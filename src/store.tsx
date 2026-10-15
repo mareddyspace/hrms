@@ -328,14 +328,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       shiftHours: active.shiftHours,
       countryCode: active.countryCode,
     }).weeklyOffDays;
-    const offsFor = (employeeId: string) => {
-      const person = TIMEZ_DEMOS.find((a) => a.id === employeeId) ?? active;
-      return scheduleForEmployee({
-        shiftName: person.shiftName,
-        shiftHours: person.shiftHours,
-        countryCode: person.countryCode,
-      }).weeklyOffDays;
-    };
+    
     const leaveTable = leaveRows(
       state.leavePolicies,
       state.leaveRequests,
