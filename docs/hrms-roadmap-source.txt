@@ -1,0 +1,2566 @@
+﻿Absolutely. Below is the combined master document with the previous product information + the diagrams in one place.
+I have structured it like a document you would personally prepare for a product review / architecture discussion / development kickoff. The wording is intentionally practical and direct.
+
+AI-POWERED GLOBAL HCM PLATFORM
+TimeZ – Product Vision, Scope, Functional Blueprint, Architecture & Design
+Document Type: Product & Solution DesignProduct: AI-Powered Global HCM PlatformSample Organization:TimeZInitial Employee Population: 500+Initial Countries: India, USA, UK, Australia, Canada, UAE, Saudi Arabia, Germany
+
+1. PRODUCT VISION
+The objective is to build a global, AI-powered Human Capital Management platform that can be used by a multinational organization with 500+ employees across multiple countries.
+The platform should provide a single place to manage the complete employee lifecycle, starting from recruitment and onboarding through employee management, attendance, leave, timesheet, performance, learning, skills, career development, compensation, benefits, documents and employee exits.
+The main focus is to build the platform with AI capabilities embedded into the core HR processes, rather than keeping AI as a separate chatbot.
+The system should be:
+Global and multi-country
+Employee-centric
+Manager-friendly
+HR-friendly
+AI-enabled
+Configurable
+Secure
+Scalable
+Integration-ready
+Workflow-driven
+Audit-ready
+Easy to use
+The platform should support country-specific requirements while maintaining a single global application and common data model.
+
+2. TIMEZ – INITIAL BUSINESS USE CASE
+For the initial implementation and demonstrations, TimeZ will be used as the sample organization.
+TimeZ Organization
+Company:TimeZEmployee Count: 500+Business Type: Multinational Organization
+Initial Countries
+Country
+Sample Employees
+India
+200
+USA
+100
+UK
+60
+Australia
+40
+Canada
+35
+UAE
+25
+Saudi Arabia
+20
+Germany
+20
+Total
+500
+The same TimeZ employee dataset will be used as the common reference dataset for:
+Application development
+Database development
+Testing
+UI demonstrations
+AI use cases
+Dashboards
+Workflow testing
+Employee lifecycle scenarios
+
+3. PRODUCT OBJECTIVES
+The major objectives of the platform are:
+3.1 Single Global HCM Platform
+Employees from different countries should be managed from one application.
+3.2 Employee Self-Service
+Employees should be able to manage most of their HR-related activities without depending on HR for every request.
+3.3 Manager Self-Service
+Managers should have visibility into their teams and be able to perform authorized approvals and workforce activities.
+3.4 HR Operations
+HR teams should have complete visibility into employee data, lifecycle events, organization structures, documents, workflows and HR processes.
+3.5 AI-Powered HR
+AI should assist employees, managers, recruiters, HR teams and leadership in finding information, analyzing data and completing repetitive activities.
+3.6 Global Localization
+The system should support country-specific:
+Currency
+Time zone
+Language
+Holiday calendar
+Leave policies
+Employment information
+Documents
+Benefits
+Working time
+Compensation configuration
+3.7 Integration Ready
+The platform should be designed so that external systems can be integrated through APIs, files, events and webhooks.
+
+4. OVERALL PRODUCT VISION DIAGRAM
+                         TIMEZ
+              AI-POWERED GLOBAL HCM PLATFORM
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+▼▼▼
+   EMPLOYEE                MANAGER                 HR
+   EXPERIENCE              EXPERIENCEEXPERIENCE
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
+▼
+                    ┌───────────────────┐
+                    │    AI PLATFORM    │
+                    │                   │
+                    │ Copilots          │
+                    │ AI Agents         │
+                    │ RAG               │
+                    │ AI Automation     │
+                    │ NL Analytics      │
+                    └─────────┬─────────┘
+                              │
+▼
+              ┌─────────────────────────────┐
+              │       GLOBAL HCM CORE       │
+              │                             │
+              │ Employee                    │
+              │ Organization                │
+              │ Recruiting                  │
+              │ Onboarding                  │
+              │ Time & Attendance           │
+              │ Leave                       │
+              │ Timesheet                   │
+              │ Performance                 │
+              │ Learning                    │
+              │ Skills & Career             │
+              │ Compensation                │
+              │ Benefits                    │
+              │ Documents                   │
+              └──────────────┬──────────────┘
+                             │
+▼
+              ┌─────────────────────────────┐
+              │ WORKFLOW & APPROVAL ENGINE  │
+              └──────────────┬──────────────┘
+                             │
+▼
+              ┌─────────────────────────────┐
+              │ INTEGRATION CENTER          │
+              │ APIs | Events | Files | Web │
+              └─────────────────────────────┘
+
+5. MAIN APPLICATION NAVIGATION
+The initial application navigation will be:
+HOME
+MY PROFILE
+PEOPLE
+ORGANIZATION
+JOBS & POSITIONS
+RECRUITING
+ONBOARDING
+TIME & ATTENDANCE
+LEAVE & ABSENCE
+TIMESHEET
+PERFORMANCE
+LEARNING
+SKILLS & CAREER
+COMPENSATION
+BENEFITS
+DOCUMENTS & LETTERS
+WORKFLOWS & APPROVALS
+ANALYTICS
+AI COPILOT
+AI AGENTS
+INTEGRATION CENTER
+PAYROLL
+ADMINISTRATION
+The Payroll section is currently an integration-ready/future placeholder and is not part of the current payroll processing scope.
+
+6. GLOBAL HCM FUNCTIONAL MAP
+                         TIMEZ
+                          │
+       ┌──────────────────┼──────────────────┐
+       │                  │                  │
+▼▼▼
+   WORKFORCE            TALENT            REWARDS
+       │                  │                  │
+├─ Employee        ├─ Recruiting     ├─ Compensation
+├─ Organization    ├─ Onboarding     └─ Benefits
+├─ Jobs            ├─ Performance
+├─ Attendance      ├─ Learning
+├─ Leave           └─ Skills & Career
+       └─ Timesheet
+       │
+       └─────────────────────────────────────┐
+                                             │
+▼
+                                      EMPLOYEE SERVICES
+                                             │
+                              ┌──────────────┼──────────────┐
+                              │              │              │
+▼▼▼
+                          Documents       Workflows      Analytics
+                              │              │              │
+                              └──────────────┼──────────────┘
+▼
+                                      AI PLATFORM
+
+7. HOME DASHBOARD
+The Home page should be role-based.
+The information displayed should depend on whether the logged-in user is an:
+Employee
+Manager
+HR user
+Recruiter
+HRBP
+Administrator
+Executive
+Other authorized role
+Employee Home
+Possible widgets:
+My Profile
+Today's Attendance
+Leave Balance
+Upcoming Holidays
+Pending Requests
+Timesheet
+Goals
+Learning
+Documents
+Notifications
+AI Assistant
+Manager Home
+Additional information:
+Team Headcount
+Team Attendance
+Pending Approvals
+Leave Requests
+Timesheet Approvals
+Goal Progress
+Performance Activities
+Team Skills
+New Joiners
+Open Positions
+Team Alerts
+HR Home
+HR dashboard can include:
+Global Headcount
+Country Headcount
+New Joiners
+Exits
+Open Positions
+Recruitment Pipeline
+Pending HR Actions
+Leave Trends
+Attendance Trends
+Performance Cycle Status
+Learning Completion
+Workforce Insights
+
+8. MY PROFILE
+Employee profile should contain all relevant information in a structured format.
+Personal Information
+Employee ID
+First Name
+Middle Name
+Last Name
+Preferred Name
+Date of Birth
+Gender
+Nationality
+Personal Email
+Work Email
+Phone Number
+Address
+Emergency Contact
+Employment Information
+Employee ID
+Joining Date
+Employment Status
+Employment Type
+Country
+Legal Entity
+Business Unit
+Division
+Department
+Cost Center
+Location
+Manager
+Job
+Job Profile
+Job Family
+Position
+Grade
+Work Location
+Work Arrangement
+Additional Information
+Skills
+Certifications
+Education
+Experience
+Dependents
+Documents
+Employment History
+Compensation History
+Performance History
+Learning History
+
+9. PEOPLE
+People should be the central employee directory.
+HR users should be able to search employees using:
+Employee ID
+Name
+Email
+Country
+Legal Entity
+Department
+Business Unit
+Manager
+Job
+Position
+Grade
+Location
+Employment Status
+Employee 360
+Each employee should have an Employee 360 page.
+The page should bring together:
+Personal information
+Employment
+Organization
+Manager
+Job
+Attendance
+Leave
+Timesheet
+Goals
+Performance
+Learning
+Skills
+Career
+Compensation
+Benefits
+Documents
+Lifecycle history
+AI Employee 360
+Authorized users can ask questions such as:
+"Give me a summary of this employee's current role, performance, skills and development areas."
+The AI response must respect the user's access permissions.
+
+10. EMPLOYEE 360 DIAGRAM
+                         EMPLOYEE
+                            │
+       ┌────────────┬───────┼───────┬────────────┐
+       │            │       │       │            │
+▼▼▼▼▼
+   Personal     Employment  Org    Manager      Job
+   Information  Information Structure
+
+       ┌──────────────────────────────────────────┐
+       │                                          │
+├──────── Attendance
+├──────── Leave
+├──────── Timesheet
+├──────── Goals
+├──────── Performance
+├──────── Learning
+├──────── Skills
+├──────── Career
+├──────── Compensation
+├──────── Benefits
+├──────── Documents
+       └──────── Lifecycle History
+                            │
+▼
+                     AI EMPLOYEE 360
+                            │
+▼
+                   Contextual Employee
+                       Summary & Insights
+
+11. ORGANIZATION MANAGEMENT
+The organization module will maintain the complete company structure.
+Organization Hierarchy
+                         TIMEZ GLOBAL COMPANY
+                                  │
+                 ┌────────────────┼────────────────┐
+▼▼▼
+              INDIA              USA              UK
+                 │
+▼
+             Legal Entity
+                 │
+▼
+             Business Unit
+                 │
+▼
+               Division
+                 │
+▼
+             Department
+                 │
+▼
+             Cost Center
+                 │
+▼
+              Location
+                 │
+▼
+             Job Family
+                 │
+▼
+             Job Profile
+                 │
+▼
+              Position
+                 │
+▼
+                Grade
+                 │
+▼
+       Supervisory Organization
+                 │
+▼
+             Employee
+The organization structure should support effective-dated changes.
+Examples:
+Department changes
+Manager changes
+Business unit transfers
+Legal entity transfers
+Location changes
+Promotions
+Reorganizations
+All changes should be tracked historically.
+
+12. JOBS & POSITIONS
+This module manages the organization's workforce structure.
+Job Family
+Examples:
+Engineering
+Finance
+Human Resources
+Sales
+Marketing
+Operations
+Information Technology
+Customer Support
+Job Profile
+Example:
+Software Engineer
+Information:
+Job Family
+Job Level
+Job Description
+Required Skills
+Preferred Skills
+Experience
+Education
+Responsibilities
+Position
+A position represents an actual organizational requirement.
+Example:
+Position: TIMEZ-ENG-IND-00125
+Job: Senior Software Engineer
+Department: Engineering
+Location: Hyderabad
+Country: India
+Grade: G6
+Manager: EMP10012
+Status: Open
+AI capabilities
+AI can assist with:
+Job description creation
+Required skill identification
+Skill recommendations
+Job-to-skill mapping
+Position analysis
+Internal candidate matching
+
+13. RECRUITING
+Recruiting should manage the complete hiring process.
+Main Areas
+Job Requisitions
+Requisition Approval
+Job Posting
+Candidates
+Applications
+Resume
+Screening
+Interviews
+Interview Feedback
+Candidate Communication
+Offers
+Hiring
+Recruitment Analytics
+Candidate Pipeline
+Applied
+   ↓
+Screening
+   ↓
+Shortlisted
+   ↓
+Interview
+   ↓
+Assessment
+   ↓
+Final Review
+   ↓
+Offer
+   ↓
+Hired
+AI Recruiter Assistant
+AI can help with:
+Resume parsing
+Resume summarization
+Skill extraction
+Candidate-job matching
+Candidate comparison
+Interview question preparation
+Job description generation
+Interview feedback summarization
+AI should assist recruiters and hiring managers. Final hiring decisions remain with authorized people.
+
+14. ONBOARDING
+The onboarding module starts after a candidate is selected.
+Pre-boarding
+Employee information collection
+Document submission
+Policy acknowledgement
+Personal information
+Emergency contacts
+Equipment requirements
+IT provisioning request
+Onboarding Checklist
+HR Documentation
+IT Account Creation
+Laptop Assignment
+Access Provisioning
+Manager Introduction
+Orientation
+Policy Training
+Mandatory Learning
+Team Introduction
+First Week Review
+AI Onboarding Assistant
+Employees can ask:
+"What do I need to complete before my joining date?"
+The AI should retrieve the applicable checklist based on:
+Country
+Legal entity
+Employee type
+Job
+Location
+
+15. EMPLOYEE LIFECYCLE
+The employee lifecycle should be one of the central business processes.
+Candidate
+   │
+▼
+Selected
+   │
+▼
+Offer
+   │
+▼
+Pre-boarding
+   │
+▼
+Onboarding
+   │
+▼
+Active Employee
+   │
+├──────────► Promotion
+   │
+├──────────► Transfer
+   │
+├──────────► Manager Change
+   │
+├──────────► Job Change
+   │
+├──────────► Location Change
+   │
+├──────────► Leave of Absence
+   │
+   └──────────► Rehire
+                    │
+▼
+                Separation
+                    │
+▼
+                  Exit
+Every important lifecycle event should create an auditable history record.
+
+16. TIME & ATTENDANCE
+The Time & Attendance module manages employee working time.
+Features
+Check-in
+Check-out
+Working hours
+Shifts
+Overtime
+Late arrival
+Early departure
+Attendance correction
+Remote work
+Hybrid work
+Holidays
+Attendance calendar
+Manager capabilities
+Managers should be able to:
+View team attendance
+Review exceptions
+Approve corrections
+View attendance trends
+
+17. LEAVE & ABSENCE
+The Leave module should support configurable leave policies.
+Features
+Leave types
+Leave balances
+Leave request
+Leave approval
+Leave cancellation
+Leave correction
+Accrual
+Carry-forward
+Eligibility
+Holiday calendar
+Leave history
+Country-specific policies
+Leave Workflow
+Employee
+   ↓
+Select Leave Type
+   ↓
+Select Dates
+   ↓
+Enter Reason
+   ↓
+Submit
+   ↓
+Manager Approval
+   ↓
+HR/Workflow Rules
+   ↓
+Approved
+AI Leave Assistant
+Employee can ask:
+"How many annual leave days do I have?"
+or:
+"What leave can I apply for next month?"
+The response should use the employee's actual country and applicable policy.
+
+18. TIMESHEET
+Timesheet is part of the current application scope.
+However, in the initial version, timesheet is not connected to payroll calculation.
+The primary purpose is:
+Project tracking
+Client tracking
+Task tracking
+Billable hours
+Non-billable hours
+Utilization
+Resource management
+Manager approval
+Reporting
+Timesheet Structure
+Date
+Project
+Client
+Task
+Hours
+Billable / Non-Billable
+Comments
+Status
+Timesheet Workflow
+Employee
+   ↓
+Enter Hours
+   ↓
+Submit
+   ↓
+Manager Review
+   ↓
+Approve / Reject
+   ↓
+Finalized
+Future integration can allow approved timesheet data to be consumed by an external payroll or finance system.
+
+19. PERFORMANCE
+The performance module should manage the employee performance lifecycle.
+Features
+Performance cycles
+Goals
+OKRs
+KPIs
+Self assessment
+Manager assessment
+360 feedback
+Reviews
+Ratings
+Development plans
+Performance history
+Goal Example
+Goal:
+Improve application availability
+
+Target:
+99.9% availability
+
+Period:
+Q3 2026
+
+Weight:
+30%
+
+Status:
+In Progress
+AI Performance Copilot
+AI can assist with:
+Goal drafting
+Goal summarization
+Review preparation
+Feedback summarization
+Development suggestions
+Performance trend analysis
+
+20. LEARNING
+The Learning module manages employee development.
+Features
+Course catalog
+Training programs
+Learning paths
+Course enrollment
+Training requests
+Assessments
+Certifications
+Mandatory training
+Learning history
+Completion tracking
+AI Learning Assistant
+AI can recommend learning based on:
+Employee job
+Current skills
+Target career
+Skill gaps
+Performance goals
+Required certifications
+Example:
+"What should I learn to move from Software Engineer to Engineering Lead?"
+The system can analyze the employee's existing skills and recommend a development path.
+
+21. SKILLS & CAREER
+This will be one of the important areas of the platform.
+Skills Library
+Each skill can contain:
+Skill Name
+Category
+Skill Level
+Description
+Related Jobs
+Related Courses
+Certification
+Proficiency Level
+Example:
+Skill: Python
+Level: Advanced
+Category: Technical
+
+Related Jobs:
+Software Engineer
+Data Engineer
+AI Engineer
+Employee Skills
+Employees can maintain:
+Current skills
+Proficiency
+Certifications
+Experience
+Skills they want to develop
+Career
+Employees can define:
+Current Role
+Target Role
+Career Path
+Required Skills
+Skill Gaps
+Development Activities
+Mentoring
+AI Career Navigator
+AI can answer:
+"What skills am I missing for my target role?"
+and:
+"What should I focus on during the next six months?"
+
+22. COMPENSATION
+The Compensation module manages compensation information without performing payroll processing.
+Features
+Base salary
+Salary history
+Compensation structures
+Grades
+Salary ranges
+Promotions
+Increment cycles
+Bonuses
+Incentives
+Compensation review
+Approval workflow
+Security
+Compensation information must be highly restricted.
+An employee should only see their own authorized compensation information.
+Managers should only see compensation information when explicitly permitted.
+
+23. BENEFITS
+Benefits should be configurable based on country and employee eligibility.
+Features
+Benefit plans
+Benefit eligibility
+Enrollment
+Dependents
+Benefit history
+Benefit documents
+Country-specific plans
+Examples:
+Health benefits
+Insurance
+Retirement-related benefits
+Allowances
+Wellness programs
+External benefit providers can be integrated later through the Integration Center.
+
+24. DOCUMENTS & LETTERS
+The platform should provide centralized document and letter management.
+Employee Documents
+Examples:
+Offer Letter
+Appointment Letter
+Employment Certificate
+Experience Letter
+Confirmation Letter
+Promotion Letter
+Transfer Letter
+Salary Revision Letter
+Increment Letter
+Relieving Letter
+Warning Letter
+NOC
+Visa/Travel Letter
+Internship Letter
+Contract
+Termination Letter
+Document Generation Process
+Employee / HR Request
+        ↓
+Select Document Type
+        ↓
+Retrieve Approved Employee Data
+        ↓
+Populate Template
+        ↓
+Validation
+        ↓
+Approval
+        ↓
+Generate Final Document
+        ↓
+Store Document
+        ↓
+Employee Access
+AI can assist in preparing the document, but authorized approval is required before final issuance.
+
+25. WORKFLOWS & APPROVALS
+A centralized workflow engine should be used across the application.
+Workflow Types
+Sequential
+Parallel
+Conditional
+Delegated
+Escalated
+SLA-based
+Example – Leave
+Employee
+   ↓
+Manager
+   ↓
+HR
+Example – Compensation
+Manager
+   ↓
+HRBP
+   ↓
+Compensation Team
+   ↓
+Authorized Approver
+Example – Recruiting
+Hiring Manager
+   ↓
+Department Approval
+   ↓
+HR
+   ↓
+Finance
+   ↓
+Approved
+The workflow engine should maintain:
+Approval history
+Rejection reason
+Comments
+Delegation
+Escalation
+SLA
+Timestamp
+Audit information
+
+26. WORKFLOW ARCHITECTURE
+                    BUSINESS TRANSACTION
+                             │
+▼
+                       Workflow Engine
+                             │
+                ┌────────────┼────────────┐
+                │            │            │
+▼▼▼
+            Sequential     Parallel    Conditional
+                │            │            │
+                └────────────┼────────────┘
+▼
+                        Approver
+                             │
+                   ┌─────────┴─────────┐
+▼▼
+                APPROVE              REJECT
+                   │                   │
+▼▼
+              Next Step            Resubmit
+                   │
+▼
+                 FINAL
+                   │
+▼
+                 AUDIT
+
+27. ROLES & ACCESS
+The platform should use a role-based access model.
+Role
+Primary Responsibility
+Super Admin
+Complete platform configuration
+HR Admin
+Global HR operations
+HRBP
+Assigned business/function HR
+Recruiter
+Recruitment activities
+Hiring Manager
+Hiring activities
+Manager
+Team management and approvals
+Employee
+Own HR/self-service
+Candidate
+Own recruitment information
+L&D Admin
+Learning and certifications
+Performance Admin
+Performance cycles
+Compensation Admin
+Compensation processes
+Finance User
+Authorized finance information
+IT Admin
+Identity and integrations
+Compliance/Audit
+Authorized audit/read-only access
+Payroll Admin
+Future/integration-related access
+
+28. EMPLOYEE → MANAGER → HR ACCESS MODEL
+                       GLOBAL HR
+                           │
+▼
+                    HR ADMIN / HRBP
+                           │
+                ┌──────────┴──────────┐
+▼▼
+             MANAGER              RECRUITER
+                │                     │
+▼▼
+             TEAM                 CANDIDATES
+                │
+       ┌────────┼────────┐
+▼▼▼
+    Employee EmployeeEmployee
+       │
+▼
+   Own Data
+Access Concept
+Employee
+   ↓
+Own Data
+
+Manager
+   ↓
+Own Data
++
+Direct Reports
++
+Authorized Team Data
+
+HR
+   ↓
+Assigned HR Scope
+
+HR Admin
+   ↓
+Global HR Scope
+
+Super Admin
+   ↓
+Platform Scope
+
+29. PERMISSION MODEL
+Role alone should not determine access.
+The platform should use multiple levels of authorization.
+RBAC
+Role-Based Access Control.
+Example:
+Manager
+   ↓
+View Team
+Approve Leave
+Approve Timesheet
+View Authorized Team Data
+ABAC
+Attribute-Based Access Control.
+Access can depend on:
+Country
+Legal Entity
+Business Unit
+Department
+Location
+Manager relationship
+Employee type
+Data Scope
+Permissions can be:
+Own
+Direct Reports
+Indirect Reports
+Department
+Business Unit
+Legal Entity
+Country
+Organization
+Global
+Sensitive Data
+Additional protection should be applied to:
+Compensation
+Confidential HR notes
+Personal information
+Documents
+Legal information
+Sensitive employee records
+
+30. RBAC + ABAC SECURITY DIAGRAM
+                         USER
+                           │
+▼
+                         ROLE
+                           │
+        ┌──────────────────┼──────────────────┐
+▼▼▼
+   Employee             Manager              HR
+        │                  │                  │
+        └──────────────────┼──────────────────┘
+▼
+                    ROLE PERMISSIONS
+                           │
+▼
+                    ATTRIBUTE RULES
+                           │
+       ┌───────────────────┼───────────────────┐
+       │                   │                   │
+     Country           Legal Entity        Department
+       │                   │                   │
+       └───────────────────┼───────────────────┘
+▼
+                       DATA SCOPE
+                           │
+▼
+                  FIELD-LEVEL SECURITY
+                           │
+▼
+                       ACCESS
+
+31. AI CAPABILITY LAYER
+AI should be part of the platform architecture rather than only a chatbot.
+Employee Copilot
+Employees can ask about:
+Leave
+Policies
+Benefits
+Learning
+Documents
+Profile
+Career
+HR requests
+Manager Copilot
+Managers can ask:
+Who is on leave?
+What approvals are pending?
+How is my team performing?
+What skills are available?
+Who has completed mandatory learning?
+HR Copilot
+HR can ask:
+Find employees matching criteria
+Workforce analysis
+Employee information
+Pending HR actions
+Organization insights
+Policy-related questions
+Recruiter Copilot
+Resume analysis
+Candidate summaries
+Job description generation
+Candidate matching
+Interview preparation
+Executive Copilot
+Authorized executives can ask:
+Global headcount
+Country trends
+Attrition
+Hiring
+Skills
+Workforce trends
+
+32. AI-POWERED HCM ARCHITECTURE
+                         USER
+                          │
+          ┌───────────────┼────────────────┐
+          │               │                │
+▼▼▼
+       Employee         Manager            HR
+          │               │                │
+          └───────────────┼────────────────┘
+▼
+                    AI COPILOT
+                          │
+▼
+                  INTENT / CONTEXT
+                          │
+▼
+                  AI ORCHESTRATOR
+                          │
+        ┌─────────────────┼─────────────────┐
+        │                 │                 │
+▼▼▼
+ Employee Agent      Manager Agent      HR Agent
+        │                 │                 │
+├──────────────┬──┴──────────────┬──┤
+        │              │                 │
+▼▼▼
+ Knowledge Agent   Analytics Agent   Document Agent
+        │              │                 │
+        └──────────────┼─────────────────┘
+▼
+                  TOOL LAYER
+                       │
+▼
+                AUTHORIZATION
+                       │
+▼
+                 BUSINESS APIs
+                       │
+▼
+                 HCM SERVICES
+                       │
+▼
+                    DATABASE
+                       │
+▼
+                     AUDIT
+
+33. AI REQUEST / ACTION FLOW
+All AI-powered business actions should follow a controlled flow.
+User Request
+     │
+▼
+AI Copilot
+     │
+▼
+Understand Intent
+     │
+▼
+Identify User Context
+     │
+├── Employee
+├── Country
+├── Legal Entity
+├── Role
+├── Permissions
+     └── Applicable Policy
+     │
+▼
+AI Agent
+     │
+▼
+Select Tool
+     │
+▼
+Authorization Check
+     │
+├──── DENIED ────► Return Access Message
+     │
+▼
+Business API
+     │
+▼
+Business Validation
+     │
+▼
+Workflow / Approval
+     │
+▼
+Database Transaction
+     │
+▼
+Audit Log
+     │
+▼
+AI Response
+
+34. AI OPERATING PRINCIPLE
+All AI-powered business actions should follow:
+Understand → Recommend → Prepare → Human Review/Approval → Execute → Audit
+AI should not directly perform sensitive actions without authorization.
+For example:
+AI
+ ↓
+Tool
+ ↓
+Authorization
+ ↓
+Business API
+ ↓
+Database
+AI should not have unrestricted direct database access.
+
+35. AI EMPLOYEE 360
+Employee 360 should combine information from multiple HCM modules.
+Employee
+   |
+   +-- Employment
+   +-- Organization
+   +-- Attendance
+   +-- Leave
+   +-- Timesheet
+   +-- Goals
+   +-- Performance
+   +-- Learning
+   +-- Skills
+   +-- Career
+   +-- Compensation
+   +-- Benefits
+   +-- Documents
+AI can create a contextual summary based on the user's permissions.
+
+36. AI SKILLS INTELLIGENCE
+The system should gradually create an organizational skills graph.
+Employee
+   ↓
+Skills
+   ↓
+Jobs
+   ↓
+Career Paths
+   ↓
+Courses
+   ↓
+Certifications
+This can help identify:
+Skill gaps
+Critical skills
+Emerging skills
+Available internal talent
+Training requirements
+Career opportunities
+Workforce risks
+
+37. AI CAREER NAVIGATOR
+An employee can select a target position.
+Example:
+Current:
+Software Engineer
+
+Target:
+Engineering Manager
+The AI evaluates:
+Current skills
+Experience
+Learning
+Performance
+Goals
+Certifications
+Then produces:
+Current Skills
+Required Skills
+Skill Gap
+Recommended Courses
+Recommended Projects
+Recommended Certifications
+Suggested Timeline
+
+38. AI HR SERVICE AUTOMATION
+Instead of simply answering questions, AI should eventually be able to prepare HR actions.
+Example:
+"I moved to a new address."
+AI can:
+Understand the request
+Identify required information
+Validate employee identity
+Prepare the profile update
+Ask for confirmation
+Submit through the authorized API
+Trigger workflow if required
+Record the activity
+
+39. AI DOCUMENT ASSISTANT
+AI should help HR generate approved documents.
+Example:
+"Prepare a promotion letter for employee EMP10235."
+The system should:
+Identify employee
+Validate authorization
+Retrieve approved employee information
+Retrieve promotion information
+Select appropriate template
+Populate fields
+Validate missing information
+Generate draft
+Send for approval
+Store final document
+
+40. AI/RAG KNOWLEDGE ARCHITECTURE
+The platform should have a controlled HR knowledge base.
+Potential content:
+Employee Handbook
+HR Policies
+Leave Policies
+Benefits Information
+Travel Policies
+Remote Work Policies
+Code of Conduct
+Learning Policies
+HR Procedures
+Approved HR Documents
+                 HR KNOWLEDGE SOURCES
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+       Policies       Handbook       Procedures
+          │              │              │
+          └──────────────┼──────────────┘
+▼
+                  Document Processing
+                         │
+▼
+                    Chunking
+                         │
+▼
+                   Embeddings
+                         │
+▼
+                  Vector Store
+                         │
+▼
+                    RAG Layer
+                         │
+▼
+User Question ─────► AI Copilot
+                         │
+▼
+                  Permission Check
+                         │
+▼
+                    Retrieval
+                         │
+▼
+                    AI Response
+Permission filtering must happen before restricted information is returned to the AI/user.
+
+41. AI CONTEXT MODEL
+The AI should understand the context of the user before answering.
+Context can include:
+User
+ │
+├── Employee ID
+├── Role
+├── Country
+├── Legal Entity
+├── Business Unit
+├── Department
+├── Location
+├── Job
+├── Manager
+├── Employment Type
+├── Language
+├──Timezone
+ └── Permissions
+This is especially important for global HR policies.
+
+42. NATURAL LANGUAGE HR ANALYTICS
+HR users should eventually be able to ask questions in normal language.
+Examples:
+"Show me headcount by country."
+"Which departments have the highest attrition?"
+"How many employees joined this quarter?"
+"Show employees who have not completed mandatory training."
+"Which locations have the highest overtime?"
+The system should convert the request into a controlled query and return:
+Table
+Chart
+Summary
+Relevant filters
+Generated queries must be validated before execution.
+
+43. ANALYTICS
+Analytics should provide dashboards for:
+Workforce
+Headcount
+New hires
+Exits
+Attrition
+Country distribution
+Department distribution
+Recruiting
+Open requisitions
+Applications
+Pipeline
+Time to hire
+Offer status
+Onboarding
+New joiners
+Checklist completion
+Pending activities
+Attendance
+Attendance
+Absence
+Overtime
+Exceptions
+Leave
+Leave utilization
+Leave trends
+Country comparison
+Performance
+Goal completion
+Review completion
+Performance distribution
+Learning
+Training completion
+Certifications
+Mandatory learning
+Skills
+Skill availability
+Skill gaps
+Critical skills
+Compensation
+Compensation distribution
+Grade analysis
+Compensation review status
+
+44. GLOBAL WORKFORCE INTELLIGENCE
+The platform should eventually provide leadership-level insights.
+Workforce Risk
+Identify areas with:
+High attrition
+Critical skill gaps
+Low learning completion
+High overtime
+Hiring pressure
+Workforce Capacity
+Analyze:
+Current headcount
+Open positions
+Skills
+Project allocation
+Utilization
+Organization Intelligence
+Identify:
+Organizational growth
+Management span
+Department size
+Location trends
+Workforce movement
+
+45. GLOBAL COUNTRY ARCHITECTURE
+The application should support multiple countries without creating separate applications.
+                     TIMEZ PLATFORM
+                           │
+▼
+                 GLOBAL CONFIGURATION
+                           │
+       ┌───────────────────┼───────────────────┐
+       │                   │                   │
+▼▼▼
+    INDIA                 USA                  UK
+       │                   │                   │
+▼▼▼
+ Legal Entity          Legal Entity       Legal Entity
+       │                   │                   │
+▼▼▼
+ Currency               CurrencyCurrency
+       │                   │                   │
+▼▼▼
+ Time Zone              Time Zone          Time Zone
+       │                   │                   │
+▼▼▼
+ Holidays              HolidaysHolidays
+       │                   │                   │
+▼▼▼
+ Leave Policy          Leave Policy       Leave Policy
+       │                   │                   │
+▼▼▼
+ Benefits              BenefitsBenefits
+       │                   │                   │
+▼▼▼
+ Documents             DocumentsDocuments
+The same model extends to:
+Australia
+Canada
+UAE
+Saudi Arabia
+Germany
+
+46. COUNTRY LOCALIZATION
+Each country should have configurable information for:
+Country
+Legal Entity
+Currency
+Time Zone
+Language
+Holiday Calendar
+Leave Policy
+Employment Information
+Documents
+Working Time
+Benefits
+Compensation Configuration
+Workflow Rules
+The global employee model should remain common while country-specific information is maintained through configurable country profiles.
+
+47. GLOBAL TIMEZONE DESIGN
+All system timestamps should preferably be stored in UTC.
+The application should display dates and times according to the user's configured timezone.
+Example:
+Database:
+2026-09-11 10:00 UTC
+
+India:
+15:30 IST
+
+UK:
+11:00 BST
+
+UAE:
+14:00 GST
+This avoids problems when employees and managers work across countries.
+
+48. INTEGRATION CENTER
+The Integration Center will be the central area for external integrations.
+Potential integrations:
+Identity/SSO
+Email
+Microsoft Teams
+Slack
+Attendance systems
+Job portals
+Learning platforms
+Benefits providers
+Finance systems
+External payroll providers
+Integration Methods
+REST API
+Webhooks
+Scheduled integrations
+File-based integrations
+Event-based integrations
+Integration Monitoring
+Each integration should provide:
+Status
+Last execution
+Next execution
+Records processed
+Success count
+Error count
+Retry
+Logs
+Error details
+Audit history
+
+49. PAYROLL – CURRENT SCOPE BOUNDARY
+Payroll will be visible as a Payroll TAB, but actual payroll processing is not part of the current product scope.
+Payroll TAB can display
+Country
+Legal Entity
+Payroll Provider
+Connection Status
+Integration Status
+Last Sync
+Payroll Period
+Integration Health
+Configuration Status
+Not included in current version
+Payroll calculations
+Tax calculation
+Payslips
+Statutory payroll
+Payroll processing
+Payment processing
+Payroll reconciliation
+Country payroll engines
+The architecture should allow external payroll systems to be connected later.
+
+50. HCM DATA ARCHITECTURE
+                         COMPANY
+                            │
+▼
+                         COUNTRY
+                            │
+▼
+                       LEGAL ENTITY
+                            │
+▼
+                       ORGANIZATION
+                            │
+             ┌──────────────┼──────────────┐
+▼▼▼
+        Department       Location       Cost Center
+             │
+▼
+         Job Family
+             │
+▼
+         Job Profile
+             │
+▼
+          Position
+             │
+▼
+           Grade
+             │
+▼
+          Employee
+             │
+    ┌────────┼─────────┬─────────┐
+▼▼▼▼
+Employment Manager   Job       Org
+    │
+├── Attendance
+├── Leave
+├── Timesheet
+├── Performance
+├── Learning
+├── Skills
+├── Compensation
+    └── Benefits
+
+51. CORE DATA ENTITIES
+The initial data model should include entities such as:
+Organization
+Company
+Country
+Legal Entity
+Business Unit
+Division
+Department
+Cost Center
+Location
+Organization
+Workforce
+Person
+Employee
+Employment
+Manager
+Job
+Job Family
+Job Profile
+Position
+Grade
+Time
+Attendance
+Leave
+Holiday
+Timesheet
+Project
+Task
+Talent
+Candidate
+Job Requisition
+Application
+Interview
+Onboarding
+Goal
+Performance
+Feedback
+Learning
+Course
+Skill
+Certification
+Career Path
+Rewards
+Compensation
+Compensation Structure
+Benefit
+Benefit Plan
+Documents
+Document
+Letter
+Template
+Platform
+Workflow
+Approval
+Notification
+Audit
+Integration
+AI Interaction
+
+52. OVERALL TECHNICAL ARCHITECTURE
+                         USERS
+                           │
+▼
+                 ┌──────────────────┐
+                 │ Web Application   │
+                 │ React + TypeScript│
+                 └────────┬─────────┘
+                          │
+▼
+                 ┌──────────────────┐
+                 │   API Gateway    │
+                 └────────┬─────────┘
+                          │
+          ┌───────────────┼────────────────┐
+          │               │                │
+▼▼▼
+   HCM SERVICES      AI PLATFORM      INTEGRATION
+          │               │                │
+          │               │                │
+          │        ┌──────┼──────┐│
+          │        │      │      │         │
+          │        ▼▼▼│
+          │      RAG    Agents Copilot     │
+          │               │                │
+          └───────────────┼────────────────┘
+                          │
+▼
+                 WORKFLOW ENGINE
+                          │
+▼
+                 BUSINESS SERVICES
+                          │
+             ┌────────────┼────────────┐
+▼▼▼
+        PostgreSQL      Redis      Object Store
+             │
+▼
+pgvector
+
+53. SUGGESTED TECHNOLOGY STACK
+Frontend
+React
+TypeScript
+Tailwind CSS
+Backend
+Python
+FastAPI
+REST APIs
+Database
+PostgreSQL
+AI / Vector Search
+pgvector initially
+Cache
+Redis
+Event Processing
+Kafka where event-driven processing is required
+Workflow
+Dedicated workflow engine/service
+Storage
+Object storage for documents
+Containers
+Docker
+Orchestration
+Kubernetes for later enterprise scaling
+AI Layer
+AI Gateway should abstract the underlying AI model/provider so the application is not tightly coupled to a single model.
+
+54. COMPLETE TIMEZ PLATFORM ARCHITECTURE
+┌───────────────────────────────────────────────────────────────┐
+│                         TIMEZ USERS                            │
+│ Employee | Manager | HR | Recruiter | Admin | Executive      │
+└──────────────────────────────┬────────────────────────────────┘
+                               │
+▼
+┌───────────────────────────────────────────────────────────────┐
+│                       EXPERIENCE LAYER                        │
+│ Web UI | Employee Portal | Manager Workspace | HR Workspace  │
+└──────────────────────────────┬────────────────────────────────┘
+                               │
+▼
+┌───────────────────────────────────────────────────────────────┐
+│                          AI LAYER                             │
+│                                                               │
+│ Employee Copilot | Manager Copilot | HR Copilot              │
+│ Recruiter Copilot | AI Agents | RAG | AI Orchestrator        │
+│ Career Intelligence | Skills Intelligence | NL Analytics     │
+└──────────────────────────────┬────────────────────────────────┘
+                               │
+▼
+┌───────────────────────────────────────────────────────────────┐
+│                       HCM APPLICATION                         │
+│                                                               │
+│ People | Organization | Jobs | Recruiting | Onboarding       │
+│ Attendance | Leave | Timesheet | Performance | Learning      │
+│ Skills | Career | Compensation | Benefits | Documents        │
+└──────────────────────────────┬────────────────────────────────┘
+                               │
+▼
+┌───────────────────────────────────────────────────────────────┐
+│                  WORKFLOW & APPROVAL ENGINE                   │
+│                                                               │
+│ Approvals | Escalation | Delegation | SLA | Notifications    │
+└──────────────────────────────┬────────────────────────────────┘
+                               │
+▼
+┌───────────────────────────────────────────────────────────────┐
+│                     INTEGRATION CENTER                       │
+│                                                               │
+│ REST APIs | Webhooks | Files | Events | External Systems     │
+└──────────────────────────────┬────────────────────────────────┘
+                               │
+▼
+┌───────────────────────────────────────────────────────────────┐
+│                         DATA LAYER                            │
+│                                                               │
+│ PostgreSQL | pgvector | Redis | Object Storage | Audit       │
+└───────────────────────────────────────────────────────────────┘
+
+55. SECURITY & GOVERNANCE
+Security should be built into the platform from the beginning.
+Authentication
+SSO
+MFA
+Identity integration
+Session management
+Authorization
+RBAC
+ABAC
+Data-level permissions
+Field-level security
+Data Security
+Encryption in transit
+Encryption at rest
+Secure secrets management
+API authentication
+Database access controls
+Audit
+Every important transaction should capture:
+Who
+What
+When
+From Where
+Before Value
+After Value
+Action
+Result
+AI Audit
+AI interactions should also be traceable:
+User
+Request
+AI capability used
+Data accessed
+Tool called
+Action proposed
+Approval
+Final action
+Timestamp
+
+56. EMPLOYEE DATA SECURITY
+Employees should not automatically have access to other employee information.
+Employee
+Can access:
+Own Profile
+Own Leave
+Own Attendance
+Own Timesheet
+Own Performance
+Own Learning
+Own Skills
+Own Compensation
+Own Documents
+Manager
+Can additionally access authorized:
+Direct Reports
+Team Attendance
+Team Leave
+Team Goals
+Team Performance
+Team Learning
+Team Skills
+Approvals
+HR
+Can access broader information according to assigned scope.
+
+57. AI GOVERNANCE
+AI should follow strict controls.
+AI can:
+Search
+Summarize
+Recommend
+Analyze
+Draft
+Prepare
+Explain
+Classify
+Assist
+AI should not independently make final decisions for sensitive employment actions.
+Examples include:
+Hiring decisions
+Termination
+Compensation decisions
+Performance ratings
+Disciplinary decisions
+These activities should have authorized human review.
+
+58. AI AGENT ARCHITECTURE
+The AI Agent layer can contain specialized agents.
+Employee Agent
+Handles employee self-service.
+Manager Agent
+Handles team-related activities.
+HR Agent
+Handles HR operations.
+Recruiter Agent
+Handles recruitment support.
+Knowledge Agent
+Retrieves HR policy and knowledge information.
+Analytics Agent
+Handles natural language analytics.
+Document Agent
+Prepares HR documents.
+Career Agent
+Handles career and skill recommendations.
+Orchestrator
+The AI Orchestrator determines which agent/tool should handle a request.
+User
+ ↓
+AI Copilot
+ ↓
+Intent Detection
+ ↓
+AI Orchestrator
+ ↓
+Specialized Agent
+ ↓
+Tool/API
+ ↓
+Authorization
+ ↓
+Business Service
+ ↓
+Response
+
+59. INTEGRATED AI + HCM FLOW
+                      USER
+                       │
+▼
+                  AI COPILOT
+                       │
+▼
+                CONTEXT ENGINE
+                       │
+▼
+                AI ORCHESTRATOR
+                       │
+       ┌───────────────┼────────────────┐
+▼▼▼
+   HCM Agent       Knowledge Agent   Analytics Agent
+       │               │                │
+▼▼▼
+  Business Tool       RAG              Query Engine
+       │               │                │
+       └───────────────┼────────────────┘
+▼
+                 Authorization
+                       │
+▼
+                  HCM API Layer
+                       │
+▼
+                Workflow Engine
+                       │
+▼
+                    Database
+                       │
+▼
+                     Audit
+
+60. PRODUCT ROADMAP
+Phase 0 – Discovery
+Duration: 2–3 weeks
+Activities:
+Business requirements
+Personas
+Countries
+Organization model
+Roles
+Permissions
+HR processes
+AI use cases
+Security requirements
+Priority definition
+
+Phase 1 – Platform Foundation
+Duration: 6–8 weeks
+Build:
+Authentication
+SSO
+User management
+Roles
+Permissions
+Country
+Legal Entity
+Organization
+Location
+Employee master
+Manager hierarchy
+Employee lifecycle
+Audit
+
+Phase 2 – Core Workforce
+Duration: 6–8 weeks
+Build:
+Employee self-service
+Manager self-service
+Leave
+Attendance
+Timesheet
+Holidays
+Approvals
+Notifications
+
+Phase 3 – Talent
+Duration: 8–10 weeks
+Build:
+Recruiting
+Candidates
+Job requisitions
+Onboarding
+Performance
+Goals
+Learning
+Skills
+Career
+
+Phase 4 – Compensation & Benefits
+Duration: 5–7 weeks
+Build:
+Compensation structures
+Grades
+Salary ranges
+Compensation review
+Promotions
+Bonuses
+Benefits
+Enrollment
+Payroll processing remains outside the scope.
+
+Phase 5 – AI Platform
+Duration: 8–12 weeks
+Build:
+AI Gateway
+RAG
+Knowledge Base
+Employee Copilot
+Manager Copilot
+HR Copilot
+Recruiter Copilot
+AI Employee 360
+AI Career Assistant
+AI Document Assistant
+Natural Language Analytics
+AI Orchestrator
+AI Agents
+
+Phase 6 – Global Enterprise
+Duration: 6–10 weeks
+Build:
+Country configuration
+Multilingual support
+Multi-currency
+Multi-timezone
+Localization
+Integration Center
+Security enhancements
+Enterprise audit
+Scalability
+External system integrations
+
+61. MVP SCOPE
+The first usable MVP should include:
+Platform
+Login
+SSO
+Users
+Roles
+Permissions
+Organization
+Country
+Legal Entity
+Location
+Employee
+Employee profile
+Employee master
+Manager hierarchy
+Employee lifecycle
+Workforce
+Leave
+Attendance
+Timesheet
+Holidays
+Approvals
+Talent
+Recruiting
+Onboarding
+Performance
+Goals
+Learning
+Skills
+Enterprise
+Documents
+Letters
+Workflow
+Analytics
+Global configuration
+Integration Center
+AI
+Employee Copilot
+Manager Copilot
+HR Copilot
+HR Policy RAG
+Employee 360
+Resume Intelligence
+Job Description Generator
+Career Assistant
+Natural Language Analytics
+Payroll
+Payroll TAB only.
+
+62. PRODUCT DIFFERENTIATION
+The platform should not be positioned as only another HR management application.
+The main differentiator should be:
+AI + HCM + Automation + Global Workforce Intelligence
+Instead of requiring users to navigate through multiple screens for every activity, AI should provide a conversational layer on top of the platform.
+Traditional Process
+Login
+ ↓
+Find Employee
+ ↓
+Open Profile
+ ↓
+Open Leave
+ ↓
+Check Balance
+ ↓
+Check History
+AI-enabled Process
+"How much leave does John have remaining and does he have any leave scheduled this month?"
+The platform should retrieve the authorized information and provide the answer.
+
+63. EMPLOYEE EXPERIENCE
+The employee should have one central workspace.
+The employee should be able to:
+View profile
+Update permitted information
+Apply leave
+Check attendance
+Submit timesheet
+View goals
+Complete performance activities
+Enroll in learning
+Manage skills
+Explore career opportunities
+View compensation
+Manage benefits
+Download documents
+Raise HR requests
+Ask AI questions
+The objective is to reduce unnecessary HR dependency.
+
+64. MANAGER EXPERIENCE
+Managers should have a dedicated manager workspace.
+Key information:
+Team headcount
+New joiners
+Team movements
+Leave
+Attendance
+Timesheets
+Goals
+Performance
+Learning
+Skills
+Open positions
+Pending approvals
+AI should summarize important information instead of forcing managers to review multiple reports.
+
+65. HR EXPERIENCE
+HR should have a complete operational view.
+HR should be able to:
+Search employees
+Manage employee data
+Manage organization
+Manage lifecycle events
+Manage documents
+Manage policies
+Manage workflows
+Manage recruitment
+Manage onboarding
+Manage performance
+Manage learning
+Manage skills
+Manage compensation
+Manage benefits
+Analyze workforce
+Use AI HR Copilot
+
+66. ADMINISTRATION
+Administration should control platform configuration.
+Organization Configuration
+Countries
+Legal Entities
+Business Units
+Departments
+Locations
+Cost Centers
+Workforce Configuration
+Job Families
+Job Profiles
+Positions
+Grades
+Employment Types
+Policy Configuration
+Leave Policies
+Holiday Calendars
+Working Time
+Attendance Rules
+Security
+Roles
+Permissions
+Data Scopes
+Security Policies
+Workflow
+Approval Rules
+Escalation
+SLA
+Delegation
+AI
+AI capabilities
+Knowledge sources
+Agent configuration
+AI permissions
+AI audit
+Integrations
+API
+Webhooks
+File integrations
+External systems
+Monitoring
+
+67. SAMPLE TIMEZ EMPLOYEE DATA
+The standard demo dataset contains 500 synthetic TimeZ employees across eight countries.
+Employee records include:
+Company
+Employee ID
+First Name
+Last Name
+Gender
+Date of Birth
+Work Email
+Country
+Country Code
+Legal Entity
+Location
+Business Unit
+Department
+Job Title
+Grade
+Employment Type
+Employment Status
+Joining Date
+Currency
+Time Zone
+Manager Employee ID
+Holiday Calendar
+Leave Policy
+Payroll Status
+AI Profile Status
+This dataset will be used as the common reference dataset for application development and demonstrations.
+
+68. FIXED PRODUCT DESIGN DECISIONS
+The following decisions should remain fixed for the current product version.
+Decision 1
+The platform will be a single global HCM application.
+Decision 2
+Multiple countries will be supported through configuration and localization.
+Decision 3
+TimeZ will be the standard sample company.
+Decision 4
+The initial sample employee population will be 500 employees.
+Decision 5
+Timesheet is included in the current scope.
+Decision 6
+Timesheet is primarily for project, client, task and utilization tracking.
+Decision 7
+Timesheet does not drive payroll in V1.
+Decision 8
+Payroll processing is not part of the current development scope.
+Decision 9
+Payroll will remain visible as an integration-ready TAB.
+Decision 10
+AI is part of the platform architecture, not a separate standalone feature.
+Decision 11
+AI actions must go through authorization and business APIs.
+Decision 12
+Sensitive employment decisions require authorized human review.
+Decision 13
+All major business transactions must be auditable.
+Decision 14
+The system must support role-based and attribute-based access.
+Decision 15
+The architecture must be integration-ready from the beginning.
+
+69. OVERALL PRODUCT OPERATING MODEL
+The final platform can be viewed as five major layers:
+                    TIMEZ PRODUCT
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+▼▼▼
+   LEVEL 1            LEVEL 2          LEVEL 3
+   PRODUCT            FUNCTIONAL       TECHNICAL
+   DESIGN             DESIGNDESIGN
+        │                │                │
+▼▼▼
+ Business View       Process View    Architecture View
+        │                │                │
+▼▼▼
+ Management          HR / Product     Developers /
+ Review              Review           Architects
+
+70. RECOMMENDED DESIGN DOCUMENT STRUCTURE
+For the actual project, I would maintain the documentation in three levels.
+Document 1 – Product Blueprint
+Audience:
+Management
+Product Team
+HR SMEs
+Business Stakeholders
+Contains:
+Product vision
+Scope
+Modules
+Personas
+Global model
+AI capabilities
+Roadmap
+MVP
+Product decisions
+
+Document 2 – Functional Design
+Audience:
+Product Team
+Business Analysts
+HR SMEs
+Developers
+Contains:
+Employee lifecycle
+Employee 360
+Recruiting
+Onboarding
+Attendance
+Leave
+Timesheet
+Performance
+Learning
+Skills
+Compensation
+Benefits
+Documents
+Workflows
+Roles
+Permissions
+Country rules
+
+Document 3 – Technical Design
+Audience:
+Architects
+Backend Developers
+Frontend Developers
+AI Engineers
+DevOps
+Security Team
+Contains:
+Application architecture
+Service architecture
+Database architecture
+Entity relationship design
+API architecture
+AI architecture
+RAG architecture
+Agent architecture
+Authorization
+Security
+Workflow engine
+Integration architecture
+Deployment architecture
+Monitoring
+Audit
+
+71. NEXT DEVELOPMENT DELIVERABLES
+After finalizing this product blueprint, the development can be broken into the following deliverables.
+Deliverable 1 – UI/UX
+Application shell
+Navigation
+Home dashboard
+Employee dashboard
+Manager dashboard
+HR dashboard
+AI Copilot interface
+Deliverable 2 – Database Design
+Entity model
+Relationships
+Primary keys
+Foreign keys
+Effective dating
+Audit tables
+Security model
+Deliverable 3 – Backend APIs
+Authentication APIs
+Employee APIs
+Organization APIs
+Leave APIs
+Attendance APIs
+Timesheet APIs
+Performance APIs
+Learning APIs
+Skills APIs
+Compensation APIs
+Benefits APIs
+Document APIs
+Workflow APIs
+Deliverable 4 – Security
+RBAC
+ABAC
+Data scope
+Field-level security
+Audit
+Deliverable 5 – AI Platform
+AI Gateway
+RAG
+Knowledge Base
+Copilots
+Agents
+Orchestrator
+Tool calling
+AI audit
+Deliverable 6 – Workflow Engine
+Approval definitions
+Workflow execution
+Escalation
+Delegation
+SLA
+Notifications
+Deliverable 7 – Analytics
+Workforce dashboards
+Recruitment dashboards
+Attendance dashboards
+Leave dashboards
+Performance dashboards
+Learning dashboards
+Skills dashboards
+Compensation dashboards
+Deliverable 8 – Integration Center
+REST APIs
+Webhooks
+Scheduled jobs
+File integrations
+Event integrations
+Monitoring
+Error handling
+Deliverable 9 – Globalization
+Countries
+Legal entities
+Currency
+Time zones
+Languages
+Holidays
+Leave policies
+Country configuration
+Deliverable 10 – Demo Environment
+Use the TimeZ 500-employee dataset as the standard demo data and build end-to-end scenarios around real employee lifecycle processes.
+
+72. FINAL PRODUCT DEFINITION
+TimeZ is a global AI-powered HCM platform designed to manage the complete employee lifecycle through a unified application, intelligent automation, configurable workflows, global localization, analytics and secure AI-assisted workforce operations.
+The long-term direction is to evolve TimeZ into an AI-native global workforce platform where employees, managers, HR teams and leadership can complete day-to-day HR activities through a combination of traditional application screens, intelligent automation and AI assistance.
+The key design principle is:
+AI should not simply answer questions. It should understand context, find information, prepare actions, trigger workflows, assist users and execute authorized transactions with complete auditability.
+
+73. FINAL ARCHITECTURE SUMMARY
+┌─────────────────────────────────────────────────────────────────────┐
+│                           TIMEZ                                    │
+│                 AI-POWERED GLOBAL HCM PLATFORM                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  EMPLOYEE        MANAGER          HR          RECRUITER   EXECUTIVE │
+│     │               │              │               │          │     │
+│     └───────────────┴──────────────┴───────────────┴──────────┘│
+│                              │                                      │
+│                              ▼│
+│                     ┌────────────────┐                             │
+│                     │   AI COPILOT   │                             │
+│                     └───────┬────────┘│
+│                             ▼│
+│                     ┌────────────────┐                             │
+│                     │ AI ORCHESTRATOR│                             │
+│                     └───────┬────────┘│
+│                             │                                      │
+│          ┌──────────────────┼───────────────────┐│
+│          ▼▼▼│
+│     AI AGENTS             RAG              ANALYTICS               │
+│          │                  │                   │                  │
+│          └──────────────────┼───────────────────┘│
+│                             ▼│
+│                    AUTHORIZATION LAYER                             │
+│                             │                                      │
+│                             ▼│
+│                     HCM BUSINESS APIs                              │
+│                             │                                      │
+│      ┌──────────────────────┼───────────────────────┐│
+│      ▼▼▼│
+│  WORKFORCE                TALENT                  REWARDS           │
+│  Employee                 Recruiting              Compensation     │
+│  Organization             Onboarding              Benefits         │
+│  Attendance               Performance                              │
+│  Leave                    Learning                                 │
+│  Timesheet                Skills & Career                           │
+│      │                      │                       │              │
+│      └──────────────────────┼───────────────────────┘│
+│                             ▼│
+│                    WORKFLOW ENGINE                                 │
+│                             │                                      │
+│                             ▼│
+│                    INTEGRATION CENTER                              │
+│                             │                                      │
+│                             ▼│
+│                    DATA & STORAGE LAYER                             │
+│          PostgreSQL | pgvector | Redis | Object Storage            │
+│                             │                                      │
+│                             ▼│
+│                         AUDIT / LOGS                                │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+The development sequence should therefore be:
+Product → UX → Functional Design → Data Model → APIs → Security → Workflow → HCM Modules → AI Layer → Integrations → Analytics → Globalization → Enterprise Hardening
+This gives you a single master document that can be copied into Word first, and then later separated into the Product Blueprint, Functional Design and Technical Design documents as the actual development progresses.
+
+
