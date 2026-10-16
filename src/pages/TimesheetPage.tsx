@@ -50,7 +50,7 @@ export function TimesheetPage() {
     removeTimeEntry,
     submitWeekTimesheets,
     setOrgTimesheetStatus,
-    canApproveLeaveFor,
+    canDecideFor,
   } = usePortal();
   const projects = currentProjects;
   const [view, setView] = useState<TimesheetView>("mine");
@@ -220,7 +220,7 @@ export function TimesheetPage() {
         <>
           <section className="summary-row" aria-label="Company timesheet summary">
             <div className="summary">
-              <span>People in scope</span>
+              <span>People</span>
               <strong>{orgCounts.total}</strong>
             </div>
             <div className="summary">
@@ -293,8 +293,8 @@ export function TimesheetPage() {
                         <StatusPill status={row.status} />
                       </td>
                       <td>
-                        {/* Only the person's reporting line (or HR) decides — never their own row. */}
-                        {row.status === "submitted" && canApproveLeaveFor(row.personId) && (
+                        {/* Only the person's reporting line decides — never their own row. */}
+                        {row.status === "submitted" && canDecideFor(row.personId) && (
                           <span className="form-actions">
                             <button
                               className="btn btn-tiny"
@@ -326,7 +326,7 @@ export function TimesheetPage() {
                             </button>
                           </span>
                         )}
-                        {row.status === "submitted" && !canApproveLeaveFor(row.personId) && (
+                        {row.status === "submitted" && !canDecideFor(row.personId) && (
                           <span className="muted">Waiting for their manager</span>
                         )}
                         {row.status === "missing" && <span className="muted">Awaiting employee</span>}

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { OptionalHolidaysCard } from "../features/workforce/OptionalHolidaysPage.tsx";
 import { Card, Page, ProjectFacts } from "../components/ui.tsx";
 import {
   isPrimaryWeeklyOffLabel,
@@ -163,6 +164,7 @@ export function HolidaysPage() {
           })}
         </div>
       </Card>
+      <OptionalHolidaysCard />
     </Page>
   );
 }

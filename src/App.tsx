@@ -45,6 +45,18 @@ import {
   WorkflowsPage,
 } from "./pages/TimezModules.tsx";
 import { ApprovalsCenterPage } from "./pages/ApprovalsCenter.tsx";
+import { AllExitsPage, MyExitPage, TeamExitsPage } from "./features/lifecycle/ExitPages.tsx";
+import { MyProbationPage, ProbationReviewsPage } from "./features/lifecycle/ProbationPages.tsx";
+import { ImmigrationPage } from "./features/compliance/ImmigrationPage.tsx";
+import { PrivacyCentrePage } from "./features/compliance/PrivacyCentrePage.tsx";
+import { GrievancePage } from "./features/compliance/GrievancePage.tsx";
+import { BackgroundChecksPage } from "./features/compliance/BackgroundChecksPage.tsx";
+import { EngagementSurveysPage, InternalJobBoardPage, SuccessionPage } from "./features/talentplus/index.ts";
+import { BulkDataPage } from "./features/datatools/BulkDataPage.tsx";
+import { ReportBuilderPage } from "./features/datatools/ReportBuilderPage.tsx";
+import { ShiftRosterPage } from "./features/workforce/ShiftRosterPage.tsx";
+import { OptionalHolidaysPage } from "./features/workforce/OptionalHolidaysPage.tsx";
+import { ContractorsPage } from "./features/workforce/ContractorsPage.tsx";
 import { EmptyState, Page } from "./components/ui.tsx";
 import { accountHasNavAccess, type NavAccessId } from "./demoAccounts.ts";
 import { usePortal } from "./store.tsx";
@@ -120,7 +132,24 @@ export function App() {
         <Route path="/cab" element={<CabPage />} />
         <Route path="/expenses" element={<Allowed id="expenses"><ExpensesPage /></Allowed>} />
         <Route path="/reimbursement" element={<ReimbursementPage />} />
-        <Route path="/investment" element={<InvestmentProofPage />} />
+        <Route path="/investment" element={<Allowed id="taxdeclarations"><InvestmentProofPage /></Allowed>} />
+        <Route path="/me/exit" element={<Allowed id="exit"><MyExitPage /></Allowed>} />
+        <Route path="/team/exits" element={<Allowed id="teamexits"><TeamExitsPage /></Allowed>} />
+        <Route path="/people/exits" element={<Allowed id="exitsadmin"><AllExitsPage /></Allowed>} />
+        <Route path="/me/probation" element={<Allowed id="probation"><MyProbationPage /></Allowed>} />
+        <Route path="/team/probation" element={<Allowed id="probationreviews"><ProbationReviewsPage /></Allowed>} />
+        <Route path="/me/immigration" element={<Allowed id="immigration"><ImmigrationPage /></Allowed>} />
+        <Route path="/me/privacy" element={<Allowed id="privacy"><PrivacyCentrePage /></Allowed>} />
+        <Route path="/me/grievances" element={<Allowed id="grievances"><GrievancePage /></Allowed>} />
+        <Route path="/talent/background-checks" element={<Allowed id="bgv"><BackgroundChecksPage /></Allowed>} />
+        <Route path="/engagement-surveys" element={<Allowed id="engagement"><EngagementSurveysPage /></Allowed>} />
+        <Route path="/succession" element={<Allowed id="succession"><SuccessionPage /></Allowed>} />
+        <Route path="/internal-jobs" element={<Allowed id="internaljobs"><InternalJobBoardPage /></Allowed>} />
+        <Route path="/data-tools/bulk" element={<Allowed id="bulkdata"><BulkDataPage /></Allowed>} />
+        <Route path="/data-tools/reports" element={<Allowed id="reportbuilder"><ReportBuilderPage /></Allowed>} />
+        <Route path="/workforce/shifts" element={<Allowed id="shifts"><ShiftRosterPage /></Allowed>} />
+        <Route path="/workforce/optional-holidays" element={<Allowed id="optionalholidays"><OptionalHolidaysPage /></Allowed>} />
+        <Route path="/workforce/contractors" element={<Allowed id="contractors"><ContractorsPage /></Allowed>} />
         <Route path="/payslips" element={<Allowed id="payslips"><PayslipsPage /></Allowed>} />
         <Route path="/payslips/:id" element={<Allowed id="payslips"><PayslipDetail /></Allowed>} />
         <Route path="/evaluations" element={<Allowed id="performance"><EvaluationsPage /></Allowed>} />

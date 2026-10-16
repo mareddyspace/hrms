@@ -189,7 +189,7 @@ export function CompensationPage() {
           {visibleHistory.length === 0 ? (
             <EmptyState
               title="No visible history"
-              description="No compensation events are in scope for this persona (or amounts are fully restricted)."
+              description="There are no compensation changes for you to see."
             />
           ) : (
             <DataTable
@@ -251,7 +251,7 @@ export function CompensationPage() {
             <Banner message={reviewMsg} />
             {visibleReviews.length === 0 ? (
               <EmptyState
-                title="No proposals in scope"
+                title="No proposals to review"
                 description="You only see your own row, direct reports (masked), or the HR/Comp approval queue."
               />
             ) : (
@@ -301,7 +301,7 @@ export function CompensationPage() {
       {tab === "bonuses" && (
         <Card title="Bonus and incentive records">
           {visibleBonuses.length === 0 ? (
-            <EmptyState title="No incentive rows in scope" description="Org-wide bonus lists are not shown to managers or executives." />
+            <EmptyState title="No incentives to show" description="Company-wide bonus lists are visible to HR and Compensation only." />
           ) : (
             <DataTable
               headers={["Employee", "Type", "Period", "Amount", "Status"]}
@@ -511,9 +511,9 @@ export function BenefitsPage() {
                 e.effective,
                 <span key={`${e.id}-a`}>{enrollmentAction(e)}</span>,
               ])}
-              empty={<EmptyState title="No enrollments" description="No enrollment rows in scope." />}
+              empty={<EmptyState title="No enrollments" description="No enrollments yet." />}
             />
-            {!canSeeOthers && <ScopeNote text="Showing your enrollments only. Changes are sent to HR for approval." />}
+            {!canSeeOthers && <ScopeNote text="Changes are sent to HR for approval." />}
           </Card>
           {availablePlans.length > 0 && (
             <Card title="Plans you can join">

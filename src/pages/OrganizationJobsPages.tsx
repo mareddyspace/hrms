@@ -23,7 +23,7 @@ import {
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { hasModuleAccess } from "../data/peoplePermissions.ts";
 import { TZ_HEADCOUNT } from "../data/dashboardMock.ts";
-import { LocaleContextBanner, RegionalFilter } from "../locale/RegionalFilter.tsx";
+import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import { usePortal } from "../store.tsx";
 
@@ -120,7 +120,6 @@ export function OrganizationPage() {
       title="Organization"
       subtitle={`${activeCountry.legalEntity} · ${activeCountry.name}`}
     >
-      <LocaleContextBanner />
       <FilterBar>
         <RegionalFilter label={t("locale.region")} />
       </FilterBar>
@@ -200,7 +199,9 @@ export function OrganizationPage() {
             rows={relationships}
             empty={<EmptyState title="No rows" description="No active employees for this filter." />}
           />
-          <p className="note">Showing up to 40 rows. Full directory is under People.</p>
+          <Link to="/directory" className="quiet-link">
+            See everyone in Directory
+          </Link>
         </Card>
       )}
 

@@ -506,7 +506,7 @@ export const INBOX_SEED: InboxTask[] = [
     id: "ib-8",
     kind: "Leave",
     title: "Emergency leave · 20 Oct",
-    requester: "Isha Reddy",
+    requester: "Riya Kapoor",
     requesterId: "ob-1",
     summary: "Delegated to Farhan Ali while Ram is OOO",
     status: "Delegated",
@@ -514,7 +514,7 @@ export const INBOX_SEED: InboxTask[] = [
     delegatedTo: "Farhan Ali",
     requiresReasonOnReject: true,
     timeline: [
-      { at: "2026-10-13T12:00:00", actor: "Isha Reddy", action: "Submitted", status: "Pending" },
+      { at: "2026-10-13T12:00:00", actor: "Riya Kapoor", action: "Submitted", status: "Pending" },
       { at: "2026-10-13T12:30:00", actor: "Ram Krishnan", action: "Delegated", comment: "Covering while OOO", status: "Delegated" },
     ],
   },
@@ -973,7 +973,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
   {
     id: "nf-m13",
     category: "Team",
-    title: "New joiner · Isha Reddy",
+    title: "New joiner · Riya Kapoor",
     body: "Engineer started 06 Oct — schedule 30-day check-in and buddy intro.",
     at: "2026-10-06T09:00:00",
     readBy: SEEN_BY_ALL,

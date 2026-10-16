@@ -6,6 +6,7 @@ import type { UserRole } from "./model.ts";
 export type NavGroupKey =
   | "me"
   | "myTime"
+  | "myRecords"
   | "team"
   | "people"
   | "talent"
@@ -59,10 +60,26 @@ export const navGroups: readonly NavGroup[] = [
       { id: "leave", label: "Leave & holidays", to: "/leave", badgeKey: "/leave" },
       { id: "holidays", label: "Holiday calendar", to: "/holidays" },
       { id: "timesheet", label: "My timesheets", to: "/timesheet", badgeKey: "/timesheet" },
+      { id: "shifts", label: "Shifts & roster", to: "/workforce/shifts" },
+      { id: "optionalholidays", label: "Optional holidays", to: "/workforce/optional-holidays" },
       { id: "payslips", label: "Payslips", to: "/payslips" },
+      { id: "taxdeclarations", label: "Tax declarations", to: "/investment" },
       { id: "benefits", label: "Benefits", to: "/benefits" },
       { id: "expenses", label: "Reimbursements", to: "/expenses" },
       { id: "documents", label: "Documents & letters", to: "/documents" },
+    ],
+  },
+  {
+    key: "myRecords",
+    label: "My workplace",
+    links: [
+      { id: "probation", label: "Probation", to: "/me/probation" },
+      { id: "internaljobs", label: "Internal jobs", to: "/internal-jobs" },
+      { id: "engagement", label: "Surveys", to: "/engagement-surveys" },
+      { id: "immigration", label: "Visas & permits", to: "/me/immigration" },
+      { id: "grievances", label: "Raise a concern", to: "/me/grievances" },
+      { id: "privacy", label: "Privacy", to: "/me/privacy" },
+      { id: "exit", label: "Resignation", to: "/me/exit" },
     ],
   },
   {
@@ -72,6 +89,9 @@ export const navGroups: readonly NavGroup[] = [
       { id: "team", label: "Team overview", to: "/team" },
       { id: "inbox", label: "Approvals", to: "/approvals", badgeKey: "/approvals" },
       { id: "workflows", label: "Workflows", to: "/workflows" },
+      { id: "probationreviews", label: "Probation reviews", to: "/team/probation" },
+      { id: "teamexits", label: "Team exits", to: "/team/exits" },
+      { id: "succession", label: "Succession", to: "/succession" },
     ],
   },
   {
@@ -82,6 +102,8 @@ export const navGroups: readonly NavGroup[] = [
       { id: "organization", label: "Organization", to: "/organization" },
       { id: "jobs", label: "Jobs", to: "/jobs" },
       { id: "compensation", label: "Compensation", to: "/compensation" },
+      { id: "contractors", label: "Contractors", to: "/workforce/contractors" },
+      { id: "exitsadmin", label: "Exits", to: "/people/exits" },
     ],
   },
   {
@@ -90,6 +112,7 @@ export const navGroups: readonly NavGroup[] = [
     links: [
       { id: "recruiting", label: "Recruiting", to: "/recruiting" },
       { id: "onboarding", label: "Onboarding", to: "/onboarding" },
+      { id: "bgv", label: "Background checks", to: "/talent/background-checks" },
     ],
   },
   {
@@ -97,6 +120,7 @@ export const navGroups: readonly NavGroup[] = [
     label: "Performance & learning",
     links: [
       { id: "analytics", label: "Analytics", to: "/analytics" },
+      { id: "reportbuilder", label: "Report builder", to: "/data-tools/reports" },
       { id: "performance", label: "Performance", to: "/evaluations", badgeKey: "/evaluations" },
       { id: "learning", label: "Learning", to: "/programs", badgeKey: "/programs" },
       { id: "skills", label: "Skills & career", to: "/skills" },
@@ -110,6 +134,7 @@ export const navGroups: readonly NavGroup[] = [
       { id: "locale", label: "Locale", to: "/settings/locale" },
       { id: "integrations", label: "Integrations", to: "/integrations" },
       { id: "payroll", label: "Payroll", to: "/payroll" },
+      { id: "bulkdata", label: "Bulk data", to: "/data-tools/bulk" },
       { id: "administration", label: "Console", to: "/admin" },
     ],
   },

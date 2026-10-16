@@ -1,0 +1,65 @@
+.lc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.lc-grid > * { min-width: 0; }
+.lc-grid .field.wide { grid-column: 1 / -1; }
+
+.lc-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+.lc-facts div { min-width: 0; }
+.lc-facts dt { margin: 0; color: var(--muted); font-size: 12.5px; }
+.lc-facts dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+
+.lc-checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.lc-check {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+.lc-check.done { opacity: 0.85; }
+.lc-check-main { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 220px; }
+.lc-check-main input { width: 18px; height: 18px; flex: 0 0 auto; }
+.lc-check-main span { overflow-wrap: anywhere; }
+
+.lc-progress { height: 8px; border-radius: 99px; background: var(--soft, #eef1f6); overflow: hidden; }
+.lc-progress > span { display: block; height: 100%; background: var(--accent-fill, #3b6cf6); }
+
+.lc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.lc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--chip-border, var(--line));
+  border-radius: 99px;
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--card);
+}
+.lc-chip input { margin: 0; }
+
+.lc-rating { display: flex; gap: 6px; flex-wrap: wrap; }
+.lc-rating button[aria-pressed="true"] { background: var(--accent-fill); color: #fff; border-color: transparent; }
+
+.lc-inline-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.lc-inline-check input { width: 16px; height: 16px; }
+
+@media (max-width: 720px) {
+  .lc-grid { grid-template-columns: minmax(0, 1fr); }
+  .lc-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 420px) {
+  .lc-facts { grid-template-columns: minmax(0, 1fr); }
+}

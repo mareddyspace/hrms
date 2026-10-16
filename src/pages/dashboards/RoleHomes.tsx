@@ -443,15 +443,15 @@ export function EmployeeHome() {
 /* ───────────────────────────────────────────── B. MANAGER ── */
 
 export function ManagerHome() {
-  const { employee, state, demoProfile, canApproveLeaveFor } = usePortal();
+  const { employee, state, demoProfile, canDecideFor } = usePortal();
   const [range, setRange] = useDateRange("30d");
   const today = todayISO();
   const access = demoProfile.navAccess;
 
-  // Only items this manager can actually decide (reporting line or HR; never their own).
-  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && canApproveLeaveFor(item.employeeId));
-  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted");
-  const expensePending = state.expenses.filter((item) => item.status === "submitted" && canApproveLeaveFor(item.employeeId));
+  // Only items this manager decides (people below them in the reporting line).
+  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && canDecideFor(item.employeeId));
+  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted" && canDecideFor(item.personId));
+  const expensePending = state.expenses.filter((item) => item.status === "submitted" && canDecideFor(item.employeeId));
   const pendingApprovals = leavePending.length + timesheetPending.length + expensePending.length;
 
   useEffect(() => {
@@ -753,7 +753,6 @@ export function HrbpHome() {
             headers={["Type", "Employee", "Detail", "Date"]}
             rows={scope.movements.map((m) => [m.type, m.who, m.detail, m.date])}
           />
-          <p className="note">Showing movements for filter: {range}</p>
         </Card>
 
         <Card title="Performance cycle progress" to={R.performance}>

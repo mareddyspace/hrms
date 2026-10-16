@@ -98,7 +98,7 @@ export const TZ_TEAM = {
   reviewDeadlines: [
     { name: "Priya Nair", item: "Mid-year check-in", due: "18 Oct", status: "Due soon" },
     { name: "Anu Rao", item: "Skills feedback", due: "22 Oct", status: "Scheduled" },
-    { name: "Isha Reddy", item: "30-day probation", due: "05 Nov", status: "On track" },
+    { name: "Riya Kapoor", item: "30-day probation", due: "05 Nov", status: "On track" },
   ],
   oneOnOnes: [
     { name: "Babu Menon", last: "07 Oct", next: "16 Oct", status: "Booked" },
@@ -113,7 +113,7 @@ export const TZ_TEAM = {
     { name: "Kabir Sharma", signal: "Low engagement pulse · high OT", risk: "Watch" },
   ],
   newJoiners: [
-    { name: "Isha Reddy", start: "06 Oct", role: "Engineer" },
+    { name: "Riya Kapoor", start: "06 Oct", role: "Engineer" },
     { name: "Noah Garcia", start: "13 Oct", role: "Designer" },
   ],
   skills: [

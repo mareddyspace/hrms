@@ -99,7 +99,7 @@ function correctionKindLabel(kind: CorrectionKind): string {
 }
 
 export function AttendancePage() {
-  const { state, employee, isManager, demoProfile, demoAccounts, canApproveLeaveFor } = usePortal();
+  const { state, employee, isManager, demoProfile, demoAccounts, canDecideFor } = usePortal();
   const { activeCountry, t } = useLocale();
   const attState = useAttendance();
   const today = todayISO();
@@ -146,8 +146,8 @@ export function AttendancePage() {
     [attState.corrections, employee.id],
   );
   const teamCorrections = useMemo(
-    () => listCorrectionsForApprover(canApproveLeaveFor),
-    [attState.corrections, canApproveLeaveFor],
+    () => listCorrectionsForApprover(canDecideFor),
+    [attState.corrections, canDecideFor],
   );
 
   const range = useMemo(() => {

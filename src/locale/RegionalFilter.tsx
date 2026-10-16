@@ -31,8 +31,3 @@ export function RegionalFilter({
 }
 
 /** Optional one-line scope hint — keep short; region picker carries the real control. */
-export function LocaleContextBanner() {
-  const { activeCountry, regionCode } = useLocale();
-  const label = regionCode === "ALL" ? "All countries" : activeCountry.name;
-  return <p className="note locale-banner">Showing data for {label}.</p>;
-}

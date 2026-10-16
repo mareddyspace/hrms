@@ -535,4 +535,23 @@ export function pushManagerTaskAlert(input: {
   });
 }
 
+/** Notification for one specific person (e.g. a task owner or someone CC'd). */
+export function pushPersonTaskAlert(input: { recipientId: string; title: string; body: string; href?: string }) {
+  updateCollab((s) => {
+    s.notifications.unshift({
+      id: `nf-task-${Date.now()}-${input.recipientId}`,
+      category: "Team",
+      title: input.title,
+      body: input.body,
+      at: new Date().toISOString(),
+      readBy: [],
+      audience: "employee",
+      recipientId: input.recipientId,
+      href: input.href ?? "/tasks",
+      actionLabel: "Open",
+      actions: [{ id: "open", label: "Open", kind: "link", href: input.href ?? "/tasks" }],
+    });
+  });
+}
+
 export type { InboxTab };

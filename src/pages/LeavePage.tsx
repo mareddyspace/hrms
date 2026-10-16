@@ -14,6 +14,7 @@ import {
   workingDays,
 } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { taskPersonById } from "../data/taskTeam.ts";
 
 const PERMISSION_LABEL: Record<BackdatedLeavePermission["status"], { text: string; tone: "ok" | "warn" | "danger" | "neutral" | "info" }> = {
   pending: { text: "Awaiting approval", tone: "warn" },
@@ -35,7 +36,8 @@ export function LeavePage() {
     requestBackdatedPermission,
     withdrawBackdatedPermission,
     decideBackdatedPermission,
-    canApproveLeaveFor,
+    canDecideFor,
+    hasApprover,
   } = portal;
   const today = todayISO();
   const approver = managementChain(employee.id, demoAccounts)[0];
@@ -65,14 +67,14 @@ export function LeavePage() {
     (request) => request.employeeId === employee.id && request.from.startsWith(String(year)),
   );
   // Past dates need permission from the reporting line before leave can be applied (recent sick leave excepted).
-  const isBackdated = Boolean(from) && needsBackdatedPermission(code, from, today);
+  const isBackdated = hasApprover && Boolean(from) && needsBackdatedPermission(code, from, today);
   const permission = isBackdated ? backdatedPermissionFor(state, employee.id, from, to || from, code) : undefined;
   const needsPermission = isBackdated && !permission;
   const recentSick = code === "sick" && Boolean(from) && from < today && !isBackdated;
   const myPermissions = state.backdatedPermissions.filter((p) => p.employeeId === employee.id);
-  const teamPermissions = state.backdatedPermissions.filter((p) => p.status === "pending" && canApproveLeaveFor(p.employeeId));
-  const teamLeave = state.leaveRequests.filter((r) => r.status === "pending" && canApproveLeaveFor(r.employeeId));
-  const nameOf = (id: string) => demoAccounts.find((a) => a.id === id)?.fullName ?? id;
+  const teamPermissions = state.backdatedPermissions.filter((p) => p.status === "pending" && canDecideFor(p.employeeId));
+  const teamLeave = state.leaveRequests.filter((r) => r.status === "pending" && canDecideFor(r.employeeId));
+  const nameOf = (id: string) => demoAccounts.find((a) => a.id === id)?.fullName ?? taskPersonById(id)?.fullName ?? id;
   const leaveName = (leaveCode: LeaveCode) => leaveTable.find((row) => row.code === leaveCode)?.name ?? leaveCode;
   const [notes, setNotes] = useState<Record<string, string>>({});
 
@@ -99,7 +101,16 @@ export function LeavePage() {
       return;
     }
     const error = await applyLeave({ code, from, to, reason });
-    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Leave request submitted. A manager must approve it." });
+    setMessage(
+      error
+        ? { tone: "err", text: error }
+        : {
+            tone: "ok",
+            text: hasApprover
+              ? `Leave request submitted to ${approver?.fullName ?? "your manager"}.`
+              : "Leave recorded and approved — there's no one above you to approve it.",
+          },
+    );
     if (!error) resetForm();
   }
 
@@ -127,7 +138,7 @@ export function LeavePage() {
   }
 
   return (
-    <Page title="Leave & Absence" subtitle="Balances, apply leave, and your request history. Balances update when a manager approves.">
+    <Page title="Leave & Absence" subtitle="Balances, requests and history.">
       <div className="year-bar" role="tablist" aria-label="Leave year">
         {years.map((item) => (
           <button

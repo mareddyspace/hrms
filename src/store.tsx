@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { compOffCreditsFor, getShiftState, subscribeShifts } from "./features/workforce/shiftsStore.ts";
+import { declarableTaxYears, money, payRulesFor } from "./countryPay.ts";
 import type { ReactNode } from "react";
 import { createContext, useContext } from "react";
 import {
@@ -11,6 +13,8 @@ import {
   validateEncashment,
   validateExpense,
   validateLeave,
+  safeTaskUrl,
+  TASK_TYPES,
   backdatedPermissionFor,
   needsBackdatedPermission,
   addDaysISO,
@@ -47,6 +51,8 @@ import type {
   Task,
   TaskPriority,
   TaskStatus,
+  TaskLink,
+  TaskType,
   OrgTimesheetStatus,
   TimeEntry,
   TimesheetStatus,
@@ -61,10 +67,10 @@ import {
   managementChain,
   type DemoAccount,
 } from "./demoAccounts.ts";
-import { canApproveTeam } from "./model.ts";
+import { canApproveTeam, setEarnedLeaveSource } from "./model.ts";
 import { createSeed, DEMO_PASSWORD, EMPLOYEE, findAccountByCode, findAccountById } from "./seed.ts";
 import { taskPersonById } from "./data/taskTeam.ts";
-import { pushManagerTaskAlert } from "./data/collabLocal.ts";
+import { pushManagerTaskAlert, pushPersonTaskAlert } from "./data/collabLocal.ts";
 import { taskProgress } from "./data/taskHelpers.ts";
 
 const STORAGE_KEY = "kastech.ess.state.v1";
@@ -199,6 +205,11 @@ function loadState(): PortalState {
         return uploadedBy === document.uploadedBy && body === document.body ? document : { ...document, uploadedBy, body };
       });
     }
+    // Payslips used to be Indian for everyone; they now follow each person's country.
+    if (!Array.isArray(parsed.payslips) || parsed.payslips.some((slip) => !slip.currency)) {
+      parsed.payslips = seed.payslips;
+      renamed = true;
+    }
     if (!parsed.policies.some((policy) => policy.id === "pol-handbook")) {
       parsed.policies = seed.policies;
       renamed = true;
@@ -263,8 +274,12 @@ interface PortalApi {
   requestBackdatedPermission: (input: LeaveInput) => string | null;
   withdrawBackdatedPermission: (id: string) => string | null;
   decideBackdatedPermission: (id: string, decision: "approved" | "rejected", note?: string) => string | null;
-  /** Whether the signed-in user may approve leave and backdated permissions for this employee. */
+  /** Manager-or-HR visibility check (who may see and manage this person's records). */
   canApproveLeaveFor: (employeeId: string) => boolean;
+  /** Whether the signed-in user decides this person's requests — someone above them in the reporting line. */
+  canDecideFor: (employeeId: string) => boolean;
+  /** False for people at the top of the organisation: their requests are approved automatically. */
+  hasApprover: boolean;
   applyEncashment: (code: LeaveCode, days: number) => string | null;
   setEncashmentStatus: (id: string, status: RequestStatus, note?: string) => string | null;
   saveTimesheet: (projectId: string, weekStart: string, hours: Record<string, number>, status: TimesheetStatus) => string | null;
@@ -300,6 +315,10 @@ interface PortalApi {
     due?: string;
     estimatedHours?: number;
     peopleIds?: string[];
+    taskType?: TaskType;
+    links?: TaskLink[];
+    referenceTaskId?: string;
+    ccIds?: string[];
   }) => string | null;
   taskAction: (
     taskId: string,
@@ -346,7 +365,6 @@ interface PortalApi {
 }
 
 /** Yearly caps for common Indian tax-saving sections (income tax old regime). */
-const INVESTMENT_SECTION_CAPS: Record<string, number> = { "80C": 150000, "80CCD(1B)": 50000, "80D": 50000, "80E": Infinity };
 const MAX_CASH_ADVANCE = 100000;
 const MAX_MEAL_ORDERS_PER_DAY = 3;
 
@@ -369,7 +387,11 @@ function withoutPhoto<T extends { photo?: string }>(override: T | undefined): Om
 
 const PortalContext = createContext<PortalApi | null>(null);
 
+// Comp-off days granted for working weekends or holidays add to the comp-off balance.
+setEarnedLeaveSource((employeeId, code, year) => (code === "comp_off" ? compOffCreditsFor(employeeId, year) : 0));
+
 export function PortalProvider({ children }: { children: ReactNode }) {
+  const shiftState = useSyncExternalStore(subscribeShifts, getShiftState);
   const [state, setState] = useState<PortalState>(() => {
     ensureDemoLastLogin();
     return loadState();
@@ -465,7 +487,28 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       return null;
     }
 
-    /** Approvers: anyone above the employee in the reporting line, or HR. Never yourself. */
+    /** Approvals follow the reporting line: only someone above the person decides their requests. */
+    function canDecideFor(employeeId: string): boolean {
+      if (employeeId === active.id) return false;
+      return managementChain(employeeId, TIMEZ_DEMOS).some((manager) => manager.id === active.id);
+    }
+
+    /** People at the top of the organisation have no one to approve their requests. */
+    const activeHasApprover = managementChain(active.id, TIMEZ_DEMOS).length > 0;
+
+    /** Requests from someone with no one above them are approved as soon as they're raised. */
+    function withAutoApproval<T extends { status: string }>(item: T, approvedStatus: T["status"]): T {
+      if (activeHasApprover) return item;
+      return {
+        ...item,
+        status: approvedStatus,
+        decidedById: active.id,
+        decidedByName: active.fullName,
+        decidedOn: todayISO(),
+        decisionNote: "Approved automatically — no one above you in the reporting line",
+      };
+    }
+
     function canApproveFor(employeeId: string): boolean {
       if (employeeId === active.id) return false;
       if (["hr", "hr_admin", "hrbp"].includes(active.role)) return true;
@@ -475,7 +518,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     const canVerifyProofs = ["hr", "hr_admin", "hrbp", "finance", "compensation_admin"].includes(active.role);
 
     /**
-     * One rule for every request type: approvers (reporting line or HR) move an open request to
+     * One rule for every request type: approvers (above the person in their reporting line) move an open request to
      * approved/rejected; the requester may withdraw it while it is still open. Nobody decides their own.
      */
     function decisionError(
@@ -492,7 +535,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       }
       if (next === "approved" || next === "rejected" || next === "verified") {
         if (isOwn) return "You cannot decide your own request.";
-        if (!canApproveFor(employeeId)) return "Only someone above this employee in the reporting line, or HR, can decide this.";
+        if (!canDecideFor(employeeId)) return "Only someone above this person in their reporting line can decide this.";
         if (!openStatuses.includes(current)) return "This request has already been decided.";
         return null;
       }
@@ -683,7 +726,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       resetDemo: () => setState(createSeed()),
       applyLeave: async (input) => {
-        const error = validateLeave(state, active.id, input, activeOffs);
+        const error = validateLeave(state, active.id, input, activeOffs, todayISO(), { needsApprover: activeHasApprover });
         if (error) return error;
         const request: LeaveRequest = {
           id: uid("lv"),
@@ -694,12 +737,12 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           appliedOn: todayISO(),
         };
         // A backdated application uses up the permission that allowed it.
-        const permission = needsBackdatedPermission(input.code, input.from)
+        const permission = activeHasApprover && needsBackdatedPermission(input.code, input.from)
           ? backdatedPermissionFor(state, active.id, input.from, input.to, input.code)
           : undefined;
         setState((prev) => ({
           ...prev,
-          leaveRequests: [request, ...prev.leaveRequests],
+          leaveRequests: [withAutoApproval(request, "approved"), ...prev.leaveRequests],
           backdatedPermissions: permission
             ? patchById(prev.backdatedPermissions, permission.id, { status: "used" as const })
             : prev.backdatedPermissions,
@@ -728,7 +771,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             input.from <= r.to,
         );
         if (overlapsLeave) return "Those dates overlap an existing leave request.";
-        if (managementChain(active.id, TIMEZ_DEMOS).length === 0) return "There is no manager above you to approve this.";
+        if (!activeHasApprover) return "You don't need permission — there's no one above you. Apply for the leave directly.";
         const clash = state.backdatedPermissions.some(
           (p) =>
             p.employeeId === active.id &&
@@ -765,7 +808,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const permission = state.backdatedPermissions.find((p) => p.id === permissionId);
         if (!permission) return "Permission request not found.";
         if (permission.employeeId === active.id) return "You cannot approve your own request.";
-        if (!canApproveFor(permission.employeeId)) return "Only someone above this employee in the reporting line, or HR, can decide this.";
+        if (!canDecideFor(permission.employeeId)) return "Only someone above this person in their reporting line can decide this.";
         if (permission.status !== "pending") return "This request has already been decided.";
         setState((prev) => ({
           ...prev,
@@ -780,6 +823,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
       canApproveLeaveFor: (employeeId) => canApproveFor(employeeId),
+      canDecideFor: (employeeId) => canDecideFor(employeeId),
+      hasApprover: activeHasApprover,
       canVerifyProofs,
       setLeaveStatus: async (leaveId, status, note) => {
         const request = state.leaveRequests.find((item) => item.id === leaveId);
@@ -823,7 +868,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           status: "pending",
           appliedOn: todayISO(),
         };
-        setState((prev) => ({ ...prev, encashments: [item, ...prev.encashments] }));
+        setState((prev) => ({ ...prev, encashments: [withAutoApproval(item, "approved"), ...prev.encashments] }));
         return null;
       },
       setEncashmentStatus: (encashmentId, status, note) => {
@@ -968,7 +1013,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           const hasRow = prev.orgTimesheets.some((row) => row.personId === active.id && row.weekStart === weekStart);
           const orgTimesheets = hasRow
             ? prev.orgTimesheets.map((row) =>
-                row.personId === active.id && row.weekStart === weekStart ? { ...row, status: "submitted" as const, hours } : row,
+                row.personId === active.id && row.weekStart === weekStart
+                  ? { ...row, status: activeHasApprover ? ("submitted" as const) : ("approved" as const), hours }
+                  : row,
               )
             : [
                 {
@@ -979,7 +1026,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
                   department: active.department ?? "",
                   weekStart,
                   hours,
-                  status: "submitted" as const,
+                  status: activeHasApprover ? ("submitted" as const) : ("approved" as const),
                   projectSummary,
                 },
                 ...prev.orgTimesheets,
@@ -988,7 +1035,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             ...prev,
             timesheets: prev.timesheets.map((sheet) =>
               sheet.employeeId === active.id && sheet.weekStart === weekStart && sheet.status !== "approved"
-                ? { ...sheet, status: "submitted" }
+                ? { ...sheet, status: activeHasApprover ? "submitted" : "approved" }
                 : sheet,
             ),
             orgTimesheets,
@@ -1008,7 +1055,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const row = state.orgTimesheets.find((item) => item.id === recordId);
         if (!row) return "Timesheet record not found.";
         if (row.personId === active.id) return "You cannot approve your own timesheet.";
-        if (!canApproveFor(row.personId)) return "Only someone above this employee in the reporting line, or HR, can decide this.";
+        if (!canDecideFor(row.personId)) return "Only someone above this person in their reporting line can decide this.";
         if (row.status === "missing") return "Missing timesheets must be filled by the employee first.";
         if (row.status !== "submitted") return "Only submitted timesheets can be approved or sent back.";
         if (status !== "approved" && status !== "draft") return "That status change isn't allowed.";
@@ -1045,7 +1092,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           description: input.description.trim(),
           status: "submitted",
         };
-        setState((prev) => ({ ...prev, expenses: [expense, ...prev.expenses] }));
+        setState((prev) => ({ ...prev, expenses: [withAutoApproval(expense, "approved"), ...prev.expenses] }));
         return null;
       },
       setExpenseStatus: (expenseId, status, note) => {
@@ -1185,16 +1232,43 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       createTask: (input) => {
         if (!canApproveTeam(active.role)) return "Only managers can create team tasks.";
         if (!canApproveFor(input.ownerId)) return "You can only assign tasks to people who report to you.";
-        const subject = input.subject.trim();
-        if (!subject) return "Enter a subject.";
+        const subject = input.subject.trim().replace(/\s+/g, " ");
+        if (subject.length < 3) return "Enter a task name (at least 3 characters).";
+        if (subject.length > 120) return "Keep the task name under 120 characters.";
         const person = taskPersonById(input.ownerId);
         if (!person) return "Pick an owner from your team.";
+        if (!input.taskType || !TASK_TYPES.includes(input.taskType)) return "Choose a task type.";
+        const status = input.status ?? "open";
+        if (status !== "open" && status !== "scheduled") return "A new task starts as To do or Scheduled.";
         const due = (input.due || "").trim();
-        if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) return "Use a valid due date (YYYY-MM-DD).";
-        if (due && due < todayISO()) return "The due date can't be in the past.";
+        if (!due) return "Choose a due date.";
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return "Use a valid due date (YYYY-MM-DD).";
+        if (due < todayISO()) return "The due date can't be in the past.";
+        const estimate = input.estimatedHours ?? 1;
+        if (!Number.isFinite(estimate) || estimate < 0.5 || estimate > 200) return "Estimate between 0.5 and 200 hours.";
+        const duplicate = state.tasks.some(
+          (t) => t.employeeId === person.id && t.status !== "done" && t.subject.trim().toLowerCase() === subject.toLowerCase(),
+        );
+        if (duplicate) return `${person.shortName} already has an open task with this name.`;
+        const links: TaskLink[] = [];
+        for (const link of input.links ?? []) {
+          if (!link.url.trim() && !link.label.trim()) continue;
+          const url = safeTaskUrl(link.url);
+          if (!url) return `"${link.url || link.label}" isn't a valid web link (use https://…).`;
+          links.push({ label: link.label.trim().slice(0, 60) || new URL(url).hostname, url });
+        }
+        if (links.length > 10) return "Add at most 10 links.";
+        if (input.referenceTaskId && !state.tasks.some((t) => t.id === input.referenceTaskId)) return "The related task no longer exists.";
+        const peopleIds = [...new Set(input.peopleIds ?? [])].filter((id) => id !== person.id);
+        if (peopleIds.some((id) => !taskPersonById(id) || !canApproveFor(id))) {
+          return "Collaborators must be people who report to you.";
+        }
+        const ccIds = [...new Set(input.ccIds ?? [])].filter((id) => id !== person.id && id !== active.id && !peopleIds.includes(id));
+        if (ccIds.some((id) => !TIMEZ_DEMOS.some((a) => a.id === id) && !taskPersonById(id))) return "Someone on CC wasn't found.";
+        if (ccIds.length > 10) return "CC at most 10 people.";
         const now = new Date().toISOString();
-        const codeNum = 1100 + state.tasks.length;
-        const peopleIds = (input.peopleIds ?? []).filter((id) => id !== person.id && taskPersonById(id));
+        // Next code after the highest existing one, so codes never repeat.
+        const codeNum = Math.max(1099, ...state.tasks.map((t) => Number(t.code.replace(/\D/g, "")) || 0)) + 1;
         const assigner = active.fullName.split(" ")[0] || "Manager";
         const task: Task = {
           id: uid("task"),
@@ -1202,7 +1276,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           employeeId: person.id,
           subject,
           priority: input.priority,
-          status: input.status ?? "open",
+          status,
+          taskType: input.taskType,
+          links,
+          referenceTaskId: input.referenceTaskId || undefined,
+          ccIds,
           assignedBy: assigner,
           owner: person.shortName,
           department: person.department,
@@ -1214,11 +1292,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           blocked: "",
           automationNote: `Created by ${assigner}`,
           createdAt: now,
-          estimatedHours: Math.max(0.25, input.estimatedHours ?? 1),
+          estimatedHours: estimate,
           hoursSpent: 0,
           score: 70,
           lastActivityAt: now,
-          due: due || todayISO(),
+          due,
           peopleIds,
           progressPct: 0,
           accepted: false,
@@ -1229,6 +1307,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           activity: [{ id: uid("tact"), at: now, actor: assigner, action: "Assigned", detail: `Assigned to ${person.shortName}` }],
         };
         setState((prev) => ({ ...prev, tasks: [task, ...prev.tasks] }));
+        pushPersonTaskAlert({
+          recipientId: person.id,
+          title: `New task · ${task.code}`,
+          body: `${active.fullName} assigned you “${subject}” (due ${due}).`,
+        });
+        for (const id of ccIds) {
+          pushPersonTaskAlert({
+            recipientId: id,
+            title: `You were CC'd · ${task.code}`,
+            body: `${active.fullName} assigned “${subject}” to ${person.fullName}.`,
+          });
+        }
         return null;
       },
       taskAction: (taskId, action, payload = {}) => {
@@ -1440,7 +1530,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           description: input.description.trim(),
           status: "submitted",
         };
-        setState((prev) => ({ ...prev, reimbursements: [item, ...prev.reimbursements] }));
+        setState((prev) => ({ ...prev, reimbursements: [withAutoApproval(item, "approved"), ...prev.reimbursements] }));
         return null;
       },
       setReimbursementStatus: (requestId, status, note) => {
@@ -1472,17 +1562,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
       addInvestmentProof: (input) => {
-        if (!input.title.trim()) return "Enter the investment title.";
+        const rules = payRulesFor(active.countryCode);
+        if (rules.declarations.length === 0) return rules.declarationNote;
+        if (!input.title.trim()) return "Enter a title.";
         if (!Number.isFinite(input.amount) || input.amount <= 0) return "Enter a valid amount.";
-        if (!Number.isInteger(input.amount)) return "Enter the amount in whole rupees.";
+        if (!Number.isInteger(input.amount)) return `Enter the amount in whole ${rules.currency}.`;
         const fy = input.financialYear.trim();
-        const [startYear] = todayISO().split("-").map(Number);
-        const month = Number(todayISO().slice(5, 7));
-        const currentFyStart = month >= 4 ? startYear : startYear - 1;
-        const allowedFys = [currentFyStart, currentFyStart + 1].map((y) => `${y}-${String((y + 1) % 100).padStart(2, "0")}`);
-        if (!allowedFys.includes(fy)) return `Choose a financial year: ${allowedFys.join(" or ")}.`;
+        const allowedFys = declarableTaxYears(rules, todayISO());
+        if (!allowedFys.includes(fy)) return `Choose a tax year: ${allowedFys.join(" or ")}.`;
         const section = input.section.trim().toUpperCase();
-        const cap = INVESTMENT_SECTION_CAPS[section];
+        const sectionRule = rules.declarations.find((item) => item.code.toUpperCase() === section);
+        if (!sectionRule) return "Choose a section from the list.";
+        const cap = sectionRule.cap;
         if (cap != null) {
           const used = state.investmentProofs
             .filter(
@@ -1495,7 +1586,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             )
             .reduce((total, p) => total + p.amount, 0);
           if (used + input.amount > cap) {
-            return `Section ${section} allows up to ₹${cap.toLocaleString("en-IN")} a year — you've already declared ₹${used.toLocaleString("en-IN")}.`;
+            return `${sectionRule.code} allows up to ${money(cap, rules.currency)} a year — you've already declared ${money(used, rules.currency)}.`;
           }
         }
         const duplicate = state.investmentProofs.some(
@@ -1515,6 +1606,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           title: input.title.trim(),
           amount: input.amount,
           financialYear: input.financialYear.trim(),
+          currency: rules.currency,
           status: "submitted",
           submittedOn: todayISO(),
         };
@@ -1582,7 +1674,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           status: "pending",
           date: todayISO(),
         };
-        setState((prev) => ({ ...prev, assetRequests: [request, ...prev.assetRequests] }));
+        setState((prev) => ({ ...prev, assetRequests: [withAutoApproval(request, "approved"), ...prev.assetRequests] }));
         return null;
       },
       setAssetStatus: (requestId, status, note) => {
@@ -1614,7 +1706,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           status: "pending",
           date: todayISO(),
         };
-        setState((prev) => ({ ...prev, cashAdvances: [request, ...prev.cashAdvances] }));
+        setState((prev) => ({ ...prev, cashAdvances: [withAutoApproval(request, "approved"), ...prev.cashAdvances] }));
         return null;
       },
       setCashStatus: (requestId, status, note) => {
@@ -1643,7 +1735,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           status: "pending",
           date: todayISO(),
         };
-        setState((prev) => ({ ...prev, softwareRequests: [request, ...prev.softwareRequests] }));
+        setState((prev) => ({ ...prev, softwareRequests: [withAutoApproval(request, "approved"), ...prev.softwareRequests] }));
         return null;
       },
       setSoftwareStatus: (requestId, status, note) => {
@@ -1684,7 +1776,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           to: booking.to.trim(),
           status: "pending",
         };
-        setState((prev) => ({ ...prev, cabBookings: [request, ...prev.cabBookings] }));
+        setState((prev) => ({ ...prev, cabBookings: [withAutoApproval(request, "approved"), ...prev.cabBookings] }));
         return null;
       },
       setCabStatus: (requestId, status, note) => {
@@ -1786,7 +1878,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
     };
-  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision]);
+  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState]);
 
   return <PortalContext.Provider value={api}>{children}</PortalContext.Provider>;
 }

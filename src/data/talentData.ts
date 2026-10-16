@@ -393,8 +393,8 @@ export const CANDIDATES: Candidate[] = [
   },
   {
     id: "cand-7",
-    name: "Isha Reddy",
-    email: "isha.reddy@example.com",
+    name: "Riya Kapoor",
+    email: "riya.kapoor@example.com",
     phone: "+91 98xxx x5520",
     role: "Senior React Engineer",
     requisitionId: "JOB-221",
@@ -478,7 +478,7 @@ export const OFFERS: OfferRecord[] = [
   {
     id: "off-2",
     candidateId: "cand-7",
-    candidateName: "Isha Reddy",
+    candidateName: "Riya Kapoor",
     role: "Senior React Engineer",
     status: "Accepted",
     packageNote: "L5 Bengaluru · start 06 Oct",
@@ -489,7 +489,7 @@ export const OFFERS: OfferRecord[] = [
 export const ONBOARDING_JOINERS: OnboardingJoiner[] = [
   {
     id: "ob-1",
-    name: "Isha Reddy",
+    name: "Riya Kapoor",
     role: "Software Engineer",
     startDate: "2026-10-06",
     country: "India",
@@ -625,7 +625,7 @@ export const ENROLLMENTS: Enrollment[] = [
   { id: "en-1", courseId: "crs-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", status: "Completed", progress: 100, completedOn: "2026-03-12" },
   { id: "en-2", courseId: "crs-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", status: "In progress", progress: 45, due: "2026-10-31" },
   { id: "en-3", courseId: "crs-6", employeeId: "emp-mahesh", employeeName: "Babu Menon", status: "Assigned", progress: 0, due: "2026-11-15" },
-  { id: "en-4", courseId: "crs-1", employeeId: "ob-1", employeeName: "Isha Reddy", status: "Assigned", progress: 0, due: "2026-10-20" },
+  { id: "en-4", courseId: "crs-1", employeeId: "ob-1", employeeName: "Riya Kapoor", status: "Assigned", progress: 0, due: "2026-10-20" },
   { id: "en-5", courseId: "crs-4", employeeId: "demo-recruiter", employeeName: "Sophie Clark", status: "Completed", progress: 100, completedOn: "2026-05-02" },
   { id: "en-6", courseId: "crs-4", employeeId: "emp-ram", employeeName: "Ram Krishnan", status: "In progress", progress: 30, due: "2026-10-05" },
 ];

@@ -1,3 +1,4 @@
+import { monthlyPay, payRulesFor } from "./countryPay.ts";
 import type { DocumentGroup, Employee, EmployeeDocument, Payslip, Policy, PortalState } from "./model.ts";
 import { DEMO_ACCOUNTS as TIMEZ_DEMO_ACCOUNTS } from "./demoAccounts.ts";
 import { buildTimezWorkforce } from "./workforce.ts";
@@ -32,32 +33,24 @@ function doc(
   return { id: key, employeeId: id, name, category, docType, expires, uploadedBy, uploadedAt, body, shared };
 }
 
-function payslip(employeeId: string, month: string, bonus: number, tds: number, scale = 1): Payslip {
-  const round = (n: number) => Math.round(n * scale);
+/** A month's payslip in the person's own country: local currency, earnings and tax deductions. */
+function payslip(account: Employee, month: string, bonusRate: number, scale = 1): Payslip {
+  const rules = payRulesFor(account.countryCode);
   return {
-    id: `pay-${employeeId}-${month}`,
-    employeeId,
+    id: `pay-${account.id}-${month}`,
+    employeeId: account.id,
     month,
-    earnings: [
-      { name: "Basic", amount: round(38000) },
-      { name: "HRA", amount: round(15200) },
-      { name: "Conveyance", amount: round(1600) },
-      { name: "Performance bonus", amount: round(bonus) },
-    ],
-    deductions: [
-      { name: "Provident Fund", amount: round(1800) },
-      { name: "Professional Tax", amount: round(200) },
-      { name: "TDS", amount: round(tds) },
-    ],
+    currency: rules.currency,
+    ...monthlyPay(rules, scale, bonusRate),
   };
 }
 
 /** Own payslips for every demo persona (managers included — colleagues remain RBAC-blocked). */
 function demoPayslips(): Payslip[] {
-  const months: Array<[string, number, number]> = [
-    ["2026-09", 2500, 3200],
-    ["2026-08", 0, 2800],
-    ["2026-07", 0, 2800],
+  const months: Array<[string, number]> = [
+    ["2026-09", 0.066],
+    ["2026-08", 0],
+    ["2026-07", 0],
   ];
   const scaleFor = (account: Employee) => {
     if (account.role === "employee") return 1;
@@ -69,7 +62,7 @@ function demoPayslips(): Payslip[] {
     return 1.15;
   };
   return DEMO_ACCOUNTS.flatMap((account) =>
-    months.map(([month, bonus, tds]) => payslip(account.id, month, bonus, tds, scaleFor(account))),
+    months.map(([month, bonusRate]) => payslip(account, month, bonusRate, scaleFor(account))),
   );
 }
 

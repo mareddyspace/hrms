@@ -112,7 +112,9 @@ export type LetterType =
   | "Promotion"
   | "Transfer"
   | "Salary revision"
-  | "Experience";
+  | "Experience"
+  | "Relieving"
+  | "Confirmation";
 
 export type LetterStatus = "Draft" | "Pending approval" | "Approved" | "Rejected" | "Issued";
 
@@ -337,7 +339,9 @@ export const LETTER_TEMPLATES: { type: LetterType; description: string }[] = [
   { type: "Promotion", description: "Promotion notification template" },
   { type: "Transfer", description: "Internal transfer confirmation" },
   { type: "Salary revision", description: "Salary revision notice template" },
-  { type: "Experience", description: "Experience / relieving letter template" },
+  { type: "Experience", description: "Experience letter template" },
+  { type: "Relieving", description: "Relieving letter — issued on the last working day" },
+  { type: "Confirmation", description: "Confirmation of employment after probation" },
 ];
 
 export const LETTER_REQUESTS: LetterRequest[] = [

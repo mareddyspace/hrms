@@ -20,7 +20,7 @@ import {
   taskProgress,
   taskStatusLabel,
 } from "../data/taskHelpers.ts";
-import { taskPersonLabel, taskTeamFor } from "../data/taskTeam.ts";
+import { TASK_TEAM, taskPersonById, taskPersonLabel, taskTeamFor } from "../data/taskTeam.ts";
 import { ProgressBar } from "./dashboards/widgets.tsx";
 import {
   formatShortDate,
@@ -28,9 +28,12 @@ import {
   parseISODate,
   toISO,
   todayISO,
+  TASK_TYPES,
   type Task,
+  type TaskLink,
   type TaskPriority,
   type TaskStatus,
+  type TaskType,
 } from "../model.ts";
 import { DEMO_ACCOUNTS } from "../seed.ts";
 import { usePortal } from "../store.tsx";
@@ -89,7 +92,13 @@ export function TasksPage() {
   const scopeTasks = useMemo(
     () =>
       state.tasks
-        .filter((task) => task.employeeId === employee.id || canApproveLeaveFor(task.employeeId))
+        .filter(
+          (task) =>
+            task.employeeId === employee.id ||
+            canApproveLeaveFor(task.employeeId) ||
+            task.ccIds?.includes(employee.id) ||
+            task.peopleIds?.includes(employee.id),
+        )
         .map(ensureTaskExtras),
     [state.tasks, employee.id, canApproveLeaveFor],
   );
@@ -119,17 +128,26 @@ export function TasksPage() {
   const [showHelpForm, setShowHelpForm] = useState(false);
   const [commentDraft, setCommentDraft] = useState("");
   const [helpDraft, setHelpDraft] = useState("");
-  const [draft, setDraft] = useState({
+  const emptyDraft = () => ({
     subject: "",
     ownerId: taskTeamFor(employee.id)[0]?.id ?? "",
+    taskType: "Feature" as TaskType,
     priority: "medium" as TaskPriority,
     status: "open" as TaskStatus,
-    client: "Internal",
+    client: "",
     notes: "",
     due: today,
-    estimatedHours: 1,
+    estimatedHours: 4,
     peopleIds: [] as string[],
+    ccIds: [] as string[],
+    referenceTaskId: "",
+    links: [{ label: "", url: "" }] as TaskLink[],
   });
+  const [draft, setDraft] = useState(emptyDraft);
+  // Anyone in the company can be CC'd; owner and collaborators come from your own team.
+  const ccCandidates = TASK_TEAM.filter((p) => p.id !== employee.id && p.id !== draft.ownerId && !draft.peopleIds.includes(p.id));
+  const projectOptions = [...new Set([...state.projects.map((p) => p.name), ...state.tasks.map((t) => t.projectName || t.client)].filter(Boolean))];
+  const toggleIn = (list: string[], id: string) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
 
   const selected = scopeTasks.find((task) => task.id === selectedId) ?? null;
   const selectedPeople = selected?.peopleIds ?? [];
@@ -384,7 +402,9 @@ export function TasksPage() {
   }
 
   const canActOnSelected =
-    !!selected && (selected.employeeId === employee.id || isManager) && selected.status !== "done";
+    !!selected &&
+    (selected.employeeId === employee.id || canApproveLeaveFor(selected.employeeId)) &&
+    selected.status !== "done";
   const selectedBlocked = selected ? isTaskBlocked(selected) : false;
   const selectedIsOwn = selected?.employeeId === employee.id;
   const selectedInReview = Boolean(selected?.inReview);
@@ -440,20 +460,41 @@ export function TasksPage() {
       {message && <Banner message={message} />}
 
       {isManager && showCreate && (
-        <Card title="Add task">
+        <Card title="New task">
           <div className="form-grid-2">
-            <label className="field">
-              Subject
+            <label className="field" style={{ gridColumn: "1 / -1" }}>
+              Task name *
               <input
                 value={draft.subject}
+                maxLength={120}
                 onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))}
                 placeholder="What needs to be done?"
               />
             </label>
             <label className="field">
-              Owner
-              <select value={draft.ownerId} onChange={(e) => setDraft((d) => ({ ...d, ownerId: e.target.value }))}>
-                {myTeam.length === 0 && <option value="">No direct or indirect reports</option>}
+              Type *
+              <select value={draft.taskType} onChange={(e) => setDraft((d) => ({ ...d, taskType: e.target.value as TaskType }))}>
+                {TASK_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              Owner *
+              <select
+                value={draft.ownerId}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    ownerId: e.target.value,
+                    peopleIds: d.peopleIds.filter((id) => id !== e.target.value),
+                    ccIds: d.ccIds.filter((id) => id !== e.target.value),
+                  }))
+                }
+              >
+                {myTeam.length === 0 && <option value="">No one reports to you</option>}
                 {myTeam.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.fullName} · {p.role}
@@ -462,11 +503,23 @@ export function TasksPage() {
               </select>
             </label>
             <label className="field">
+              Due date *
+              <input type="date" min={today} value={draft.due} onChange={(e) => setDraft((d) => ({ ...d, due: e.target.value }))} />
+            </label>
+            <label className="field">
+              Estimate (hours)
+              <input
+                type="number"
+                min={0.5}
+                max={200}
+                step={0.5}
+                value={draft.estimatedHours}
+                onChange={(e) => setDraft((d) => ({ ...d, estimatedHours: Number(e.target.value) }))}
+              />
+            </label>
+            <label className="field">
               Priority
-              <select
-                value={draft.priority}
-                onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value as TaskPriority }))}
-              >
+              <select value={draft.priority} onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value as TaskPriority }))}>
                 <option value="urgent">Urgent</option>
                 <option value="high">High</option>
                 <option value="medium">Medium</option>
@@ -474,43 +527,143 @@ export function TasksPage() {
               </select>
             </label>
             <label className="field">
-              Due
-              <input
-                type="date"
-                min={today}
-                value={draft.due}
-                onChange={(e) => setDraft((d) => ({ ...d, due: e.target.value }))}
-              />
+              Start as
+              <select value={draft.status} onChange={(e) => setDraft((d) => ({ ...d, status: e.target.value as TaskStatus }))}>
+                <option value="open">To do</option>
+                <option value="scheduled">Scheduled (released later)</option>
+              </select>
             </label>
             <label className="field">
-              Client / project
-              <input value={draft.client} onChange={(e) => setDraft((d) => ({ ...d, client: e.target.value }))} />
+              Project
+              <input
+                list="task-projects"
+                value={draft.client}
+                onChange={(e) => setDraft((d) => ({ ...d, client: e.target.value }))}
+                placeholder="Internal"
+              />
+              <datalist id="task-projects">
+                {projectOptions.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+            </label>
+            <label className="field">
+              Related task
+              <select value={draft.referenceTaskId} onChange={(e) => setDraft((d) => ({ ...d, referenceTaskId: e.target.value }))}>
+                <option value="">None</option>
+                {scopeTasks.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.code} · {t.subject}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="field" style={{ gridColumn: "1 / -1" }}>
-              Notes
-              <input value={draft.notes} onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))} />
+              Description
+              <textarea
+                rows={3}
+                value={draft.notes}
+                onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
+                placeholder="Context, acceptance criteria, anything the owner needs to know"
+              />
             </label>
           </div>
+
+          <fieldset className="task-form-group">
+            <legend>Links</legend>
+            {draft.links.map((link, index) => (
+              <div key={index} className="task-link-row">
+                <input
+                  value={link.label}
+                  placeholder="Label (e.g. Spec)"
+                  aria-label={`Link ${index + 1} label`}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, links: d.links.map((l, i) => (i === index ? { ...l, label: e.target.value } : l)) }))
+                  }
+                />
+                <input
+                  value={link.url}
+                  placeholder="https://…"
+                  aria-label={`Link ${index + 1} address`}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, links: d.links.map((l, i) => (i === index ? { ...l, url: e.target.value } : l)) }))
+                  }
+                />
+                <button
+                  type="button"
+                  className="btn-ghost btn-tiny"
+                  aria-label={`Remove link ${index + 1}`}
+                  onClick={() => setDraft((d) => ({ ...d, links: d.links.filter((_, i) => i !== index) }))}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            {draft.links.length < 10 && (
+              <button
+                type="button"
+                className="btn-ghost btn-tiny"
+                onClick={() => setDraft((d) => ({ ...d, links: [...d.links, { label: "", url: "" }] }))}
+              >
+                + Add link
+              </button>
+            )}
+          </fieldset>
+
+          {myTeam.filter((p) => p.id !== draft.ownerId).length > 0 && (
+            <fieldset className="task-form-group">
+              <legend>Collaborators (your team)</legend>
+              <div className="task-chip-picks">
+                {myTeam
+                  .filter((p) => p.id !== draft.ownerId)
+                  .map((p) => (
+                    <label key={p.id} className={draft.peopleIds.includes(p.id) ? "chip-pick on" : "chip-pick"}>
+                      <input
+                        type="checkbox"
+                        checked={draft.peopleIds.includes(p.id)}
+                        onChange={() =>
+                          setDraft((d) => ({ ...d, peopleIds: toggleIn(d.peopleIds, p.id), ccIds: d.ccIds.filter((id) => id !== p.id) }))
+                        }
+                      />
+                      {p.fullName}
+                    </label>
+                  ))}
+              </div>
+            </fieldset>
+          )}
+
+          <fieldset className="task-form-group">
+            <legend>CC — kept informed, view only</legend>
+            <div className="task-chip-picks">
+              {ccCandidates.map((p) => (
+                <label key={p.id} className={draft.ccIds.includes(p.id) ? "chip-pick on" : "chip-pick"}>
+                  <input
+                    type="checkbox"
+                    checked={draft.ccIds.includes(p.id)}
+                    onChange={() => setDraft((d) => ({ ...d, ccIds: toggleIn(d.ccIds, p.id) }))}
+                  />
+                  {p.fullName}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
           <div className="form-actions">
+            <button type="button" className="btn-ghost" onClick={() => { setShowCreate(false); setDraft(emptyDraft()); }}>
+              Cancel
+            </button>
             <button
               type="button"
               className="btn"
               onClick={() => {
-                if (!myTeam.some((p) => p.id === draft.ownerId)) {
-                  setMessage({ tone: "err", text: "Pick an owner from your own team." });
-                  return;
-                }
-                if (draft.due && draft.due < today) {
-                  setMessage({ tone: "err", text: "Due date cannot be in the past." });
-                  return;
-                }
-                const error = createTask(draft);
+                const error = createTask({ ...draft, client: draft.client.trim() || "Internal" });
                 if (error) {
                   setMessage({ tone: "err", text: error });
                   return;
                 }
-                setMessage({ tone: "ok", text: "Task created and assigned." });
+                setMessage({ tone: "ok", text: "Task created. The owner and everyone on CC have been notified." });
                 setShowCreate(false);
+                setDraft(emptyDraft());
                 setTab("open");
               }}
             >
@@ -842,11 +995,52 @@ export function TasksPage() {
                         <span className="muted">Dependency</span>
                         <strong>{selected.dependsOn || "—"}</strong>
                       </div>
+                      {selected.taskType && (
+                        <div>
+                          <span className="muted">Type</span>
+                          <strong>{selected.taskType}</strong>
+                        </div>
+                      )}
+                      {selected.referenceTaskId && (
+                        <div>
+                          <span className="muted">Related task</span>
+                          <strong>
+                            {scopeTasks.some((t) => t.id === selected.referenceTaskId) ? (
+                              <button type="button" className="link-btn" onClick={() => setSelectedId(selected.referenceTaskId!)}>
+                                {state.tasks.find((t) => t.id === selected.referenceTaskId)?.code}
+                              </button>
+                            ) : (
+                              state.tasks.find((t) => t.id === selected.referenceTaskId)?.code ?? "—"
+                            )}
+                          </strong>
+                        </div>
+                      )}
+                      {(selected.ccIds?.length ?? 0) > 0 && (
+                        <div>
+                          <span className="muted">CC</span>
+                          <strong>{selected.ccIds!.map((id) => taskPersonById(id)?.fullName ?? id).join(", ")}</strong>
+                        </div>
+                      )}
                     </div>
+                    {selected.ccIds?.includes(employee.id) && !canActOnSelected && (
+                      <p className="note">You're CC'd on this task — you can follow it but not change it.</p>
+                    )}
 
                     <section className="task-section">
                       <h4 className="task-section-title">Description</h4>
-                      <p>{selected.notes || "No description provided."}</p>
+                      <p className="task-description">{selected.notes || "No description provided."}</p>
+                      {(selected.links?.length ?? 0) > 0 && (
+                        <ul className="task-links">
+                          {selected.links!.map((link) => (
+                            <li key={link.url}>
+                              <a href={link.url} target="_blank" rel="noopener noreferrer">
+                                {link.label}
+                              </a>
+                              <span className="muted"> · {new URL(link.url).hostname}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       {selectedBlocked && <p className="note err">Blocked: {selected.blocked}</p>}
                     </section>
 

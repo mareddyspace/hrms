@@ -1,4 +1,5 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
+import { money } from "../countryPay.ts";
 import { Banner, Card, EmptyState, Page, StatusBadge, Tabs } from "../components/ui.tsx";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
@@ -77,7 +78,7 @@ export function countWaitingOnMe(
 /** Approvals inbox built from real requests: decide what's waiting on you, track what you've asked for. */
 export function ApprovalsCenterPage() {
   const portal = usePortal();
-  const { state, employee, demoAccounts, leaveTable, canApproveLeaveFor, canVerifyProofs } = portal;
+  const { state, employee, demoAccounts, leaveTable, canDecideFor, canVerifyProofs } = portal;
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
   const [tab, setTab] = useState<"waiting" | "mine">("waiting");
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -230,7 +231,7 @@ export function ApprovalsCenterPage() {
         key: `poi-${x.id}`,
         kind: "Tax-saving proof",
         employeeId: x.employeeId,
-        title: `${x.section} · ${x.title} · ${inr(x.amount)} · FY ${x.financialYear}`,
+        title: `${x.section} · ${x.title} · ${money(x.amount, x.currency)} · ${x.financialYear}`,
         raisedOn: x.submittedOn,
         status: x.status,
         open: x.status === "submitted",
@@ -263,7 +264,7 @@ export function ApprovalsCenterPage() {
       item.open &&
       item.decide &&
       item.employeeId !== employee.id &&
-      (item.kind === "Tax-saving proof" ? canVerifyProofs : canApproveLeaveFor(item.employeeId)),
+      (item.kind === "Tax-saving proof" ? canVerifyProofs : canDecideFor(item.employeeId)),
   );
   const mine = items
     .filter((item) => item.employeeId === employee.id && item.kind !== "Timesheet")

@@ -191,7 +191,7 @@ export interface LeaveRequest extends DecisionInfo {
 
 /**
  * Permission to apply for leave on past dates. Raised by the employee, decided by someone above them
- * in the reporting line (or HR); once approved, the employee can apply for leave on those dates.
+ * in the reporting line; once approved, the employee can apply for leave on those dates.
  */
 export interface BackdatedLeavePermission {
   id: string;
@@ -296,6 +296,8 @@ export interface Payslip {
   id: string;
   employeeId: string;
   month: string;
+  /** ISO currency of the amounts; older saved payslips have none and are INR. */
+  currency?: string;
   earnings: PayLine[];
   deductions: PayLine[];
 }
@@ -338,6 +340,29 @@ export interface TaskActivity {
   detail?: string;
 }
 
+export const TASK_TYPES = ["Feature", "Bug", "Improvement", "Research", "Support", "Admin"] as const;
+export type TaskType = (typeof TASK_TYPES)[number];
+
+/** A reference link on a task (spec, ticket, design, doc). */
+export interface TaskLink {
+  label: string;
+  url: string;
+}
+
+/** Only plain web links are allowed — never javascript:, data: or file: URLs. */
+export function safeTaskUrl(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (!url.hostname.includes(".")) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export interface Task {
   id: string;
   code: string;
@@ -370,6 +395,13 @@ export interface Task {
   inReview?: boolean;
   dependsOn?: string;
   projectName?: string;
+  taskType?: TaskType;
+  /** Reference links: specs, tickets, designs, source documents. */
+  links?: TaskLink[];
+  /** Another task this one relates to. */
+  referenceTaskId?: string;
+  /** People kept informed. They can view the task but not change it. */
+  ccIds?: string[];
   subtasks?: TaskSubtask[];
   attachments?: TaskAttachment[];
   comments?: TaskComment[];
@@ -577,6 +609,8 @@ export interface InvestmentProof extends DecisionInfo {
   title: string;
   amount: number;
   financialYear: string;
+  /** ISO currency of the amount; INR when missing. */
+  currency?: string;
   status: "submitted" | "verified" | "rejected" | "withdrawn";
   submittedOn: string;
 }
@@ -844,6 +878,13 @@ export function monthCells(year: number, monthIndex: number): (string | null)[] 
   return cells;
 }
 
+/** Leave earned on top of the yearly quota, such as comp-off for working a holiday. */
+let earnedLeave: (employeeId: string, code: LeaveCode, year: number) => number = () => 0;
+
+export function setEarnedLeaveSource(source: (employeeId: string, code: LeaveCode, year: number) => number): void {
+  earnedLeave = source;
+}
+
 export function leaveRows(
   policies: LeavePolicy[],
   requests: LeaveRequest[],
@@ -875,11 +916,12 @@ export function leaveRows(
           .filter((request) => request.status === "pending")
           .map((request) => workingDays(request.from, request.to, dates, weeklyOffDays)),
       ) + sum(encashed.filter((item) => item.status === "pending").map((item) => item.days));
-    const balance = policy.quota - utilized;
+    const quota = policy.quota + (year == null ? 0 : earnedLeave(employeeId, policy.code, year));
+    const balance = quota - utilized;
     return {
       code: policy.code,
       name: policy.name,
-      quota: policy.quota,
+      quota,
       utilized,
       pending,
       balance,
@@ -934,6 +976,7 @@ export function validateLeave(
   input: LeaveInput,
   weeklyOffDays: number[] = [0, 6],
   today: string = todayISO(),
+  options: { needsApprover?: boolean } = {},
 ): string | null {
   if (!input.reason.trim()) return "Enter a reason.";
   if (!input.from || !input.to) return "Choose the from and to dates.";
@@ -943,6 +986,7 @@ export function validateLeave(
   }
   if (input.code === "sick" && input.from > today) return "Sick leave can't be booked in advance.";
   if (
+    options.needsApprover !== false &&
     needsBackdatedPermission(input.code, input.from, today) &&
     !backdatedPermissionFor(state, employeeId, input.from, input.to, input.code, today)
   ) {
@@ -1139,11 +1183,14 @@ export function actionCounts(state: PortalState, employeeId: string): ActionCoun
 
 export function payslipText(view: PayslipView, employee: Employee): string {
   const earn = view.earnings.map((line) => `${line.name}: ${line.amount}`).join("\n");
-  const deduct = view.deductions.map((line) => `${line.name}: ${line.amount}`).join("\n");
+  const deduct = view.deductions.length
+    ? view.deductions.map((line) => `${line.name}: ${line.amount}`).join("\n")
+    : "None";
   return [
     view.label,
     employee.fullName,
     employee.employeeCode,
+    `Currency: ${view.currency ?? "INR"}`,
     "",
     "Earnings",
     earn,

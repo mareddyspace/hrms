@@ -46,7 +46,25 @@ export type NavAccessId =
   | "locale"
   | "help"
   | "holidays"
-  | "expenses";
+  | "expenses"
+  | "taxdeclarations"
+  | "exit"
+  | "teamexits"
+  | "exitsadmin"
+  | "probation"
+  | "probationreviews"
+  | "immigration"
+  | "privacy"
+  | "grievances"
+  | "bgv"
+  | "engagement"
+  | "succession"
+  | "internaljobs"
+  | "bulkdata"
+  | "reportbuilder"
+  | "shifts"
+  | "optionalholidays"
+  | "contractors";
 
 export interface DemoAccount extends Employee {
   /** Prototype-only plain-text password (frontend mock). */
@@ -90,6 +108,16 @@ const ACCESS_EMPLOYEE: NavAccessId[] = [
   "help",
   "copilot",
   "locale",
+  "taxdeclarations",
+  "exit",
+  "probation",
+  "immigration",
+  "privacy",
+  "grievances",
+  "engagement",
+  "internaljobs",
+  "shifts",
+  "optionalholidays",
 ];
 
 const ACCESS_MANAGER: NavAccessId[] = [
@@ -102,6 +130,10 @@ const ACCESS_MANAGER: NavAccessId[] = [
   "skills",
   "people",
   "analytics",
+  "probationreviews",
+  "teamexits",
+  "succession",
+  "contractors",
   // compensation intentionally omitted — managers do not get salary records by default
 ];
 
@@ -118,6 +150,9 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "integrations",
   "payroll", // integration status only
   "administration",
+  "bulkdata",
+  "reportbuilder",
+  "exitsadmin",
   // no "compensation" / "payslips" — Admin does not auto-receive salary access
 ];
 
@@ -222,6 +257,10 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "agents",
       "locale",
       "administration",
+      "exitsadmin",
+      "bgv",
+      "bulkdata",
+      "reportbuilder",
     ],
   }),
   account({
@@ -254,6 +293,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "onboarding",
       "analytics",
       "agents",
+      "bgv",
     ],
   }),
   account({
@@ -304,6 +344,8 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "jobs",
       "recruiting",
       "agents",
+      "reportbuilder",
+      "exitsadmin",
       // no compensation — salary stays restricted unless salaryAuthorized
     ],
   }),
@@ -338,6 +380,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "compensation",
       "payroll",
       "payslips",
+      "reportbuilder",
     ],
   }),
   account({

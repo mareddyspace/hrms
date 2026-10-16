@@ -12,7 +12,6 @@ import { formatShortDate, parseISODate, toISO, todayISO } from "../model.ts";
 import { managementChain } from "../demoAccounts.ts";
 
 const KEY = "timez.attendance.state.v1";
-const HR_ROLES = ["hr", "hr_admin", "hrbp"];
 const CORRECTION_WINDOW_DAYS = 30;
 const HM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -285,7 +284,7 @@ export function submitCorrection(input: {
   return null;
 }
 
-/** Decide a correction. Only someone above the employee in the reporting line, or HR, may decide — never self. */
+/** Decide a correction. Only someone above the employee in their reporting line may decide — never self. */
 export function decideCorrection(
   id: string,
   approver: { id: string; role: string },
@@ -295,10 +294,9 @@ export function decideCorrection(
   const row = getAttendanceState().corrections.find((c) => c.id === id);
   if (!row) return "Correction not found.";
   if (row.employeeId === approver.id) return "You cannot decide your own correction request.";
+  // Corrections are decided by the reporting line, like every other request.
   const inLine = managementChain(row.employeeId).some((m) => m.id === approver.id);
-  if (!inLine && !HR_ROLES.includes(approver.role)) {
-    return "Only managers in the employee's reporting line or HR can review this correction.";
-  }
+  if (!inLine) return "Only someone above this person in their reporting line can review this correction.";
   if (row.status !== "Pending") return "This request was already decided.";
   update((s) => {
     const target = s.corrections.find((c) => c.id === id);

@@ -1,18 +1,12 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
+import { declarableTaxYears, money, payRulesFor } from "../countryPay.ts";
 import { addDaysISO, EXPENSE_CLAIM_WINDOW_DAYS, inr, todayISO } from "../model.ts";
 
-/** Current and next Indian financial year (April–March), e.g. 2026-27 and 2027-28. */
-function financialYearOptions(): string[] {
-  const [year, month] = todayISO().split("-").map(Number);
-  const start = month >= 4 ? year : year - 1;
-  return [start, start + 1].map((y) => `${y}-${String((y + 1) % 100).padStart(2, "0")}`);
-}
 import { usePortal } from "../store.tsx";
 
 const REIMBURSE_CATEGORIES = ["Internet", "Books", "Medical", "Conveyance", "Other"] as const;
-const POI_SECTIONS = ["80C", "80D", "80E", "HRA", "Other"] as const;
 
 export function ReimbursementPage() {
   const { state, employee, addReimbursement } = usePortal();
@@ -113,12 +107,15 @@ export function ReimbursementPage() {
 
 export function InvestmentProofPage() {
   const { state, employee, addInvestmentProof } = usePortal();
+  const rules = payRulesFor(employee.countryCode);
+  const years = declarableTaxYears(rules, todayISO());
   const mine = state.investmentProofs.filter((item) => item.employeeId === employee.id);
-  const [section, setSection] = useState<string>(POI_SECTIONS[0]);
+  const [section, setSection] = useState<string>(rules.declarations[0]?.code ?? "");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
-  const [financialYear, setFinancialYear] = useState(() => financialYearOptions()[0]);
+  const [financialYear, setFinancialYear] = useState(years[0]);
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const cap = rules.declarations.find((item) => item.code === section)?.cap;
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -128,29 +125,41 @@ export function InvestmentProofPage() {
       amount: Number(amount),
       financialYear,
     });
-    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Proof of investment submitted." });
+    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Declaration submitted." });
     if (!error) {
       setTitle("");
       setAmount("");
     }
   }
 
+  if (rules.declarations.length === 0) {
+    return (
+      <Page title="Tax declarations" subtitle={employee.countryName}>
+        <Card>
+          <p className="empty">{rules.declarationNote}</p>
+        </Card>
+      </Page>
+    );
+  }
+
   return (
-    <Page title="Proof of investment" subtitle="Upload tax-saving proofs for the selected financial year. Finance verifies them for payroll.">
+    <Page title="Tax declarations" subtitle={`${employee.countryName ?? "India"} · ${rules.declarationNote}`}>
       <div className="split">
-        <Card title="Submit proof">
+        <Card title="Declare">
           <form onSubmit={onSubmit}>
             <div className="form-grid">
               <Field label="Section">
                 <select value={section} onChange={(event) => setSection(event.target.value)}>
-                  {POI_SECTIONS.map((item) => (
-                    <option key={item}>{item}</option>
+                  {rules.declarations.map((item) => (
+                    <option key={item.code} value={item.code}>
+                      {item.label}
+                    </option>
                   ))}
                 </select>
               </Field>
-              <Field label="Financial year">
+              <Field label="Tax year">
                 <select value={financialYear} onChange={(event) => setFinancialYear(event.target.value)}>
-                  {financialYearOptions().map((fy) => (
+                  {years.map((fy) => (
                     <option key={fy} value={fy}>
                       {fy}
                     </option>
@@ -158,21 +167,21 @@ export function InvestmentProofPage() {
                 </select>
               </Field>
               <Field label="Title" wide>
-                <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. ELSS mutual fund" />
+                <input value={title} onChange={(event) => setTitle(event.target.value)} />
               </Field>
-              <Field label="Amount (INR)">
+              <Field label={cap ? `Amount (${rules.currency}, up to ${money(cap, rules.currency)})` : `Amount (${rules.currency})`}>
                 <input type="number" min={1} value={amount} onChange={(event) => setAmount(event.target.value)} />
               </Field>
             </div>
             <div className="form-actions">
               <button className="btn" type="submit">
-                Submit proof
+                Submit
               </button>
             </div>
             <Banner message={message} />
           </form>
         </Card>
-        <Card title="Submitted proofs">
+        <Card title="Submitted">
           <div className="table-scroll">
             <table className="data">
               <thead>
@@ -180,7 +189,7 @@ export function InvestmentProofPage() {
                   <th>Section</th>
                   <th>Title</th>
                   <th className="num">Amount</th>
-                  <th>FY</th>
+                  <th>Tax year</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -189,7 +198,7 @@ export function InvestmentProofPage() {
                   <tr key={item.id}>
                     <td>{item.section}</td>
                     <td>{item.title}</td>
-                    <td className="num">{inr(item.amount)}</td>
+                    <td className="num">{money(item.amount, item.currency)}</td>
                     <td>{item.financialYear}</td>
                     <td>
                       <StatusPill status={item.status} />

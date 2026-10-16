@@ -37,7 +37,9 @@ export function buildTimezWorkforce(total = 500): Colleague[] {
       // for up to FIRST.length * LAST.length (600) employees.
       const k = seq - 1;
       const first = FIRST[k % FIRST.length];
-      const last = LAST[(k + Math.floor(k / FIRST.length)) % LAST.length];
+      // "Isha Reddy" is retired from the sample data; that one combination uses Kapoor instead.
+      const generatedLast = LAST[(k + Math.floor(k / FIRST.length)) % LAST.length];
+      const last = first === "Isha" && generatedLast === "Reddy" ? "Kapoor" : generatedLast;
       const code = `TZ${String(seq).padStart(4, "0")}`;
       const dept = DEPARTMENTS[seq % DEPARTMENTS.length];
       const deptTitles = TITLES_BY_DEPARTMENT[dept];

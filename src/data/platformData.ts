@@ -466,7 +466,7 @@ function rawCopilotAnswer(question: string): RawCopilotAnswer {
           ["Kabir Sharma", "PTO / Holiday", "18", "Engineering"],
           ["Diya Patel", "PTO / Holiday", "14", "Engineering"],
           ["Noah Garcia", "PTO / Holiday", "11", "Product"],
-          ["Isha Reddy", "PTO / Holiday", "9", "Engineering"],
+          ["Riya Kapoor", "PTO / Holiday", "9", "Engineering"],
           ["Anita Joseph", "PTO / Holiday", "8", "Quality"],
         ],
       },

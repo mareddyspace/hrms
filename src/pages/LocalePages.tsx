@@ -14,7 +14,7 @@ import {
   Tabs,
 } from "../components/ui.tsx";
 import { type AppLanguage, type CountrySettings } from "../locale/countryConfig.ts";
-import { LocaleContextBanner, RegionalFilter } from "../locale/RegionalFilter.tsx";
+import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import type { CountryCode } from "../model.ts";
 import { usePortal } from "../store.tsx";
@@ -38,10 +38,9 @@ export function LocaleSettingsPage() {
   return (
     <Page title={t("nav.settings")} subtitle="Region, language, currency and time zone">
       <Banner message={{ tone: "ok", text: t("locale.disclaimer") }} />
-      <LocaleContextBanner />
 
       <MetricGrid>
-        <MetricCard label="Signed-in identity" value={employee.fullName} hint={`${demoProfile.personaLabel} · unchanged by region`} />
+        <MetricCard label="Signed-in identity" value={employee.fullName} hint={demoProfile.personaLabel} />
         <MetricCard label="Home country (profile)" value={employee.countryName ?? "—"} hint={employee.legalEntity} />
         <MetricCard label={t("locale.region")} value={regionCode === "ALL" ? t("country.all") : activeCountry.name} />
         <MetricCard label={t("locale.language")} value={languageLabels[language]} />
@@ -131,7 +130,6 @@ export function CountryBenefitsConfigPage() {
   const { activeCountry, t } = useLocale();
   return (
     <Page title={t("benefits.country")} subtitle={activeCountry.name}>
-      <LocaleContextBanner />
       <RegionalFilter />
       <Card title={activeCountry.name}>
         <DataTable
@@ -148,7 +146,6 @@ export function CountryDocumentsConfigPage() {
   const { activeCountry, t } = useLocale();
   return (
     <Page title={t("documents.country")} subtitle={`${activeCountry.name} · document checklist`}>
-      <LocaleContextBanner />
       <RegionalFilter />
       <Card title={activeCountry.name}>
         <DataTable
@@ -246,7 +243,6 @@ export function CountryAdminPage() {
           title="Not authorized"
           description="Only HR or Admin can edit country settings."
         />
-        <LocaleContextBanner />
         <Card title="Read-only snapshot">
           <DataTable
             headers={["Country", "Entity", "Currency", "Time zone"]}

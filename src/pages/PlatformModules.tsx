@@ -95,7 +95,7 @@ function BarRows({
 /* ───────────────── Analytics ───────────────── */
 
 export function AnalyticsPage() {
-  const { demoProfile, employee, state, canApproveLeaveFor } = usePortal();
+  const { demoProfile, employee, state, canDecideFor } = usePortal();
   const { regionCode, activeCountry, t, formatMoney } = useLocale();
   const [range, setRange] = useState<AnalyticsRange>("30d");
   const [dept, setDept] = useState<string>("All departments");
@@ -117,10 +117,10 @@ export function AnalyticsPage() {
   const compAccess = getCompensationAccess(demoProfile);
   const canCompTab = canCompReport && compAccess.othersAmounts !== "hidden";
 
-  // Only items this viewer can actually decide (above the employee in the reporting line, or HR).
-  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && canApproveLeaveFor(item.employeeId));
-  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted" && canApproveLeaveFor(item.personId));
-  const expensePending = state.expenses.filter((item) => item.status === "submitted" && canApproveLeaveFor(item.employeeId));
+  // Only items this viewer decides (people below them in the reporting line).
+  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && canDecideFor(item.employeeId));
+  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted" && canDecideFor(item.personId));
+  const expensePending = state.expenses.filter((item) => item.status === "submitted" && canDecideFor(item.employeeId));
   const pendingApprovals = leavePending.length + timesheetPending.length + expensePending.length;
 
   if (!hasModuleAccess(demoProfile, "analytics") && !canSystem) {
@@ -182,7 +182,7 @@ export function AnalyticsPage() {
 
       {canTeam && (teamOnly || activeTab === "team") && (
         <MetricGrid>
-          <MetricCard label="Team size" value={TZ_TEAM.managerTeamSize} hint="Direct reports in scope" />
+          <MetricCard label="Team size" value={TZ_TEAM.managerTeamSize} hint="Direct reports" />
           <MetricCard
             label="In today"
             value={`${TZ_TEAM.attendancePct}%`}

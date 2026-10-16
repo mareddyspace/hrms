@@ -58,7 +58,7 @@ import {
 } from "../data/talentLocal.ts";
 import { accountHasNavAccess } from "../demoAccounts.ts";
 import { candidateAccess } from "../data/rbac.ts";
-import { LocaleContextBanner, RegionalFilter } from "../locale/RegionalFilter.tsx";
+import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import { maskEmail, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
@@ -208,7 +208,6 @@ export function RecruitingPage() {
 
   return (
     <Page title="Recruiting">
-      <LocaleContextBanner />
       <p className="note">
         Candidate access for {demoProfile.personaLabel}: <strong>{candAccess}</strong>
         {maskCandidates ? " · contact details masked" : ""}

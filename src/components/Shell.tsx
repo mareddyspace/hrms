@@ -65,6 +65,7 @@ const THEME_KEY = "kastech.ess.theme";
 const groupIcons: Record<NavGroupKey, ReactNode> = {
   me: <UserRound size={18} strokeWidth={1.75} />,
   myTime: <Clock3 size={18} strokeWidth={1.75} />,
+  myRecords: <Briefcase size={18} strokeWidth={1.75} />,
   team: <Network size={18} strokeWidth={1.75} />,
   people: <Users size={18} strokeWidth={1.75} />,
   talent: <Briefcase size={18} strokeWidth={1.75} />,
@@ -288,7 +289,7 @@ function applyTheme(theme: "light" | "night") {
 }
 
 export function Shell() {
-  const { employee, demoProfile, demoAccounts, signOut, switchDemoPersona, counts, state, canApproveLeaveFor, canVerifyProofs } =
+  const { employee, demoProfile, demoAccounts, signOut, switchDemoPersona, counts, state, canDecideFor, canVerifyProofs } =
     usePortal();
   const { regionCode, setRegionCode, language, setLanguage, countries, t, languageLabels, activeCountry } = useLocale();
   const passwordPrompt = usePasswordPolicyPrompt();
@@ -320,8 +321,8 @@ export function Shell() {
     // Your own pending leave, plus team leave and backdated-leave permissions waiting on you.
     const leavePending =
       mine(state.leaveRequests).filter((item) => item.status === "pending").length +
-      state.leaveRequests.filter((item) => item.status === "pending" && canApproveLeaveFor(item.employeeId)).length +
-      state.backdatedPermissions.filter((item) => item.status === "pending" && canApproveLeaveFor(item.employeeId)).length;
+      state.leaveRequests.filter((item) => item.status === "pending" && canDecideFor(item.employeeId)).length +
+      state.backdatedPermissions.filter((item) => item.status === "pending" && canDecideFor(item.employeeId)).length;
     void collabTick;
     return {
       "/leave": leavePending,
@@ -330,11 +331,11 @@ export function Shell() {
       // Open course enrollments — the same list the Learning page and home page use.
       "/programs": talent.enrollments.filter((e) => e.employeeId === employee.id && e.status !== "Completed").length,
       "/evaluations": counts.evaluation,
-      "/approvals": countWaitingOnMe(state, employee.id, canApproveLeaveFor, canVerifyProofs),
+      "/approvals": countWaitingOnMe(state, employee.id, canDecideFor, canVerifyProofs),
       "/chat": countUnreadMessages(employee.id, demoProfile.role),
       "/notifications": countUnreadNotifications(demoProfile.role),
     } as Record<string, number>;
-  }, [counts, employee.id, state, collabTick, demoProfile.role, talent, canApproveLeaveFor, canVerifyProofs]);
+  }, [counts, employee.id, state, collabTick, demoProfile.role, talent, canDecideFor, canVerifyProofs]);
 
   const needle = query.trim().toLowerCase();
   const pinned = filterPinnedForAccount(demoProfile);
@@ -575,7 +576,7 @@ export function Shell() {
                 },
                 {
                   id: "view-region",
-                  label: `Demo region: ${regionCode === "ALL" ? "All" : activeCountry.name} · ${activeCountry.currency}`,
+                  label: `Region: ${regionCode === "ALL" ? "All" : activeCountry.name} · ${activeCountry.currency}`,
                 },
                 { id: "locale", label: t("nav.settings"), to: "/settings/locale" },
                 ...(["admin", "super_admin", "hr", "hr_admin"].includes(demoProfile.role)
