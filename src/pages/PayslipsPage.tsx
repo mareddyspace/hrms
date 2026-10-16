@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { Card, Page, downloadText } from "../components/ui.tsx";
-import { inr, parseISODate, payslipText } from "../model.ts";
+import { money } from "../countryPay.ts";
+import { parseISODate, payslipText } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
 function monthTitle(month: string) {
@@ -87,37 +88,44 @@ export function PayslipDetail() {
                   .map((line) => (
                     <tr key={line.name}>
                       <td>{line.name}</td>
-                      <td>{inr(line.amount)}</td>
+                      <td>{money(line.amount, payslip.currency)}</td>
                     </tr>
                   ))}
               </tbody>
             </table>
             <div className="total-row">
               <span>Gross</span>
-              <span>{inr(payslip.gross)}</span>
+              <span>{money(payslip.gross, payslip.currency)}</span>
             </div>
           </section>
           <section className="pay-col">
             <h2 className="card-title">Deductions</h2>
             <table className="data pay-lines-table">
               <tbody>
+                {payslip.deductions.length === 0 && (
+                  <tr>
+                    <td colSpan={2} className="muted">
+                      No income tax or deductions
+                    </td>
+                  </tr>
+                )}
                 {payslip.deductions.map((line) => (
                   <tr key={line.name}>
                     <td>{line.name}</td>
-                    <td>{inr(line.amount)}</td>
+                    <td>{money(line.amount, payslip.currency)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <div className="total-row">
               <span>Total deductions</span>
-              <span>{inr(payslip.deductionTotal)}</span>
+              <span>{money(payslip.deductionTotal, payslip.currency)}</span>
             </div>
           </section>
         </div>
         <div className="pay-net">
           <span>Net pay</span>
-          <span>{inr(payslip.net)}</span>
+          <span>{money(payslip.net, payslip.currency)}</span>
         </div>
       </Card>
     </Page>

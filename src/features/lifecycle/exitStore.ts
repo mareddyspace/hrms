@@ -1,0 +1,475 @@
+import type { DemoAccount } from "../../demoAccounts.ts";
+import { getPerson, upsertPerson, type LocalPersonRecord } from "../../data/peopleLocal.ts";
+import { addLetterRequest } from "../../data/rewardLocal.ts";
+import { addDaysISO, todayISO, type AssetAssignment } from "../../model.ts";
+import {
+  canActForEmployee,
+  countryCodeFor,
+  isAboveInLine,
+  isHrRole,
+  isValidISO,
+  noticeDaysFor,
+  personName,
+  seedCandidates,
+  type LifecycleActor,
+  type LifecycleResult,
+} from "./lifecycleShared.ts";
+
+const KEY = "kastech.exits.v1";
+
+export type ExitStatus = "Submitted" | "Accepted" | "Conversation requested" | "Withdrawn" | "Completed";
+export type ClearanceOwner = "employee" | "manager" | "it" | "finance" | "hr";
+export type SettlementStatus = "Pending" | "In progress" | "Paid";
+
+export const EXIT_REASONS = [
+  "Career growth",
+  "Compensation",
+  "Relocation",
+  "Higher studies",
+  "Personal or family reasons",
+  "Health",
+  "Work-life balance",
+  "Other",
+] as const;
+
+export const INTERVIEW_REASONS = [
+  "Better role elsewhere",
+  "Pay and benefits",
+  "Manager relationship",
+  "Team culture",
+  "Workload",
+  "Limited growth",
+  "Commute or location",
+  "Personal circumstances",
+] as const;
+
+export const SETTLEMENT_STEPS: SettlementStatus[] = ["Pending", "In progress", "Paid"];
+
+export const OWNER_LABEL: Record<ClearanceOwner, string> = {
+  employee: "Employee",
+  manager: "Manager",
+  it: "IT",
+  finance: "Finance",
+  hr: "HR",
+};
+
+export interface ClearanceItem {
+  id: string;
+  label: string;
+  owner: ClearanceOwner;
+  done: boolean;
+  doneBy?: string;
+  doneById?: string;
+  doneOn?: string;
+}
+
+export interface ExitInterview {
+  rating: number;
+  reasons: string[];
+  wouldReturn: "Yes" | "No" | "Maybe";
+  comments: string;
+  submittedOn: string;
+}
+
+export interface ExitCase {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  submittedOn: string;
+  noticeDays: number;
+  /** Date the employee asked for. */
+  proposedLastDay: string;
+  /** Agreed date once accepted (proposed date, or the standard notice date if early release was declined). */
+  lastWorkingDay: string;
+  earlyRelease: boolean;
+  reason: string;
+  note: string;
+  status: ExitStatus;
+  decidedBy?: string;
+  decidedById?: string;
+  decidedOn?: string;
+  decisionNote?: string;
+  clearance: ClearanceItem[];
+  interview?: ExitInterview;
+  settlement: SettlementStatus;
+  settlementUpdatedBy?: string;
+  settlementUpdatedOn?: string;
+  completedBy?: string;
+  completedOn?: string;
+  completionNote?: string;
+}
+
+type ExitState = { cases: ExitCase[] };
+
+export const OPEN_EXIT_STATUSES: ExitStatus[] = ["Submitted", "Accepted"];
+
+function buildClearance(caseId: string, assets: Pick<AssetAssignment, "id" | "name" | "tag">[]): ClearanceItem[] {
+  const items: ClearanceItem[] = assets.map((asset) => ({
+    id: `${caseId}-asset-${asset.id}`,
+    label: `Asset returned: ${asset.name} (${asset.tag})`,
+    owner: "it",
+    done: false,
+  }));
+  if (!assets.length) {
+    items.push({ id: `${caseId}-asset-none`, label: "Confirm no company assets are held", owner: "it", done: false });
+  }
+  items.push(
+    { id: `${caseId}-it`, label: "IT access revoked (email, VPN, apps)", owner: "it", done: false },
+    { id: `${caseId}-finance`, label: "Finance dues settled (advances, expenses, loans)", owner: "finance", done: false },
+    { id: `${caseId}-kt`, label: "Knowledge transfer completed", owner: "employee", done: false },
+    { id: `${caseId}-mgr`, label: "Manager sign-off", owner: "manager", done: false },
+    { id: `${caseId}-hr`, label: "HR sign-off", owner: "hr", done: false },
+  );
+  return items;
+}
+
+function defaults(): ExitState {
+  const person = seedCandidates()[3] ?? seedCandidates()[0];
+  if (!person) return { cases: [] };
+  const today = todayISO();
+  const submittedOn = addDaysISO(today, -10);
+  const noticeDays = noticeDaysFor(person.id);
+  const lastDay = addDaysISO(submittedOn, noticeDays);
+  const id = "exit-seed-1";
+  const clearance = buildClearance(id, [{ id: "seed-laptop", name: "Laptop", tag: "LT-4471" }]).map((item) =>
+    item.owner === "finance" || item.id.endsWith("-kt")
+      ? { ...item, done: true, doneBy: item.owner === "finance" ? "Finance team" : person.fullName, doneById: item.owner === "finance" ? "finance" : person.id, doneOn: addDaysISO(today, -3) }
+      : item,
+  );
+  return {
+    cases: [
+      {
+        id,
+        employeeId: person.id,
+        employeeName: person.fullName,
+        submittedOn,
+        noticeDays,
+        proposedLastDay: lastDay,
+        lastWorkingDay: lastDay,
+        earlyRelease: false,
+        reason: "Relocation",
+        note: "Moving cities for family reasons.",
+        status: "Accepted",
+        decidedBy: "Ram Krishnan",
+        decidedById: "emp-ram",
+        decidedOn: addDaysISO(submittedOn, 2),
+        decisionNote: "Thanks for the notice — handover plan agreed.",
+        clearance,
+        interview: {
+          rating: 4,
+          reasons: ["Commute or location", "Personal circumstances"],
+          wouldReturn: "Yes",
+          comments: "Good team. Leaving only because of the move.",
+          submittedOn: addDaysISO(today, -2),
+        },
+        settlement: "In progress",
+        settlementUpdatedBy: "Farhan Ali",
+        settlementUpdatedOn: addDaysISO(today, -1),
+      },
+    ],
+  };
+}
+
+function read(): ExitState {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return defaults();
+    const saved = JSON.parse(raw) as Partial<Record<keyof ExitState, unknown>>;
+    const base = defaults();
+    if (Array.isArray(saved?.cases)) base.cases = saved.cases as ExitCase[];
+    return base;
+  } catch {
+    return defaults();
+  }
+}
+
+let cache: ExitState | null = null;
+const listeners = new Set<() => void>();
+
+function write(state: ExitState): LifecycleResult {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(state));
+  } catch {
+    return "Could not save — browser storage is full or unavailable.";
+  }
+  cache = state;
+  listeners.forEach((fn) => fn());
+  return null;
+}
+
+export function subscribeExits(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** Stable snapshot for useSyncExternalStore. */
+export function getExitState(): ExitState {
+  if (!cache) cache = read();
+  return cache;
+}
+
+function mutateCase(id: string, mutator: (row: ExitCase) => LifecycleResult): LifecycleResult {
+  const current = getExitState();
+  const index = current.cases.findIndex((c) => c.id === id);
+  if (index < 0) return "Exit record not found.";
+  const row: ExitCase = structuredClone(current.cases[index]);
+  const error = mutator(row);
+  if (error) return error;
+  const cases = current.cases.slice();
+  cases[index] = row;
+  return write({ ...current, cases });
+}
+
+/* ───────────── Queries ───────────── */
+
+export function openExitFor(employeeId: string): ExitCase | undefined {
+  return getExitState().cases.find((c) => c.employeeId === employeeId && OPEN_EXIT_STATUSES.includes(c.status));
+}
+
+export function earliestLastDay(employeeId: string, from = todayISO()): string {
+  return addDaysISO(from, noticeDaysFor(employeeId));
+}
+
+/** Exit interview answers are confidential: only the leaver and HR may read them. */
+export function canSeeInterview(actor: LifecycleActor, row: ExitCase): boolean {
+  return actor.id === row.employeeId || isHrRole(actor.role);
+}
+
+export function canTickItem(actor: LifecycleActor, row: ExitCase, item: ClearanceItem): boolean {
+  if (row.status !== "Accepted") return false;
+  if (actor.id === row.employeeId) return item.owner === "employee";
+  if (isHrRole(actor.role)) return true;
+  switch (item.owner) {
+    case "employee":
+      return false;
+    case "manager":
+      return isAboveInLine(actor.id, row.employeeId);
+    case "it":
+      return actor.role === "it_admin" || actor.role === "admin" || actor.role === "super_admin";
+    case "finance":
+      return actor.role === "finance";
+    case "hr":
+      return false;
+  }
+}
+
+export function clearanceProgress(row: ExitCase): { done: number; total: number } {
+  return { done: row.clearance.filter((i) => i.done).length, total: row.clearance.length };
+}
+
+export function completionBlocker(row: ExitCase, today = todayISO()): string | null {
+  if (row.status !== "Accepted") return "Only accepted exits can be completed.";
+  const { done, total } = clearanceProgress(row);
+  if (done < total) return `Clearance is incomplete (${done} of ${total} done).`;
+  if (row.lastWorkingDay > today) return "The last working day has not been reached yet.";
+  return null;
+}
+
+/* ───────────── Mutations ───────────── */
+
+export function submitResignation(
+  actor: LifecycleActor,
+  input: { proposedLastDay: string; reason: string; note: string; earlyRelease: boolean },
+): LifecycleResult {
+  const today = todayISO();
+  const person = getPerson(actor.id);
+  if (person?.employmentStatus === "Terminated") return "Your employment has already ended.";
+  if (openExitFor(actor.id)) return "You already have an open resignation.";
+  if (!input.reason.trim()) return "Choose a reason for leaving.";
+  if (!isValidISO(input.proposedLastDay)) return "Enter a valid last working day.";
+  if (input.proposedLastDay < today) return "Last working day cannot be in the past.";
+  if (input.note.length > 1000) return "Note must be 1000 characters or fewer.";
+  const noticeDays = noticeDaysFor(actor.id);
+  const earliest = addDaysISO(today, noticeDays);
+  if (input.proposedLastDay < earliest && !input.earlyRelease) {
+    return `Your notice period is ${noticeDays} days — choose ${earliest} or later, or request early release.`;
+  }
+  if (input.earlyRelease && input.proposedLastDay >= earliest) {
+    return "Early release is only needed when the date is inside your notice period.";
+  }
+  if (input.proposedLastDay > addDaysISO(today, 180)) return "Last working day must be within 180 days.";
+  const state = getExitState();
+  const row: ExitCase = {
+    id: `exit-${Date.now()}`,
+    employeeId: actor.id,
+    employeeName: actor.fullName,
+    submittedOn: today,
+    noticeDays,
+    proposedLastDay: input.proposedLastDay,
+    lastWorkingDay: input.proposedLastDay,
+    earlyRelease: input.earlyRelease,
+    reason: input.reason.trim(),
+    note: input.note.trim(),
+    status: "Submitted",
+    clearance: [],
+    settlement: "Pending",
+  };
+  return write({ ...state, cases: [row, ...state.cases] });
+}
+
+export function withdrawResignation(actor: LifecycleActor, id: string): LifecycleResult {
+  return mutateCase(id, (row) => {
+    if (row.employeeId !== actor.id) return "Only the employee can withdraw their resignation.";
+    if (row.status !== "Submitted") return "A resignation can only be withdrawn before it is accepted.";
+    row.status = "Withdrawn";
+    row.decidedOn = todayISO();
+    return null;
+  });
+}
+
+export function decideResignation(
+  actor: LifecycleActor,
+  id: string,
+  decision: "accept" | "conversation",
+  options: { note: string; approveEarlyRelease?: boolean; assets: Pick<AssetAssignment, "id" | "name" | "tag" | "employeeId">[] },
+): LifecycleResult {
+  return mutateCase(id, (row) => {
+    if (row.employeeId === actor.id) return "You cannot act on your own resignation.";
+    if (!canActForEmployee(actor, row.employeeId)) return "Only the reporting line or HR can act on this resignation.";
+    if (row.status !== "Submitted") return `This resignation is already ${row.status.toLowerCase()}.`;
+    const note = options.note.trim();
+    const today = todayISO();
+    if (decision === "conversation") {
+      if (!note) return "Add a note explaining what you'd like to discuss.";
+      row.status = "Conversation requested";
+    } else {
+      if (row.earlyRelease && options.approveEarlyRelease === false) {
+        // Early date declined — the standard notice applies from the submission date.
+        const standard = addDaysISO(row.submittedOn, row.noticeDays);
+        row.lastWorkingDay = standard < today ? today : standard;
+        if (!note) return "Add a note when declining the early release date.";
+      } else {
+        row.lastWorkingDay = row.proposedLastDay < today ? today : row.proposedLastDay;
+      }
+      row.status = "Accepted";
+      const assets = options.assets.filter((a) => a.employeeId === row.employeeId);
+      row.clearance = buildClearance(row.id, assets);
+    }
+    row.decidedBy = actor.fullName;
+    row.decidedById = actor.id;
+    row.decidedOn = today;
+    row.decisionNote = note;
+    return null;
+  });
+}
+
+export function setClearanceItem(actor: LifecycleActor, id: string, itemId: string, done: boolean): LifecycleResult {
+  return mutateCase(id, (row) => {
+    const item = row.clearance.find((i) => i.id === itemId);
+    if (!item) return "Checklist item not found.";
+    if (row.status !== "Accepted") return "The checklist is locked for this exit.";
+    if (!canTickItem(actor, row, item)) return `Only ${OWNER_LABEL[item.owner]} or HR can update this item.`;
+    if (item.owner === "hr" && done && row.clearance.some((i) => i.id !== item.id && !i.done)) {
+      return "HR sign-off comes last — finish the other items first.";
+    }
+    if (item.owner === "manager" && done) {
+      const kt = row.clearance.find((i) => i.id.endsWith("-kt"));
+      if (kt && !kt.done) return "Knowledge transfer must be done before manager sign-off.";
+    }
+    if (!done) {
+      const hr = row.clearance.find((i) => i.owner === "hr");
+      if (hr?.done && item.owner !== "hr") return "Undo HR sign-off before reopening other items.";
+    }
+    item.done = done;
+    item.doneBy = done ? actor.fullName : undefined;
+    item.doneById = done ? actor.id : undefined;
+    item.doneOn = done ? todayISO() : undefined;
+    return null;
+  });
+}
+
+export function submitExitInterview(
+  actor: LifecycleActor,
+  id: string,
+  input: { rating: number; reasons: string[]; wouldReturn: ExitInterview["wouldReturn"]; comments: string },
+): LifecycleResult {
+  return mutateCase(id, (row) => {
+    if (row.employeeId !== actor.id) return "Only the leaving employee can fill the exit interview.";
+    if (row.status !== "Accepted") return "The exit interview opens once your resignation is accepted.";
+    if (row.interview) return "You have already submitted your exit interview.";
+    if (!Number.isInteger(input.rating) || input.rating < 1 || input.rating > 5) return "Choose an overall rating from 1 to 5.";
+    if (!input.reasons.length) return "Pick at least one reason.";
+    if (input.reasons.some((r) => !(INTERVIEW_REASONS as readonly string[]).includes(r))) return "One of the reasons is not recognised.";
+    if (input.comments.length > 2000) return "Comments must be 2000 characters or fewer.";
+    row.interview = {
+      rating: input.rating,
+      reasons: [...new Set(input.reasons)],
+      wouldReturn: input.wouldReturn,
+      comments: input.comments.trim(),
+      submittedOn: todayISO(),
+    };
+    return null;
+  });
+}
+
+export function setSettlement(actor: LifecycleActor, id: string, next: SettlementStatus): LifecycleResult {
+  return mutateCase(id, (row) => {
+    if (!isHrRole(actor.role)) return "Only HR can update the final settlement.";
+    if (row.employeeId === actor.id) return "You cannot update your own settlement.";
+    if (row.status !== "Accepted" && row.status !== "Completed") return "Settlement starts once the resignation is accepted.";
+    const from = SETTLEMENT_STEPS.indexOf(row.settlement);
+    const to = SETTLEMENT_STEPS.indexOf(next);
+    if (to < 0) return "Unknown settlement status.";
+    if (to !== from + 1) return `Settlement can only move from ${row.settlement} to ${SETTLEMENT_STEPS[from + 1] ?? "—"}.`;
+    row.settlement = next;
+    row.settlementUpdatedBy = actor.fullName;
+    row.settlementUpdatedOn = todayISO();
+    return null;
+  });
+}
+
+/**
+ * HR closes the exit: marks the directory record Terminated (keeping every other field)
+ * and raises the relieving/experience letter request.
+ * Returns an error, or null plus an optional warning about the letter via `onWarning`.
+ */
+export function completeExit(actor: DemoAccount, id: string, onWarning?: (text: string) => void): LifecycleResult {
+  if (!isHrRole(actor.role)) return "Only HR can complete an exit.";
+  const row = getExitState().cases.find((c) => c.id === id);
+  if (!row) return "Exit record not found.";
+  if (row.employeeId === actor.id) return "You cannot complete your own exit.";
+  const blocker = completionBlocker(row);
+  if (blocker) return blocker;
+  const person = getPerson(row.employeeId);
+  if (!person) return "This person is not in the directory.";
+  try {
+    const updated: LocalPersonRecord = {
+      ...person,
+      employmentStatus: "Terminated",
+      exitDate: row.lastWorkingDay,
+      exitReason: `Resignation — ${row.reason}`,
+    };
+    upsertPerson(updated);
+  } catch {
+    return "Could not update the directory record — browser storage is unavailable.";
+  }
+  const error = mutateCase(id, (r) => {
+    r.status = "Completed";
+    r.completedBy = actor.fullName;
+    r.completedOn = todayISO();
+    return null;
+  });
+  if (error) return error;
+  // Leavers get both a relieving letter and an experience letter.
+  const letterErrors = (["Relieving", "Experience"] as const)
+    .map((type) =>
+      addLetterRequest(actor, {
+        employeeId: row.employeeId,
+        employeeName: row.employeeName,
+        type,
+        note: `${type} letter — last working day ${row.lastWorkingDay}.`,
+      }),
+    )
+    .filter(Boolean);
+  if (letterErrors.length) onWarning?.(`Exit completed, but a letter request was not created: ${letterErrors.join(" ")}`);
+  return null;
+}
+
+/** Re-export so pages can show the person's country without extra imports. */
+export function exitCountry(employeeId: string): string {
+  return getPerson(employeeId)?.countryName ?? countryCodeFor(employeeId);
+}
+
+export { personName };

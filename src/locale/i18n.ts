@@ -29,7 +29,7 @@ const EN: Record<I18nKey, string> = {
   "nav.home": "Home",
   "nav.people": "People",
   "nav.settings": "Locale settings",
-  "locale.region": "Demo region",
+  "locale.region": "Region",
   "locale.language": "Language",
   "locale.currency": "Currency",
   "locale.timezone": "Time zone",

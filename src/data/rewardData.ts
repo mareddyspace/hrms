@@ -1,7 +1,7 @@
 /** Compensation, benefits, and documents & letters — fictional Infotech demo data only. */
 
 export const LEGAL_DISCLAIMER =
-  "Demo templates and figures only. Infotech does not generate real employment, tax, or legal documents from fabricated data in this prototype.";
+  "Templates and figures are illustrative only. Official employment, tax and legal documents are issued by HR.";
 
 export interface GradeBand {
   id: string;
@@ -49,6 +49,9 @@ export interface CompReviewItem {
   currency: string;
   status: "Draft" | "Pending approval" | "Approved" | "Rejected";
   bonusProposal: string;
+  /** Set when an approver decides the row */
+  approver?: string;
+  decidedOn?: string;
 }
 
 export interface BonusRecord {
@@ -71,6 +74,8 @@ export interface BenefitPlan {
   summary: string;
   employeeCost: string;
   documents: string[];
+  /** Statutory plans: enrollment is compulsory and can never be waived. */
+  mandatory?: boolean;
 }
 
 export interface BenefitEnrollment {
@@ -107,9 +112,14 @@ export type LetterType =
   | "Promotion"
   | "Transfer"
   | "Salary revision"
-  | "Experience";
+  | "Experience"
+  | "Relieving"
+  | "Confirmation";
 
-export type LetterStatus = "Draft" | "Pending approval" | "Approved" | "Issued";
+export type LetterStatus = "Draft" | "Pending approval" | "Approved" | "Rejected" | "Issued";
+
+/** Letters that must stay hidden from their subject until issued. */
+export const SENSITIVE_LETTER_TYPES: LetterType[] = ["Salary revision", "Promotion"];
 
 export interface LetterRequest {
   id: string;
@@ -118,11 +128,13 @@ export interface LetterRequest {
   type: LetterType;
   status: LetterStatus;
   requestedBy: string;
+  /** Account id of the requester (older rows may only carry the name) */
+  requestedById?: string;
   requestedOn: string;
   approver?: string;
   decidedOn?: string;
   note: string;
-  /** Demo template body — not a legal document */
+  /** Template preview body — not a legal document */
   previewBody: string;
 }
 
@@ -136,7 +148,7 @@ export interface DocLibraryItem {
   uploadedBy: string;
   uploadedAt: string;
   sizeLabel: string;
-  /** text or data-url demo preview */
+  /** text or data-url preview */
   preview: string;
   isDemoFile: boolean;
 }
@@ -240,60 +252,62 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     country: "India",
     name: "Group Medical (India)",
     category: "Medical",
-    provider: "Demo Health India",
-    summary: "Employee + family floater · demo plan summary only",
+    provider: "Northwind Health India",
+    summary: "Employee + family floater cover",
     employeeCost: "Employer paid",
-    documents: ["India Medical SPD (demo).pdf"],
+    documents: ["India Medical SPD.pdf"],
   },
   {
     id: "bp-in-pf",
     country: "India",
     name: "Provident Fund",
     category: "Retirement",
-    provider: "EPFO (demo)",
-    summary: "Statutory PF contribution demo record",
-    employeeCost: "12% employee share (demo)",
-    documents: ["PF FAQ (demo).pdf"],
+    provider: "EPFO",
+    summary: "Statutory PF contribution",
+    employeeCost: "12% employee share",
+    documents: ["PF FAQ.pdf"],
+    mandatory: true,
   },
   {
     id: "bp-us-med",
     country: "United States",
     name: "Medical PPO",
     category: "Medical",
-    provider: "DemoCare US",
+    provider: "Northwind Care US",
     summary: "PPO network · open enrollment Nov",
-    employeeCost: "$120 / paycheck (demo)",
-    documents: ["US Medical SBC (demo).pdf"],
+    employeeCost: "$120 / paycheck",
+    documents: ["US Medical SBC.pdf"],
   },
   {
     id: "bp-us-401",
     country: "United States",
     name: "401(k)",
     category: "Retirement",
-    provider: "Demo Fidelity",
-    summary: "4% match demo description",
+    provider: "Harbor Retirement Services",
+    summary: "4% employer match",
     employeeCost: "Elective deferral",
-    documents: ["401k Summary (demo).pdf"],
+    documents: ["401k Summary.pdf"],
   },
   {
     id: "bp-uk-med",
     country: "United Kingdom",
     name: "Private Medical",
     category: "Medical",
-    provider: "Demo Health UK",
+    provider: "Northwind Health UK",
     summary: "Employee + optional dependents",
-    employeeCost: "£45 / month (demo)",
-    documents: ["UK PMI guide (demo).pdf"],
+    employeeCost: "£45 / month",
+    documents: ["UK PMI guide.pdf"],
   },
   {
     id: "bp-ae-med",
     country: "United Arab Emirates",
     name: "DHA Medical",
     category: "Medical",
-    provider: "Demo Gulf Care",
-    summary: "Mandatory medical insurance demo",
+    provider: "Gulf Shield Care",
+    summary: "Mandatory medical insurance (DHA)",
     employeeCost: "Employer paid",
-    documents: ["UAE Medical (demo).pdf"],
+    documents: ["UAE Medical.pdf"],
+    mandatory: true,
   },
 ];
 
@@ -319,13 +333,15 @@ export const BENEFIT_HISTORY: BenefitHistoryRow[] = [
 ];
 
 export const LETTER_TEMPLATES: { type: LetterType; description: string }[] = [
-  { type: "Offer", description: "Demo offer letter shell — not a binding offer" },
-  { type: "Appointment", description: "Demo appointment confirmation shell" },
-  { type: "Employment", description: "Demo employment particulars summary" },
-  { type: "Promotion", description: "Demo promotion notification shell" },
-  { type: "Transfer", description: "Demo internal transfer confirmation" },
-  { type: "Salary revision", description: "Demo salary revision notice shell" },
-  { type: "Experience", description: "Demo experience / relieving letter shell" },
+  { type: "Offer", description: "Offer letter template — not a binding offer" },
+  { type: "Appointment", description: "Appointment confirmation template" },
+  { type: "Employment", description: "Employment particulars summary" },
+  { type: "Promotion", description: "Promotion notification template" },
+  { type: "Transfer", description: "Internal transfer confirmation" },
+  { type: "Salary revision", description: "Salary revision notice template" },
+  { type: "Experience", description: "Experience letter template" },
+  { type: "Relieving", description: "Relieving letter — issued on the last working day" },
+  { type: "Confirmation", description: "Confirmation of employment after probation" },
 ];
 
 export const LETTER_REQUESTS: LetterRequest[] = [
@@ -336,12 +352,13 @@ export const LETTER_REQUESTS: LetterRequest[] = [
     type: "Employment",
     status: "Issued",
     requestedBy: "Babu Menon",
+    requestedById: "emp-mahesh",
     requestedOn: "2026-09-01",
     approver: "Farhan Ali",
     decidedOn: "2026-09-03",
     note: "Bank KYC support",
     previewBody:
-      "[DEMO TEMPLATE — NOT A LEGAL DOCUMENT]\n\nEmployment particulars summary for Babu Menon (EMP1184).\nRole: Software Engineer · Entity: Infotech India Pvt Ltd (demo).\nThis text is fictional and must not be used as an official letter.",
+      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nEmployment particulars summary for Babu Menon (EMP1184).\nRole: Software Engineer · Entity: Infotech India Pvt Ltd.\nPreview only — the issued letter is provided by HR.",
   },
   {
     id: "ltr-2",
@@ -350,10 +367,11 @@ export const LETTER_REQUESTS: LetterRequest[] = [
     type: "Salary revision",
     status: "Pending approval",
     requestedBy: "Ram Krishnan",
+    requestedById: "emp-ram",
     requestedOn: "2026-10-08",
     note: "Linked to FY2026 review proposal",
     previewBody:
-      "[DEMO TEMPLATE — NOT A LEGAL DOCUMENT]\n\nSalary revision draft for Babu Menon.\nAmounts are placeholders and masked according to viewer permissions.\nDo not treat as an official compensation letter.",
+      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nSalary revision draft for Babu Menon.\nAmounts are placeholders and masked according to viewer permissions.\nDo not treat as an official compensation letter.",
   },
   {
     id: "ltr-3",
@@ -362,10 +380,11 @@ export const LETTER_REQUESTS: LetterRequest[] = [
     type: "Promotion",
     status: "Draft",
     requestedBy: "Farhan Ali",
+    requestedById: "demo-hr-admin",
     requestedOn: "2026-10-10",
     note: "Pending cycle approval",
     previewBody:
-      "[DEMO TEMPLATE — NOT A LEGAL DOCUMENT]\n\nPromotion notification draft for Priya Nair.\nFictional content for UI demonstration only.",
+      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nPromotion notification draft for Priya Nair.\nPreview only — the issued letter is provided by HR.",
   },
 ];
 
@@ -374,39 +393,39 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     id: "dl-1",
     employeeId: "emp-mahesh",
     employeeName: "Babu Menon",
-    name: "PAN card (demo scan)",
+    name: "PAN card scan",
     category: "Identity",
     docType: "ID",
     uploadedBy: "Babu Menon",
     uploadedAt: "2024-11-05T10:00:00",
     sizeLabel: "240 KB",
-    preview: "Demo file placeholder: PAN scan metadata only. No real identity document stored.",
+    preview: "PAN card scan · metadata only. The original is held by HR.",
     isDemoFile: true,
   },
   {
     id: "dl-2",
     employeeId: "emp-mahesh",
     employeeName: "Babu Menon",
-    name: "Signed NDA (demo)",
+    name: "Signed NDA",
     category: "Compliance",
     docType: "Agreement",
     uploadedBy: "HR Ops",
     uploadedAt: "2024-11-04T09:00:00",
     sizeLabel: "110 KB",
-    preview: "Demo NDA acknowledgement text. Not an executed legal agreement.",
+    preview: "NDA acknowledgement · signed copy held by HR.",
     isDemoFile: true,
   },
   {
     id: "dl-3",
     employeeId: "demo-hiring-manager",
     employeeName: "Daniel Ortiz",
-    name: "I-9 worksheet (demo)",
+    name: "I-9 worksheet",
     category: "Onboarding",
     docType: "Form",
     uploadedBy: "HR US",
     uploadedAt: "2025-02-01T15:00:00",
     sizeLabel: "88 KB",
-    preview: "Demo onboarding form metadata for US entity.",
+    preview: "Onboarding form metadata for the US entity.",
     isDemoFile: true,
   },
 ];

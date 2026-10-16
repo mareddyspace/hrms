@@ -297,7 +297,7 @@ export function rbacPolicySummary(viewer: DemoAccount): string {
           : viewer.role === "compensation_admin"
             ? "Authorized compensation & payslip access."
             : isHr(viewer.role)
-              ? "HR compensation access for authorized cases (demo: enabled)."
+              ? "HR compensation access for authorized cases."
               : "Own salary & payslips only.";
   return `${viewer.personaLabel}: reports [${scopes}]. ${salaryNote}`;
 }

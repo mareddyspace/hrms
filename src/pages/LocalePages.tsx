@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Banner,
@@ -13,8 +13,8 @@ import {
   StatusBadge,
   Tabs,
 } from "../components/ui.tsx";
-import { POLICY_DISCLAIMER, type AppLanguage, type CountrySettings } from "../locale/countryConfig.ts";
-import { LocaleContextBanner, RegionalFilter } from "../locale/RegionalFilter.tsx";
+import { type AppLanguage, type CountrySettings } from "../locale/countryConfig.ts";
+import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import type { CountryCode } from "../model.ts";
 import { usePortal } from "../store.tsx";
@@ -36,12 +36,11 @@ export function LocaleSettingsPage() {
   } = useLocale();
 
   return (
-    <Page title={t("nav.settings")} subtitle="Demo region, language, currency and time zone — shared Infotech app">
+    <Page title={t("nav.settings")} subtitle="Region, language, currency and time zone">
       <Banner message={{ tone: "ok", text: t("locale.disclaimer") }} />
-      <LocaleContextBanner />
 
       <MetricGrid>
-        <MetricCard label="Signed-in identity" value={employee.fullName} hint={`${demoProfile.personaLabel} · unchanged by region`} />
+        <MetricCard label="Signed-in identity" value={employee.fullName} hint={demoProfile.personaLabel} />
         <MetricCard label="Home country (profile)" value={employee.countryName ?? "—"} hint={employee.legalEntity} />
         <MetricCard label={t("locale.region")} value={regionCode === "ALL" ? t("country.all") : activeCountry.name} />
         <MetricCard label={t("locale.language")} value={languageLabels[language]} />
@@ -72,7 +71,7 @@ export function LocaleSettingsPage() {
             </select>
           </Field>
           <p className="note">
-            Full UI translation is not claimed. Only keys with reliable copy are translated; other screens stay English.
+            Some screens are available in English only.
           </p>
         </Card>
 
@@ -92,7 +91,6 @@ export function LocaleSettingsPage() {
             headers={["Date", "Holiday"]}
             rows={activeCountry.holidays.map((h) => [h.date, h.name])}
           />
-          <p className="note">{POLICY_DISCLAIMER}</p>
         </Card>
 
         <Card title={t("leave.policy")}>
@@ -103,7 +101,7 @@ export function LocaleSettingsPage() {
             Annual days (sample): {activeCountry.leavePolicy.annualDays} · Carry-forward (sample):{" "}
             {activeCountry.leavePolicy.carryForwardDays}
           </p>
-          <p className="note">{activeCountry.leavePolicy.note}</p>
+          {activeCountry.leavePolicy.note && <p className="note">{activeCountry.leavePolicy.note}</p>}
         </Card>
 
         <Card title={t("working.time")}>
@@ -111,7 +109,7 @@ export function LocaleSettingsPage() {
             {activeCountry.workingTime.workDays} · {activeCountry.workingTime.standardHours}
           </p>
           <p>Week starts: {activeCountry.workingTime.weekStart}</p>
-          <p className="note">{activeCountry.workingTime.note}</p>
+          {activeCountry.workingTime.note && <p className="note">{activeCountry.workingTime.note}</p>}
         </Card>
 
         <Card title="Related country config">
@@ -131,9 +129,7 @@ export function LocaleSettingsPage() {
 export function CountryBenefitsConfigPage() {
   const { activeCountry, t } = useLocale();
   return (
-    <Page title={t("benefits.country")} subtitle={`${activeCountry.name} · sample catalog`}>
-      <LocaleContextBanner />
-      <Banner message={{ tone: "ok", text: POLICY_DISCLAIMER }} />
+    <Page title={t("benefits.country")} subtitle={activeCountry.name}>
       <RegionalFilter />
       <Card title={activeCountry.name}>
         <DataTable
@@ -149,9 +145,7 @@ export function CountryBenefitsConfigPage() {
 export function CountryDocumentsConfigPage() {
   const { activeCountry, t } = useLocale();
   return (
-    <Page title={t("documents.country")} subtitle={`${activeCountry.name} · sample document checklist`}>
-      <LocaleContextBanner />
-      <Banner message={{ tone: "ok", text: POLICY_DISCLAIMER }} />
+    <Page title={t("documents.country")} subtitle={`${activeCountry.name} · document checklist`}>
       <RegionalFilter />
       <Card title={activeCountry.name}>
         <DataTable
@@ -167,12 +161,74 @@ export function CountryDocumentsConfigPage() {
   );
 }
 
+/** Intl.supportedValuesOf is ES2022 — feature-detect so older engines fall back gracefully. */
+function supportedValues(key: "currency" | "timeZone"): string[] | null {
+  const fn = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
+  try {
+    return typeof fn === "function" ? fn(key) : null;
+  } catch {
+    return null;
+  }
+}
+
+function currencyError(value: string): string {
+  const code = value.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code)) return "Currency must be a 3-letter ISO 4217 code (e.g. INR, USD).";
+  const list = supportedValues("currency");
+  if (list && !list.includes(code)) return `${code} is not a recognised ISO currency code.`;
+  return "";
+}
+
+function timeZoneError(value: string): string {
+  const zone = value.trim();
+  if (!zone) return "Time zone is required.";
+  const list = supportedValues("timeZone");
+  if (list) return list.includes(zone) || zone === "UTC" ? "" : `${zone} is not a recognised IANA time zone.`;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: zone });
+    return "";
+  } catch {
+    return `${zone} is not a recognised IANA time zone.`;
+  }
+}
+
+/** Parses a day count; null when it is not a whole number >= 0. */
+function parseDays(value: string): number | null {
+  if (value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
 export function CountryAdminPage() {
   const { countries, updateCountrySettings, resetCountrySettings, t, formatMoney } = useLocale();
   const { demoProfile } = usePortal();
   const [code, setCode] = useState<CountryCode>(countries[0]?.code ?? "IN");
   const [tab, setTab] = useState("overview");
   const selected = countries.find((c) => c.code === code) ?? countries[0];
+  // Currency / zone / day fields are edited as drafts and only saved once valid.
+  const [currencyDraft, setCurrencyDraft] = useState("");
+  const [zoneDraft, setZoneDraft] = useState("");
+  const [annualDraft, setAnnualDraft] = useState("");
+  const [carryDraft, setCarryDraft] = useState("");
+
+  useEffect(() => {
+    if (!selected) return;
+    setCurrencyDraft(selected.currency);
+    setZoneDraft(selected.timeZone);
+    setAnnualDraft(String(selected.leavePolicy.annualDays));
+    setCarryDraft(String(selected.leavePolicy.carryForwardDays));
+  }, [
+    selected?.code,
+    selected?.currency,
+    selected?.timeZone,
+    selected?.leavePolicy.annualDays,
+    selected?.leavePolicy.carryForwardDays,
+  ]);
+
+  const currencyMsg = currencyError(currencyDraft);
+  const zoneMsg = timeZoneError(zoneDraft);
+  const annualOk = parseDays(annualDraft) !== null;
+  const carryOk = parseDays(carryDraft) !== null;
 
   const canEdit =
     demoProfile.role === "super_admin" ||
@@ -185,9 +241,8 @@ export function CountryAdminPage() {
       <Page title={t("admin.countries")}>
         <EmptyState
           title="Not authorized"
-          description="Only HR or Admin demo personas can edit mock country settings in this prototype."
+          description="Only HR or Admin can edit country settings."
         />
-        <LocaleContextBanner />
         <Card title="Read-only snapshot">
           <DataTable
             headers={["Country", "Entity", "Currency", "Time zone"]}
@@ -206,14 +261,20 @@ export function CountryAdminPage() {
   return (
     <Page
       title={t("admin.countries")}
-      subtitle="Inspect and edit mock country settings (localStorage) — one shared Infotech app"
       action={
-        <button type="button" className="btn-ghost" onClick={() => resetCountrySettings()}>
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() => {
+            if (window.confirm("Reset all country settings to their defaults? Your edits will be lost.")) {
+              resetCountrySettings();
+            }
+          }}
+        >
           Reset defaults
         </button>
       }
     >
-      <Banner message={{ tone: "ok", text: POLICY_DISCLAIMER }} />
       <FilterBar>
         <label className="filter-label">
           Country
@@ -253,7 +314,17 @@ export function CountryAdminPage() {
                   />
                 </Field>
                 <Field label="Currency code">
-                  <input value={selected.currency} onChange={(e) => patch({ currency: e.target.value })} />
+                  <input
+                    value={currencyDraft}
+                    maxLength={3}
+                    aria-invalid={!!currencyMsg}
+                    onChange={(e) => {
+                      const next = e.target.value.toUpperCase();
+                      setCurrencyDraft(next);
+                      if (!currencyError(next)) patch({ currency: next.trim() });
+                    }}
+                  />
+                  {currencyMsg && <span className="note err">{currencyMsg}</span>}
                 </Field>
                 <Field label="Currency locale">
                   <input
@@ -262,10 +333,19 @@ export function CountryAdminPage() {
                   />
                 </Field>
                 <Field label="IANA time zone">
-                  <input value={selected.timeZone} onChange={(e) => patch({ timeZone: e.target.value })} />
+                  <input
+                    value={zoneDraft}
+                    aria-invalid={!!zoneMsg}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setZoneDraft(next);
+                      if (!timeZoneError(next)) patch({ timeZone: next.trim() });
+                    }}
+                  />
+                  {zoneMsg && <span className="note err">{zoneMsg}</span>}
                 </Field>
               </div>
-              <p className="note">Format preview: {formatMoney(250000)} · Headcount band stays on workforce mock.</p>
+              <p className="note">Format preview: {formatMoney(250000)}</p>
             </Card>
           )}
 
@@ -275,7 +355,6 @@ export function CountryAdminPage() {
                 headers={["Date", "Name"]}
                 rows={selected.holidays.map((h) => [h.date, h.name])}
               />
-              <p className="note">Holiday rows are sample data. Edit JSON via reset or extend in code for demos.</p>
             </Card>
           )}
 
@@ -293,30 +372,32 @@ export function CountryAdminPage() {
                 <Field label="Annual days (sample)">
                   <input
                     type="number"
-                    value={selected.leavePolicy.annualDays}
-                    onChange={(e) =>
-                      patch({
-                        leavePolicy: {
-                          ...selected.leavePolicy,
-                          annualDays: Number(e.target.value) || 0,
-                        },
-                      })
-                    }
+                    min={0}
+                    step={1}
+                    value={annualDraft}
+                    aria-invalid={!annualOk}
+                    onChange={(e) => {
+                      setAnnualDraft(e.target.value);
+                      const days = parseDays(e.target.value);
+                      if (days !== null) patch({ leavePolicy: { ...selected.leavePolicy, annualDays: days } });
+                    }}
                   />
+                  {!annualOk && <span className="note err">Enter a whole number of days, 0 or more.</span>}
                 </Field>
                 <Field label="Carry-forward (sample)">
                   <input
                     type="number"
-                    value={selected.leavePolicy.carryForwardDays}
-                    onChange={(e) =>
-                      patch({
-                        leavePolicy: {
-                          ...selected.leavePolicy,
-                          carryForwardDays: Number(e.target.value) || 0,
-                        },
-                      })
-                    }
+                    min={0}
+                    step={1}
+                    value={carryDraft}
+                    aria-invalid={!carryOk}
+                    onChange={(e) => {
+                      setCarryDraft(e.target.value);
+                      const days = parseDays(e.target.value);
+                      if (days !== null) patch({ leavePolicy: { ...selected.leavePolicy, carryForwardDays: days } });
+                    }}
                   />
+                  {!carryOk && <span className="note err">Enter a whole number of days, 0 or more.</span>}
                 </Field>
                 <StatusBadge status="Sample only" tone="warn" />
               </Card>

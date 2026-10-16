@@ -46,7 +46,25 @@ export type NavAccessId =
   | "locale"
   | "help"
   | "holidays"
-  | "expenses";
+  | "expenses"
+  | "taxdeclarations"
+  | "exit"
+  | "teamexits"
+  | "exitsadmin"
+  | "probation"
+  | "probationreviews"
+  | "immigration"
+  | "privacy"
+  | "grievances"
+  | "bgv"
+  | "engagement"
+  | "succession"
+  | "internaljobs"
+  | "bulkdata"
+  | "reportbuilder"
+  | "shifts"
+  | "optionalholidays"
+  | "contractors";
 
 export interface DemoAccount extends Employee {
   /** Prototype-only plain-text password (frontend mock). */
@@ -90,6 +108,16 @@ const ACCESS_EMPLOYEE: NavAccessId[] = [
   "help",
   "copilot",
   "locale",
+  "taxdeclarations",
+  "exit",
+  "probation",
+  "immigration",
+  "privacy",
+  "grievances",
+  "engagement",
+  "internaljobs",
+  "shifts",
+  "optionalholidays",
 ];
 
 const ACCESS_MANAGER: NavAccessId[] = [
@@ -102,6 +130,10 @@ const ACCESS_MANAGER: NavAccessId[] = [
   "skills",
   "people",
   "analytics",
+  "probationreviews",
+  "teamexits",
+  "succession",
+  "contractors",
   // compensation intentionally omitted — managers do not get salary records by default
 ];
 
@@ -118,6 +150,9 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "integrations",
   "payroll", // integration status only
   "administration",
+  "bulkdata",
+  "reportbuilder",
+  "exitsadmin",
   // no "compensation" / "payslips" — Admin does not auto-receive salary access
 ];
 
@@ -222,6 +257,10 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "agents",
       "locale",
       "administration",
+      "exitsadmin",
+      "bgv",
+      "bulkdata",
+      "reportbuilder",
     ],
   }),
   account({
@@ -254,6 +293,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "onboarding",
       "analytics",
       "agents",
+      "bgv",
     ],
   }),
   account({
@@ -304,6 +344,8 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "jobs",
       "recruiting",
       "agents",
+      "reportbuilder",
+      "exitsadmin",
       // no compensation — salary stays restricted unless salaryAuthorized
     ],
   }),
@@ -338,6 +380,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "compensation",
       "payroll",
       "payslips",
+      "reportbuilder",
     ],
   }),
   account({
@@ -416,6 +459,33 @@ export function findDemoByEmailOrCode(value: string): DemoAccount | undefined {
     (account) =>
       account.email.toLowerCase() === needle || account.employeeCode.toLowerCase() === needle,
   );
+}
+
+/** Everyone above this person in the reporting line, nearest first (manager, their manager, …). */
+/** Engineering teammates who aren't sign-in personas but appear in leave, tasks and timesheets. */
+const TEAMMATE_REPORTS_TO: Record<string, string> = {
+  "emp-priya": "emp-ram",
+  "emp-anu": "emp-ram",
+  "emp-kabir": "emp-ram",
+  "emp-diya": "emp-ram",
+};
+
+export function managementChain(employeeId: string, accounts: readonly DemoAccount[] = DEMO_ACCOUNTS): DemoAccount[] {
+  const chain: DemoAccount[] = [];
+  const seen = new Set<string>([employeeId]);
+  let current =
+    accounts.find((a) => a.id === employeeId) ??
+    (TEAMMATE_REPORTS_TO[employeeId]
+      ? ({ id: employeeId, reportsToId: TEAMMATE_REPORTS_TO[employeeId] } as DemoAccount)
+      : undefined);
+  while (current?.reportsToId && !seen.has(current.reportsToId)) {
+    const manager = accounts.find((a) => a.id === current!.reportsToId);
+    if (!manager) break;
+    chain.push(manager);
+    seen.add(manager.id);
+    current = manager;
+  }
+  return chain;
 }
 
 export function demoPasswordFor(employeeCode: string): string {

@@ -13,10 +13,12 @@ import {
 } from "../components/ui.tsx";
 import {
   SAMPLE_SHIFT,
+  attendanceContextFor,
   buildAttendanceHistory,
   breakMinutes,
   formatHm,
   kindLabel,
+  nonWorkingReason,
   phaseLabel,
   type AttendanceCorrection,
   type AttendanceDayKind,
@@ -27,9 +29,10 @@ import {
   attendanceAction,
   decideCorrection,
   getAttendanceState,
-  getTodaySession,
+  getCurrentSession,
+  listCorrectionsForApprover,
   listCorrectionsForEmployee,
-  listCorrectionsForManager,
+  missingCheckOutSessions,
   sessionHours,
   submitCorrection,
   subscribeAttendance,
@@ -45,15 +48,13 @@ import {
   toISO,
   todayISO,
 } from "../model.ts";
-import { buildDefaultCountrySettings, countryByCode } from "../locale/countryConfig.ts";
 import {
   isPrimaryWeeklyOffLabel,
   scheduleForEmployee,
   shortHolidayName,
 } from "../data/workSchedule.ts";
+import { managementChain } from "../demoAccounts.ts";
 import { usePortal } from "../store.tsx";
-
-const COUNTRY_SETTINGS = buildDefaultCountrySettings();
 
 type RangeMode = "week" | "month" | "custom";
 type AttTab = "overview" | "history" | "corrections" | "schedule";
@@ -98,7 +99,7 @@ function correctionKindLabel(kind: CorrectionKind): string {
 }
 
 export function AttendancePage() {
-  const { state, employee, isManager, demoProfile } = usePortal();
+  const { state, employee, isManager, demoProfile, demoAccounts, canDecideFor } = usePortal();
   const { activeCountry, t } = useLocale();
   const attState = useAttendance();
   const today = todayISO();
@@ -118,7 +119,9 @@ export function AttendancePage() {
   const [corrReason, setCorrReason] = useState("");
   const [corrIn, setCorrIn] = useState("");
   const [corrOut, setCorrOut] = useState("");
-  const [decideNote, setDecideNote] = useState("");
+  const [corrError, setCorrError] = useState<string | null>(null);
+  // Decision notes are per correction so typing on one row does not leak into another.
+  const [decideNotes, setDecideNotes] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!message) return;
@@ -126,7 +129,9 @@ export function AttendancePage() {
     return () => window.clearTimeout(tmr);
   }, [message]);
 
-  const managerId = demoProfile.reportsToId || "emp-ram";
+  // Corrections go to the nearest manager in the reporting line; none means nobody can review them.
+  const approver = managementChain(employee.id, demoAccounts)[0];
+  const managerId = approver?.id ?? "";
   const schedule = useMemo(
     () =>
       scheduleForEmployee({
@@ -141,8 +146,8 @@ export function AttendancePage() {
     [attState.corrections, employee.id],
   );
   const teamCorrections = useMemo(
-    () => (isManager ? listCorrectionsForManager(employee.id) : []),
-    [attState.corrections, employee.id, isManager],
+    () => listCorrectionsForApprover(canDecideFor),
+    [attState.corrections, canDecideFor],
   );
 
   const range = useMemo(() => {
@@ -158,15 +163,11 @@ export function AttendancePage() {
     return monthBounds(cursor.year, cursor.month);
   }, [rangeMode, cursor, customFrom, customTo, selectedDate, today]);
 
-  const employeeHolidays = useMemo(() => {
-    const home = countryByCode(employee.countryCode || "IN", COUNTRY_SETTINGS);
-    const byDate = new Map<string, { id: string; date: string; name: string }>();
-    for (const h of state.holidays) byDate.set(h.date, { id: h.id, date: h.date, name: h.name });
-    for (const h of home?.holidays ?? []) {
-      byDate.set(h.date, { id: `country-${h.date}`, date: h.date, name: h.name });
-    }
-    return Array.from(byDate.values());
-  }, [state.holidays, employee.countryCode]);
+  const dayContext = useMemo(
+    () => attendanceContextFor(employee, state.holidays, state.leaveRequests),
+    [employee, state.holidays, state.leaveRequests],
+  );
+  const employeeHolidays = dayContext.holidays;
 
   const history = useMemo(
     () =>
@@ -181,6 +182,7 @@ export function AttendancePage() {
         shiftHours: employee.shiftHours,
         corrections: myCorrections,
         weeklyOffDays: schedule.weeklyOffDays,
+        sessions: attState.sessions,
       }),
     [
       employee.id,
@@ -193,6 +195,7 @@ export function AttendancePage() {
       state.absences,
       myCorrections,
       schedule.weeklyOffDays,
+      attState.sessions,
     ],
   );
 
@@ -209,6 +212,7 @@ export function AttendancePage() {
       shiftHours: employee.shiftHours,
       corrections: myCorrections,
       weeklyOffDays: schedule.weeklyOffDays,
+      sessions: attState.sessions,
     });
   }, [
     cursor.year,
@@ -221,6 +225,7 @@ export function AttendancePage() {
     state.absences,
     myCorrections,
     schedule.weeklyOffDays,
+    attState.sessions,
   ]);
 
   const byDate = useMemo(() => new Map(monthHistory.map((r) => [r.date, r])), [monthHistory]);
@@ -238,7 +243,9 @@ export function AttendancePage() {
     return s;
   }, [history]);
 
-  const session = getTodaySession(employee.id);
+  const session = getCurrentSession(employee.id, attState);
+  const missingOut = missingCheckOutSessions(employee.id, attState);
+  const todayOff = session.phase === "not_started" ? nonWorkingReason(employee.id, today, dayContext) : null;
   const live = sessionHours(session);
   const openBreak = session.breaks.find((b) => !b.end);
 
@@ -262,7 +269,12 @@ export function AttendancePage() {
   }, [history, historyQ, historyKind]);
 
   const monthExpectedDays = monthHistory.filter(
-    (r) => r.kind === "present" || r.kind === "wfh" || r.kind === "missing_punch" || r.kind === "pending_correction",
+    (r) =>
+      r.kind === "present" ||
+      r.kind === "wfh" ||
+      r.kind === "missing_punch" ||
+      r.kind === "pending_correction" ||
+      r.kind === "not_checked_in",
   ).length;
   const monthExpectedHours = monthExpectedDays * SAMPLE_SHIFT.expectedHours;
   const monthRecordedHours = monthHistory.reduce((sum, r) => sum + r.hoursWorked, 0);
@@ -283,7 +295,7 @@ export function AttendancePage() {
   }
 
   function runPunch(action: "check_in" | "start_break" | "end_break" | "check_out") {
-    const error = attendanceAction(employee.id, action);
+    const error = attendanceAction(employee.id, action, dayContext);
     if (error) {
       setMessage({ tone: "err", text: error });
       return;
@@ -307,13 +319,27 @@ export function AttendancePage() {
       reason: corrReason,
       requestedCheckIn: corrIn || undefined,
       requestedCheckOut: corrOut || undefined,
+      context: dayContext,
     });
-    if (error) {
-      setMessage({ tone: "err", text: error });
-      return;
-    }
-    setMessage({ tone: "ok", text: "Correction request submitted (demo — manager notified in Approvals)." });
+    setCorrError(error);
+    if (error) return;
+    setMessage({ tone: "ok", text: `Correction request submitted — ${approver?.fullName ?? "your manager"} will review it.` });
     setCorrReason("");
+    setCorrIn("");
+    setCorrOut("");
+    setTab("corrections");
+  }
+
+  function decide(row: AttendanceCorrection, status: "Approved" | "Rejected") {
+    const error = decideCorrection(row.id, { id: employee.id, role: demoProfile.role }, status, decideNotes[row.id]);
+    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `Correction ${status.toLowerCase()}.` });
+    if (!error) setDecideNotes((prev) => ({ ...prev, [row.id]: "" }));
+  }
+
+  function openCorrection(date: string, kind: CorrectionKind) {
+    setCorrDate(date);
+    setCorrKind(kind);
+    setCorrError(null);
     setTab("corrections");
   }
 
@@ -353,9 +379,6 @@ export function AttendancePage() {
         </button>
       }
     >
-      <p className="note">
-        Sample attendance policies and shift rules are illustrative for this prototype — not legal entitlements.
-      </p>
       {message && <Banner message={message} />}
 
       <Tabs
@@ -404,12 +427,26 @@ export function AttendancePage() {
                     </strong>
                   </div>
                 </div>
-                <div className="form-actions">
-                  {session.phase === "not_started" && (
-                    <button type="button" className="btn" onClick={() => runPunch("check_in")}>
-                      Check in
+                {session.date !== today && session.phase !== "not_started" && (
+                  <p className="note warn">Session started {formatShortDate(session.date)} (overnight) — check out to close it.</p>
+                )}
+                {missingOut.map((s) => (
+                  <p key={s.date} className="note warn att-missing-out">
+                    Missing check-out on {formatShortDate(s.date)} (checked in {s.checkIn ? formatHm(s.checkIn) : "—"}).{" "}
+                    <button type="button" className="btn-ghost" onClick={() => openCorrection(s.date, "missing_check_out")}>
+                      Request correction
                     </button>
-                  )}
+                  </p>
+                ))}
+                <div className="form-actions">
+                  {session.phase === "not_started" &&
+                    (todayOff ? (
+                      <p className="note">{todayOff} No check-in needed.</p>
+                    ) : (
+                      <button type="button" className="btn" onClick={() => runPunch("check_in")}>
+                        Check in
+                      </button>
+                    ))}
                   {session.phase === "checked_in" && (
                     <>
                       <button type="button" className="btn-ghost" onClick={() => runPunch("start_break")}>
@@ -531,6 +568,7 @@ export function AttendancePage() {
                       else if (kind === "absent") caption = "Absent";
                       else if (kind === "missing_punch") caption = "Missing punch";
                       else if (kind === "pending_correction") caption = "Correction";
+                      else if (kind === "not_checked_in") caption = "Not checked in";
                       else if (kind === "present") {
                         caption = row && row.hoursWorked > 0 ? `${row.hoursWorked}h` : schedule.hoursLabel;
                       } else if (
@@ -608,27 +646,26 @@ export function AttendancePage() {
                         {selectedRecord.note && <p className="note">{selectedRecord.note}</p>}
                         {(selectedRecord.lateMinutes > 0 || selectedRecord.overtimeMinutes > 0) && (
                           <p className="note">
-                            {selectedRecord.lateMinutes > 0 ? `Late by ${selectedRecord.lateMinutes} min (sample rule). ` : ""}
+                            {selectedRecord.lateMinutes > 0 ? `Late by ${selectedRecord.lateMinutes} min. ` : ""}
                             {selectedRecord.overtimeMinutes > 0
                               ? `Overtime ${selectedRecord.overtimeMinutes} min (sample rule).`
                               : ""}
                           </p>
                         )}
-                        {selectedRecord.kind !== "upcoming" && selectedRecord.kind !== "weekend" && (
+                        {!["upcoming", "weekend", "holiday", "leave"].includes(selectedRecord.kind) && (
                           <button
                             type="button"
                             className="btn-ghost"
-                            onClick={() => {
-                              setCorrDate(selectedRecord.date);
-                              setCorrKind(
+                            onClick={() =>
+                              openCorrection(
+                                selectedRecord.date,
                                 !selectedRecord.checkIn
                                   ? "missing_check_in"
                                   : !selectedRecord.checkOut
                                     ? "missing_check_out"
                                     : "wrong_time",
-                              );
-                              setTab("corrections");
-                            }}
+                              )
+                            }
                           >
                             Request correction
                           </button>
@@ -649,7 +686,7 @@ export function AttendancePage() {
                         ))}
                       </ul>
                     )}
-                    <p className="note">{activeCountry.leavePolicy.note}</p>
+                    {activeCountry.leavePolicy.note && <p className="note">{activeCountry.leavePolicy.note}</p>}
                   </Card>
                 </aside>
               </div>
@@ -684,6 +721,7 @@ export function AttendancePage() {
                     <option value="wfh">WFH</option>
                     <option value="missing_punch">Missing punch</option>
                     <option value="pending_correction">Correction pending</option>
+                    <option value="not_checked_in">Not checked in</option>
                     <option value="holiday">Holiday</option>
                   </select>
                 </label>
@@ -737,11 +775,14 @@ export function AttendancePage() {
           {tab === "corrections" && (
             <div className="att-corr-grid">
               <Card title="Request a correction">
-                <p className="note">Submit for your own punches only. Manager reviews in Approvals / below.</p>
+                <p className="note">
+                  Submit for your own punches only, within the last 30 days.{" "}
+                  {approver ? `Reviewed by ${approver.fullName}.` : "No manager in your reporting line — contact HR."}
+                </p>
                 <div className="form-grid-2">
                   <label className="field">
                     Date
-                    <input type="date" value={corrDate} onChange={(e) => setCorrDate(e.target.value)} />
+                    <input type="date" value={corrDate} max={today} onChange={(e) => setCorrDate(e.target.value)} />
                   </label>
                   <label className="field">
                     Type
@@ -753,12 +794,12 @@ export function AttendancePage() {
                     </select>
                   </label>
                   <label className="field">
-                    Requested check-in
-                    <input value={corrIn} onChange={(e) => setCorrIn(e.target.value)} placeholder="HH:mm" />
+                    Requested check-in{corrKind === "missing_check_in" ? " *" : ""}
+                    <input type="time" value={corrIn} onChange={(e) => setCorrIn(e.target.value)} placeholder="HH:mm" />
                   </label>
                   <label className="field">
-                    Requested check-out
-                    <input value={corrOut} onChange={(e) => setCorrOut(e.target.value)} placeholder="HH:mm" />
+                    Requested check-out{corrKind === "missing_check_out" ? " *" : ""}
+                    <input type="time" value={corrOut} onChange={(e) => setCorrOut(e.target.value)} placeholder="HH:mm" />
                   </label>
                   <label className="field" style={{ gridColumn: "1 / -1" }}>
                     Reason
@@ -769,8 +810,13 @@ export function AttendancePage() {
                     />
                   </label>
                 </div>
+                {corrError && (
+                  <p className="note err" role="alert">
+                    {corrError}
+                  </p>
+                )}
                 <div className="form-actions">
-                  <button type="button" className="btn" onClick={submitCorr}>
+                  <button type="button" className="btn" onClick={submitCorr} disabled={!approver}>
                     Submit request
                   </button>
                 </div>
@@ -788,13 +834,10 @@ export function AttendancePage() {
                 )}
               </Card>
 
-              {isManager && (
+              {(isManager || teamCorrections.length > 0) && (
                 <Card title="Team correction queue" className="att-corr-span">
-                  <p className="note">
-                    Viewing as {demoProfile.personaLabel}: only requests from your assigned team (demo).
-                  </p>
                   {teamCorrections.length === 0 ? (
-                    <EmptyState title="No team requests" description="Pending corrections from reports show here." />
+                    <EmptyState title="No team requests" description="Corrections from people in your reporting line show here." />
                   ) : (
                     <ul className="att-corr-list">
                       {teamCorrections.map((c) => (
@@ -803,39 +846,16 @@ export function AttendancePage() {
                           {c.status === "Pending" && (
                             <div className="row-gap" style={{ marginTop: 8 }}>
                               <input
-                                value={decideNote}
-                                onChange={(e) => setDecideNote(e.target.value)}
+                                value={decideNotes[c.id] ?? ""}
+                                onChange={(e) => setDecideNotes((prev) => ({ ...prev, [c.id]: e.target.value }))}
                                 placeholder="Decision note (optional)"
+                                aria-label={`Decision note for ${c.employeeName}, ${c.date}`}
                                 style={{ flex: 1 }}
                               />
-                              <button
-                                type="button"
-                                className="btn"
-                                onClick={() => {
-                                  const error = decideCorrection(c.id, employee.id, "Approved", decideNote);
-                                  setMessage(
-                                    error
-                                      ? { tone: "err", text: error }
-                                      : { tone: "ok", text: "Correction approved (demo)." },
-                                  );
-                                  if (!error) setDecideNote("");
-                                }}
-                              >
+                              <button type="button" className="btn" onClick={() => decide(c, "Approved")}>
                                 Approve
                               </button>
-                              <button
-                                type="button"
-                                className="btn-ghost"
-                                onClick={() => {
-                                  const error = decideCorrection(c.id, employee.id, "Rejected", decideNote);
-                                  setMessage(
-                                    error
-                                      ? { tone: "err", text: error }
-                                      : { tone: "ok", text: "Correction rejected (demo)." },
-                                  );
-                                  if (!error) setDecideNote("");
-                                }}
-                              >
+                              <button type="button" className="btn-ghost" onClick={() => decide(c, "Rejected")}>
                                 Reject
                               </button>
                             </div>
@@ -886,8 +906,7 @@ export function AttendancePage() {
                   />
                 </MetricGrid>
                 <p className="note">
-                  Late and overtime flags use sample grace rules ({SAMPLE_SHIFT.lateGraceMinutes}m late grace, OT after{" "}
-                  {SAMPLE_SHIFT.overtimeAfterMinutes}m past shift end). Illustrative only.
+                  Late after {SAMPLE_SHIFT.lateGraceMinutes} min grace · overtime after {SAMPLE_SHIFT.overtimeAfterMinutes} min past shift end.
                 </p>
               </Card>
             </div>

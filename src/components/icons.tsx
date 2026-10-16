@@ -20,7 +20,7 @@ function base(props: IconProps) {
 export function Logo() {
   return (
     <svg width="42" height="42" viewBox="0 0 64 64" aria-hidden>
-      <rect width="64" height="64" rx="14" fill="#6d28d9" />
+      <rect width="64" height="64" rx="14" fill="#0e7490" />
       <path fill="#fff" d="M14 12h9v40h-9z" />
       <path fill="#fff" d="M24 30.5 44 12h10L34 32.5 54 52H44L24 34.5z" />
     </svg>
@@ -30,10 +30,10 @@ export function Logo() {
 export function Avatar({ size = 72 }: { size?: number }) {
   return (
     <svg className="avatar" width={size} height={size} viewBox="0 0 80 80" aria-hidden>
-      <circle cx="40" cy="40" r="40" fill="#efe8ff" />
+      <circle cx="40" cy="40" r="40" fill="#e0f2f7" />
       <circle cx="40" cy="33" r="13" fill="#f0c2a0" />
       <path d="M24 31c1-12 8-18 16-18s15 6 16 18c-2-5-7-8-16-8s-14 3-16 8z" fill="#2a211c" />
-      <path d="M12 76c5-18 16-26 28-26s23 8 28 26" fill="#6d28d9" />
+      <path d="M12 76c5-18 16-26 28-26s23 8 28 26" fill="#0e7490" />
     </svg>
   );
 }
@@ -158,8 +158,8 @@ export function PowerIcon(props: IconProps) {
 export function DocIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
-      <path d="M7 3h7l5 5v13H7V3Z" fill="#efe8ff" stroke="#6d28d9" strokeWidth="1.6" />
-      <path d="M14 3v5h5" fill="none" stroke="#6d28d9" strokeWidth="1.6" />
+      <path d="M7 3h7l5 5v13H7V3Z" fill="#e0f2f7" stroke="#0e7490" strokeWidth="1.6" />
+      <path d="M14 3v5h5" fill="none" stroke="#0e7490" strokeWidth="1.6" />
     </svg>
   );
 }

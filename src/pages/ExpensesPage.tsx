@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
-import { EXPENSE_CATEGORIES, inr } from "../model.ts";
+import { addDaysISO, EXPENSE_CATEGORIES, EXPENSE_CLAIM_WINDOW_DAYS, inr, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
 export function ExpensesPage() {
@@ -52,7 +52,14 @@ export function ExpensesPage() {
           <form onSubmit={onSubmit}>
             <div className="form-grid">
               <Field label="Date">
-                <input type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
+                <input
+                  type="date"
+                  min={addDaysISO(todayISO(), -EXPENSE_CLAIM_WINDOW_DAYS)}
+                  max={todayISO()}
+                  value={date}
+                  onChange={(event) => setDate(event.target.value)}
+                  required
+                />
               </Field>
               <Field label="Category">
                 <select value={category} onChange={(event) => setCategory(event.target.value)}>

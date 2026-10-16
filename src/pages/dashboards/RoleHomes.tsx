@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { COMPANY_NAME } from "../../brand.ts";
 import {
@@ -22,6 +22,16 @@ import {
   type DateRangeKey,
 } from "../../data/dashboardMock.ts";
 import type { DemoAccount } from "../../demoAccounts.ts";
+import { COURSES } from "../../data/talentData.ts";
+import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
+import { attendanceContextFor, formatHm, nonWorkingReason, phaseLabel } from "../../data/attendanceData.ts";
+import {
+  attendanceAction,
+  getAttendanceState,
+  getCurrentSession,
+  missingCheckOutSessions,
+  subscribeAttendance,
+} from "../../data/attendanceLocal.ts";
 import {
   attendanceOn,
   dayGreeting,
@@ -89,18 +99,31 @@ function movementForRange(range: DateRangeKey) {
   };
 }
 
+/** First holiday on or after `today`, regardless of the order holidays are stored in. */
+function nextHolidayFrom<T extends { date: string }>(holidays: T[], today: string): T | undefined {
+  return [...holidays].sort((a, b) => a.date.localeCompare(b.date)).find((h) => h.date >= today);
+}
+
 /* ───────────────────────────────────────────── A. EMPLOYEE ── */
 
 export function EmployeeHome() {
-  const { employee, leaveTable, counts, payslipViews, currentProjects, state } = usePortal();
+  const { employee, leaveTable, counts, payslipViews, currentProjects, state, demoProfile, demoAccounts } = usePortal();
+  const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+  // Same persisted sessions as the Attendance page, so both agree and survive refresh.
+  const attState = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
   const { activeCountry } = useLocale();
-  const [checkedIn, setCheckedIn] = useState(false);
-  const [checkInAt, setCheckInAt] = useState<string | null>(null);
-  const [checkOutAt, setCheckOutAt] = useState<string | null>(null);
+  const [punchError, setPunchError] = useState<string | null>(null);
   const today = todayISO();
   const pto = leaveTable.find((row) => row.code === "pto");
   const wfh = leaveTable.find((row) => row.code === "wfh");
-  const nextHoliday = state.holidays.find((holiday) => holiday.date >= today);
+  const nextHoliday = nextHolidayFrom(state.holidays, today);
+  const dayContext = useMemo(
+    () => attendanceContextFor(employee, state.holidays, state.leaveRequests),
+    [employee, state.holidays, state.leaveRequests],
+  );
+  const session = getCurrentSession(employee.id, attState);
+  const missingOut = missingCheckOutSessions(employee.id, attState);
+  const offToday = session.phase === "not_started" ? nonWorkingReason(employee.id, today, dayContext) : null;
   const personalPending = state.leaveRequests.filter(
     (item) => item.employeeId === employee.id && item.status === "pending",
   );
@@ -108,10 +131,40 @@ export function EmployeeHome() {
     (task) => task.employeeId === employee.id && (task.status === "open" || task.status === "progress"),
   );
   const urgentTask = myOpenTasks.find((t) => t.priority === "urgent" || t.priority === "high") ?? myOpenTasks[0];
+  const isOverdue = (due?: string) => Boolean(due && due < today);
+  // Learning comes from the same enrollments the Learning page shows.
+  const openCourses = talent.enrollments
+    .filter((e) => e.employeeId === employee.id && e.status !== "Completed")
+    .sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999"));
+  const myGoals = talent.goals.filter((g) => g.ownerId === employee.id);
+  const manager = demoAccounts.find((a) => a.id === demoProfile.reportsToId);
+  // Unpaid leave has no balance to show — it is only something you can apply for.
+  const balanceRows = leaveTable.filter((row) => row.code !== "unpaid");
   const timesheetNeedsAction = counts.timesheet > 0;
-  const todayAtt = attendanceOn(today, state.holidays, state.leaveRequests, [], employee.shiftHours, today, employee.id);
+  const todayAtt = attendanceOn(
+    today,
+    dayContext.holidays,
+    state.leaveRequests,
+    [],
+    employee.shiftHours,
+    today,
+    employee.id,
+    dayContext.weeklyOffDays,
+  );
   const attendanceLabel =
-    todayAtt.kind === "leave" ? "On leave" : checkedIn ? (checkOutAt ? "Checked out" : "Checked in") : "Not checked in";
+    session.phase !== "not_started"
+      ? phaseLabel(session.phase)
+      : todayAtt.kind === "leave"
+        ? "On leave"
+        : todayAtt.kind === "holiday"
+          ? "Holiday"
+          : todayAtt.kind === "weekend"
+            ? "Weekly off"
+            : "Not checked in";
+
+  function punch(action: "check_in" | "end_break" | "check_out") {
+    setPunchError(attendanceAction(employee.id, action, dayContext));
+  }
   const actionItems = [
     ...personalPending.map((req) => ({
       id: req.id,
@@ -123,8 +176,14 @@ export function EmployeeHome() {
     ...myOpenTasks.slice(0, 3).map((task) => ({
       id: task.id,
       label: `${task.code} · ${task.subject}`,
-      status: task.blocked ? "Action Required" : task.status === "progress" ? "In progress" : "Open",
-      next: task.due ? `Due ${formatShortDate(task.due)}` : "Open task",
+      status: isOverdue(task.due)
+        ? "Overdue"
+        : task.blocked
+          ? "Action Required"
+          : task.status === "progress"
+            ? "In progress"
+            : "Open",
+      next: task.due ? `${isOverdue(task.due) ? "Was due" : "Due"} ${formatShortDate(task.due)}` : "Open task",
       to: R.tasks,
     })),
     ...(timesheetNeedsAction
@@ -138,13 +197,13 @@ export function EmployeeHome() {
           },
         ]
       : []),
-    ...(counts.programs > 0
+    ...(openCourses.length > 0
       ? [
           {
             id: "learn-action",
-            label: `${counts.programs} learning item(s) due`,
-            status: "Action Required",
-            next: "Complete assigned courses",
+            label: `${openCourses.length} course${openCourses.length > 1 ? "s" : ""} to finish`,
+            status: openCourses.some((e) => isOverdue(e.due)) ? "Overdue" : "Action Required",
+            next: openCourses[0]?.due ? `Next due ${formatShortDate(openCourses[0].due)}` : "Complete assigned courses",
             to: R.learning,
           },
         ]
@@ -184,8 +243,8 @@ export function EmployeeHome() {
             label="Today’s attendance"
             value={attendanceLabel}
             hint={
-              checkInAt
-                ? `In ${checkInAt}${checkOutAt ? ` · Out ${checkOutAt}` : ""} · ${employee.shiftHours}`
+              session.checkIn
+                ? `In ${formatHm(session.checkIn)}${session.checkOut ? ` · Out ${formatHm(session.checkOut)}` : ""} · ${employee.shiftHours}`
                 : `${employee.shiftHours} · ${activeCountry.name}`
             }
           />
@@ -193,13 +252,13 @@ export function EmployeeHome() {
         <Link to={R.leave} className="metric-card-link">
           <MetricCard
             label="Leave balance"
-            value={pto?.balance ?? "—"}
-            hint={`PTO available · WFH ${wfh?.balance ?? "—"}`}
+            value={pto?.available ?? "—"}
+            hint={`Privilege leave available · WFH ${wfh?.available ?? "—"}`}
           />
         </Link>
         <Link to={urgentTask ? R.tasks : R.tasks} className="metric-card-link">
           <MetricCard
-            label="Urgent tasks"
+            label="Open tasks"
             value={myOpenTasks.length}
             hint={urgentTask ? urgentTask.subject : "You're all caught up"}
           />
@@ -229,32 +288,37 @@ export function EmployeeHome() {
                       <strong>{item.label}</strong>
                       <span className="muted">{item.next}</span>
                     </span>
-                    <StatusBadge status={item.status} />
+                    <StatusBadge status={item.status} tone={item.status === "Overdue" ? "danger" : undefined} />
                   </Link>
                 </li>
               ))}
             </ul>
           )}
+          {missingOut.length > 0 && (
+            <p className="note warn" style={{ marginTop: 12 }}>
+              Missing check-out on {missingOut.map((s) => formatShortDate(s.date)).join(", ")} —{" "}
+              <Link to={R.attendance}>request a correction</Link>.
+            </p>
+          )}
+          {offToday && <p className="note" style={{ marginTop: 12 }}>{offToday} No check-in needed.</p>}
+          {punchError && (
+            <p className="note err" role="alert">
+              {punchError}
+            </p>
+          )}
           <div className="row-gap" style={{ marginTop: 12 }}>
-            {!checkedIn && todayAtt.kind !== "leave" && (
-              <button
-                type="button"
-                className="btn"
-                onClick={() => {
-                  setCheckedIn(true);
-                  setCheckInAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
-                  setCheckOutAt(null);
-                }}
-              >
+            {session.phase === "not_started" && !offToday && (
+              <button type="button" className="btn" onClick={() => punch("check_in")}>
                 Check in
               </button>
             )}
-            {checkedIn && !checkOutAt && (
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setCheckOutAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}
-              >
+            {session.phase === "on_break" && (
+              <button type="button" className="btn" onClick={() => punch("end_break")}>
+                End break
+              </button>
+            )}
+            {session.phase === "checked_in" && (
+              <button type="button" className="btn" onClick={() => punch("check_out")}>
                 Check out
               </button>
             )}
@@ -265,7 +329,7 @@ export function EmployeeHome() {
         </Card>
 
         <Card title="Leave & holidays" to={R.leave}>
-          <LeaveTable rows={leaveTable} />
+          <LeaveTable rows={balanceRows} />
           <p className="muted" style={{ marginTop: 10 }}>
             Next holiday:{" "}
             {nextHoliday ? (
@@ -293,7 +357,7 @@ export function EmployeeHome() {
           <ul className="todo">
             <li>
               <Link to={R.payslips}>
-                Latest payslip · {payslipViews[0]?.label ?? "—"} <StatusBadge status="Approved" tone="ok" />
+                Latest payslip · {payslipViews[0]?.label ?? "—"} <StatusBadge status="Paid" tone="ok" literal />
               </Link>
             </li>
             <li>
@@ -317,17 +381,17 @@ export function EmployeeHome() {
 
         <Card title="Performance & learning" to={R.performance}>
           <ul className="todo">
-            {TZ_EMPLOYEE_DEFAULTS.goals.map((g) => (
-              <li key={g.name}>
+            {myGoals.map((g) => (
+              <li key={g.id}>
                 <Link to={R.performance}>
-                  {g.name} · {g.progress}%
+                  {g.title} · {g.progress}%
                 </Link>
               </li>
             ))}
-            {TZ_EMPLOYEE_DEFAULTS.learningProgress.map((c) => (
-              <li key={c.name}>
+            {openCourses.map((e) => (
+              <li key={e.id}>
                 <Link to={R.learning}>
-                  {c.name} · {c.progress}%
+                  {COURSES.find((c) => c.id === e.courseId)?.title ?? e.courseId} · {e.progress}%
                 </Link>
               </li>
             ))}
@@ -339,7 +403,9 @@ export function EmployeeHome() {
 
         <Card title="People & organization" to={R.directory}>
           <p className="muted">
-            {employee.department} · Manager on file · {employee.location}, {employee.countryName}
+            {employee.department} · Manager:{" "}
+            {manager ? <Link to={`/people/${manager.id}`}>{manager.fullName}</Link> : "—"} · {employee.location},{" "}
+            {employee.countryName}
           </p>
           <div className="row-gap" style={{ marginTop: 10 }}>
             <Link className="btn-ghost" to={R.directory}>
@@ -377,14 +443,15 @@ export function EmployeeHome() {
 /* ───────────────────────────────────────────── B. MANAGER ── */
 
 export function ManagerHome() {
-  const { employee, state, demoProfile } = usePortal();
+  const { employee, state, demoProfile, canDecideFor } = usePortal();
   const [range, setRange] = useDateRange("30d");
   const today = todayISO();
   const access = demoProfile.navAccess;
 
-  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && item.employeeId !== employee.id);
-  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted");
-  const expensePending = state.expenses.filter((item) => item.status === "submitted" && item.employeeId !== employee.id);
+  // Only items this manager decides (people below them in the reporting line).
+  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && canDecideFor(item.employeeId));
+  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted" && canDecideFor(item.personId));
+  const expensePending = state.expenses.filter((item) => item.status === "submitted" && canDecideFor(item.employeeId));
   const pendingApprovals = leavePending.length + timesheetPending.length + expensePending.length;
 
   useEffect(() => {
@@ -686,12 +753,11 @@ export function HrbpHome() {
             headers={["Type", "Employee", "Detail", "Date"]}
             rows={scope.movements.map((m) => [m.type, m.who, m.detail, m.date])}
           />
-          <p className="note">Showing movements for filter: {range}</p>
         </Card>
 
         <Card title="Performance cycle progress" to={R.performance}>
           <ProgressBar value={TZ_HR.performanceCycle.completionPct} label={scope.org} />
-          <p className="note">Org completion trails global average by ~4 pts (demo).</p>
+          <p className="note">Org completion trails global average by ~4 pts.</p>
         </Card>
 
         <Card title="Organization headcount mix">
@@ -782,10 +848,10 @@ export function RecruiterHome() {
             <MetricCard label="Offers out" value={TZ_RECRUITING.offersOut} />
             <MetricCard label="Accepted" value={TZ_RECRUITING.offersAccepted} />
           </MetricGrid>
-          <PlaceholderPanel title="Offer letters" detail="Document generation is a placeholder in this frontend prototype." />
+          <PlaceholderPanel title="Offer letters" detail="Document generation is coming soon." />
         </Card>
 
-        <Card title="Time-to-hire trend (demo chart)">
+        <Card title="Time-to-hire trend">
           <MiniBars
             items={[
               { label: "Jul", value: 38 },
@@ -877,7 +943,7 @@ export function HiringManagerHome() {
               <Link to="/recruiting">Culture fit · Mei Lin</Link>
             </li>
           </ul>
-          <PlaceholderPanel title="Scorecard submit" detail="Forms open in Recruiting module (prototype navigation)." />
+          <PlaceholderPanel title="Scorecard submit" detail="Forms open in the Recruiting module." />
         </Card>
 
         <Card title="Hiring approvals" to="/approvals">
@@ -1140,7 +1206,7 @@ export function AdministrationHome() {
             headers={["Role", "Users", "Permission summary"]}
             rows={roleRows.map((r) => [r.role, String(r.users), r.perms])}
           />
-          <PlaceholderPanel title="Create user" detail="User provisioning UI placeholder — no backend write." />
+          <PlaceholderPanel title="Create user" detail="Coming soon." />
         </Card>
       )}
 
@@ -1163,7 +1229,7 @@ export function AdministrationHome() {
       {tab === "entities" && (
         <Card title="Country and legal entity settings">
           <DataTable
-            headers={["Country", "Headcount", "Currency", "Legal entity (demo)"]}
+            headers={["Country", "Headcount", "Currency", "Legal entity"]}
             rows={TZ_HEADCOUNT.byCountry.map((c) => [
               c.name,
               String(c.headcount),
@@ -1183,7 +1249,7 @@ export function AdministrationHome() {
               <StatusBadge key={i.name} status={i.status} tone={i.status === "Healthy" ? "ok" : "warn"} />,
             ])}
           />
-          <PlaceholderPanel title="Reconnect" detail="Connector diagnostics are placeholders in the frontend prototype." />
+          <PlaceholderPanel title="Reconnect" detail="Connector diagnostics are coming soon." />
         </Card>
       )}
 
@@ -1199,7 +1265,7 @@ export function AdministrationHome() {
       {tab === "platform" && (
         <Card title="Platform configuration">
           <ul className="todo">
-            <li>Session timeout · 8 hours (demo)</li>
+            <li>Session timeout · 8 hours</li>
             <li>Password policy · 90-day rotation</li>
             <li>Feature flags · Copilot enabled · Agents beta</li>
             <li>Branding · Infotech navy / indigo</li>

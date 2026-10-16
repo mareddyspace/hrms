@@ -164,7 +164,7 @@ function buildBasePeople(): PersonRecord[] {
     const country = countryForColleague(row.workingCountry);
     const locs = LOCATIONS[country.code] ?? [country.name];
     const location = locs[index % locs.length];
-    const family = JOB_FAMILY_LIST[index % JOB_FAMILY_LIST.length];
+    const family = JOB_FAMILY_LIST.includes(row.department) ? row.department : "Operations";
     const grade = GRADES[index % GRADES.length];
     const mgr = managers[index % managers.length];
     const statusRoll = index % 23;
@@ -614,7 +614,8 @@ export const ORG_CHANGE_HISTORY: OrgChangeEvent[] = [
 export const FILTER_OPTIONS = {
   countries: TIMEZ_COUNTRIES.map((c) => c.name),
   legalEntities: Object.values(LEGAL_BY_COUNTRY),
-  departments: [...TZ_HEADCOUNT.byDepartment.map((d) => d.name)],
+  // Use the departments people actually belong to, so every employee can be found by the filter.
+  departments: [...new Set(getBasePeople().map((p) => p.department))].sort(),
   employmentStatuses: ["Active", "On Leave", "Contractor", "Terminated"] as EmploymentStatus[],
   jobFamilies: JOB_FAMILY_LIST,
 };

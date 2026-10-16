@@ -1,0 +1,21 @@
+/* Workforce features: shifts, optional holidays, contractors */
+.wf-block { display: block; margin-top: 2px; }
+.wf-wrap { flex-wrap: wrap; gap: 8px; }
+.wf-grid .data-table th,
+.wf-grid .data-table td { padding: 8px; vertical-align: top; }
+.wf-grid .data-table th { white-space: nowrap; }
+.wf-cell { display: grid; gap: 4px; min-width: 96px; }
+.wf-cell select {
+  border: 1px solid var(--chip-border);
+  border-radius: 6px;
+  padding: 5px 6px;
+  background: var(--input-bg);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.wf-locked { font-weight: 600; font-size: 12.5px; }
+.wf-tag { font-size: 11px; font-weight: 600; color: var(--muted); }
+.wf-tag.warn { color: var(--warn); }
+.note.wf-warn { color: var(--warn); display: grid; gap: 4px; }
+.wf-inline-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.wf-inline-form .field { flex: 1 1 140px; }

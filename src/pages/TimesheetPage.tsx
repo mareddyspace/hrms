@@ -50,6 +50,7 @@ export function TimesheetPage() {
     removeTimeEntry,
     submitWeekTimesheets,
     setOrgTimesheetStatus,
+    canDecideFor,
   } = usePortal();
   const projects = currentProjects;
   const [view, setView] = useState<TimesheetView>("mine");
@@ -217,13 +218,9 @@ export function TimesheetPage() {
 
       {view === "company" ? (
         <>
-          <p className="note">
-            Managers review team submissions and missing hours. HR or admins can review company-wide approved and pending
-            timesheets. This demo shows the organization board for the selected week.
-          </p>
           <section className="summary-row" aria-label="Company timesheet summary">
             <div className="summary">
-              <span>People in scope</span>
+              <span>People</span>
               <strong>{orgCounts.total}</strong>
             </div>
             <div className="summary">
@@ -296,7 +293,8 @@ export function TimesheetPage() {
                         <StatusPill status={row.status} />
                       </td>
                       <td>
-                        {row.status === "submitted" && (
+                        {/* Only the person's reporting line decides — never their own row. */}
+                        {row.status === "submitted" && canDecideFor(row.personId) && (
                           <span className="form-actions">
                             <button
                               className="btn btn-tiny"
@@ -312,7 +310,24 @@ export function TimesheetPage() {
                             >
                               Approve
                             </button>
+                            <button
+                              className="btn-ghost btn-tiny"
+                              type="button"
+                              onClick={() => {
+                                const error = setOrgTimesheetStatus(row.id, "draft");
+                                setMessage(
+                                  error
+                                    ? { tone: "err", text: error }
+                                    : { tone: "ok", text: `${row.name}'s timesheet sent back for changes.` },
+                                );
+                              }}
+                            >
+                              Send back
+                            </button>
                           </span>
+                        )}
+                        {row.status === "submitted" && !canDecideFor(row.personId) && (
+                          <span className="muted">Waiting for their manager</span>
                         )}
                         {row.status === "missing" && <span className="muted">Awaiting employee</span>}
                         {row.status === "draft" && <span className="muted">Not submitted</span>}

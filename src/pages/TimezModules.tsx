@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
 import { PRODUCT_NAME } from "../brand.ts";
 import {
   Card,
@@ -94,7 +93,7 @@ export function WorkflowsPage() {
   ].slice(0, 20);
 
   return (
-    <Page title="Workflows & Approvals" subtitle="Configurable approval queues and SLA tracking (frontend foundation)">
+    <Page title="Workflows & Approvals" subtitle="Approval queues and SLA tracking">
       <Tabs
         tabs={[
           { id: "queue", label: "Active queue" },
@@ -117,12 +116,6 @@ export function WorkflowsPage() {
         )}
         empty={<EmptyState title="Queue clear" description="No open workflow items right now." />}
       />
-      <Card title="Definitions (placeholder)">
-        <p className="note">
-          Leave, expense, cash, asset, and timesheet workflows are enforced in the current portal store. A dedicated
-          workflow designer will land in a later phase.
-        </p>
-      </Card>
     </Page>
   );
 }
@@ -169,10 +162,6 @@ export function RoadmapPage() {
             </tbody>
           </table>
         </div>
-        <p className="note" style={{ marginTop: 12 }}>
-          Explore <Link to="/ai/copilot">AI Copilot</Link> and <Link to="/integrations">Integrations</Link> for
-          scaffolded modules.
-        </p>
       </Card>
     </Page>
   );

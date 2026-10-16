@@ -2,8 +2,24 @@ import { getBasePeople, type PersonRecord } from "./peopleData.ts";
 
 const STORAGE_KEY = "infotech.people.overlay.v2";
 
+/**
+ * Exit details kept on the local overlay only (the base PersonRecord type has no exit fields).
+ * They ride along on the stored record, so `getExitDetails` reads them back from any person.
+ */
+export type PersonExitDetails = { exitDate?: string; exitReason?: string };
+export type LocalPersonRecord = PersonRecord & PersonExitDetails;
+
+export function getExitDetails(person: PersonRecord): PersonExitDetails {
+  const { exitDate, exitReason } = person as LocalPersonRecord;
+  return { exitDate, exitReason };
+}
+
+export function isTerminated(person: Pick<PersonRecord, "employmentStatus"> | undefined | null): boolean {
+  return person?.employmentStatus === "Terminated";
+}
+
 type Overlay = {
-  upserts: PersonRecord[];
+  upserts: LocalPersonRecord[];
   removedIds: string[];
 };
 
@@ -56,7 +72,7 @@ export function getPerson(id: string): PersonRecord | undefined {
   return listPeople().find((p) => p.id === id || p.employeeCode === id);
 }
 
-export function upsertPerson(person: PersonRecord) {
+export function upsertPerson(person: LocalPersonRecord) {
   const overlay = readOverlay();
   overlay.removedIds = overlay.removedIds.filter((rid) => rid !== person.id);
   const idx = overlay.upserts.findIndex((p) => p.id === person.id);

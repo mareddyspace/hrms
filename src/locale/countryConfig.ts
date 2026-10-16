@@ -1,8 +1,5 @@
 import { TIMEZ_COUNTRIES, type CountryCode } from "../model.ts";
 
-export const POLICY_DISCLAIMER =
-  "Fictional sample policy for UI demonstration only — not a statement of legal entitlements. Replace with approved business rules before go-live.";
-
 export type AppLanguage = "en" | "hi" | "de" | "ar";
 
 export interface CountryHoliday {
@@ -69,13 +66,13 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
       name: "India leave sample",
       annualDays: 18,
       carryForwardDays: 5,
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     workingTime: {
       weekStart: "Monday",
       standardHours: "09:30–18:30 IST",
       workDays: "Mon–Fri",
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     benefits: [
       { id: "in-med", name: "Group Medical (sample)", category: "Medical", summary: "Demo floater plan" },
@@ -100,13 +97,13 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
       name: "US PTO sample",
       annualDays: 15,
       carryForwardDays: 0,
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     workingTime: {
       weekStart: "Sunday",
       standardHours: "09:00–17:00 local",
       workDays: "Mon–Fri",
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     benefits: [
       { id: "us-med", name: "Medical PPO (sample)", category: "Medical", summary: "Demo open enrollment" },
@@ -131,13 +128,13 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
       name: "UK annual leave sample",
       annualDays: 25,
       carryForwardDays: 5,
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     workingTime: {
       weekStart: "Monday",
       standardHours: "09:00–17:30 GMT/BST",
       workDays: "Mon–Fri",
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     benefits: [
       { id: "uk-pmi", name: "Private Medical (sample)", category: "Medical", summary: "Demo PMI" },
@@ -161,13 +158,13 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
       name: "Australia annual leave sample",
       annualDays: 20,
       carryForwardDays: 10,
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     workingTime: {
       weekStart: "Monday",
       standardHours: "09:00–17:00 AEST",
       workDays: "Mon–Fri",
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     benefits: [
       { id: "au-super", name: "Superannuation (sample)", category: "Retirement", summary: "Demo super illustration" },
@@ -187,13 +184,13 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
       name: "Canada vacation sample",
       annualDays: 15,
       carryForwardDays: 5,
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     workingTime: {
       weekStart: "Sunday",
       standardHours: "09:00–17:00 local",
       workDays: "Mon–Fri",
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     benefits: [
       { id: "ca-health", name: "Extended health (sample)", category: "Medical", summary: "Demo benefits booklet" },
@@ -212,13 +209,13 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
       name: "UAE annual leave sample",
       annualDays: 22,
       carryForwardDays: 0,
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     workingTime: {
       weekStart: "Sunday",
       standardHours: "09:00–18:00 GST",
       workDays: "Sun–Thu (sample)",
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     benefits: [
       { id: "ae-med", name: "DHA Medical (sample)", category: "Medical", summary: "Demo medical cover" },
@@ -237,13 +234,13 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
       name: "Saudi annual leave sample",
       annualDays: 21,
       carryForwardDays: 0,
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     workingTime: {
       weekStart: "Sunday",
       standardHours: "09:00–18:00 AST",
       workDays: "Sun–Thu (sample)",
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     benefits: [
       { id: "sa-med", name: "Medical insurance (sample)", category: "Medical", summary: "Demo cover" },
@@ -264,13 +261,13 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
       name: "Germany Urlaub sample",
       annualDays: 26,
       carryForwardDays: 5,
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     workingTime: {
       weekStart: "Monday",
       standardHours: "09:00–17:30 CET",
       workDays: "Mon–Fri",
-      note: POLICY_DISCLAIMER,
+      note: "",
     },
     benefits: [
       { id: "de-health", name: "Health insurance note (sample)", category: "Medical", summary: "Demo illustration only" },

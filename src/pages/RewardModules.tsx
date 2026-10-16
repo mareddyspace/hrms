@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useMemo, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import {
   Banner,
   Card,
@@ -20,6 +20,7 @@ import {
   canViewCompStructures,
   canViewSalaryAmount,
   displayMoney,
+  formatCompAmount,
   getCompensationAccess,
   hasModuleAccess,
 } from "../data/peoplePermissions.ts";
@@ -32,17 +33,27 @@ import {
   GRADE_BANDS,
   LEGAL_DISCLAIMER,
   LETTER_TEMPLATES,
+  type LetterStatus,
   type LetterType,
 } from "../data/rewardData.ts";
 import {
+  UPLOAD_EXTENSIONS,
   addLetterRequest,
   addLibraryDoc,
+  canAdminBenefits,
+  canViewLetter,
+  decideEnrollment,
   getRewardState,
-  setEnrollmentStatus,
+  isMandatoryPlan,
+  nextLetterStatuses,
+  requestEnrollment,
+  requestEnrollmentChange,
   setLetterStatus,
   setReviewStatus,
   subscribeReward,
+  validateUpload,
 } from "../data/rewardLocal.ts";
+import type { DocumentGroup } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
 function useReward() {
@@ -61,6 +72,7 @@ export function CompensationPage() {
   const [tab, setTab] = useState("structures");
   const [cycleId, setCycleId] = useState(COMP_CYCLES[0]?.id ?? "");
   const [country, setCountry] = useState("");
+  const [reviewMsg, setReviewMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   const structuresOk = canViewCompStructures(demoProfile);
   const canApprove = canApproveCompReviews(demoProfile);
@@ -167,7 +179,6 @@ export function CompensationPage() {
                 headers={["Grade", "Family", "Country", "Currency", "Min", "Mid", "Max"]}
                 rows={bands.map((b) => [b.grade, b.family, b.country, b.currency, b.min, b.mid, b.max])}
               />
-              <p className="note">Ranges are fictional market bands for UI demos — not real pay offers.</p>
             </>
           )}
         </Card>
@@ -178,7 +189,7 @@ export function CompensationPage() {
           {visibleHistory.length === 0 ? (
             <EmptyState
               title="No visible history"
-              description="No compensation events are in scope for this persona (or amounts are fully restricted)."
+              description="There are no compensation changes for you to see."
             />
           ) : (
             <DataTable
@@ -234,46 +245,55 @@ export function CompensationPage() {
                   }}
                 />
               )}
+            {cycle?.status === "Closed" && (
+              <Banner message={{ tone: "info", text: "This cycle is closed — proposals are read-only." }} />
+            )}
+            <Banner message={reviewMsg} />
             {visibleReviews.length === 0 ? (
               <EmptyState
-                title="No proposals in scope"
+                title="No proposals to review"
                 description="You only see your own row, direct reports (masked), or the HR/Comp approval queue."
               />
             ) : (
               <DataTable
-                headers={["Employee", "Manager", "Grade", "Current", "Proposed", "Incr %", "Bonus", "Status", "Action"]}
+                headers={["Employee", "Manager", "Grade", "Current", "Proposed", "Incr %", "Bonus", "Status", "Decided by", "Action"]}
                 rows={visibleReviews.map((r) => {
                   const access = canViewSalaryAmount(demoProfile, r.employeeId, {
                     selfId: employee.id,
                     isDirectReport: r.managerId === employee.id || r.managerId === demoProfile.id,
                   });
+                  const decide = (status: "Approved" | "Rejected") => {
+                    const error = setReviewStatus(demoProfile, r.id, status);
+                    setReviewMsg(error ? { tone: "err", text: error } : { tone: "ok", text: `${r.employeeName}: ${status}.` });
+                  };
+                  let action: ReactNode;
+                  if (!canApprove) action = <span className="muted">View only</span>;
+                  else if (cycle?.status === "Closed") action = <span className="muted">Locked</span>;
+                  else if (r.employeeId === employee.id) action = <span className="muted">Your own review</span>;
+                  else if (r.status !== "Pending approval") action = <span className="muted">—</span>;
+                  else
+                    action = (
+                      <span className="reward-actions">
+                        <button type="button" className="btn" onClick={() => decide("Approved")}>Approve</button>
+                        <button type="button" className="btn-ghost" onClick={() => decide("Rejected")}>Reject</button>
+                      </span>
+                    );
                   return [
                     r.employeeName,
                     r.managerName,
-                    `${r.currentGrade} → ${r.proposedGrade}`,
+                    // Proposed grade and % reveal the outcome, so mask them with the amounts
+                    `${r.currentGrade} → ${formatCompAmount(access, r.proposedGrade, "•••")}`,
                     displayMoney(r.currentBase, access),
                     displayMoney(r.proposedBase, access),
-                    `${r.proposedIncreasePct}%`,
+                    formatCompAmount(access, `${r.proposedIncreasePct}%`, "•••"),
                     displayMoney(r.bonusProposal, access),
                     <StatusBadge key={r.id} status={r.status} />,
-                    canApprove ? (
-                      <select
-                        key={`${r.id}-a`}
-                        value={r.status}
-                        onChange={(e) => setReviewStatus(r.id, e.target.value as typeof r.status)}
-                      >
-                        {(["Draft", "Pending approval", "Approved", "Rejected"] as const).map((s) => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="muted">View only</span>
-                    ),
+                    r.approver ? `${r.approver} · ${r.decidedOn ?? ""}` : "—",
+                    <span key={`${r.id}-a`}>{action}</span>,
                   ];
                 })}
               />
             )}
-            <p className="note">Approvals are human-controlled local demo actions — not payroll commits.</p>
           </Card>
         </div>
       )}
@@ -281,7 +301,7 @@ export function CompensationPage() {
       {tab === "bonuses" && (
         <Card title="Bonus and incentive records">
           {visibleBonuses.length === 0 ? (
-            <EmptyState title="No incentive rows in scope" description="Org-wide bonus lists are not shown to managers or executives." />
+            <EmptyState title="No incentives to show" description="Company-wide bonus lists are visible to HR and Compensation only." />
           ) : (
             <DataTable
               headers={["Employee", "Type", "Period", "Amount", "Status"]}
@@ -306,11 +326,11 @@ export function CompensationPage() {
 /* ───────────────────────────── BENEFITS ── */
 
 export function BenefitsPage() {
-  const { demoProfile, employee } = usePortal();
+  const { demoProfile, employee, demoAccounts } = usePortal();
   const reward = useReward();
   const [tab, setTab] = useState("plans");
-  const [country, setCountry] = useState(employee.countryName ?? "India");
   const [planId, setPlanId] = useState("");
+  const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   const canSeeOthers =
     demoProfile.role === "hr_admin" ||
@@ -318,22 +338,71 @@ export function BenefitsPage() {
     demoProfile.role === "hrbp" ||
     demoProfile.role === "compensation_admin" ||
     demoProfile.role === "super_admin";
+  const isBenefitsAdmin = canAdminBenefits(demoProfile);
 
-  const plans = BENEFIT_PLANS.filter((p) => !country || p.country === country);
-  const selectedPlan = BENEFIT_PLANS.find((p) => p.id === planId) ?? plans[0];
+  // Employees are locked to their own country; HR can browse any country.
+  const ownCountry = employee.countryName ?? "";
+  const [hrCountry, setHrCountry] = useState(ownCountry);
+  const country = canSeeOthers ? hrCountry : ownCountry;
 
-  const enrollments = reward.enrollments.filter((e) => {
-    if (canSeeOthers) return !country || e.country === country;
-    return e.employeeId === employee.id;
-  });
+  const countryOf = (employeeId: string) =>
+    demoAccounts.find((a) => a.id === employeeId)?.countryName ??
+    reward.enrollments.find((e) => e.employeeId === employeeId)?.country ??
+    "";
+  const inScope = (employeeId: string) =>
+    canSeeOthers ? !country || countryOf(employeeId) === country : employeeId === employee.id;
 
-  const dependents = DEPENDENTS.filter((d) =>
-    canSeeOthers ? true : d.employeeId === employee.id,
-  ).filter((d) => d.employeeId === employee.id || canSeeOthers);
+  const plans = BENEFIT_PLANS.filter((p) => (canSeeOthers ? !country || p.country === country : p.country === ownCountry));
+  const selectedPlan = plans.find((p) => p.id === planId) ?? plans[0];
 
-  const history = BENEFIT_HISTORY.filter((h) =>
-    canSeeOthers ? true : h.employeeId === employee.id,
+  const enrollments = reward.enrollments.filter((e) =>
+    canSeeOthers ? !country || e.country === country : e.employeeId === employee.id,
   );
+  const myPlanIds = new Set(reward.enrollments.filter((e) => e.employeeId === employee.id).map((e) => e.planId));
+  const availablePlans = plans.filter((p) => p.country === ownCountry && !myPlanIds.has(p.id));
+
+  const dependents = DEPENDENTS.filter((d) => inScope(d.employeeId));
+  const history = BENEFIT_HISTORY.filter((h) => inScope(h.employeeId));
+
+  function run(error: string | null, okText: string) {
+    setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: okText });
+  }
+
+  function enrollmentAction(e: (typeof enrollments)[number]): ReactNode {
+    const mandatory = isMandatoryPlan(e.planId);
+    if (e.employeeId === employee.id) {
+      if (e.status === "Pending") return <span className="muted">Awaiting HR</span>;
+      if (e.status === "Enrolled") {
+        return mandatory ? (
+          <span className="muted">Mandatory</span>
+        ) : (
+          <button type="button" className="quiet-link" onClick={() => run(requestEnrollmentChange(demoProfile, e.id), "Change request sent to HR.")}>
+            Request change
+          </button>
+        );
+      }
+      return (
+        <button type="button" className="quiet-link" onClick={() => run(requestEnrollment(demoProfile, e.planId), "Enrollment request sent to HR.")}>
+          Request enrollment
+        </button>
+      );
+    }
+    if (isBenefitsAdmin && e.status === "Pending") {
+      return (
+        <span className="reward-actions">
+          <button type="button" className="btn" onClick={() => run(decideEnrollment(demoProfile, e.id, "Enrolled"), `${e.employeeName} enrolled in ${e.planName}.`)}>
+            Enroll
+          </button>
+          {!mandatory && (
+            <button type="button" className="btn-ghost" onClick={() => run(decideEnrollment(demoProfile, e.id, "Waived"), `${e.employeeName} waived ${e.planName}.`)}>
+              Waive
+            </button>
+          )}
+        </span>
+      );
+    }
+    return "—";
+  }
 
   if (!hasModuleAccess(demoProfile, "benefits")) {
     return (
@@ -345,18 +414,26 @@ export function BenefitsPage() {
 
   return (
     <Page title="Benefits" subtitle="Country plans, eligibility, enrollment, dependents and plan documents">
-      <Banner message={{ tone: "ok", text: LEGAL_DISCLAIMER }} />
 
       <FilterBar>
         <label className="filter-label">
           Country
-          <select value={country} onChange={(e) => setCountry(e.target.value)}>
-            {[...new Set(BENEFIT_PLANS.map((p) => p.country))].map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
+          {canSeeOthers ? (
+            <select value={hrCountry} onChange={(e) => setHrCountry(e.target.value)}>
+              <option value="">All countries</option>
+              {[...new Set(BENEFIT_PLANS.map((p) => p.country))].map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          ) : (
+            <select value={ownCountry} disabled>
+              <option value={ownCountry}>{ownCountry || "Not set"}</option>
+            </select>
+          )}
         </label>
       </FilterBar>
+
+      <Banner message={msg} />
 
       <Tabs
         tabs={[
@@ -371,11 +448,14 @@ export function BenefitsPage() {
 
       {tab === "plans" && (
         <div className="mgr-home-grid">
-          <Card title={`Benefit plans · ${country}`}>
+          <Card title={`Benefit plans · ${country || "All countries"}`}>
             <DataTable
               headers={["Plan", "Category", "Provider", "Employee cost", ""]}
               rows={plans.map((p) => [
-                p.name,
+                <>
+                  {p.name}
+                  {p.mandatory && <span className="reward-tag">Mandatory</span>}
+                </>,
                 p.category,
                 p.provider,
                 p.employeeCost,
@@ -383,14 +463,17 @@ export function BenefitsPage() {
                   Details
                 </button>,
               ])}
-              empty={<EmptyState title="No plans" description="No demo plans for this country." />}
+              empty={<EmptyState title="No plans" description="No benefit plans are available for this country." />}
             />
           </Card>
           {selectedPlan && (
             <Card title={selectedPlan.name}>
               <p>{selectedPlan.summary}</p>
               <p className="note">Provider: {selectedPlan.provider}</p>
-              <h3 style={{ fontSize: 14, marginTop: 12 }}>Benefit documents (demo)</h3>
+              {selectedPlan.mandatory && (
+                <p className="note">Statutory plan — enrollment is compulsory and cannot be waived.</p>
+              )}
+              <h3 style={{ fontSize: 14, marginTop: 12 }}>Benefit documents</h3>
               <ul className="todo">
                 {selectedPlan.documents.map((d) => (
                   <li key={d}>
@@ -401,11 +484,11 @@ export function BenefitsPage() {
                       onClick={() =>
                         downloadText(
                           d.replace(/\.pdf$/i, ".txt"),
-                          `${d}\n\n${LEGAL_DISCLAIMER}\n\nDemo plan excerpt for ${selectedPlan.name}.`,
+                          `${d}\n\n${LEGAL_DISCLAIMER}\n\nPlan excerpt for ${selectedPlan.name}.`,
                         )
                       }
                     >
-                      Download demo file
+                      Download
                     </button>
                   </li>
                 ))}
@@ -416,43 +499,51 @@ export function BenefitsPage() {
       )}
 
       {tab === "enrollment" && (
-        <Card title="Eligibility and enrollment status">
-          <DataTable
-            headers={["Employee", "Plan", "Country", "Status", "Effective", "Update"]}
-            rows={enrollments.map((e) => [
-              e.employeeName,
-              e.planName,
-              e.country,
-              <StatusBadge key={e.id} status={e.status} />,
-              e.effective,
-              e.employeeId === employee.id || canSeeOthers ? (
-                <select
-                  key={`${e.id}-s`}
-                  value={e.status}
-                  onChange={(ev) => setEnrollmentStatus(e.id, ev.target.value as typeof e.status)}
-                >
-                  {(["Eligible", "Enrolled", "Waived", "Pending"] as const).map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              ) : (
-                "—"
-              ),
-            ])}
-            empty={<EmptyState title="No enrollments" description="No enrollment rows in scope." />}
-          />
-          {!canSeeOthers && <ScopeNote text="Showing your enrollments only. HR personas see broader country queues." />}
-        </Card>
+        <div className="stack">
+          <Card title="Eligibility and enrollment status">
+            <DataTable
+              headers={["Employee", "Plan", "Country", "Status", "Effective", "Action"]}
+              rows={enrollments.map((e) => [
+                e.employeeName,
+                e.planName,
+                e.country,
+                <StatusBadge key={e.id} status={e.status} />,
+                e.effective,
+                <span key={`${e.id}-a`}>{enrollmentAction(e)}</span>,
+              ])}
+              empty={<EmptyState title="No enrollments" description="No enrollments yet." />}
+            />
+            {!canSeeOthers && <ScopeNote text="Changes are sent to HR for approval." />}
+          </Card>
+          {availablePlans.length > 0 && (
+            <Card title="Plans you can join">
+              <DataTable
+                headers={["Plan", "Category", "Employee cost", ""]}
+                rows={availablePlans.map((p) => [
+                  p.name,
+                  p.category,
+                  p.employeeCost,
+                  <button
+                    key={p.id}
+                    type="button"
+                    className="quiet-link"
+                    onClick={() => run(requestEnrollment(demoProfile, p.id), "Enrollment request sent to HR.")}
+                  >
+                    Request enrollment
+                  </button>,
+                ])}
+              />
+            </Card>
+          )}
+        </div>
       )}
 
       {tab === "dependents" && (
         <Card title="Dependents">
           <DataTable
             headers={["Name", "Relationship", "Covered plans"]}
-            rows={dependents
-              .filter((d) => d.employeeId === employee.id || canSeeOthers)
-              .map((d) => [d.name, d.relationship, d.coveredPlans.join(", ")])}
-            empty={<EmptyState title="No dependents on file" description="Demo dependent records appear for sample employees." />}
+            rows={dependents.map((d) => [d.name, d.relationship, d.coveredPlans.join(", ")])}
+            empty={<EmptyState title="No dependents on file" description="No dependents are recorded for this scope." />}
           />
         </Card>
       )}
@@ -461,9 +552,7 @@ export function BenefitsPage() {
         <Card title="Benefit history">
           <DataTable
             headers={["Date", "Event", "Detail"]}
-            rows={history
-              .filter((h) => h.employeeId === employee.id || canSeeOthers)
-              .map((h) => [h.date, h.event, h.detail])}
+            rows={history.map((h) => [h.date, h.event, h.detail])}
             empty={<EmptyState title="No history" description="No benefit events for this scope." />}
           />
         </Card>
@@ -474,6 +563,15 @@ export function BenefitsPage() {
 
 /* ───────────────────────────── DOCUMENTS & LETTERS ── */
 
+/** Library categories → portal DocumentGroup for the ESS mirror. */
+const PORTAL_GROUP: Record<string, DocumentGroup> = {
+  Identity: "Immigration",
+  Compliance: "Employment",
+  Onboarding: "Onboarding",
+  Benefits: "Employment",
+  Other: "Employment",
+};
+
 export function DocumentsLettersPage() {
   const { demoProfile, employee, state, addDocument } = usePortal();
   const reward = useReward();
@@ -482,11 +580,13 @@ export function DocumentsLettersPage() {
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [letterType, setLetterType] = useState<LetterType>("Employment");
   const [letterNote, setLetterNote] = useState("");
+  const [letterMsg, setLetterMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadName, setUploadName] = useState("");
   const [uploadCategory, setUploadCategory] = useState("Identity");
   const [uploadPreview, setUploadPreview] = useState("");
   const [uploadFileLabel, setUploadFileLabel] = useState("");
+  const [uploadError, setUploadError] = useState("");
   const [letterPreview, setLetterPreview] = useState<string | null>(null);
 
   const canLetters = canManageLetters(demoProfile);
@@ -497,23 +597,33 @@ export function DocumentsLettersPage() {
     return d.employeeId === employee.id && (!category || d.category === category);
   });
 
-  const letters = reward.letters.filter((l) => {
-    if (canLetters) return true;
-    return l.employeeId === employee.id;
-  });
+  const letters = reward.letters.filter((l) => canViewLetter(demoProfile, l));
 
   const previewDoc = library.find((d) => d.id === previewId) ?? null;
   const categories = [...new Set(reward.library.map((d) => d.category))];
 
+  function resetUpload() {
+    setUploadName("");
+    setUploadPreview("");
+    setUploadFileLabel("");
+    setUploadError("");
+  }
+
   function onFilePicked(file: File | null) {
+    resetUpload();
     if (!file) return;
+    const invalid = validateUpload(file);
+    if (invalid) {
+      setUploadError(invalid);
+      return;
+    }
     setUploadName(file.name.replace(/\.[^.]+$/, ""));
-    setUploadFileLabel(`${file.name} · ${(file.size / 1024).toFixed(0)} KB (demo)`);
+    setUploadFileLabel(`${file.name} · ${(file.size / 1024).toFixed(0)} KB`);
     const reader = new FileReader();
-    if (file.type.startsWith("text/") || file.name.endsWith(".txt") || file.name.endsWith(".csv")) {
+    if (file.type.startsWith("text/") || /\.(txt|csv)$/i.test(file.name)) {
       reader.onload = () => {
         const text = String(reader.result ?? "").slice(0, 4000);
-        setUploadPreview(`Demo upload preview of ${file.name}:\n\n${text || "(empty file)"}`);
+        setUploadPreview(`Preview of ${file.name}:\n\n${text || "(empty file)"}`);
       };
       reader.readAsText(file);
     } else if (file.type.startsWith("image/")) {
@@ -522,51 +632,74 @@ export function DocumentsLettersPage() {
       };
       reader.readAsDataURL(file);
     } else {
-      setUploadPreview(
-        `Demo file metadata only.\nName: ${file.name}\nType: ${file.type || "unknown"}\nSize: ${file.size} bytes\n\n${LEGAL_DISCLAIMER}`,
-      );
+      setUploadPreview(`File details\nName: ${file.name}\nType: ${file.type || "unknown"}\nSize: ${file.size} bytes`);
     }
   }
 
   function saveUpload(event: FormEvent) {
     event.preventDefault();
-    if (!uploadName.trim()) return;
-    addLibraryDoc({
+    if (!uploadName.trim() || uploadError) return;
+    const error = addLibraryDoc({
       employeeId: employee.id,
       employeeName: employee.fullName,
       name: uploadName.trim(),
       category: uploadCategory,
       docType: "Upload",
       uploadedBy: employee.fullName,
-      sizeLabel: uploadFileLabel || "Demo",
-      preview: uploadPreview || `Demo file: ${uploadName}`,
-      isDemoFile: true,
+      sizeLabel: uploadFileLabel || "—",
+      preview: uploadPreview || uploadName.trim(),
+      isDemoFile: false,
     });
-    // Also mirror into portal documents for ESS compatibility
-    addDocument({
+    if (error) {
+      setUploadError(error);
+      return;
+    }
+    // Mirror a short metadata line into portal documents (never the binary data URL)
+    const mirrorError = addDocument({
       name: uploadName.trim(),
-      category: "Onboarding",
+      category: PORTAL_GROUP[uploadCategory] ?? "Employment",
       docType: "Upload",
       expires: "",
-      body: uploadPreview.slice(0, 2000) || "Demo upload",
+      body: `${uploadCategory} upload · ${uploadFileLabel || uploadName.trim()} · stored in the document library.`,
     });
+    if (mirrorError) {
+      setUploadError(`Saved to the library, but not to My ESS documents: ${mirrorError}`);
+      return;
+    }
     setUploadOpen(false);
-    setUploadName("");
-    setUploadPreview("");
-    setUploadFileLabel("");
+    resetUpload();
   }
+
+  function moveLetter(id: string, status: LetterStatus) {
+    const error = setLetterStatus(demoProfile, id, status);
+    setLetterMsg(error ? { tone: "err", text: error } : { tone: "ok", text: `Letter moved to ${status}.` });
+  }
+
+  const letterActionLabel: Record<LetterStatus, string> = {
+    Draft: "Draft",
+    "Pending approval": "Submit",
+    Approved: "Approve",
+    Rejected: "Reject",
+    Issued: "Issue",
+  };
 
   return (
     <Page
       title="Documents & Letters"
-      subtitle="Employee library, demo uploads, letter templates and approval history"
+      subtitle="Employee library, uploads, letter templates and approval history"
       action={
-        <button type="button" className="btn" onClick={() => setUploadOpen(true)}>
-          Upload demo file
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            resetUpload();
+            setUploadOpen(true);
+          }}
+        >
+          Upload document
         </button>
       }
     >
-      <Banner message={{ tone: "ok", text: LEGAL_DISCLAIMER }} />
 
       <Tabs
         tabs={[
@@ -597,7 +730,7 @@ export function DocumentsLettersPage() {
               headers={["Document", "Employee", "Category", "Type", "Uploaded", "Size", ""]}
               rows={library.map((d) => [
                 <>
-                  {d.name} {d.isDemoFile && <span className="muted">(demo)</span>}
+                  {d.name}
                 </>,
                 d.employeeName,
                 d.category,
@@ -608,15 +741,15 @@ export function DocumentsLettersPage() {
                   Preview
                 </button>,
               ])}
-              empty={<EmptyState title="No documents" description="Upload a demo file or switch category." />}
+              empty={<EmptyState title="No documents" description="Upload a document or switch category." />}
             />
           </Card>
           <Card title="Preview">
             {!previewDoc ? (
-              <EmptyState title="Select a document" description="Preview opens metadata / demo content only." />
+              <EmptyState title="Select a document" description="Choose Preview on a document to see it here." />
             ) : previewDoc.preview.startsWith("data:image") ? (
               <div>
-                <p className="note">{previewDoc.name} · demo image preview</p>
+                <p className="note">{previewDoc.name}</p>
                 <img src={previewDoc.preview} alt="" style={{ maxWidth: "100%", borderRadius: 8 }} />
               </div>
             ) : (
@@ -636,7 +769,7 @@ export function DocumentsLettersPage() {
                   )
                 }
               >
-                Download demo text
+                Download
               </button>
             )}
           </Card>
@@ -655,13 +788,17 @@ export function DocumentsLettersPage() {
               style={{ marginTop: 12 }}
               onSubmit={(e) => {
                 e.preventDefault();
-                addLetterRequest({
+                const error = addLetterRequest(demoProfile, {
                   employeeId: employee.id,
                   employeeName: employee.fullName,
                   type: letterType,
-                  requestedBy: employee.fullName,
-                  note: letterNote || "Demo request",
+                  note: letterNote.trim() || "No reason given",
                 });
+                if (error) {
+                  setLetterMsg({ tone: "err", text: error });
+                  return;
+                }
+                setLetterMsg({ tone: "ok", text: `${letterType} letter requested — sent to HR for approval.` });
                 setLetterNote("");
                 setTab("history");
               }}
@@ -677,54 +814,55 @@ export function DocumentsLettersPage() {
                 <input value={letterNote} onChange={(e) => setLetterNote(e.target.value)} placeholder="Reason for request" />
               </Field>
               <button type="submit" className="btn">
-                Create draft request
+                Request letter
               </button>
             </form>
           </Card>
           <Card title="Letter workflow statuses">
-            <p className="note">Draft → Pending approval → Approved → Issued (local demo only).</p>
+            <p className="note">Pending approval → Approved → Issued (or Rejected).</p>
+            <Banner message={letterMsg} />
             <DataTable
-              headers={["Employee", "Type", "Status", "Preview"]}
-              rows={letters.map((l) => [
-                l.employeeName,
-                l.type,
-                <StatusBadge key={l.id} status={l.status} />,
-                <button
-                  key={`${l.id}-p`}
-                  type="button"
-                  className="quiet-link"
-                  onClick={() => setLetterPreview(l.previewBody)}
-                >
-                  View demo text
-                </button>,
-              ])}
-            />
-            {canLetters && (
-              <div style={{ marginTop: 12 }}>
-                <p className="note">HR actions</p>
-                {letters.map((l) => (
-                  <div key={`${l.id}-hr`} className="row-gap" style={{ marginBottom: 8 }}>
-                    <span>{l.employeeName} · {l.type}</span>
-                    <select
-                      value={l.status}
-                      onChange={(e) =>
-                        setLetterStatus(l.id, e.target.value as typeof l.status, demoProfile.fullName)
-                      }
-                    >
-                      {(["Draft", "Pending approval", "Approved", "Issued"] as const).map((s) => (
-                        <option key={s} value={s}>{s}</option>
+              headers={["Employee", "Type", "Status", "Preview", "Action"]}
+              rows={letters.map((l) => {
+                const next = nextLetterStatuses(demoProfile, l);
+                return [
+                  l.employeeName,
+                  l.type,
+                  <StatusBadge key={l.id} status={l.status} />,
+                  <button
+                    key={`${l.id}-p`}
+                    type="button"
+                    className="quiet-link"
+                    onClick={() => setLetterPreview(l.previewBody)}
+                  >
+                    View letter
+                  </button>,
+                  next.length === 0 ? (
+                    <span key={`${l.id}-a`} className="muted">—</span>
+                  ) : (
+                    <span key={`${l.id}-a`} className="reward-actions">
+                      {next.map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          className={s === "Rejected" ? "btn-ghost" : "btn"}
+                          onClick={() => moveLetter(l.id, s)}
+                        >
+                          {letterActionLabel[s]}
+                        </button>
                       ))}
-                    </select>
-                  </div>
-                ))}
-              </div>
-            )}
+                    </span>
+                  ),
+                ];
+              })}
+            />
           </Card>
         </div>
       )}
 
       {tab === "history" && (
         <Card title="Request and approval history">
+          <Banner message={letterMsg} />
           <DataTable
             headers={["Requested", "Employee", "Type", "By", "Status", "Approver", "Decided", "Note"]}
             rows={letters.map((l) => [
@@ -737,7 +875,7 @@ export function DocumentsLettersPage() {
               l.decidedOn ?? "—",
               l.note,
             ])}
-            empty={<EmptyState title="No letter requests" description="Create a draft from the Letters tab." />}
+            empty={<EmptyState title="No letter requests" description="Request a letter from the Letters tab." />}
           />
         </Card>
       )}
@@ -752,37 +890,37 @@ export function DocumentsLettersPage() {
         </Card>
       )}
 
-      <Dialog open={!!letterPreview} title="Demo letter preview" onClose={() => setLetterPreview(null)}>
-        <Banner message={{ tone: "ok", text: LEGAL_DISCLAIMER }} />
+      <Dialog open={!!letterPreview} title="Letter preview" onClose={() => setLetterPreview(null)}>
         <pre className="doc-preview-pre">{letterPreview}</pre>
       </Dialog>
 
-      <Dialog open={uploadOpen} title="Upload demo file" onClose={() => setUploadOpen(false)}>
+      <Dialog open={uploadOpen} title="Upload document" onClose={() => setUploadOpen(false)}>
         <form className="stack" onSubmit={saveUpload}>
           <Field label="File">
             <input
               type="file"
-              accept=".txt,.csv,.png,.jpg,.jpeg,.pdf,.doc,.docx"
+              accept={UPLOAD_EXTENSIONS.map((ext) => `.${ext}`).join(",")}
               onChange={(e) => onFilePicked(e.target.files?.[0] ?? null)}
             />
           </Field>
+          <p className="note">PDF, PNG, JPG, WEBP, TXT or CSV · max 2 MB.</p>
           {uploadFileLabel && <p className="note">{uploadFileLabel}</p>}
+          {uploadError && <Banner message={{ tone: "err", text: uploadError }} />}
           <Field label="Display name">
             <input value={uploadName} onChange={(e) => setUploadName(e.target.value)} required />
           </Field>
           <Field label="Category">
             <select value={uploadCategory} onChange={(e) => setUploadCategory(e.target.value)}>
-              {["Identity", "Compliance", "Onboarding", "Benefits", "Other"].map((c) => (
+              {Object.keys(PORTAL_GROUP).map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
           </Field>
-          <p className="note">Files stay in browser local/demo state. PDFs show metadata preview only.</p>
           <div className="dialog-actions">
             <button type="button" className="btn-ghost" onClick={() => setUploadOpen(false)}>
               Cancel
             </button>
-            <button type="submit" className="btn" disabled={!uploadName.trim()}>
+            <button type="submit" className="btn" disabled={!uploadName.trim() || !!uploadError}>
               Save to library
             </button>
           </div>

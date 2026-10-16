@@ -1,0 +1,27 @@
+.dt-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dt-file { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.dt-file input[type="file"] { max-width: 100%; font-size: 13px; }
+.dt-check { display: inline-flex; gap: 8px; align-items: center; font-size: 13.5px; color: var(--ink); cursor: pointer; }
+.dt-check input { width: 16px; height: 16px; flex: none; }
+.dt-columns { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px 14px; }
+.dt-issues { margin: 0; padding-left: 16px; font-size: 12.5px; color: var(--danger); }
+.dt-issues li.warn { color: var(--warn); }
+.dt-issues.ok { color: var(--ok); list-style: none; padding-left: 0; }
+.dt-subtle { font-size: 12.5px; color: var(--muted); }
+.dt-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.dt-filters input, .dt-filters select { width: 100%; min-width: 0; }
+.dt-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13.5px; color: var(--ink); }
+.dt-summary strong { font-weight: 650; }
+.dt-chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.dt-chip-list li { padding: 2px 8px; border-radius: 999px; background: var(--soft); font-size: 12px; color: var(--ink); overflow-wrap: anywhere; }
+.dt-nowrap { white-space: nowrap; }
+.dt-more { display: flex; justify-content: center; margin-top: 10px; }
+
+@media (max-width: 640px) {
+  .dt-actions > .btn, .dt-actions > .btn-ghost { flex: 1 1 auto; }
+  .dt-columns { grid-template-columns: 1fr 1fr; }
+  .dt-filters { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 400px) {
+  .dt-columns, .dt-filters { grid-template-columns: 1fr; }
+}

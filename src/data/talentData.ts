@@ -9,9 +9,18 @@ export const PIPELINE_STAGES = [
   "Final Review",
   "Offer",
   "Hired",
+  "Rejected",
+  "Withdrawn",
 ] as const;
 
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+
+/** Stages a candidate can always be moved to (from any non-final stage). */
+export const EXIT_STAGES: readonly PipelineStage[] = ["Rejected", "Withdrawn"];
+/** Final stages — no further moves. */
+export const CLOSED_STAGES: readonly PipelineStage[] = ["Hired", "Rejected", "Withdrawn"];
+/** Candidates at these stages can be given an offer. */
+export const OFFER_ELIGIBLE_STAGES: readonly PipelineStage[] = ["Final Review", "Offer"];
 
 export type ApprovalStatus = "Draft" | "Pending approval" | "Approved" | "Rejected" | "On hold";
 
@@ -156,6 +165,58 @@ export interface Certification {
   name: string;
   issuer: string;
   earnedOn: string;
+  /** Empty when the certification never expires. */
+  expiresOn?: string;
+  /** How long a renewal is valid for, in years. */
+  validityYears?: number;
+  /** Set when the employee records a renewal; dates only change once HR verifies it. */
+  renewalStatus?: "Pending verification";
+  renewalRequestedOn?: string;
+  /** New expiry entered by the employee when the certification has no fixed validity. */
+  renewalExpiresOn?: string;
+}
+
+export const PRAISE_BADGES = ["Teamwork", "Ownership", "Customer first", "Innovation", "Mentorship"] as const;
+export type PraiseBadge = (typeof PRAISE_BADGES)[number];
+
+/** Continuous feedback: public praise, private feedback, or a request for feedback. */
+export interface FeedbackItem {
+  id: string;
+  kind: "Praise" | "Feedback" | "Request";
+  fromId: string;
+  fromName: string;
+  toId: string;
+  toName: string;
+  /** For a Request: whose work the feedback should be about. */
+  aboutName?: string;
+  badge?: PraiseBadge;
+  message: string;
+  createdOn: string;
+  /** Full timestamp (ISO) for duplicate detection; missing on older items. */
+  createdAt?: string;
+  /** Requests only. */
+  status?: "Open" | "Answered";
+}
+
+export interface CheckInItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+/** Recurring manager–employee 1:1 meeting with shared agenda, action items and notes. */
+export interface OneOnOne {
+  id: string;
+  managerId: string;
+  managerName: string;
+  employeeId: string;
+  employeeName: string;
+  date: string;
+  time: string;
+  status: "Upcoming" | "Completed";
+  agenda: CheckInItem[];
+  actionItems: CheckInItem[];
+  notes: string;
 }
 
 export interface SkillDef {
@@ -170,6 +231,11 @@ export interface EmployeeSkill {
   skillName: string;
   level: string;
   targetLevel: string;
+}
+
+export interface SkillProfile {
+  employeeId: string;
+  skills: EmployeeSkill[];
 }
 
 export const REQUISITIONS: Requisition[] = [
@@ -327,8 +393,8 @@ export const CANDIDATES: Candidate[] = [
   },
   {
     id: "cand-7",
-    name: "Isha Reddy",
-    email: "isha.reddy@example.com",
+    name: "Riya Kapoor",
+    email: "riya.kapoor@example.com",
     phone: "+91 98xxx x5520",
     role: "Senior React Engineer",
     requisitionId: "JOB-221",
@@ -412,7 +478,7 @@ export const OFFERS: OfferRecord[] = [
   {
     id: "off-2",
     candidateId: "cand-7",
-    candidateName: "Isha Reddy",
+    candidateName: "Riya Kapoor",
     role: "Senior React Engineer",
     status: "Accepted",
     packageNote: "L5 Bengaluru · start 06 Oct",
@@ -423,7 +489,7 @@ export const OFFERS: OfferRecord[] = [
 export const ONBOARDING_JOINERS: OnboardingJoiner[] = [
   {
     id: "ob-1",
-    name: "Isha Reddy",
+    name: "Riya Kapoor",
     role: "Software Engineer",
     startDate: "2026-10-06",
     country: "India",
@@ -559,13 +625,102 @@ export const ENROLLMENTS: Enrollment[] = [
   { id: "en-1", courseId: "crs-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", status: "Completed", progress: 100, completedOn: "2026-03-12" },
   { id: "en-2", courseId: "crs-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", status: "In progress", progress: 45, due: "2026-10-31" },
   { id: "en-3", courseId: "crs-6", employeeId: "emp-mahesh", employeeName: "Babu Menon", status: "Assigned", progress: 0, due: "2026-11-15" },
-  { id: "en-4", courseId: "crs-1", employeeId: "ob-1", employeeName: "Isha Reddy", status: "Assigned", progress: 0, due: "2026-10-20" },
+  { id: "en-4", courseId: "crs-1", employeeId: "ob-1", employeeName: "Riya Kapoor", status: "Assigned", progress: 0, due: "2026-10-20" },
   { id: "en-5", courseId: "crs-4", employeeId: "demo-recruiter", employeeName: "Sophie Clark", status: "Completed", progress: 100, completedOn: "2026-05-02" },
+  { id: "en-6", courseId: "crs-4", employeeId: "emp-ram", employeeName: "Ram Krishnan", status: "In progress", progress: 30, due: "2026-10-05" },
 ];
 
 export const CERTIFICATIONS: Certification[] = [
   { id: "cert-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", name: "Professional Scrum Master", issuer: "Scrum.org", earnedOn: "2023-06-01" },
-  { id: "cert-2", employeeId: "demo-learning", employeeName: "Priya Nair", name: "ATD Master Trainer", issuer: "ATD", earnedOn: "2024-11-18" },
+  { id: "cert-2", employeeId: "demo-learning", employeeName: "Priya Nair", name: "ATD Master Trainer", issuer: "ATD", earnedOn: "2024-11-18", expiresOn: "2027-11-18", validityYears: 3 },
+  { id: "cert-3", employeeId: "emp-mahesh", employeeName: "Babu Menon", name: "AWS Certified Developer – Associate", issuer: "Amazon Web Services", earnedOn: "2023-11-20", expiresOn: "2026-11-20", validityYears: 3 },
+  { id: "cert-4", employeeId: "emp-ram", employeeName: "Ram Krishnan", name: "First Aid at Work", issuer: "St John Ambulance", earnedOn: "2023-09-01", expiresOn: "2026-09-01", validityYears: 3 },
+  { id: "cert-5", employeeId: "demo-recruiter", employeeName: "Sophie Clark", name: "Certified Diversity Recruiter", issuer: "AIRS", earnedOn: "2025-02-10", expiresOn: "2028-02-10", validityYears: 3 },
+];
+
+export const FEEDBACK_ITEMS: FeedbackItem[] = [
+  {
+    id: "fb-1",
+    kind: "Praise",
+    fromId: "emp-ram",
+    fromName: "Ram Krishnan",
+    toId: "emp-mahesh",
+    toName: "Babu Menon",
+    badge: "Ownership",
+    message: "Took the timesheet calendar from idea to release in two sprints and handled every review comment quickly.",
+    createdOn: "2026-10-09",
+  },
+  {
+    id: "fb-2",
+    kind: "Praise",
+    fromId: "emp-mahesh",
+    fromName: "Babu Menon",
+    toId: "demo-recruiter",
+    toName: "Sophie Clark",
+    badge: "Teamwork",
+    message: "Thanks for lining up the frontend interview panel at short notice.",
+    createdOn: "2026-10-02",
+  },
+  {
+    id: "fb-3",
+    kind: "Feedback",
+    fromId: "emp-ram",
+    fromName: "Ram Krishnan",
+    toId: "emp-mahesh",
+    toName: "Babu Menon",
+    message: "Great demo on Friday. Next time, share the agenda a day earlier so product can prepare questions.",
+    createdOn: "2026-10-11",
+  },
+  {
+    id: "fb-4",
+    kind: "Request",
+    fromId: "emp-ram",
+    fromName: "Ram Krishnan",
+    toId: "emp-mahesh",
+    toName: "Babu Menon",
+    aboutName: "Ram Krishnan",
+    message: "How can I make our sprint planning more useful for you?",
+    createdOn: "2026-10-13",
+    status: "Open",
+  },
+];
+
+export const ONE_ON_ONES: OneOnOne[] = [
+  {
+    id: "oo-1",
+    managerId: "emp-ram",
+    managerName: "Ram Krishnan",
+    employeeId: "emp-mahesh",
+    employeeName: "Babu Menon",
+    date: "2026-10-20",
+    time: "11:00",
+    status: "Upcoming",
+    agenda: [
+      { id: "oo-1-a1", text: "Progress on PR cycle time OKR", done: false },
+      { id: "oo-1-a2", text: "System design mentoring plan", done: false },
+    ],
+    actionItems: [{ id: "oo-1-x1", text: "Babu to draft reviewer rotation proposal", done: false }],
+    notes: "",
+  },
+  {
+    id: "oo-2",
+    managerId: "emp-ram",
+    managerName: "Ram Krishnan",
+    employeeId: "emp-mahesh",
+    employeeName: "Babu Menon",
+    date: "2026-10-06",
+    time: "11:00",
+    status: "Completed",
+    agenda: [
+      { id: "oo-2-a1", text: "Mid-year self-assessment", done: true },
+      { id: "oo-2-a2", text: "Secure coding course timeline", done: true },
+    ],
+    actionItems: [
+      { id: "oo-2-x1", text: "Submit self-assessment", done: true },
+      { id: "oo-2-x2", text: "Finish secure coding module 2", done: false },
+    ],
+    notes: "Self-assessment looks good. Agreed to finish secure coding before month end.",
+  },
 ];
 
 export const SKILL_LIBRARY: SkillDef[] = [
