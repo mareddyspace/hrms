@@ -20,7 +20,7 @@ import {
   taskProgress,
   taskStatusLabel,
 } from "../data/taskHelpers.ts";
-import { TASK_TEAM, taskPersonLabel } from "../data/taskTeam.ts";
+import { taskPersonLabel, taskTeamFor } from "../data/taskTeam.ts";
 import { ProgressBar } from "./dashboards/widgets.tsx";
 import {
   formatShortDate,
@@ -82,13 +82,18 @@ export function TasksPage() {
     toggleTaskSubtask,
     addTaskComment,
     colleagueName,
+    canApproveLeaveFor,
   } = usePortal();
   const today = todayISO();
+  // Own tasks plus tasks of people below you in the reporting line (or anyone, for HR).
   const scopeTasks = useMemo(
     () =>
-      (isManager ? state.tasks : state.tasks.filter((task) => task.employeeId === employee.id)).map(ensureTaskExtras),
-    [state.tasks, isManager, employee.id],
+      state.tasks
+        .filter((task) => task.employeeId === employee.id || canApproveLeaveFor(task.employeeId))
+        .map(ensureTaskExtras),
+    [state.tasks, employee.id, canApproveLeaveFor],
   );
+  const myTeam = useMemo(() => taskTeamFor(employee.id), [employee.id]);
 
   const [tab, setTab] = useState<TaskTab>(isManager ? "dashboard" : "mine");
   const [view, setView] = useState<ViewMode>("list");
@@ -116,7 +121,7 @@ export function TasksPage() {
   const [helpDraft, setHelpDraft] = useState("");
   const [draft, setDraft] = useState({
     subject: "",
-    ownerId: TASK_TEAM[0]?.id ?? "",
+    ownerId: taskTeamFor(employee.id)[0]?.id ?? "",
     priority: "medium" as TaskPriority,
     status: "open" as TaskStatus,
     client: "Internal",
@@ -128,7 +133,7 @@ export function TasksPage() {
 
   const selected = scopeTasks.find((task) => task.id === selectedId) ?? null;
   const selectedPeople = selected?.peopleIds ?? [];
-  const addablePeople = TASK_TEAM.filter(
+  const addablePeople = myTeam.filter(
     (p) => selected && p.id !== selected.employeeId && !selectedPeople.includes(p.id),
   );
 
@@ -381,6 +386,7 @@ export function TasksPage() {
   const canActOnSelected =
     !!selected && (selected.employeeId === employee.id || isManager) && selected.status !== "done";
   const selectedBlocked = selected ? isTaskBlocked(selected) : false;
+  const selectedIsOwn = selected?.employeeId === employee.id;
   const selectedInReview = Boolean(selected?.inReview);
   const nextHint = selected ? nextTaskActionHint(selected) : "";
 
@@ -427,7 +433,7 @@ export function TasksPage() {
       {!isManager && (
         <p className="note">
           Today: <strong>{summary.overdue}</strong> overdue · <strong>{summary.dueSoon}</strong> due soon ·{" "}
-          <strong>{summary.blocked}</strong> blocked. Select a task on the left — actions appear in the detail panel.
+          <strong>{summary.blocked}</strong> blocked.
         </p>
       )}
 
@@ -447,7 +453,8 @@ export function TasksPage() {
             <label className="field">
               Owner
               <select value={draft.ownerId} onChange={(e) => setDraft((d) => ({ ...d, ownerId: e.target.value }))}>
-                {TASK_TEAM.map((p) => (
+                {myTeam.length === 0 && <option value="">No direct or indirect reports</option>}
+                {myTeam.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.fullName} · {p.role}
                   </option>
@@ -468,7 +475,12 @@ export function TasksPage() {
             </label>
             <label className="field">
               Due
-              <input type="date" value={draft.due} onChange={(e) => setDraft((d) => ({ ...d, due: e.target.value }))} />
+              <input
+                type="date"
+                min={today}
+                value={draft.due}
+                onChange={(e) => setDraft((d) => ({ ...d, due: e.target.value }))}
+              />
             </label>
             <label className="field">
               Client / project
@@ -484,6 +496,14 @@ export function TasksPage() {
               type="button"
               className="btn"
               onClick={() => {
+                if (!myTeam.some((p) => p.id === draft.ownerId)) {
+                  setMessage({ tone: "err", text: "Pick an owner from your own team." });
+                  return;
+                }
+                if (draft.due && draft.due < today) {
+                  setMessage({ tone: "err", text: "Due date cannot be in the past." });
+                  return;
+                }
                 const error = createTask(draft);
                 if (error) {
                   setMessage({ tone: "err", text: error });
@@ -980,7 +1000,10 @@ export function TasksPage() {
                                 );
                               }}
                             >
-                              {TASK_TEAM.map((p) => (
+                              {!myTeam.some((p) => p.id === selected.employeeId) && (
+                                <option value={selected.employeeId}>{selected.owner}</option>
+                              )}
+                              {myTeam.map((p) => (
                                 <option key={p.id} value={p.id}>
                                   {p.fullName}
                                 </option>
@@ -1083,19 +1106,25 @@ export function TasksPage() {
                               >
                                 Request help
                               </button>
-                              <button type="button" className="btn-ghost" onClick={() => runAction("review")}>
-                                Submit for review
-                              </button>
-                              <button type="button" className="btn" onClick={() => runAction("complete")}>
-                                Mark complete
-                              </button>
+                              {selectedIsOwn ? (
+                                <button type="button" className="btn-ghost" onClick={() => runAction("review")}>
+                                  Submit for review
+                                </button>
+                              ) : (
+                                <button type="button" className="btn" onClick={() => runAction("complete")}>
+                                  Mark complete
+                                </button>
+                              )}
                             </>
                           )}
                         {canActOnSelected && selectedInReview && !selectedBlocked && (
                           <>
-                            <button type="button" className="btn" onClick={() => runAction("complete")}>
-                              Mark complete
-                            </button>
+                            {/* Only the reviewer completes; the owner waits for review. */}
+                            {!selectedIsOwn && (
+                              <button type="button" className="btn" onClick={() => runAction("complete")}>
+                                Mark complete
+                              </button>
+                            )}
                             <button
                               type="button"
                               className="btn-ghost"

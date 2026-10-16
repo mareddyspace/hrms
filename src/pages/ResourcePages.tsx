@@ -70,7 +70,7 @@ export function LegacyEssDocumentsPage() {
   return (
     <Page
       title="My documents"
-      subtitle="Files are grouped so you can find them quickly. Sharing only marks a document for HR. It does not send it anywhere in this demo."
+      subtitle="Files are grouped so you can find them quickly. Sharing marks a document for HR."
       action={
         <button className="btn" type="button" onClick={openAdd}>
           Add document

@@ -418,6 +418,33 @@ export function findDemoByEmailOrCode(value: string): DemoAccount | undefined {
   );
 }
 
+/** Everyone above this person in the reporting line, nearest first (manager, their manager, …). */
+/** Engineering teammates who aren't sign-in personas but appear in leave, tasks and timesheets. */
+const TEAMMATE_REPORTS_TO: Record<string, string> = {
+  "emp-priya": "emp-ram",
+  "emp-anu": "emp-ram",
+  "emp-kabir": "emp-ram",
+  "emp-diya": "emp-ram",
+};
+
+export function managementChain(employeeId: string, accounts: readonly DemoAccount[] = DEMO_ACCOUNTS): DemoAccount[] {
+  const chain: DemoAccount[] = [];
+  const seen = new Set<string>([employeeId]);
+  let current =
+    accounts.find((a) => a.id === employeeId) ??
+    (TEAMMATE_REPORTS_TO[employeeId]
+      ? ({ id: employeeId, reportsToId: TEAMMATE_REPORTS_TO[employeeId] } as DemoAccount)
+      : undefined);
+  while (current?.reportsToId && !seen.has(current.reportsToId)) {
+    const manager = accounts.find((a) => a.id === current!.reportsToId);
+    if (!manager) break;
+    chain.push(manager);
+    seen.add(manager.id);
+    current = manager;
+  }
+  return chain;
+}
+
 export function demoPasswordFor(employeeCode: string): string {
   return findDemoByCode(employeeCode)?.password ?? "welcome";
 }

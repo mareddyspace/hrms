@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -45,7 +45,6 @@ import {
   type NavLink as SideNavLink,
 } from "../nav.ts";
 import {
-  countPendingInbox,
   countUnreadMessages,
   countUnreadNotifications,
   subscribeCollab,
@@ -53,8 +52,11 @@ import {
 import { useLocale } from "../locale/LocaleContext.tsx";
 import type { AppLanguage } from "../locale/countryConfig.ts";
 import type { CountryCode } from "../model.ts";
+import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
 import { usePortal } from "../store.tsx";
+import { countWaitingOnMe } from "../pages/ApprovalsCenter.tsx";
 import { CopilotPopup } from "./CopilotPopup.tsx";
+import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Banner, Dropdown, Field } from "./ui.tsx";
 
 const SIDEBAR_KEY = "timez.sidebar.collapsed";
@@ -286,7 +288,8 @@ function applyTheme(theme: "light" | "night") {
 }
 
 export function Shell() {
-  const { employee, demoProfile, demoAccounts, signOut, switchDemoPersona, counts, state } = usePortal();
+  const { employee, demoProfile, demoAccounts, signOut, switchDemoPersona, counts, state, canApproveLeaveFor, canVerifyProofs } =
+    usePortal();
   const { regionCode, setRegionCode, language, setLanguage, countries, t, languageLabels, activeCountry } = useLocale();
   const passwordPrompt = usePasswordPolicyPrompt();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -310,21 +313,28 @@ export function Shell() {
   const [collabTick, setCollabTick] = useState(0);
   useEffect(() => subscribeCollab(() => setCollabTick((n) => n + 1)), []);
 
+  const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+
   const badges = useMemo(() => {
     const mine = <T extends { employeeId: string }>(items: T[]) => items.filter((item) => item.employeeId === employee.id);
-    const leavePending = mine(state.leaveRequests).filter((item) => item.status === "pending").length;
+    // Your own pending leave, plus team leave and backdated-leave permissions waiting on you.
+    const leavePending =
+      mine(state.leaveRequests).filter((item) => item.status === "pending").length +
+      state.leaveRequests.filter((item) => item.status === "pending" && canApproveLeaveFor(item.employeeId)).length +
+      state.backdatedPermissions.filter((item) => item.status === "pending" && canApproveLeaveFor(item.employeeId)).length;
     void collabTick;
     return {
       "/leave": leavePending,
       "/timesheet": counts.timesheet,
       "/tasks": counts.tasks,
-      "/programs": counts.programs,
+      // Open course enrollments — the same list the Learning page and home page use.
+      "/programs": talent.enrollments.filter((e) => e.employeeId === employee.id && e.status !== "Completed").length,
       "/evaluations": counts.evaluation,
-      "/approvals": countPendingInbox(),
+      "/approvals": countWaitingOnMe(state, employee.id, canApproveLeaveFor, canVerifyProofs),
       "/chat": countUnreadMessages(employee.id, demoProfile.role),
       "/notifications": countUnreadNotifications(demoProfile.role),
     } as Record<string, number>;
-  }, [counts, employee.id, state, collabTick, demoProfile.role]);
+  }, [counts, employee.id, state, collabTick, demoProfile.role, talent, canApproveLeaveFor, canVerifyProofs]);
 
   const needle = query.trim().toLowerCase();
   const pinned = filterPinnedForAccount(demoProfile);
@@ -521,7 +531,7 @@ export function Shell() {
               <Bell size={18} strokeWidth={1.75} />
               {(badges["/notifications"] ?? 0) > 0 && <span className="dot" />}
             </Link>
-            <Link to="/approvals" className="top-icon-btn" aria-label="Inbox and approvals">
+            <Link to="/approvals" className="top-icon-btn" aria-label="Approvals and my requests" title="Approvals & my requests">
               <Inbox size={18} strokeWidth={1.75} />
               {(badges["/approvals"] ?? 0) > 0 && <span className="dot" />}
             </Link>
@@ -568,14 +578,21 @@ export function Shell() {
                   label: `Demo region: ${regionCode === "ALL" ? "All" : activeCountry.name} · ${activeCountry.currency}`,
                 },
                 { id: "locale", label: t("nav.settings"), to: "/settings/locale" },
-                { id: "countries-admin", label: t("admin.countries"), to: "/admin/countries" },
+                ...(["admin", "super_admin", "hr", "hr_admin"].includes(demoProfile.role)
+                  ? [{ id: "countries-admin", label: t("admin.countries"), to: "/admin/countries" }]
+                  : []),
                 { id: "help", label: "Help", to: "/help" },
                 ...aboutLinks.filter((item) => item.to !== "/help").map((item) => ({ id: item.id, label: item.label, to: item.to })),
-                {
-                  id: "switcher-label",
-                  label: "—— DEMO ROLE SWITCHER (prototype) ——",
-                },
-                ...demoAccounts.map((account) => ({
+                // Switching persona skips the password, so it only exists while developing (npm run dev).
+                ...(import.meta.env.DEV
+                  ? [
+                      {
+                        id: "switcher-label",
+                        label: "—— Switch persona (development only) ——",
+                      },
+                    ]
+                  : []),
+                ...(import.meta.env.DEV ? demoAccounts : []).map((account) => ({
                   id: `switch-${account.id}`,
                   label: `${account.personaLabel}${account.id === demoProfile.id ? " ✓" : ""}`,
                   onSelect: () => {
@@ -608,7 +625,10 @@ export function Shell() {
         </header>
 
         <main className="main">
-          <Outlet />
+          {/* Keyed by path so a crashed page recovers as soon as you navigate elsewhere. */}
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
 
         <footer className="footer">

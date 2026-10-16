@@ -34,5 +34,5 @@ export function RegionalFilter({
 export function LocaleContextBanner() {
   const { activeCountry, regionCode } = useLocale();
   const label = regionCode === "ALL" ? "All countries" : activeCountry.name;
-  return <p className="note locale-banner">Showing demo data for {label}.</p>;
+  return <p className="note locale-banner">Showing data for {label}.</p>;
 }

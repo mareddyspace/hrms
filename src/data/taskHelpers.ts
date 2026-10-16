@@ -42,10 +42,10 @@ export function nextTaskActionHint(task: Task): string {
   if (task.status === "done") return "No further action — this task is complete.";
   if (task.status === "scheduled") return "Waiting for your manager to release this task.";
   if (task.blocked) return "Resolve or clear the blocker, or request help from your manager.";
-  if (task.inReview) return "Submitted for review — mark complete when approved, or update progress if more work is needed.";
+  if (task.inReview) return "Submitted for review — the reviewer marks it complete, or returns it if more work is needed.";
   if (task.status === "open" && !task.accepted) return "Accept this task to acknowledge the assignment.";
   if (task.status === "open") return "Start the task when you are ready to begin work.";
-  if (task.status === "progress") return "Update progress, submit for review, or mark complete when finished.";
+  if (task.status === "progress") return "Update progress, then submit for review when finished.";
   return "Review this task and choose the next action.";
 }
 

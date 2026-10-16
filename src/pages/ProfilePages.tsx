@@ -1,8 +1,5 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { ProfileEditForm } from "../components/ProfileEditForm.tsx";
+import { useMemo, useState } from "react";
 import { Card, Page, ProjectFacts } from "../components/ui.tsx";
-import type { PersonRecord } from "../data/peopleData.ts";
-import { getPerson, listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import {
   isPrimaryWeeklyOffLabel,
   isWeeklyOffDate,
@@ -10,142 +7,20 @@ import {
 } from "../data/workSchedule.ts";
 import { formatLongDate, monthCells, monthLabel, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
-import { Employee360View } from "./Employee360View.tsx";
+import { PersonProfilePage } from "./PersonProfilePage.tsx";
 
 export { AttendancePage } from "./AttendanceModule.tsx";
 
-function usePeople() {
-  return useSyncExternalStore(subscribePeople, listPeople, listPeople);
-}
-
+/** My profile — the same profile page colleagues see, plus edit and the full record for you. */
 export function MyInfo() {
-  const { employee, demoProfile, currentProjects } = usePortal();
-  const people = usePeople();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(employee);
-  const [photoFile, setPhotoFile] = useState("");
-
-  const person: PersonRecord | undefined = useMemo(() => {
-    return (
-      getPerson(employee.id) ||
-      people.find((p) => p.employeeCode === employee.employeeCode) ||
-      people.find((p) => p.email === employee.email)
-    );
-  }, [employee, people]);
-
-  useEffect(() => {
-    if (!editing) setDraft(employee);
-  }, [employee, editing]);
-
-  function readPhoto(file: File) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const image = new Image();
-      image.onload = () => {
-        const size = 320;
-        const canvas = document.createElement("canvas");
-        canvas.width = size;
-        canvas.height = size;
-        const context = canvas.getContext("2d");
-        if (!context) return;
-        const scale = Math.max(size / image.width, size / image.height);
-        const width = image.width * scale;
-        const height = image.height * scale;
-        context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
-        setPhotoFile(canvas.toDataURL("image/jpeg", 0.86));
-      };
-      image.src = String(reader.result);
-    };
-    reader.readAsDataURL(file);
-  }
-
-  const selfPerson: PersonRecord = person ?? {
-    id: employee.id,
-    employeeCode: employee.employeeCode,
-    fullName: employee.fullName,
-    email: employee.email,
-    personalEmail: employee.email,
-    mobile: employee.mobile,
-    photo: photoFile || employee.photo,
-    gender: "",
-    dateOfJoining: "2024-11-04",
-    employmentType: employee.employmentType,
-    employmentStatus: "Active",
-    designation: employee.designation,
-    jobFamily: employee.department ?? "Engineering",
-    jobProfileId: "JP-SELF",
-    positionId: "POS-SELF",
-    grade: "L4",
-    department: employee.department ?? "Engineering",
-    division: `${employee.department ?? "Engineering"} Delivery`,
-    businessUnit: `Infotech ${employee.countryName ?? "India"}`,
-    costCenter: "CC-IN-1",
-    location: employee.location ?? "Bengaluru",
-    countryCode: employee.countryCode ?? "IN",
-    countryName: employee.countryName ?? "India",
-    legalEntity: employee.legalEntity ?? "Infotech India Pvt Ltd",
-    managerId: "emp-ram",
-    managerName: "Ram Krishnan",
-    availability: "In Office",
-    timeZone: employee.timeZone,
-    currency: employee.currency ?? "INR",
-    address: employee.address,
-  };
-
-  return (
-    <Page
-      title="My Profile"
-      subtitle="Employee 360 · personal, employment, organization, skills, time, goals, documents, and pay (by permission)"
-      action={
-        <button
-          className="btn-ghost"
-          type="button"
-          onClick={() => {
-            setDraft(employee);
-            setPhotoFile("");
-            setEditing((open) => !open);
-          }}
-        >
-          {editing ? "Cancel edit" : "Edit contact details"}
-        </button>
-      }
-    >
-      {editing && (
-        <Card title="Edit contact details">
-          <p className="note">
-            Projects on file: {currentProjects.map((p) => p.name).join(", ") || "—"}
-          </p>
-          <ProfileEditForm
-            draft={draft}
-            setDraft={(next) =>
-              setDraft((prev) => ({
-                ...prev,
-                ...(typeof next === "function" ? next(prev) : next),
-              }))
-            }
-            photoFile={photoFile}
-            onReadPhoto={readPhoto}
-            onCancel={() => {
-              setEditing(false);
-              setPhotoFile("");
-              setDraft(employee);
-            }}
-            onSaved={() => {
-              setEditing(false);
-              setPhotoFile("");
-            }}
-          />
-        </Card>
-      )}
-      <Employee360View person={{ ...selfPerson, photo: photoFile || selfPerson.photo }} viewer={demoProfile} selfId={employee.id} />
-    </Page>
-  );
+  const { employee } = usePortal();
+  return <PersonProfilePage personId={employee.id} />;
 }
 
 export function EmsPage() {
   const { employee, currentProjects, previousProjects } = usePortal();
   return (
-    <Page title="Employee EMS" subtitle="Employment snapshot from the same profile used on the home screen.">
+    <Page title="Employee EMS">
       <Card>
         <table className="data">
           <tbody>
@@ -181,7 +56,6 @@ export function EmsPage() {
             </tr>
           </tbody>
         </table>
-        <p className="note">Department, manager, and joining date will come from the employee master when the database is connected.</p>
       </Card>
     </Page>
   );
@@ -248,7 +122,7 @@ export function HolidaysPage() {
   }
 
   return (
-    <Page title="Company holiday calendar" subtitle="Company-wide holidays for everyone. Use this calendar to plan leave around office closures.">
+    <Page title="Company holiday calendar" subtitle="Plan leave around office closures.">
       <Card>
         <div className="row-between" style={{ marginBottom: 12 }}>
           <h2 className="card-title" style={{ margin: 0 }}>
@@ -282,6 +156,7 @@ export function HolidaysPage() {
                 title={holiday ? holiday.name : weeklyOff ? "Weekly Off" : undefined}
               >
                 <strong>{Number(date.slice(-2))}</strong>
+                {date === today && <span className="day-today-tag">Today</span>}
                 {holiday ? holiday.name : showOff ? "Weekly Off" : ""}
               </div>
             );
@@ -298,7 +173,7 @@ export function HighlightsPage() {
   const today = todayISO();
   const next = holidays.find((holiday) => holiday.date >= today);
   return (
-    <Page title="Highlights" subtitle="A reading of leave, holidays, and pending actions. Nothing new is stored here.">
+    <Page title="Highlights" subtitle="Leave, holidays, and pending actions at a glance.">
       <div className="stat-grid">
         <div className="stat">
           <span>Next holiday</span>

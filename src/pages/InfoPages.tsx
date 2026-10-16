@@ -38,7 +38,6 @@ export function LoginPage() {
   const [sentTo, setSentTo] = useState("");
   const [sentChannel, setSentChannel] = useState<ResetChannel>("email");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const [selectedDemo, setSelectedDemo] = useState<DemoAccount | null>(null);
 
   if (signedIn) return <Navigate to="/" replace />;
 
@@ -62,14 +61,10 @@ export function LoginPage() {
   }
 
   async function fillDemo(account: DemoAccount) {
-    setSelectedDemo(account);
     setEmail(account.email);
     setPassword(account.password);
     setFieldErrors({});
-    setMessage({
-      tone: "ok",
-      text: `Prototype account loaded: ${account.personaLabel}. Click Sign in to continue.`,
-    });
+    setMessage(null);
   }
 
   async function quickSignIn(account: DemoAccount) {
@@ -157,7 +152,6 @@ export function LoginPage() {
             </span>
             <h1>{COMPANY_NAME}</h1>
             <p className="lede">{PRODUCT_TAGLINE}</p>
-            <p className="login-proto-banner">Prototype demo accounts only — not production identity.</p>
             <div className="stack">
               <Field label="Work email" wide>
                 <input
@@ -216,18 +210,11 @@ export function LoginPage() {
               </button>
             </div>
             <Banner message={message} />
-            {selectedDemo && (
-              <p className="note">
-                Selected: <strong>{selectedDemo.fullName}</strong> · {selectedDemo.personaLabel} · {selectedDemo.employeeCode} ·{" "}
-                {selectedDemo.countryName}
-              </p>
-            )}
           </form>
 
           <aside className="login-demo-panel" aria-label="Prototype demo accounts">
             <div className="login-demo-head">
               <h2>Demo role selection</h2>
-              <p>8 frontend demo personas — start with Employee. Unique email and password per person.</p>
             </div>
             <div className="login-demo-grid">
               {demoAccounts.map((account) => (

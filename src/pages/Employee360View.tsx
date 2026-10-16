@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useState } from "react";
 import { Card, EmptyState, MetricCard, MetricGrid, StatusBadge, Tabs } from "../components/ui.tsx";
 import { getPerson360Extras, type PersonRecord } from "../data/peopleData.ts";
+import { getExitDetails, isTerminated } from "../data/peopleLocal.ts";
 import {
   canViewSalaryAmount,
   canViewSensitivePiiFor,
@@ -39,14 +40,19 @@ export function Employee360View({
   viewer,
   selfId,
   onEdit,
+  hideHeader = false,
 }: {
   person: PersonRecord;
   viewer: DemoAccount;
   selfId: string;
   onEdit?: () => void;
+  /** Skip the photo/name card when the page already shows a profile header. */
+  hideHeader?: boolean;
 }) {
   const isSelf = person.id === selfId || person.employeeCode === viewer.employeeCode;
   const extras = getPerson360Extras(person);
+  const terminated = isTerminated(person);
+  const exit = getExitDetails(person);
   const subjectCtx = {
     subjectId: person.id,
     selfId,
@@ -81,12 +87,18 @@ export function Employee360View({
 
   return (
     <div className="stack">
+      {!hideHeader && (
       <Card>
         <div className="who row-between" style={{ alignItems: "flex-start", gap: 16 }}>
           <div className="who" style={{ margin: 0 }}>
             <img className="identity-photo who-photo" src={person.photo} alt="" />
             <div className="who-copy">
               <h2>{person.fullName}</h2>
+              {terminated && (
+                <p className="profile-left-chip">
+                  No longer with the company{exit.exitDate ? ` · left ${exit.exitDate}` : ""}
+                </p>
+              )}
               <p className="muted">
                 {person.employeeCode} · {person.employmentType} · {person.employmentStatus}
               </p>
@@ -110,6 +122,7 @@ export function Employee360View({
           </div>
         </div>
       </Card>
+      )}
 
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
 
@@ -141,6 +154,8 @@ export function Employee360View({
           <dl className="info-grid">
             <Fact label="Employee ID" value={person.employeeCode} />
             <Fact label="Status" value={person.employmentStatus} />
+            {terminated && <Fact label="Exit date" value={exit.exitDate ?? ""} />}
+            {terminated && showFullHr && <Fact label="Exit reason" value={exit.exitReason ?? ""} />}
             <Fact label="Employment type" value={person.employmentType} />
             <Fact label="Date of joining" value={person.dateOfJoining} />
             <Fact label="Job title" value={person.designation} />

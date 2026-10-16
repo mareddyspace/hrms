@@ -1,4 +1,5 @@
 import { COMPANY_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from "../brand.ts";
+import type { DemoAccount, NavAccessId } from "../demoAccounts.ts";
 import type { CountryCode, UserRole } from "../model.ts";
 import { TIMEZ_COUNTRIES } from "../model.ts";
 import { TZ_HEADCOUNT, TZ_HR, TZ_MOVEMENT, TZ_RECRUITING, TZ_EXEC } from "./dashboardMock.ts";
@@ -320,8 +321,76 @@ function hasAll(q: string, words: string[]) {
   return words.every((w) => q.includes(w));
 }
 
-/** Rule-based demo Copilot — broad matchers so short natural questions still get answers. */
-export function answerCopilot(question: string): CopilotAnswer {
+/** Who is asking — answers and links are trimmed to what this persona may open. */
+export type CopilotViewer = Pick<DemoAccount, "role" | "navAccess">;
+
+/** Internal: an answer may name the module whose data it reveals. */
+type RawCopilotAnswer = CopilotAnswer & { requires?: NavAccessId };
+
+/** Route → nav access id, so Copilot never links to pages the viewer can't open. */
+const COPILOT_LINK_ACCESS: Record<string, NavAccessId> = {
+  "/": "home",
+  "/info": "profile",
+  "/calendar": "calendar",
+  "/org-chart": "orgchart",
+  "/tasks": "tasks",
+  "/chat": "messages",
+  "/notifications": "notifications",
+  "/announcements": "announcements",
+  "/help": "help",
+  "/attendance": "attendance",
+  "/leave": "leave",
+  "/holidays": "holidays",
+  "/timesheet": "timesheet",
+  "/payslips": "payslips",
+  "/benefits": "benefits",
+  "/expenses": "expenses",
+  "/reimbursement": "expenses",
+  "/documents": "documents",
+  "/team": "team",
+  "/approvals": "inbox",
+  "/workflows": "workflows",
+  "/directory": "people",
+  "/organization": "organization",
+  "/jobs": "jobs",
+  "/compensation": "compensation",
+  "/recruiting": "recruiting",
+  "/onboarding": "onboarding",
+  "/analytics": "analytics",
+  "/evaluations": "performance",
+  "/programs": "learning",
+  "/skills": "skills",
+  "/ai/agents": "agents",
+  "/integrations": "integrations",
+  "/payroll": "payroll",
+  "/admin": "administration",
+};
+
+function viewerHas(viewer: CopilotViewer, id: NavAccessId): boolean {
+  return viewer.navAccess.includes("*") || viewer.navAccess.includes(id);
+}
+
+/** Rule-based demo Copilot, filtered to what the viewer is allowed to see. */
+export function answerCopilot(question: string, viewer: CopilotViewer): CopilotAnswer {
+  const { requires, ...raw } = rawCopilotAnswer(question);
+  const allowedLink = (l: { to: string }) => {
+    const id = COPILOT_LINK_ACCESS[l.to];
+    return !id || viewerHas(viewer, id);
+  };
+  if (requires && !viewerHas(viewer, requires)) {
+    return {
+      kind: "text",
+      summary:
+        "You don't have access to that information with your current role. Ask your manager or HR if you need it.",
+      links: [{ label: "Help", to: "/help" }].filter(allowedLink),
+    };
+  }
+  const links = raw.links?.filter(allowedLink);
+  return { ...raw, links: links?.length ? links : undefined };
+}
+
+/** Broad keyword matchers so short natural questions still get answers. */
+function rawCopilotAnswer(question: string): RawCopilotAnswer {
   const q = question.toLowerCase().replace(/[?!.,'"]/g, " ").replace(/\s+/g, " ").trim();
 
   if (hasAny(q, ["company name", "organisation name", "organization name", "who are we", "brand name"]) ||
@@ -371,7 +440,7 @@ export function answerCopilot(question: string): CopilotAnswer {
         "In this demo, most India Engineering personas use the General Shift 09:30 AM to 06:30 PM (Asia/Kolkata). US/UK personas use regional day shifts. Open Timesheet to log hours against projects for the current week.",
       metrics: [
         { label: "Typical shift (IN)", value: "09:30 AM – 06:30 PM" },
-        { label: "Work week", value: "Mon–Fri (demo)" },
+        { label: "Work week", value: "Mon–Fri" },
         { label: "Break", value: "Not tracked in prototype" },
       ],
       links: [
@@ -390,6 +459,7 @@ export function answerCopilot(question: string): CopilotAnswer {
       kind: "table",
       summary:
         "From the demo leave ledger (mock YTD days taken), Kabir Sharma used the most holiday/PTO. Figures are fictional sample data for manager review demos.",
+      requires: "team",
       table: {
         headers: ["Employee", "Type", "Days taken YTD", "Department"],
         rows: [
@@ -466,6 +536,7 @@ export function answerCopilot(question: string): CopilotAnswer {
   if (hasAny(q, ["compensation", "salary band", "pay band", "ctc", "bonus cycle"])) {
     return {
       kind: "text",
+      requires: "compensation",
       summary:
         "Compensation is role-gated. Helen (Compensation) and authorized HR can open Compensation; Jordan needs salaryAuthorized; Alex (Admin) does not get pay access from the Admin role alone.",
       links: [
@@ -585,6 +656,7 @@ export function answerCopilot(question: string): CopilotAnswer {
     return {
       kind: "table",
       summary: "Simulated approval queue from frontend mock data (not a live workflow engine). Ram can approve Babu's leave because Babu reports to him.",
+      requires: "inbox",
       table: {
         headers: ["Employee", "Type", "From", "To", "Status"],
         rows: [
@@ -604,7 +676,7 @@ export function answerCopilot(question: string): CopilotAnswer {
     return {
       kind: "metrics",
       summary:
-        "Your leave balance this year (demo): Annual leave 12 days left, Sick leave 6 days left, and WFH 8 days left. Comp-off and casual balances are on Leave & Absence.",
+        "Your leave balance this year: Annual leave 12 days left, Sick leave 6 days left, and WFH 8 days left. Comp-off and casual balances are on Leave & Absence.",
       metrics: [
         { label: "Annual leave left", value: "12 days" },
         { label: "Sick leave left", value: "6 days" },
@@ -633,7 +705,7 @@ export function answerCopilot(question: string): CopilotAnswer {
   if (hasAny(q, ["leave", "pto", "wfh", "absence", "comp off", "casual"]) && !hasAny(q, ["policy"])) {
     return {
       kind: "metrics",
-      summary: `Your leave overview: Annual 12 days left · Sick 6 · WFH 8 · Privilege 14. Team leave days in October: ${TZ_HR.leaveTrend.find((r) => r.label === "Oct")?.days ?? 390} (demo).`,
+      summary: `Your leave overview: Annual 12 days left · Sick 6 · WFH 8 · Privilege 14. Team leave days in October: ${TZ_HR.leaveTrend.find((r) => r.label === "Oct")?.days ?? 390}.`,
       metrics: [
         { label: "Annual left", value: "12 days" },
         { label: "Sick left", value: "6 days" },
@@ -650,7 +722,7 @@ export function answerCopilot(question: string): CopilotAnswer {
   if (hasAny(q, ["policy", "policies", "acknowledg", "handbook"])) {
     return {
       kind: "table",
-      summary: "Policy catalogue excerpt (demo). Acknowledgements are not enforced by a live engine.",
+      summary: "Policy catalogue excerpt. Acknowledgements are not enforced by a live engine.",
       table: {
         headers: ["Policy", "Audience", "Ack pending"],
         rows: [
@@ -667,6 +739,7 @@ export function answerCopilot(question: string): CopilotAnswer {
     return {
       kind: "table",
       summary: "Critical skill gaps from shared workforce mock (executive/manager demo view).",
+      requires: "analytics",
       table: {
         headers: ["Skill", "Gap", "Countries"],
         rows: TZ_EXEC.criticalSkillGaps.map((s) => [s.skill, s.gap, s.countries]),
@@ -684,6 +757,7 @@ export function answerCopilot(question: string): CopilotAnswer {
     return {
       kind: "metrics",
       summary: `Workforce snapshot from shared ${COMPANY_NAME} analytics mock. Filter Analytics for country/department detail.`,
+      requires: "analytics",
       metrics: [
         { label: "Global headcount", value: String(TZ_HEADCOUNT.global) },
         { label: "Hiring YTD", value: String(TZ_MOVEMENT.hiringYtd) },
@@ -697,6 +771,7 @@ export function answerCopilot(question: string): CopilotAnswer {
   if (hasAny(q, ["pipeline", "time-to-hire", "time to hire", "recruit", "requisition", "interview", "candidate", "offer", "ats"])) {
     return {
       kind: "table",
+      requires: "recruiting",
       summary: `Recruiting pipeline demo · avg time-to-hire ${TZ_RECRUITING.avgTimeToHireDays} days (mock). Sophie gets candidate access via Recruiter role.`,
       table: {
         headers: ["Stage", "Candidates"],
@@ -863,7 +938,7 @@ export const AI_AGENTS: AiAgentCard[] = [
     id: "knowledge",
     name: "Knowledge agent",
     audience: "All staff",
-    purpose: "Retrieves answers from a fictional policy knowledge base (no live RAG connection).",
+    purpose: "Retrieves answers from the policy knowledge base.",
     availability: "Copilot · Policies screens",
     demoStatus: "Planned demo",
   },
@@ -906,15 +981,15 @@ export const INTEGRATION_SEED: IntegrationCard[] = [
     id: "sso",
     name: "SSO / Identity",
     category: "Identity",
-    description: "SAML / OIDC placeholder for corporate identity providers.",
+    description: "SAML / OIDC for corporate identity providers.",
     status: "Degraded",
     lastSync: "2026-10-14 08:40 IST",
     recordsProcessed: 512,
     errorCount: 3,
     logs: [
-      { at: "14 Oct 08:40", level: "warn", message: "Token refresh latency above threshold (demo)" },
-      { at: "14 Oct 07:12", level: "info", message: "Directory sync batch completed (demo)" },
-      { at: "13 Oct 22:01", level: "error", message: "IdP metadata fetch timeout (simulated)" },
+      { at: "14 Oct 08:40", level: "warn", message: "Token refresh latency above threshold" },
+      { at: "14 Oct 07:12", level: "info", message: "Directory sync batch completed" },
+      { at: "13 Oct 22:01", level: "error", message: "IdP metadata fetch timeout" },
     ],
   },
   {
@@ -927,22 +1002,22 @@ export const INTEGRATION_SEED: IntegrationCard[] = [
     recordsProcessed: 4280,
     errorCount: 0,
     logs: [
-      { at: "14 Oct 09:05", level: "info", message: "Digest batch sent (demo)" },
-      { at: "14 Oct 06:00", level: "info", message: "Provider health check OK (demo)" },
+      { at: "14 Oct 09:05", level: "info", message: "Digest batch sent" },
+      { at: "14 Oct 06:00", level: "info", message: "Provider health check OK" },
     ],
   },
   {
     id: "teams",
     name: "Microsoft Teams",
     category: "Collaboration",
-    description: "Presence and notification channel placeholders.",
+    description: "Presence and notification channels.",
     status: "Connected",
     lastSync: "2026-10-14 09:00 IST",
     recordsProcessed: 910,
     errorCount: 1,
     logs: [
-      { at: "14 Oct 09:00", level: "info", message: "Channel notify push (demo)" },
-      { at: "13 Oct 16:22", level: "warn", message: "Webhook 429 soft throttle (simulated)" },
+      { at: "14 Oct 09:00", level: "info", message: "Channel notify push" },
+      { at: "13 Oct 16:22", level: "warn", message: "Webhook 429 soft throttle" },
     ],
   },
   {
@@ -960,26 +1035,26 @@ export const INTEGRATION_SEED: IntegrationCard[] = [
     id: "attendance",
     name: "Attendance devices",
     category: "Workforce",
-    description: "Badge / biometric punch feed placeholder.",
+    description: "Badge / biometric punch feed.",
     status: "Connected",
     lastSync: "2026-10-14 09:15 IST",
     recordsProcessed: 18420,
     errorCount: 12,
     logs: [
-      { at: "14 Oct 09:15", level: "info", message: "Punch import cycle (demo)" },
-      { at: "14 Oct 08:02", level: "error", message: "Device TZ-BLR-04 offline (simulated)" },
+      { at: "14 Oct 09:15", level: "info", message: "Punch import cycle" },
+      { at: "14 Oct 08:02", level: "error", message: "Device TZ-BLR-04 offline" },
     ],
   },
   {
     id: "learning",
     name: "Learning LMS",
     category: "Talent",
-    description: "Course completion and certification sync placeholder.",
+    description: "Course completion and certification sync.",
     status: "Connected",
     lastSync: "2026-10-13 23:40 IST",
     recordsProcessed: 640,
     errorCount: 0,
-    logs: [{ at: "13 Oct 23:40", level: "info", message: "Completion delta sync (demo)" }],
+    logs: [{ at: "13 Oct 23:40", level: "info", message: "Completion delta sync" }],
   },
   {
     id: "benefits",
@@ -991,8 +1066,8 @@ export const INTEGRATION_SEED: IntegrationCard[] = [
     recordsProcessed: 210,
     errorCount: 4,
     logs: [
-      { at: "12 Oct 18:20", level: "warn", message: "Enrollment file validation warnings (demo)" },
-      { at: "11 Oct 18:20", level: "error", message: "SFTP handshake failed once (simulated)" },
+      { at: "12 Oct 18:20", level: "warn", message: "Enrollment file validation warnings" },
+      { at: "11 Oct 18:20", level: "error", message: "SFTP handshake failed once" },
     ],
   },
   {
@@ -1005,8 +1080,8 @@ export const INTEGRATION_SEED: IntegrationCard[] = [
     recordsProcessed: 500,
     errorCount: 0,
     logs: [
-      { at: "10 Oct 21:00", level: "info", message: "Period file handoff placeholder (demo)" },
-      { at: "01 Oct 21:00", level: "info", message: "Prior period acknowledged (demo)" },
+      { at: "10 Oct 21:00", level: "info", message: "Period file handoff" },
+      { at: "01 Oct 21:00", level: "info", message: "Prior period acknowledged" },
     ],
   },
 ];
@@ -1014,7 +1089,7 @@ export const INTEGRATION_SEED: IntegrationCard[] = [
 /* —— Payroll —— */
 
 export const PAYROLL_STATUS = {
-  provider: "Infotech External Payroll Adapter (demo)",
+  provider: "Infotech External Payroll Adapter",
   country: "Depends on active demo region",
   legalEntity: "Depends on active demo region",
   period: "October 2026 (sample)",
@@ -1057,7 +1132,7 @@ export const ROLE_PERMISSION_CATALOG: { id: string; label: string; description: 
   { id: "analytics", label: "Analytics", description: "Workforce intelligence" },
   { id: "integrations", label: "Integrations", description: "Connector administration" },
   { id: "administration", label: "Administration", description: "Platform settings" },
-  { id: "payroll", label: "Payroll placeholder", description: "External payroll status" },
+  { id: "payroll", label: "Payroll", description: "External payroll status" },
 ];
 
 export interface AuditLogRow {
@@ -1074,7 +1149,7 @@ export const AUDIT_LOG_SEED: AuditLogRow[] = [
     id: "aud-1",
     at: "2026-10-14 09:12",
     actor: "kai.nakamura@infotech.com",
-    action: "Updated role binding (demo)",
+    action: "Updated role binding",
     target: "HRBP",
     outcome: "Recorded",
   },
@@ -1082,7 +1157,7 @@ export const AUDIT_LOG_SEED: AuditLogRow[] = [
     id: "aud-2",
     at: "2026-10-13 18:40",
     actor: "alex.morgan@infotech.com",
-    action: "Rotated API key (demo)",
+    action: "Rotated API key",
     target: "Payroll connector",
     outcome: "Simulated",
   },
@@ -1090,7 +1165,7 @@ export const AUDIT_LOG_SEED: AuditLogRow[] = [
     id: "aud-3",
     at: "2026-10-13 11:05",
     actor: "farhan.ali@infotech.com",
-    action: "Published policy (demo)",
+    action: "Published policy",
     target: "Leave Policy",
     outcome: "Recorded",
   },
@@ -1098,7 +1173,7 @@ export const AUDIT_LOG_SEED: AuditLogRow[] = [
     id: "aud-4",
     at: "2026-10-12 16:30",
     actor: "priya.nair@infotech.com",
-    action: "Retry integration sync (demo)",
+    action: "Retry integration sync",
     target: "SSO / Identity",
     outcome: "Simulated",
   },
@@ -1106,7 +1181,7 @@ export const AUDIT_LOG_SEED: AuditLogRow[] = [
     id: "aud-5",
     at: "2026-10-11 10:02",
     actor: "maya.chen@infotech.com",
-    action: "Viewed compensation analytics (demo)",
+    action: "Viewed compensation analytics",
     target: "Analytics",
     outcome: "Recorded",
   },

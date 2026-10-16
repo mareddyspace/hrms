@@ -37,7 +37,7 @@ export function CopilotPopup() {
   function ask(question: string) {
     const q = question.trim();
     if (!q) return;
-    const answer = answerCopilot(q);
+    const answer = answerCopilot(q, demoProfile);
     const stamp = Date.now();
     setHistory((prev) => [
       ...prev,
@@ -92,7 +92,7 @@ export function CopilotPopup() {
           <div className="copilot-fab-thread" ref={threadRef} aria-live="polite">
             {history.length === 0 && (
               <p className="note">
-                Hi {firstName} — ask about leave, payslips, policies, or your team. Answers are simulated demo data.
+                Hi {firstName} — ask about leave, payslips, policies, or your team.
               </p>
             )}
             {history.map((turn) => (

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Banner,
   Card,
@@ -18,6 +18,8 @@ import {
   FAQ_ITEMS,
   NOTIF_CATEGORIES,
   chatPersonById,
+  canManageAnnouncement,
+  isHrRole,
   isManagerNotifRole,
   notifPrefKey,
   type AnnouncementScope,
@@ -31,6 +33,8 @@ import {
 } from "../data/collabData.ts";
 import {
   addHrComment,
+  allowedHrStatuses,
+  conversationUnreadCount,
   countPendingInbox,
   countUnreadMessages,
   countUnreadNotifications,
@@ -39,6 +43,9 @@ import {
   decideInboxTask,
   delegateInboxTask,
   getCollabState,
+  hrRequestVisibleTo,
+  isMessageUnreadFor,
+  isNotificationReadBy,
   listConversationsForUser,
   listNotificationsForRole,
   markAllNotificationsRead,
@@ -285,10 +292,12 @@ export function InboxApprovalsPage() {
 export function MessagingPage() {
   const { employee, demoProfile } = usePortal();
   const collab = useCollab();
+  const [searchParams] = useSearchParams();
   const [filter, setFilter] = useState<"all" | "direct" | "group">("all");
   const [convQ, setConvQ] = useState("");
   const [peopleQ, setPeopleQ] = useState("");
-  const [activeId, setActiveId] = useState("");
+  // ?c=<conversation id> opens that conversation, e.g. from a profile's Message button.
+  const [activeId, setActiveId] = useState(() => searchParams.get("c") ?? "");
   const [text, setText] = useState("");
   const [attachName, setAttachName] = useState<string | undefined>();
   const [error, setError] = useState("");
@@ -327,8 +336,8 @@ export function MessagingPage() {
     if (!active?.id) return;
     if (markedReadRef.current === active.id) return;
     markedReadRef.current = active.id;
-    markConversationRead(active.id);
-  }, [active?.id]);
+    markConversationRead(active.id, employee.id);
+  }, [active?.id, employee.id]);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ block: "end" });
@@ -398,23 +407,26 @@ export function MessagingPage() {
       setError("Type a message or attach a demo file.");
       return;
     }
-    setError("");
-    sendChatMessage(
+    const failure = sendChatMessage(
       active.id,
       employee.id,
       employee.fullName,
       text.trim() || `(Attachment) ${attachName}`,
       attachName,
     );
+    if (failure) {
+      setError(failure);
+      return;
+    }
+    setError("");
     setText("");
     setAttachName(undefined);
-    setSentOk("Message sent (demo — not delivered in real time or by email).");
+    setSentOk("Message sent.");
   }
 
   return (
     <Page
       title="Messages"
-      subtitle="Internal messaging prototype · mock data only"
       action={
         <div className="row-gap">
           <button
@@ -434,19 +446,12 @@ export function MessagingPage() {
         </div>
       }
     >
-      <Banner
-        message={{
-          tone: "info",
-          text: "Messaging is a frontend prototype. It does not deliver real-time messages or emails. Compensation and confidential HR threads stay visible only to authorized participants.",
-        }}
-      />
       {sentOk && <Banner message={{ tone: "ok", text: sentOk }} />}
 
       {composerMode !== "closed" && (
-        <Card title={composerMode === "direct" ? "New message" : "New group (demo)"}>
+        <Card title={composerMode === "direct" ? "New message" : "New group"}>
           {composerMode === "direct" ? (
             <div className="stack-tight">
-              <p className="note">Pick someone to open or create a direct conversation.</p>
               <label className="filter-label">
                 Search
                 <input
@@ -484,7 +489,7 @@ export function MessagingPage() {
                   placeholder="e.g. Sprint sync"
                 />
               </Field>
-              <p className="note">Select colleagues to include (demo group — local state only).</p>
+              <p className="note">Select colleagues to include.</p>
               <ul className="collab-list">
                 {CHAT_PEOPLE.filter((p) => p.id !== employee.id).map((p) => (
                   <li key={p.id} className="msg-person-row">
@@ -557,6 +562,7 @@ export function MessagingPage() {
               <ul className="collab-list">
                 {conversations.map((c) => {
                   const last = c.messages?.at(-1);
+                  const unreadCount = conversationUnreadCount(c, employee.id);
                   return (
                     <li key={c.id}>
                       <button
@@ -571,7 +577,7 @@ export function MessagingPage() {
                       >
                         <strong>
                           {c.title}{" "}
-                          {c.unread > 0 && <StatusBadge status={`${c.unread} new`} tone="warn" />}
+                          {unreadCount > 0 && <StatusBadge status={`${unreadCount} new`} tone="warn" />}
                           {c.restricted === "compensation" && (
                             <StatusBadge status="Compensation" tone="danger" />
                           )}
@@ -696,12 +702,12 @@ export function MessagingPage() {
                         {m.fromId === employee.id ? (
                           <StatusBadge status="Sent" tone="ok" />
                         ) : (
-                          !m.read && <StatusBadge status="Unread" tone="warn" />
+                          isMessageUnreadFor(m, employee.id) && <StatusBadge status="Unread" tone="warn" />
                         )}
                       </div>
                       <p>{m.text}</p>
                       {m.attachmentName && (
-                        <p className="note">Attachment (demo): {m.attachmentName}</p>
+                        <p className="note">Attachment: {m.attachmentName}</p>
                       )}
                     </div>
                   ))
@@ -720,7 +726,7 @@ export function MessagingPage() {
                 />
                 <div className="row-between">
                   <label className="btn-ghost" style={{ cursor: "pointer" }}>
-                    Attach (demo)
+                    Attach
                     <input
                       type="file"
                       hidden
@@ -733,12 +739,11 @@ export function MessagingPage() {
                       }}
                     />
                   </label>
-                  {attachName && <span className="note">Demo file: {attachName}</span>}
+                  {attachName && <span className="note">File: {attachName}</span>}
                   <button type="submit" className="btn">
                     Send
                   </button>
                 </div>
-                <p className="note">Attachments are metadata-only in this prototype — no cloud storage.</p>
               </form>
             </Card>
           )}
@@ -751,29 +756,29 @@ export function MessagingPage() {
 /* ───────────────────────────── 3. ANNOUNCEMENTS ── */
 
 export function AnnouncementsPage() {
-  const { demoProfile } = usePortal();
+  const { employee, demoProfile } = usePortal();
   const collab = useCollab();
   const [scope, setScope] = useState<AnnouncementScope | "">("");
   const [stateFilter, setStateFilter] = useState("");
   const [selectedId, setSelectedId] = useState(collab.announcements[0]?.id ?? "");
+  const [publishError, setPublishError] = useState("");
 
-  const canPublish =
-    demoProfile.role === "hr_admin" ||
-    demoProfile.role === "hr" ||
-    demoProfile.role === "super_admin" ||
-    demoProfile.role === "manager";
+  const actor = { id: employee.id, fullName: employee.fullName, role: demoProfile.role };
+  const canManage = (a: (typeof collab.announcements)[number]) => canManageAnnouncement(a, actor);
+  const isReadByMe = (a: (typeof collab.announcements)[number]) => a.readBy.includes(employee.id);
 
+  // Drafts / scheduled posts are only visible to people who may manage them.
   const list = collab.announcements.filter((a) => {
     if (scope && a.scope !== scope) return false;
     if (stateFilter && a.state !== stateFilter) return false;
-    if (!canPublish && a.state === "Draft") return false;
+    if (a.state !== "Published" && !canManage(a)) return false;
     return true;
   });
 
   const selected = list.find((a) => a.id === selectedId) ?? list[0] ?? null;
 
   return (
-    <Page title="Announcements" subtitle="Company, country, department and team communications (demo)">
+    <Page title="Announcements" subtitle="Company, country, department and team communications">
       <FilterBar>
         <label className="filter-label">
           Scope
@@ -808,11 +813,12 @@ export function AnnouncementsPage() {
                     className={selected?.id === a.id ? "collab-list-item active" : "collab-list-item"}
                     onClick={() => {
                       setSelectedId(a.id);
-                      if (a.state === "Published") markAnnouncementRead(a.id);
+                      setPublishError("");
+                      if (a.state === "Published") markAnnouncementRead(a.id, employee.id);
                     }}
                   >
                     <strong>
-                      {a.title} {!a.readByMe && a.state === "Published" && <StatusBadge status="Unread" tone="warn" />}
+                      {a.title} {!isReadByMe(a) && a.state === "Published" && <StatusBadge status="Unread" tone="warn" />}
                     </strong>
                     <span className="muted">
                       {a.scope} · {a.audience} · {a.state}
@@ -833,7 +839,7 @@ export function AnnouncementsPage() {
               <div className="row-gap">
                 <StatusBadge status={selected.state} />
                 <StatusBadge status={selected.scope} tone="info" />
-                {selected.readByMe ? (
+                {isReadByMe(selected) ? (
                   <StatusBadge status="Read" tone="ok" />
                 ) : (
                   <StatusBadge status="Unread" tone="warn" />
@@ -845,12 +851,14 @@ export function AnnouncementsPage() {
                 {selected.scheduledFor ? ` · Scheduled ${formatWhen(selected.scheduledFor)}` : ""}
               </p>
               <p>{selected.body}</p>
-              {canPublish && (
+              {canManage(selected) && (
                 <Field label="Demo publish controls">
                   <select
                     value={selected.state}
                     onChange={(e) =>
-                      setAnnouncementState(selected.id, e.target.value as typeof selected.state)
+                      setPublishError(
+                        setAnnouncementState(selected.id, e.target.value as typeof selected.state, actor) ?? "",
+                      )
                     }
                   >
                     {(["Draft", "Scheduled", "Published"] as const).map((s) => (
@@ -859,8 +867,9 @@ export function AnnouncementsPage() {
                   </select>
                 </Field>
               )}
-              {selected.state === "Published" && !selected.readByMe && (
-                <button type="button" className="btn" onClick={() => markAnnouncementRead(selected.id)}>
+              {publishError && <Banner message={{ tone: "err", text: publishError }} />}
+              {selected.state === "Published" && !isReadByMe(selected) && (
+                <button type="button" className="btn" onClick={() => markAnnouncementRead(selected.id, employee.id)}>
                   Mark as read
                 </button>
               )}
@@ -881,7 +890,7 @@ function notificationActions(n: AppNotification): NotifAction[] {
 }
 
 export function NotificationCenterPage() {
-  const { employee, demoProfile } = usePortal();
+  const { employee, demoProfile, canApproveLeaveFor } = usePortal();
   const navigate = useNavigate();
   const collab = useCollab();
   const role = demoProfile.role;
@@ -890,27 +899,45 @@ export function NotificationCenterPage() {
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [prefs, setPrefs] = useState(collab.prefs);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [actionFlash, setActionFlash] = useState("");
+  const [actionFlash, setActionFlash] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
     setPrefs(collab.prefs);
   }, [collab.prefs]);
 
-  const scoped = useMemo(() => listNotificationsForRole(role), [role, collab.notifications]);
+  const scoped = useMemo(
+    () => listNotificationsForRole(role, employee.id),
+    [role, employee.id, collab.notifications],
+  );
+  const isRead = (n: AppNotification) => isNotificationReadBy(n, employee.id);
+
+  /** Approve / Reject only while the linked inbox item is pending and the viewer may decide it. */
+  function canDecide(n: AppNotification): boolean {
+    if (!n.inboxTaskId) return false;
+    const task = collab.inbox.find((t) => t.id === n.inboxTaskId);
+    return !!task && task.status === "Pending" && canApproveLeaveFor(task.requesterId);
+  }
+
+  function visibleActions(n: AppNotification): NotifAction[] {
+    return notificationActions(n).filter(
+      (a) => (a.kind !== "approve" && a.kind !== "reject") || canDecide(n),
+    );
+  }
 
   const list = scoped.filter((n) => {
     if (category && n.category !== category) return false;
     return prefs[notifPrefKey(n.category)] !== false;
   });
 
-  const unread = scoped.filter((n) => !n.read).length;
+  // Same preference filter as the list (and the sidebar badge).
+  const unread = scoped.filter((n) => !isRead(n) && prefs[notifPrefKey(n.category)] !== false).length;
   const actionRequired = scoped.filter(
     (n) =>
-      !n.read &&
+      !isRead(n) &&
       (n.category === "Leave" || n.category === "Timesheet" || n.category === "Attendance") &&
-      (n.inboxTaskId || n.actions?.some((a) => a.kind === "approve" || a.kind === "reject")),
+      canDecide(n),
   ).length;
-  const unreadTeamMessages = scoped.filter((n) => n.category === "Messages" && !n.read).length;
+  const unreadTeamMessages = scoped.filter((n) => n.category === "Messages" && !isRead(n)).length;
   const selected = selectedId ? scoped.find((n) => n.id === selectedId) ?? null : null;
 
   const categoriesInScope = useMemo(() => {
@@ -920,7 +947,7 @@ export function NotificationCenterPage() {
 
   function openDetail(n: AppNotification) {
     setSelectedId(n.id);
-    if (!n.read) markNotificationRead(n.id);
+    if (!isRead(n)) markNotificationRead(n.id, employee.id);
   }
 
   function runAction(n: AppNotification, action: NotifAction) {
@@ -930,30 +957,32 @@ export function NotificationCenterPage() {
       return;
     }
     if (kind === "approve" || kind === "reject") {
-      if (n.inboxTaskId) {
-        decideInboxTask(
-          n.inboxTaskId,
-          kind === "approve" ? "Approved" : "Rejected",
-          employee.fullName,
-          kind === "reject" ? "Rejected from Notification Center (demo)" : undefined,
-        );
-      }
-      markNotificationRead(n.id);
-      setActionFlash(
-        kind === "approve"
-          ? `Approved · ${n.title}`
-          : `Rejected · ${n.title}`,
-      );
       setSelectedId(n.id);
+      if (!n.inboxTaskId || !canDecide(n)) {
+        setActionFlash({ tone: "err", text: "This request is no longer pending or you can't decide it." });
+        return;
+      }
+      const result = decideInboxTask(
+        n.inboxTaskId,
+        kind === "approve" ? "Approved" : "Rejected",
+        employee.fullName,
+        kind === "reject" ? "Rejected from Notification Center" : undefined,
+      );
+      if (!result.ok) {
+        setActionFlash({ tone: "err", text: result.error });
+        return;
+      }
+      markNotificationRead(n.id, employee.id);
+      setActionFlash({ tone: "ok", text: `${kind === "approve" ? "Approved" : "Rejected"} · ${n.title}` });
       return;
     }
-    markNotificationRead(n.id);
+    markNotificationRead(n.id, employee.id);
     const href = action.href || n.href;
     if (href) navigate(href);
   }
 
   function markAllReadScoped() {
-    markAllNotificationsRead(role);
+    markAllNotificationsRead(role, employee.id);
   }
 
   return (
@@ -975,14 +1004,14 @@ export function NotificationCenterPage() {
         </div>
       }
     >
-      {actionFlash && <Banner message={{ tone: "ok", text: actionFlash }} />}
+      {actionFlash && <Banner message={actionFlash} />}
 
       <MetricGrid>
         <MetricCard label="Unread" value={unread} />
         <MetricCard label="Total" value={scoped.length} />
         <MetricCard
           label={managerView ? "Action required" : "Pending approvals"}
-          value={managerView ? actionRequired : countPendingInbox()}
+          value={managerView ? actionRequired : collab.inbox.filter((t) => t.status === "Pending" && canApproveLeaveFor(t.requesterId)).length}
           hint={managerView ? "Leave · timesheet · attendance" : "Open Inbox"}
         />
         <MetricCard
@@ -1053,18 +1082,18 @@ export function NotificationCenterPage() {
           ) : (
             <ul className="collab-list">
               {list.map((n) => {
-                const actions = notificationActions(n);
+                const actions = visibleActions(n);
                 return (
                   <li key={n.id}>
                     <div
-                      className={n.read ? "collab-list-item" : "collab-list-item active"}
+                      className={isRead(n) ? "collab-list-item" : "collab-list-item active"}
                       style={{ cursor: "default" }}
                     >
                       <div className="row-between" style={{ width: "100%", gap: 8, alignItems: "flex-start" }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <strong>
                             {n.title}{" "}
-                            {!n.read ? (
+                            {!isRead(n) ? (
                               <StatusBadge status="Unread" tone="warn" />
                             ) : (
                               <StatusBadge status="Read" tone="neutral" />
@@ -1083,7 +1112,7 @@ export function NotificationCenterPage() {
                                     to={action.href || n.href || "#"}
                                     className="btn-ghost"
                                     style={{ fontSize: 13 }}
-                                    onClick={() => markNotificationRead(n.id)}
+                                    onClick={() => markNotificationRead(n.id, employee.id)}
                                   >
                                     {action.label}
                                   </Link>
@@ -1108,8 +1137,8 @@ export function NotificationCenterPage() {
                               Details
                             </button>
                           )}
-                          {!n.read && (
-                            <button type="button" className="btn-ghost" onClick={() => markNotificationRead(n.id)}>
+                          {!isRead(n) && (
+                            <button type="button" className="btn-ghost" onClick={() => markNotificationRead(n.id, employee.id)}>
                               Mark read
                             </button>
                           )}
@@ -1133,19 +1162,19 @@ export function NotificationCenterPage() {
             }
           >
             <p className="muted">
-              {selected.category} · {formatWhen(selected.at)} · {selected.read ? "Read" : "Unread"}
+              {selected.category} · {formatWhen(selected.at)} · {isRead(selected) ? "Read" : "Unread"}
             </p>
             <h3 style={{ margin: "8px 0" }}>{selected.title}</h3>
             <p>{selected.body}</p>
             {selected.detail && <p className="note">{selected.detail}</p>}
             <div className="row-gap" style={{ marginTop: 12, flexWrap: "wrap" }}>
-              {notificationActions(selected).map((action) =>
+              {visibleActions(selected).map((action) =>
                 action.kind === "link" || !action.kind ? (
                   <Link
                     key={action.id}
                     to={action.href || selected.href || "#"}
                     className="btn"
-                    onClick={() => markNotificationRead(selected.id)}
+                    onClick={() => markNotificationRead(selected.id, employee.id)}
                   >
                     {action.label}
                   </Link>
@@ -1171,19 +1200,27 @@ export function NotificationCenterPage() {
 /* ───────────────────────────── 5. HELP & HR REQUESTS ── */
 
 export function HelpHrRequestsPage() {
-  const { employee } = usePortal();
+  const { employee, demoProfile } = usePortal();
   const collab = useCollab();
+  const hrView = isHrRole(demoProfile.role);
+  const actor = { id: employee.id, role: demoProfile.role };
+  const requests = useMemo(
+    () => collab.hrRequests.filter((r) => hrRequestVisibleTo(r, employee.id, demoProfile.role)),
+    [collab.hrRequests, employee.id, demoProfile.role],
+  );
   const [tab, setTab] = useState("request");
   const [category, setCategory] = useState<HrRequestCategory>("Documents");
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [formError, setFormError] = useState("");
   const [formOk, setFormOk] = useState("");
-  const [selectedId, setSelectedId] = useState(collab.hrRequests[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState("");
   const [comment, setComment] = useState("");
+  const [ticketError, setTicketError] = useState("");
   const [faqQ, setFaqQ] = useState("");
 
-  const selected = collab.hrRequests.find((r) => r.id === selectedId) ?? collab.hrRequests[0] ?? null;
+  const selected = requests.find((r) => r.id === selectedId) ?? requests[0] ?? null;
+  const statusOptions = selected ? allowedHrStatuses(selected, employee.id, demoProfile.role) : [];
 
   const faqs = FAQ_ITEMS.filter((f) => {
     if (!faqQ) return true;
@@ -1202,6 +1239,7 @@ export function HelpHrRequestsPage() {
       subject,
       description,
       author: employee.fullName,
+      requesterId: employee.id,
     });
     setSubject("");
     setDescription("");
@@ -1211,7 +1249,7 @@ export function HelpHrRequestsPage() {
   }
 
   return (
-    <Page title="Help & HR Requests" subtitle="Service desk demo · FAQ, policies and request history">
+    <Page title="Help & HR Requests" subtitle="FAQ, policies and request history">
       <Tabs
         tabs={[
           { id: "request", label: "New request" },
@@ -1263,18 +1301,22 @@ export function HelpHrRequestsPage() {
 
       {tab === "history" && (
         <div className="collab-split">
-          <Card title="My requests">
-            {collab.hrRequests.length === 0 ? (
+          <Card title={hrView ? "All requests" : "My requests"}>
+            {requests.length === 0 ? (
               <EmptyState title="No requests yet" description="Submit a service request from the New request tab." />
             ) : (
               <DataTable
-                headers={["Subject", "Category", "Status", "Updated", ""]}
-                rows={collab.hrRequests.map((r) => [
+                headers={hrView ? ["Subject", "Requester", "Category", "Status", "Updated", ""] : ["Subject", "Category", "Status", "Updated", ""]}
+                rows={requests.map((r) => [
                   r.subject,
+                  ...(hrView ? [r.requesterName ?? "Unknown (legacy)"] : []),
                   r.category,
                   <StatusBadge key={r.id} status={r.status} />,
                   r.updatedAt,
-                  <button key={`${r.id}-o`} type="button" className="quiet-link" onClick={() => setSelectedId(r.id)}>
+                  <button key={`${r.id}-o`} type="button" className="quiet-link" onClick={() => {
+                      setSelectedId(r.id);
+                      setTicketError("");
+                    }}>
                     Open
                   </button>,
                 ])}
@@ -1289,17 +1331,31 @@ export function HelpHrRequestsPage() {
                 <h3 style={{ margin: 0 }}>{selected.subject}</h3>
                 <p className="muted">
                   {selected.category} · Created {selected.createdAt}
+                  {hrView && ` · Raised by ${selected.requesterName ?? "unknown (legacy ticket)"}`}
                 </p>
-                <Field label="Status">
-                  <select
-                    value={selected.status}
-                    onChange={(e) => setHrRequestStatus(selected.id, e.target.value as typeof selected.status)}
-                  >
-                    {(["Open", "In progress", "Waiting on you", "Resolved", "Closed"] as const).map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                </Field>
+                {statusOptions.length > 0 ? (
+                  <Field label="Status">
+                    <select
+                      value={selected.status}
+                      onChange={(e) =>
+                        setTicketError(
+                          setHrRequestStatus(selected.id, e.target.value as typeof selected.status, actor) ?? "",
+                        )
+                      }
+                    >
+                      {[selected.status, ...statusOptions].map((s) => (
+                        <option key={s} value={s}>
+                          {!hrView && s === "In progress" && selected.status !== "In progress" ? "Reopen" : s}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                ) : (
+                  <div className="row-gap">
+                    <StatusBadge status={selected.status} />
+                    <span className="muted">HR updates the status of this request.</span>
+                  </div>
+                )}
                 <p>{selected.description}</p>
                 <h4 className="collab-section-title">Comments</h4>
                 <ul className="collab-timeline">
@@ -1311,6 +1367,7 @@ export function HelpHrRequestsPage() {
                     </li>
                   ))}
                 </ul>
+                {ticketError && <Banner message={{ tone: "err", text: ticketError }} />}
                 <Field label="Add comment" wide>
                   <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
                 </Field>
@@ -1319,8 +1376,9 @@ export function HelpHrRequestsPage() {
                   className="btn"
                   disabled={!comment.trim()}
                   onClick={() => {
-                    addHrComment(selected.id, employee.fullName, comment.trim());
-                    setComment("");
+                    const failure = addHrComment(selected.id, employee.fullName, comment, actor);
+                    setTicketError(failure ?? "");
+                    if (!failure) setComment("");
                   }}
                 >
                   Post comment

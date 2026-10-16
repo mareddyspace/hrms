@@ -7,10 +7,25 @@ import { Banner, Field } from "./ui.tsx";
 
 type ProfileDraft = Pick<Employee, "fullName" | "designation" | "mobile" | "email" | "address" | "shiftName" | "shiftHours">;
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Problems with the employee-editable fields, or null when they are fine. */
+function validateDraft(draft: ProfileDraft): string | null {
+  if (!draft.fullName.trim()) return "Enter a name.";
+  if (!EMAIL_PATTERN.test(draft.email.trim())) return "Enter a valid email address (name@company.com).";
+  const mobile = draft.mobile.trim();
+  const digits = mobile.replace(/\D/g, "").length;
+  if (!/^\+?[\d ]+$/.test(mobile) || digits < 8 || digits > 15) {
+    return "Enter a valid mobile number: 8–15 digits, optionally starting with + (spaces allowed).";
+  }
+  return null;
+}
+
 export function ProfileEditForm({
   draft,
   setDraft,
   photoFile,
+  photoError,
   onReadPhoto,
   onCancel,
   onSaved,
@@ -18,6 +33,8 @@ export function ProfileEditForm({
   draft: ProfileDraft;
   setDraft: (next: ProfileDraft | ((prev: ProfileDraft) => ProfileDraft)) => void;
   photoFile: string;
+  /** Problem with the chosen photo (wrong type, too large, unreadable), shown under the picker. */
+  photoError?: string;
   onReadPhoto: (file: File) => void;
   onCancel: () => void;
   onSaved: () => void;
@@ -45,7 +62,22 @@ export function ProfileEditForm({
       setMessage({ tone: "err", text: "Send a verification code before saving." });
       return;
     }
-    const error = updateProfileWithOtp({ ...draft, photo: photoFile || undefined }, otp);
+    const invalid = validateDraft(draft);
+    if (invalid) {
+      setMessage({ tone: "err", text: invalid });
+      return;
+    }
+    // Designation and shift are HR-owned: always send the current values, never the draft's.
+    const error = updateProfileWithOtp(
+      {
+        ...draft,
+        designation: employee.designation,
+        shiftName: employee.shiftName,
+        shiftHours: employee.shiftHours,
+        photo: photoFile || undefined,
+      },
+      otp,
+    );
     if (error) {
       setMessage({ tone: "err", text: error });
       return;
@@ -61,30 +93,49 @@ export function ProfileEditForm({
     <form className="identity-edit" onSubmit={saveProfile}>
       <div className="form-grid">
         <Field label="Photo">
-          <input type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && onReadPhoto(event.target.files[0])} />
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={(event) => event.target.files?.[0] && onReadPhoto(event.target.files[0])}
+          />
+          {photoError ? <span className="note err">{photoError}</span> : <span className="note">JPEG, PNG or WebP, up to 5 MB.</span>}
         </Field>
         <Field label="Name">
           <input value={draft.fullName} onChange={(event) => setDraft({ ...draft, fullName: event.target.value })} />
         </Field>
-        <Field label="Designation">
-          <input value={draft.designation} onChange={(event) => setDraft({ ...draft, designation: event.target.value })} />
-        </Field>
         <Field label="Mobile">
-          <input value={draft.mobile} onChange={(event) => setDraft({ ...draft, mobile: event.target.value })} />
+          <input
+            type="tel"
+            inputMode="tel"
+            value={draft.mobile}
+            onChange={(event) => setDraft({ ...draft, mobile: event.target.value })}
+          />
         </Field>
         <Field label="Email">
-          <input value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
+          <input type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
         </Field>
         <Field label="Address" wide>
           <input value={draft.address} onChange={(event) => setDraft({ ...draft, address: event.target.value })} />
         </Field>
-        <Field label="Shift">
-          <input value={draft.shiftName} onChange={(event) => setDraft({ ...draft, shiftName: event.target.value })} />
-        </Field>
-        <Field label="Hours">
-          <input value={draft.shiftHours} onChange={(event) => setDraft({ ...draft, shiftHours: event.target.value })} />
-        </Field>
       </div>
+
+      <section className="profile-hr-owned" aria-label="Managed by HR">
+        <dl>
+          <div>
+            <dt>Designation</dt>
+            <dd>{employee.designation || "—"}</dd>
+          </div>
+          <div>
+            <dt>Shift</dt>
+            <dd>{employee.shiftName || "—"}</dd>
+          </div>
+          <div>
+            <dt>Hours</dt>
+            <dd>{employee.shiftHours || "—"}</dd>
+          </div>
+        </dl>
+        <p className="note">Managed by HR — ask HR to change these.</p>
+      </section>
 
       <div className="otp-box">
         <p className="otp-title">Verify before save</p>

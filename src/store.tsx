@@ -11,6 +11,9 @@ import {
   validateEncashment,
   validateExpense,
   validateLeave,
+  backdatedPermissionFor,
+  needsBackdatedPermission,
+  addDaysISO,
   hoursFromEntries,
   validateTimesheet,
   workingDays,
@@ -22,8 +25,10 @@ import {
 import type {
   Approval,
   AssetRequest,
+  BackdatedLeavePermission,
   CabBooking,
   CashAdvance,
+  DecisionInfo,
   Employee,
   Encashment,
   Expense,
@@ -53,6 +58,7 @@ import {
   findDemoByCode,
   findDemoByEmailOrCode,
   findDemoById,
+  managementChain,
   type DemoAccount,
 } from "./demoAccounts.ts";
 import { canApproveTeam } from "./model.ts";
@@ -84,33 +90,49 @@ function storedPassword(employeeCode: string = EMPLOYEE.employeeCode): string {
   );
 }
 
-function passwordChangedAtIso(): string | null {
-  return localStorage.getItem(PASSWORD_CHANGED_AT_KEY);
+const MUST_CHANGE_KEY = "kastech.ess.must-change-password";
+const LOCK_KEY = "kastech.ess.login-lock";
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCK_MINUTES = 5;
+
+/** Per-person keys: password age, last login and the forced-change flag belong to one account, not the device. */
+function userKey(base: string, employeeCode: string): string {
+  return `${base}.${employeeCode.toUpperCase()}`;
 }
 
-function notePasswordChanged(employeeCode?: string) {
-  localStorage.setItem(PASSWORD_CHANGED_AT_KEY, new Date().toISOString());
-  if (employeeCode) {
-    // keep shared stamp; per-user passwords are stored separately
+function passwordChangedAtIso(employeeCode: string): string | null {
+  return localStorage.getItem(userKey(PASSWORD_CHANGED_AT_KEY, employeeCode));
+}
+
+function notePasswordChanged(employeeCode: string) {
+  localStorage.setItem(userKey(PASSWORD_CHANGED_AT_KEY, employeeCode), new Date().toISOString());
+  localStorage.removeItem(userKey(MUST_CHANGE_KEY, employeeCode));
+}
+
+/** Session lives in localStorage with "Remember me", otherwise only until the browser closes. */
+function readSession(): boolean {
+  return localStorage.getItem(SESSION_KEY) === "in" || sessionStorage.getItem(SESSION_KEY) === "in";
+}
+
+function readLock(employeeCode: string): { fails: number; until: number } {
+  try {
+    const raw = localStorage.getItem(userKey(LOCK_KEY, employeeCode));
+    return raw ? (JSON.parse(raw) as { fails: number; until: number }) : { fails: 0, until: 0 };
+  } catch {
+    return { fails: 0, until: 0 };
   }
 }
 
 function savePassword(employeeCode: string, next: string) {
   localStorage.setItem(passwordStorageKey(employeeCode), next);
-  localStorage.setItem(PASSWORD_KEY, next);
   notePasswordChanged(employeeCode);
 }
 
+/** First time we see an account, start its password-age clock (only once — not on every render). */
 function ensureDemoPasswordChangedAt(employeeCode?: string) {
-  // Prototype demo passwords should not force the stale-password gate.
   const code = employeeCode ?? EMPLOYEE.employeeCode;
-  const baseline = demoPasswordFor(code);
-  const stillBaseline = storedPassword(code) === baseline;
-  if (stillBaseline) {
-    localStorage.setItem(PASSWORD_CHANGED_AT_KEY, new Date().toISOString());
-    return;
-  }
-  if (localStorage.getItem(PASSWORD_CHANGED_AT_KEY)) return;
+  if (passwordChangedAtIso(code)) return;
+  localStorage.setItem(userKey(PASSWORD_CHANGED_AT_KEY, code), new Date().toISOString());
 }
 
 function ensureDemoLastLogin() {
@@ -139,6 +161,7 @@ function loadState(): PortalState {
     if (!Array.isArray(parsed.chatThreads)) parsed.chatThreads = seed.chatThreads;
     if (!Array.isArray(parsed.policies)) parsed.policies = seed.policies;
     if (!Array.isArray(parsed.documents)) parsed.documents = seed.documents;
+    if (!Array.isArray(parsed.backdatedPermissions)) parsed.backdatedPermissions = [];
     if (localStorage.getItem(PHOTO_RESET_KEY) !== "1") {
       if (parsed.profilePhoto) {
         delete parsed.profilePhoto;
@@ -146,9 +169,26 @@ function loadState(): PortalState {
       }
       localStorage.setItem(PHOTO_RESET_KEY, "1");
     }
+    if (!parsed.profiles || typeof parsed.profiles !== "object") parsed.profiles = {};
+    if (parsed.profile) {
+      const { fullName, mobile, email, address } = parsed.profile;
+      parsed.profiles[EMPLOYEE.id] ??= { fullName, mobile, email, address, photo: parsed.profilePhoto };
+      delete parsed.profile;
+      delete parsed.profilePhoto;
+    }
     let renamed = false;
-    if (parsed.profile?.fullName === "Mahesh Babu") {
-      parsed.profile = { ...parsed.profile, fullName: "Babu" };
+    // The sample WFH request used to fall on the Dussehra holiday (20 Oct), which leave rules forbid.
+    const holidayWfh = parsed.leaveRequests.find(
+      (req) => req.id === "lv-oct-wfh" && req.from === "2026-10-20" && req.to === "2026-10-20",
+    );
+    if (holidayWfh) {
+      holidayWfh.from = "2026-10-22";
+      holidayWfh.to = "2026-10-22";
+      renamed = true;
+    }
+    const babuProfile = parsed.profiles[EMPLOYEE.id];
+    if (babuProfile?.fullName === "Mahesh Babu") {
+      parsed.profiles[EMPLOYEE.id] = { ...babuProfile, fullName: "Babu" };
       renamed = true;
     }
     if (Array.isArray(parsed.documents)) {
@@ -218,9 +258,15 @@ interface PortalApi {
   previousProjects: PortalState["projects"];
   hoursFor: (projectId: string) => number;
   applyLeave: (input: LeaveInput) => Promise<string | null>;
-  setLeaveStatus: (id: string, status: RequestStatus) => Promise<string | null>;
+  setLeaveStatus: (id: string, status: RequestStatus, note?: string) => Promise<string | null>;
+  /** Ask the reporting line for permission to apply for leave on past dates. */
+  requestBackdatedPermission: (input: LeaveInput) => string | null;
+  withdrawBackdatedPermission: (id: string) => string | null;
+  decideBackdatedPermission: (id: string, decision: "approved" | "rejected", note?: string) => string | null;
+  /** Whether the signed-in user may approve leave and backdated permissions for this employee. */
+  canApproveLeaveFor: (employeeId: string) => boolean;
   applyEncashment: (code: LeaveCode, days: number) => string | null;
-  setEncashmentStatus: (id: string, status: RequestStatus) => string | null;
+  setEncashmentStatus: (id: string, status: RequestStatus, note?: string) => string | null;
   saveTimesheet: (projectId: string, weekStart: string, hours: Record<string, number>, status: TimesheetStatus) => string | null;
   addTimeEntry: (
     projectId: string,
@@ -231,8 +277,10 @@ interface PortalApi {
   submitWeekTimesheets: (weekStart: string) => string | null;
   setTimesheetStatus: (id: string, status: TimesheetStatus) => void;
   setOrgTimesheetStatus: (id: string, status: OrgTimesheetStatus) => string | null;
+  /** Whether the signed-in user may verify tax-saving proofs (payroll/HR). */
+  canVerifyProofs: boolean;
   addExpense: (input: Omit<Expense, "id" | "employeeId" | "status">) => string | null;
-  setExpenseStatus: (id: string, status: Expense["status"]) => void;
+  setExpenseStatus: (id: string, status: Expense["status"], note?: string) => string | null;
   acceptTask: (id: string) => string | null;
   moveTask: (id: string, status: TaskStatus) => void;
   /** Manager: set primary owner / reassign task. */
@@ -261,21 +309,24 @@ interface PortalApi {
   toggleTaskSubtask: (taskId: string, subtaskId: string) => string | null;
   addTaskComment: (taskId: string, text: string) => string | null;
   addReimbursement: (input: Omit<Reimbursement, "id" | "employeeId" | "status">) => string | null;
-  setReimbursementStatus: (id: string, status: Reimbursement["status"]) => void;
+  setReimbursementStatus: (id: string, status: Reimbursement["status"], note?: string) => string | null;
+  /** Payroll/HR verify or reject a tax-saving proof; the employee may withdraw while it is submitted. */
+  setInvestmentProofStatus: (id: string, status: InvestmentProof["status"], note?: string) => string | null;
   addInvestmentProof: (input: Omit<InvestmentProof, "id" | "employeeId" | "status" | "submittedOn">) => string | null;
   continueProgram: (id: string) => string | null;
   completeProgram: (id: string) => string | null;
   setApproval: (id: string, status: Approval["status"]) => void;
   sendMessage: (threadId: string, text: string) => string | null;
   addAssetRequest: (item: string, reason: string) => string | null;
-  setAssetStatus: (id: string, status: RequestStatus) => void;
+  setAssetStatus: (id: string, status: RequestStatus, note?: string) => string | null;
   addCash: (input: { amount: number; category: string; purpose: string; requiredBy: string }) => string | null;
-  setCashStatus: (id: string, status: RequestStatus) => void;
+  setCashStatus: (id: string, status: RequestStatus, note?: string) => string | null;
   addSoftware: (software: string, justification: string) => string | null;
-  setSoftwareStatus: (id: string, status: RequestStatus) => void;
+  setSoftwareStatus: (id: string, status: RequestStatus, note?: string) => string | null;
   addCab: (booking: Omit<CabBooking, "id" | "employeeId" | "status">) => string | null;
-  setCabStatus: (id: string, status: RequestStatus) => void;
+  setCabStatus: (id: string, status: RequestStatus, note?: string) => string | null;
   orderMeal: (menuItemId: string) => string | null;
+  cancelMeal: (orderId: string) => string | null;
   addSignature: (documentName: string, dataUrl: string) => string | null;
   addDocument: (input: {
     name: string;
@@ -294,6 +345,28 @@ interface PortalApi {
   menuItem: (menuItemId: string) => PortalState["menu"][number] | undefined;
 }
 
+/** Yearly caps for common Indian tax-saving sections (income tax old regime). */
+const INVESTMENT_SECTION_CAPS: Record<string, number> = { "80C": 150000, "80CCD(1B)": 50000, "80D": 50000, "80E": Infinity };
+const MAX_CASH_ADVANCE = 100000;
+const MAX_MEAL_ORDERS_PER_DAY = 3;
+
+/** Editing a week's time after submitting it takes it back out of the manager's queue. */
+function backToDraft(rows: PortalState["orgTimesheets"], weekStart: string, personId?: string): PortalState["orgTimesheets"] {
+  return rows.map((row) =>
+    row.weekStart === weekStart && (!personId || row.personId === personId) && row.status === "submitted"
+      ? { ...row, status: "draft" as const }
+      : row,
+  );
+}
+
+const MAX_OTP_ATTEMPTS = 5;
+
+function withoutPhoto<T extends { photo?: string }>(override: T | undefined): Omit<T, "photo"> | null {
+  if (!override) return null;
+  const { photo: _photo, ...rest } = override;
+  return rest;
+}
+
 const PortalContext = createContext<PortalApi | null>(null);
 
 export function PortalProvider({ children }: { children: ReactNode }) {
@@ -301,15 +374,25 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     ensureDemoLastLogin();
     return loadState();
   });
-  const [signedIn, setSignedIn] = useState(() => localStorage.getItem(SESSION_KEY) === "in");
+  const [signedIn, setSignedIn] = useState(readSession);
   const [userId, setUserId] = useState(() => localStorage.getItem(USER_KEY) ?? EMPLOYEE.id);
-  const [loginNotice, setLoginNotice] = useState<LoginNotice | null>(null);
-  const [profileOtp, setProfileOtp] = useState<{ code: string; expiresAt: number } | null>(null);
-  const [resetOtp, setResetOtp] = useState<{ code: string; expiresAt: number; employeeCode: string } | null>(null);
+  // A forced password change survives a page refresh until the password is actually changed.
+  const [loginNotice, setLoginNotice] = useState<LoginNotice | null>(() => {
+    const account = findDemoById(localStorage.getItem(USER_KEY) ?? EMPLOYEE.id);
+    if (!readSession() || !account || localStorage.getItem(userKey(MUST_CHANGE_KEY, account.employeeCode)) !== "1") return null;
+    return { previousIso: null, timeZone: account.timeZone, requirePasswordChange: true };
+  });
+  const [profileOtp, setProfileOtp] = useState<{ code: string; expiresAt: number; attempts: number } | null>(null);
+  const [resetOtp, setResetOtp] = useState<{ code: string; expiresAt: number; employeeCode: string; attempts: number } | null>(null);
   const [passwordRevision, setPasswordRevision] = useState(0);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (error) {
+      // Storage full (e.g. many large signatures): keep working in memory rather than crash the app.
+      console.error("Could not save portal data to browser storage", error);
+    }
   }, [state]);
 
   useEffect(() => {
@@ -328,7 +411,14 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       shiftHours: active.shiftHours,
       countryCode: active.countryCode,
     }).weeklyOffDays;
-    
+    const offsFor = (employeeId: string) => {
+      const person = TIMEZ_DEMOS.find((a) => a.id === employeeId) ?? active;
+      return scheduleForEmployee({
+        shiftName: person.shiftName,
+        shiftHours: person.shiftHours,
+        countryCode: person.countryCode,
+      }).weeklyOffDays;
+    };
     const leaveTable = leaveRows(
       state.leavePolicies,
       state.leaveRequests,
@@ -336,6 +426,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       state.holidays,
       active.id,
       activeOffs,
+      Number(todayISO().slice(0, 4)),
     );
     const currentProjects = mine(state.projects).filter((project) => project.status === "current");
     const previousProjects = mine(state.projects).filter((project) => project.status === "previous");
@@ -348,14 +439,90 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       return state.projects.find((project) => project.id === projectId)?.name ?? "Project";
     }
 
-    function activateSession(account: DemoAccount, options?: { silent?: boolean }) {
-      const previousIso = localStorage.getItem(LAST_LOGIN_KEY);
-      const requirePasswordChange = previousIso ? daysSinceLogin(previousIso) > PASSWORD_STALE_DAYS : false;
-      localStorage.setItem(LAST_LOGIN_KEY, new Date().toISOString());
-      localStorage.setItem(SESSION_KEY, "in");
+    /** Saves the signed-in person's own contact details. Job title and shift are HR-owned and ignored here. */
+    function saveOwnProfile(input: { fullName: string; mobile: string; email: string; address: string; photo?: string }): string | null {
+      const fullName = input.fullName.trim();
+      const email = input.email.trim();
+      const mobile = input.mobile.trim();
+      if (!fullName) return "Enter a name.";
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Enter a valid email address.";
+      if (!/^\+?[\d\s]{8,18}$/.test(mobile) || mobile.replace(/\D/g, "").length < 8 || mobile.replace(/\D/g, "").length > 15) {
+        return "Enter a valid mobile number (8–15 digits).";
+      }
+      setState((prev) => ({
+        ...prev,
+        profiles: {
+          ...prev.profiles,
+          [active.id]: {
+            fullName,
+            mobile,
+            email,
+            address: input.address.trim(),
+            photo: input.photo ?? prev.profiles?.[active.id]?.photo,
+          },
+        },
+      }));
+      return null;
+    }
+
+    /** Approvers: anyone above the employee in the reporting line, or HR. Never yourself. */
+    function canApproveFor(employeeId: string): boolean {
+      if (employeeId === active.id) return false;
+      if (["hr", "hr_admin", "hrbp"].includes(active.role)) return true;
+      return managementChain(employeeId, TIMEZ_DEMOS).some((manager) => manager.id === active.id);
+    }
+
+    const canVerifyProofs = ["hr", "hr_admin", "hrbp", "finance", "compensation_admin"].includes(active.role);
+
+    /**
+     * One rule for every request type: approvers (reporting line or HR) move an open request to
+     * approved/rejected; the requester may withdraw it while it is still open. Nobody decides their own.
+     */
+    function decisionError(
+      employeeId: string,
+      current: string,
+      next: string,
+      openStatuses: string[] = ["pending", "submitted"],
+    ): string | null {
+      const isOwn = employeeId === active.id;
+      if (next === "withdrawn") {
+        if (!isOwn) return "Only the person who raised this request can withdraw it.";
+        if (!openStatuses.includes(current)) return "Only open requests can be withdrawn.";
+        return null;
+      }
+      if (next === "approved" || next === "rejected" || next === "verified") {
+        if (isOwn) return "You cannot decide your own request.";
+        if (!canApproveFor(employeeId)) return "Only someone above this employee in the reporting line, or HR, can decide this.";
+        if (!openStatuses.includes(current)) return "This request has already been decided.";
+        return null;
+      }
+      return "That status change isn't allowed.";
+    }
+
+    function decision(status: string, note?: string): DecisionInfo {
+      if (status === "withdrawn") return {};
+      return { decidedById: active.id, decidedByName: active.fullName, decidedOn: todayISO(), decisionNote: note?.trim() || undefined };
+    }
+
+    function activateSession(account: DemoAccount, options?: { silent?: boolean; remember?: boolean }) {
+      const lastLoginKey = userKey(LAST_LOGIN_KEY, account.employeeCode);
+      // Older versions kept one device-wide stamp; fall back to it once.
+      const previousIso = localStorage.getItem(lastLoginKey) ?? localStorage.getItem(LAST_LOGIN_KEY);
+      const requirePasswordChange =
+        localStorage.getItem(userKey(MUST_CHANGE_KEY, account.employeeCode)) === "1" ||
+        (previousIso ? daysSinceLogin(previousIso) > PASSWORD_STALE_DAYS : false);
+      if (requirePasswordChange) localStorage.setItem(userKey(MUST_CHANGE_KEY, account.employeeCode), "1");
+      localStorage.setItem(lastLoginKey, new Date().toISOString());
+      if (options?.remember ?? localStorage.getItem(SESSION_KEY) === "in") {
+        localStorage.setItem(SESSION_KEY, "in");
+        sessionStorage.removeItem(SESSION_KEY);
+      } else {
+        sessionStorage.setItem(SESSION_KEY, "in");
+        localStorage.removeItem(SESSION_KEY);
+      }
       localStorage.setItem(USER_KEY, account.id);
       setUserId(account.id);
-      if (!options?.silent) {
+      if (!options?.silent || requirePasswordChange) {
         setLoginNotice({ previousIso, timeZone: account.timeZone, requirePasswordChange });
       }
       setSignedIn(true);
@@ -364,8 +531,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     return {
       employee: {
         ...active,
-        ...(active.id === EMPLOYEE.id ? state.profile : null),
-        photo: active.id === EMPLOYEE.id ? state.profilePhoto || active.photo : active.photo,
+        ...withoutPhoto(state.profiles?.[active.id]),
+        photo: state.profiles?.[active.id]?.photo || active.photo,
       },
       demoProfile: active,
       isManager: canApproveTeam(active.role),
@@ -387,7 +554,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setLoginNotice(null);
         return null;
       },
-      passwordPolicy: passwordPolicyFromChangedAt(passwordChangedAtIso()),
+      passwordPolicy: passwordPolicyFromChangedAt(passwordChangedAtIso(active.employeeCode)),
       changePassword: (currentPassword, newPassword, confirm) => {
         if (currentPassword !== storedPassword(active.employeeCode)) return "Current password is not correct.";
         const next = newPassword.trim();
@@ -401,13 +568,13 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       requestPasswordResetOtp: (employeeCode, channel) => {
         const account = findDemoByEmailOrCode(employeeCode) ?? findAccountByCode(employeeCode);
         if (!account) return { error: "That work email or employee ID was not found." };
-        const profile = account.id === EMPLOYEE.id ? { ...account, ...state.profile } : account;
+        const profile = { ...account, ...withoutPhoto(state.profiles?.[account.id]) };
         const sentTo = channel === "email" ? profile.email.trim() : profile.mobile.trim();
         if (!sentTo) {
           return { error: channel === "email" ? "No email is registered on this account." : "No mobile is registered on this account." };
         }
         const code = String(100000 + Math.floor(Math.random() * 900000));
-        setResetOtp({ code, expiresAt: Date.now() + 5 * 60 * 1000, employeeCode: account.employeeCode });
+        setResetOtp({ code, expiresAt: Date.now() + 5 * 60 * 1000, employeeCode: account.employeeCode, attempts: 0 });
         return { code, sentTo, channel };
       },
       resetPasswordWithOtp: (employeeCode, otp, newPassword, confirm) => {
@@ -420,12 +587,21 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           setResetOtp(null);
           return "That code has expired. Send a new one.";
         }
-        if (otp.trim() !== resetOtp.code) return "That verification code is not correct.";
+        if (otp.trim() !== resetOtp.code) {
+          const attempts = resetOtp.attempts + 1;
+          if (attempts >= MAX_OTP_ATTEMPTS) {
+            setResetOtp(null);
+            return "Too many wrong codes. Send a new code and try again.";
+          }
+          setResetOtp({ ...resetOtp, attempts });
+          return `That verification code is not correct. ${MAX_OTP_ATTEMPTS - attempts} tries left.`;
+        }
         const next = newPassword.trim();
         if (next.length < 6) return "Use at least 6 characters.";
         if (next !== confirm.trim()) return "Confirmation does not match.";
         if (next === storedPassword(account.employeeCode)) return "Choose a password different from your current one.";
         savePassword(account.employeeCode, next);
+        localStorage.removeItem(userKey(LOCK_KEY, account.employeeCode));
         setPasswordRevision((value) => value + 1);
         setResetOtp(null);
         return null;
@@ -446,10 +622,26 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const account = findDemoByEmailOrCode(emailOrCode);
         if (!account) return "No prototype account matches that work email or employee ID.";
         if (!password.trim()) return "Enter your password.";
-        if (password !== storedPassword(account.employeeCode)) return "The password does not match this account.";
+        const lock = readLock(account.employeeCode);
+        if (lock.until > Date.now()) {
+          const minutes = Math.ceil((lock.until - Date.now()) / 60000);
+          return `Too many wrong passwords. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}, or reset your password.`;
+        }
+        if (password !== storedPassword(account.employeeCode)) {
+          const fails = (lock.until > 0 ? 0 : lock.fails) + 1;
+          const locked = fails >= MAX_LOGIN_ATTEMPTS;
+          localStorage.setItem(
+            userKey(LOCK_KEY, account.employeeCode),
+            JSON.stringify({ fails: locked ? 0 : fails, until: locked ? Date.now() + LOCK_MINUTES * 60000 : 0 }),
+          );
+          return locked
+            ? `Too many wrong passwords. Sign-in is locked for ${LOCK_MINUTES} minutes.`
+            : `The password does not match this account. ${MAX_LOGIN_ATTEMPTS - fails} tries left.`;
+        }
+        localStorage.removeItem(userKey(LOCK_KEY, account.employeeCode));
         if (remember) localStorage.setItem(REMEMBER_KEY, account.email);
         else localStorage.removeItem(REMEMBER_KEY);
-        activateSession(account);
+        activateSession(account, { remember });
         return null;
       },
       switchDemoPersona: (accountId) => {
@@ -460,29 +652,14 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       signOut: () => {
         localStorage.setItem(SESSION_KEY, "out");
+        sessionStorage.removeItem(SESSION_KEY);
         setSignedIn(false);
         setLoginNotice(null);
       },
-      updateProfile: (input) => {
-        if (!input.fullName.trim()) return "Enter a name.";
-        setState((prev) => ({
-          ...prev,
-          profile: {
-            fullName: input.fullName.trim(),
-            designation: input.designation.trim(),
-            mobile: input.mobile.trim(),
-            email: input.email.trim(),
-            address: input.address.trim(),
-            shiftName: input.shiftName.trim(),
-            shiftHours: input.shiftHours.trim(),
-          },
-          profilePhoto: input.photo ?? prev.profilePhoto,
-        }));
-        return null;
-      },
+      updateProfile: (input) => saveOwnProfile(input),
       requestProfileOtp: () => {
         const code = String(100000 + Math.floor(Math.random() * 900000));
-        setProfileOtp({ code, expiresAt: Date.now() + 5 * 60 * 1000 });
+        setProfileOtp({ code, expiresAt: Date.now() + 5 * 60 * 1000, attempts: 0 });
         return code;
       },
       updateProfileWithOtp: (input, otp) => {
@@ -491,23 +668,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           setProfileOtp(null);
           return "That code has expired. Send a new one.";
         }
-        if (otp.trim() !== profileOtp.code) return "That verification code is not correct.";
-        if (!input.fullName.trim()) return "Enter a name.";
-        setState((prev) => ({
-          ...prev,
-          profile: {
-            fullName: input.fullName.trim(),
-            designation: input.designation.trim(),
-            mobile: input.mobile.trim(),
-            email: input.email.trim(),
-            address: input.address.trim(),
-            shiftName: input.shiftName.trim(),
-            shiftHours: input.shiftHours.trim(),
-          },
-          profilePhoto: input.photo ?? prev.profilePhoto,
-        }));
-        setProfileOtp(null);
-        return null;
+        if (otp.trim() !== profileOtp.code) {
+          const attempts = profileOtp.attempts + 1;
+          if (attempts >= MAX_OTP_ATTEMPTS) {
+            setProfileOtp(null);
+            return "Too many wrong codes. Send a new code and try again.";
+          }
+          setProfileOtp({ ...profileOtp, attempts });
+          return `That verification code is not correct. ${MAX_OTP_ATTEMPTS - attempts} tries left.`;
+        }
+        const error = saveOwnProfile(input);
+        if (!error) setProfileOtp(null);
+        return error;
       },
       resetDemo: () => setState(createSeed()),
       applyLeave: async (input) => {
@@ -521,24 +693,123 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           status: "pending",
           appliedOn: todayISO(),
         };
-        setState((prev) => ({ ...prev, leaveRequests: [request, ...prev.leaveRequests] }));
+        // A backdated application uses up the permission that allowed it.
+        const permission = needsBackdatedPermission(input.code, input.from)
+          ? backdatedPermissionFor(state, active.id, input.from, input.to, input.code)
+          : undefined;
+        setState((prev) => ({
+          ...prev,
+          leaveRequests: [request, ...prev.leaveRequests],
+          backdatedPermissions: permission
+            ? patchById(prev.backdatedPermissions, permission.id, { status: "used" as const })
+            : prev.backdatedPermissions,
+        }));
         return null;
       },
-      setLeaveStatus: async (leaveId, status) => {
+      requestBackdatedPermission: (input) => {
+        const today = todayISO();
+        if (!input.from || !input.to) return "Choose the from and to dates.";
+        if (input.to < input.from) return "The end date is before the start date.";
+        if (!needsBackdatedPermission(input.code, input.from, today)) {
+          return "These dates don't need permission — apply for leave directly.";
+        }
+        if (input.from < `${today.slice(0, 4)}-01-01`) return "Permission can only be requested for dates in this leave year.";
+        if (input.to >= today) return "The whole range must be in the past. Apply separately for today and future dates.";
+        if (!input.reason.trim()) return "Explain why the leave is being applied late.";
+        if (workingDays(input.from, input.to, holidaySet(state.holidays), activeOffs) <= 0) {
+          return "That range has no working days (weekly offs and holidays are skipped).";
+        }
+        const overlapsLeave = state.leaveRequests.some(
+          (r) =>
+            r.employeeId === active.id &&
+            r.status !== "rejected" &&
+            r.status !== "withdrawn" &&
+            r.from <= input.to &&
+            input.from <= r.to,
+        );
+        if (overlapsLeave) return "Those dates overlap an existing leave request.";
+        if (managementChain(active.id, TIMEZ_DEMOS).length === 0) return "There is no manager above you to approve this.";
+        const clash = state.backdatedPermissions.some(
+          (p) =>
+            p.employeeId === active.id &&
+            (p.status === "pending" || p.status === "approved") &&
+            p.from <= input.to &&
+            input.from <= p.to,
+        );
+        if (clash) return "You already have a permission request for these dates.";
+        const permission: BackdatedLeavePermission = {
+          id: uid("bdp"),
+          employeeId: active.id,
+          employeeName: active.fullName,
+          code: input.code,
+          from: input.from,
+          to: input.to,
+          reason: input.reason.trim(),
+          status: "pending",
+          requestedOn: today,
+        };
+        setState((prev) => ({ ...prev, backdatedPermissions: [permission, ...prev.backdatedPermissions] }));
+        return null;
+      },
+      withdrawBackdatedPermission: (permissionId) => {
+        const permission = state.backdatedPermissions.find((p) => p.id === permissionId);
+        if (!permission || permission.employeeId !== active.id) return "Permission request not found.";
+        if (permission.status !== "pending") return "Only pending requests can be withdrawn.";
+        setState((prev) => ({
+          ...prev,
+          backdatedPermissions: patchById(prev.backdatedPermissions, permissionId, { status: "withdrawn" as const }),
+        }));
+        return null;
+      },
+      decideBackdatedPermission: (permissionId, decision, note) => {
+        const permission = state.backdatedPermissions.find((p) => p.id === permissionId);
+        if (!permission) return "Permission request not found.";
+        if (permission.employeeId === active.id) return "You cannot approve your own request.";
+        if (!canApproveFor(permission.employeeId)) return "Only someone above this employee in the reporting line, or HR, can decide this.";
+        if (permission.status !== "pending") return "This request has already been decided.";
+        setState((prev) => ({
+          ...prev,
+          backdatedPermissions: patchById(prev.backdatedPermissions, permissionId, {
+            status: decision,
+            decidedById: active.id,
+            decidedByName: active.fullName,
+            decidedOn: todayISO(),
+            decisionNote: note?.trim() || undefined,
+          }),
+        }));
+        return null;
+      },
+      canApproveLeaveFor: (employeeId) => canApproveFor(employeeId),
+      canVerifyProofs,
+      setLeaveStatus: async (leaveId, status, note) => {
         const request = state.leaveRequests.find((item) => item.id === leaveId);
         if (!request) return "Leave request not found.";
-        const isOwn = request.employeeId === active.id;
-        if (!isOwn && !canApproveTeam(active.role)) return "Only managers or HR can approve team leave.";
-        if (isOwn && (status === "approved" || status === "rejected")) {
-          return "Employees cannot approve or reject their own leave.";
-        }
+        // Approved leave that hasn't started yet can still be cancelled by the employee.
+        const cancellingUpcoming =
+          status === "withdrawn" && request.employeeId === active.id && request.status === "approved" && request.from > todayISO();
+        const error = cancellingUpcoming ? null : decisionError(request.employeeId, request.status, status, ["pending"]);
+        if (error) return error;
         if (status === "approved") {
-          const ownerRows = leaveRows(state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, request.employeeId);
+          // Count days with the requester's own weekly offs, not the approver's.
+          const ownerOffs = offsFor(request.employeeId);
+          // Leave this request out of "pending" so its own days aren't counted twice.
+          const ownerRows = leaveRows(
+            state.leavePolicies,
+            state.leaveRequests.filter((item) => item.id !== leaveId),
+            state.encashments,
+            state.holidays,
+            request.employeeId,
+            ownerOffs,
+            Number(request.from.slice(0, 4)),
+          );
           const row = ownerRows.find((item) => item.code === request.code);
-          const days = workingDays(request.from, request.to, holidaySet(state.holidays));
+          const days = workingDays(request.from, request.to, holidaySet(state.holidays), ownerOffs);
           if (!row || days > row.available) return "Approving this would go past that employee's quota.";
         }
-        setState((prev) => ({ ...prev, leaveRequests: patchById(prev.leaveRequests, leaveId, { status }) }));
+        setState((prev) => ({
+          ...prev,
+          leaveRequests: patchById(prev.leaveRequests, leaveId, { status, ...decision(status, note) }),
+        }));
         return null;
       },
       applyEncashment: (code, days) => {
@@ -555,20 +826,28 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({ ...prev, encashments: [item, ...prev.encashments] }));
         return null;
       },
-      setEncashmentStatus: (encashmentId, status) => {
+      setEncashmentStatus: (encashmentId, status, note) => {
         const item = state.encashments.find((entry) => entry.id === encashmentId);
         if (!item) return "Encashment request not found.";
-        const isOwn = item.employeeId === active.id;
-        if (!isOwn && !canApproveTeam(active.role)) return "Only managers can approve encashment.";
-        if (isOwn && (status === "approved" || status === "rejected")) {
-          return "Employees cannot approve their own encashment.";
-        }
+        const error = decisionError(item.employeeId, item.status, status, ["pending"]);
+        if (error) return error;
         if (status === "approved") {
-          const ownerRows = leaveRows(state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, item.employeeId);
+          const ownerRows = leaveRows(
+            state.leavePolicies,
+            state.leaveRequests,
+            state.encashments.filter((entry) => entry.id !== encashmentId),
+            state.holidays,
+            item.employeeId,
+            offsFor(item.employeeId),
+            Number(item.appliedOn.slice(0, 4)),
+          );
           const row = ownerRows.find((entry) => entry.code === item.code);
           if (!row || item.days > row.available) return "Approving this would go past that employee's quota.";
         }
-        setState((prev) => ({ ...prev, encashments: patchById(prev.encashments, encashmentId, { status }) }));
+        setState((prev) => ({
+          ...prev,
+          encashments: patchById(prev.encashments, encashmentId, { status, ...decision(status, note) }),
+        }));
         return null;
       },
       saveTimesheet: (projectId, weekStart, hours, status) => {
@@ -610,6 +889,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (!input.note.trim()) return "Enter a short note for the block.";
         if (!Number.isFinite(input.hours) || input.hours <= 0) return "Enter hours greater than zero.";
         if (input.startHour < 0 || input.startHour >= 24) return "Enter a valid start time.";
+        if (input.startHour + input.hours > 24) return "A block can't run past midnight.";
+        if (input.date < weekStart || input.date > addDaysISO(weekStart, 6)) return "That date isn't in this week.";
+        const overlapping = state.timesheets
+          .filter((sheet) => sheet.employeeId === active.id)
+          .flatMap((sheet) => sheet.entries ?? [])
+          .some(
+            (entry) =>
+              entry.date === input.date &&
+              input.startHour < entry.startHour + entry.hours &&
+              entry.startHour < input.startHour + input.hours,
+          );
+        if (overlapping) return "That block overlaps time you've already logged.";
         const existing = state.timesheets.find(
           (sheet) => sheet.employeeId === active.id && sheet.projectId === projectId && sheet.weekStart === weekStart,
         );
@@ -628,7 +919,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
                 ...current,
                 entries,
                 hours,
-                status: current.status === "submitted" ? current.status : ("draft" as TimesheetStatus),
+                status: "draft" as TimesheetStatus,
               }
             : {
                 id: uid("ts"),
@@ -642,7 +933,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           const timesheets = current
             ? prev.timesheets.map((sheet) => (sheet.id === current.id ? next : sheet))
             : [next, ...prev.timesheets];
-          return { ...prev, timesheets };
+          return { ...prev, timesheets, orgTimesheets: backToDraft(prev.orgTimesheets, weekStart) };
         });
         return null;
       },
@@ -657,8 +948,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           timesheets: prev.timesheets.map((sheet) => {
             if (sheet.id !== existing.id) return sheet;
             const entries = sheet.entries.filter((entry) => entry.id !== entryId);
-            return { ...sheet, entries, hours: hoursFromEntries(entries) };
+            return { ...sheet, entries, hours: hoursFromEntries(entries), status: "draft" as TimesheetStatus };
           }),
+          orgTimesheets: backToDraft(prev.orgTimesheets, weekStart),
         }));
         return null;
       },
@@ -666,20 +958,42 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const mine = state.timesheets.filter((sheet) => sheet.employeeId === active.id && sheet.weekStart === weekStart);
         if (mine.length === 0) return "Log some time before submitting.";
         if (mine.every((sheet) => sheet.status === "approved")) return "This week is already approved.";
+        if (weekStart > todayISO()) return "You can't submit a week that hasn't started yet.";
         const hours = mine.reduce((sum, sheet) => sum + Object.values(sheet.hours).reduce((a, b) => a + b, 0), 0);
-        setState((prev) => ({
-          ...prev,
-          timesheets: prev.timesheets.map((sheet) =>
-            sheet.employeeId === active.id && sheet.weekStart === weekStart && sheet.status !== "approved"
-              ? { ...sheet, status: "submitted" }
-              : sheet,
-          ),
-          orgTimesheets: prev.orgTimesheets.map((row) =>
-            row.personId === active.id && row.weekStart === weekStart
-              ? { ...row, status: "submitted", hours }
-              : row,
-          ),
-        }));
+        const projectSummary = mine
+          .map((sheet) => state.projects.find((p) => p.id === sheet.projectId)?.name)
+          .filter(Boolean)
+          .join(", ");
+        setState((prev) => {
+          const hasRow = prev.orgTimesheets.some((row) => row.personId === active.id && row.weekStart === weekStart);
+          const orgTimesheets = hasRow
+            ? prev.orgTimesheets.map((row) =>
+                row.personId === active.id && row.weekStart === weekStart ? { ...row, status: "submitted" as const, hours } : row,
+              )
+            : [
+                {
+                  id: uid("org-ts"),
+                  personId: active.id,
+                  name: active.fullName,
+                  employeeCode: active.employeeCode,
+                  department: active.department ?? "",
+                  weekStart,
+                  hours,
+                  status: "submitted" as const,
+                  projectSummary,
+                },
+                ...prev.orgTimesheets,
+              ];
+          return {
+            ...prev,
+            timesheets: prev.timesheets.map((sheet) =>
+              sheet.employeeId === active.id && sheet.weekStart === weekStart && sheet.status !== "approved"
+                ? { ...sheet, status: "submitted" }
+                : sheet,
+            ),
+            orgTimesheets,
+          };
+        });
         return null;
       },
       setTimesheetStatus: (sheetId, status) => {
@@ -691,20 +1005,39 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }));
       },
       setOrgTimesheetStatus: (recordId, status) => {
-        if (!canApproveTeam(active.role)) return "Only managers can update company timesheets.";
         const row = state.orgTimesheets.find((item) => item.id === recordId);
         if (!row) return "Timesheet record not found.";
+        if (row.personId === active.id) return "You cannot approve your own timesheet.";
+        if (!canApproveFor(row.personId)) return "Only someone above this employee in the reporting line, or HR, can decide this.";
         if (row.status === "missing") return "Missing timesheets must be filled by the employee first.";
-        if (row.status === "approved" && status !== "approved") return "Approved timesheets stay locked in this demo.";
+        if (row.status !== "submitted") return "Only submitted timesheets can be approved or sent back.";
+        if (status !== "approved" && status !== "draft") return "That status change isn't allowed.";
+        // "draft" = sent back to the employee for changes.
         setState((prev) => ({
           ...prev,
           orgTimesheets: patchById(prev.orgTimesheets, recordId, { status }),
+          timesheets: prev.timesheets.map((sheet) =>
+            sheet.employeeId === row.personId && sheet.weekStart === row.weekStart && sheet.status === "submitted"
+              ? { ...sheet, status: status === "approved" ? "approved" : "draft" }
+              : sheet,
+          ),
         }));
         return null;
       },
       addExpense: (input) => {
         const error = validateExpense(input);
         if (error) return error;
+        if (!currentProjects.some((project) => project.id === input.projectId)) return "Choose one of your current projects.";
+        const duplicate = state.expenses.some(
+          (item) =>
+            item.employeeId === active.id &&
+            item.status !== "rejected" &&
+            item.status !== "withdrawn" &&
+            item.date === input.date &&
+            item.category === input.category &&
+            item.amount === input.amount,
+        );
+        if (duplicate) return "You've already claimed this expense (same date, category and amount).";
         const expense: Expense = {
           id: uid("ex"),
           employeeId: active.id,
@@ -715,18 +1048,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({ ...prev, expenses: [expense, ...prev.expenses] }));
         return null;
       },
-      setExpenseStatus: (expenseId, status) => {
+      setExpenseStatus: (expenseId, status, note) => {
         const expense = state.expenses.find((item) => item.id === expenseId);
-        if (!expense) return;
-        const isOwn = expense.employeeId === active.id;
-        if (!isOwn && !canApproveTeam(active.role)) return;
-        if (isOwn && (status === "approved" || status === "rejected")) return;
-        setState((prev) => ({ ...prev, expenses: patchById(prev.expenses, expenseId, { status }) }));
+        if (!expense) return "Expense not found.";
+        const error = decisionError(expense.employeeId, expense.status, status);
+        if (error) return error;
+        setState((prev) => ({ ...prev, expenses: patchById(prev.expenses, expenseId, { status, ...decision(status, note) }) }));
+        return null;
       },
       acceptTask: (taskId) => {
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return "Task not found.";
-        const canAct = task.employeeId === active.id || canApproveTeam(active.role);
+        const canAct = task.employeeId === active.id || canApproveFor(task.employeeId);
         if (!canAct) return "You can only complete your own tasks.";
         if (task.status === "done") return "This task is already complete.";
         if (task.status === "scheduled") return "This task is not open yet.";
@@ -755,9 +1088,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       moveTask: (taskId, status) => {
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return;
-        const canAct = task.employeeId === active.id || canApproveTeam(active.role);
+        const canAct = task.employeeId === active.id || canApproveFor(task.employeeId);
         if (!canAct) return;
-        if (task.status === "scheduled" && status !== "open" && !canApproveTeam(active.role)) return;
+        if (task.status === "scheduled" && status !== "open" && !canApproveFor(task.employeeId)) return;
         const now = new Date().toISOString();
         const actor = active.fullName.split(" ")[0] || "User";
         setState((prev) => ({
@@ -779,9 +1112,10 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }));
       },
       reassignTask: (taskId, personId) => {
-        if (!canApproveTeam(active.role)) return "Only managers can reassign tasks.";
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return "Task not found.";
+        if (!canApproveFor(task.employeeId)) return "Only the owner's manager can reassign this task.";
+        if (!canApproveFor(personId)) return "You can only assign tasks to people who report to you.";
         if (task.status === "done") return "Closed tasks cannot be reassigned.";
         const person = taskPersonById(personId);
         if (!person) return "Pick someone from your team.";
@@ -807,6 +1141,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       addTaskPerson: (taskId, personId) => {
         if (!canApproveTeam(active.role)) return "Only managers can add people to tasks.";
+        if (!canApproveFor(personId)) return "You can only add people who report to you.";
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return "Task not found.";
         if (task.status === "done") return "Closed tasks cannot be edited.";
@@ -849,12 +1184,14 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       createTask: (input) => {
         if (!canApproveTeam(active.role)) return "Only managers can create team tasks.";
+        if (!canApproveFor(input.ownerId)) return "You can only assign tasks to people who report to you.";
         const subject = input.subject.trim();
         if (!subject) return "Enter a subject.";
         const person = taskPersonById(input.ownerId);
         if (!person) return "Pick an owner from your team.";
         const due = (input.due || "").trim();
         if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) return "Use a valid due date (YYYY-MM-DD).";
+        if (due && due < todayISO()) return "The due date can't be in the past.";
         const now = new Date().toISOString();
         const codeNum = 1100 + state.tasks.length;
         const peopleIds = (input.peopleIds ?? []).filter((id) => id !== person.id && taskPersonById(id));
@@ -897,7 +1234,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       taskAction: (taskId, action, payload = {}) => {
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return "Task not found.";
-        const canAct = task.employeeId === active.id || canApproveTeam(active.role);
+        const canAct = task.employeeId === active.id || canApproveFor(task.employeeId);
         if (!canAct) return "You can only update your own tasks.";
         if (task.status === "scheduled" && action !== "accept") return "This task is not open yet.";
         if (task.status === "done") return "This task is already complete.";
@@ -962,6 +1299,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             title: `Task blocked · ${task.code}`,
             body: `${actor} blocked “${task.subject}”: ${reason}${dependsOn ? ` · depends on ${dependsOn}` : ""}`,
             href: "/tasks",
+            employeeId: task.employeeId,
           });
           return null;
         }
@@ -983,6 +1321,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             title: `Help requested · ${task.code}`,
             body: `${actor} asked for help on “${task.subject}”: ${note}`,
             href: "/tasks",
+            employeeId: task.employeeId,
           });
           return null;
         }
@@ -998,10 +1337,15 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             title: `Review requested · ${task.code}`,
             body: `${actor} submitted “${task.subject}” for review.`,
             href: "/tasks",
+            employeeId: task.employeeId,
           });
           return null;
         }
         if (action === "complete") {
+          if (task.blocked) return "Unblock the task before completing it.";
+          if (task.employeeId === active.id && managementChain(active.id, TIMEZ_DEMOS).length > 0) {
+            return "Submit it for review — your manager marks it complete.";
+          }
           pushActivity("Completed", undefined, {
             status: "done",
             progressPct: 100,
@@ -1019,7 +1363,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       toggleTaskSubtask: (taskId, subtaskId) => {
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return "Task not found.";
-        const canAct = task.employeeId === active.id || canApproveTeam(active.role);
+        const canAct = task.employeeId === active.id || canApproveFor(task.employeeId);
         if (!canAct) return "You can only update your own tasks.";
         if (task.status === "done" || task.status === "scheduled") return "This task cannot be edited right now.";
         const subtasks = (task.subtasks ?? []).map((s) => (s.id === subtaskId ? { ...s, done: !s.done } : s));
@@ -1055,7 +1399,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       addTaskComment: (taskId, text) => {
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return "Task not found.";
-        const canAct = task.employeeId === active.id || canApproveTeam(active.role);
+        const canAct = task.employeeId === active.id || canApproveFor(task.employeeId);
         if (!canAct) return "You can only comment on your own tasks.";
         const trimmed = text.trim();
         if (!trimmed) return "Enter a comment.";
@@ -1075,8 +1419,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
       addReimbursement: (input) => {
-        if (!input.description.trim()) return "Enter a description.";
-        if (!Number.isFinite(input.amount) || input.amount <= 0) return "Enter a valid amount.";
+        const error = validateExpense({ ...input, category: input.category.trim() });
+        if (error) return error;
+        const duplicate = state.reimbursements.some(
+          (item) =>
+            item.employeeId === active.id &&
+            item.status !== "rejected" &&
+            item.status !== "withdrawn" &&
+            item.date === input.date &&
+            item.category === input.category.trim() &&
+            item.amount === input.amount,
+        );
+        if (duplicate) return "You've already claimed this (same date, category and amount).";
         const item: Reimbursement = {
           id: uid("rb"),
           employeeId: active.id,
@@ -1089,17 +1443,71 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({ ...prev, reimbursements: [item, ...prev.reimbursements] }));
         return null;
       },
-      setReimbursementStatus: (requestId, status) => {
+      setReimbursementStatus: (requestId, status, note) => {
         const item = state.reimbursements.find((entry) => entry.id === requestId);
-        if (!item) return;
-        const isOwn = item.employeeId === active.id;
-        if (!isOwn && !canApproveTeam(active.role)) return;
-        if (isOwn && (status === "approved" || status === "rejected")) return;
-        setState((prev) => ({ ...prev, reimbursements: patchById(prev.reimbursements, requestId, { status }) }));
+        if (!item) return "Claim not found.";
+        const error = decisionError(item.employeeId, item.status, status);
+        if (error) return error;
+        setState((prev) => ({
+          ...prev,
+          reimbursements: patchById(prev.reimbursements, requestId, { status, ...decision(status, note) }),
+        }));
+        return null;
+      },
+      setInvestmentProofStatus: (proofId, status, note) => {
+        const item = state.investmentProofs.find((entry) => entry.id === proofId);
+        if (!item) return "Proof not found.";
+        if (status === "withdrawn") {
+          if (item.employeeId !== active.id) return "Only the employee can withdraw their proof.";
+          if (item.status !== "submitted") return "Only submitted proofs can be withdrawn.";
+        } else {
+          if (item.employeeId === active.id) return "You cannot verify your own proof.";
+          if (!canVerifyProofs) return "Only payroll or HR can verify tax-saving proofs.";
+          if (item.status !== "submitted") return "This proof has already been reviewed.";
+        }
+        setState((prev) => ({
+          ...prev,
+          investmentProofs: patchById(prev.investmentProofs, proofId, { status, ...decision(status, note) }),
+        }));
+        return null;
       },
       addInvestmentProof: (input) => {
         if (!input.title.trim()) return "Enter the investment title.";
         if (!Number.isFinite(input.amount) || input.amount <= 0) return "Enter a valid amount.";
+        if (!Number.isInteger(input.amount)) return "Enter the amount in whole rupees.";
+        const fy = input.financialYear.trim();
+        const [startYear] = todayISO().split("-").map(Number);
+        const month = Number(todayISO().slice(5, 7));
+        const currentFyStart = month >= 4 ? startYear : startYear - 1;
+        const allowedFys = [currentFyStart, currentFyStart + 1].map((y) => `${y}-${String((y + 1) % 100).padStart(2, "0")}`);
+        if (!allowedFys.includes(fy)) return `Choose a financial year: ${allowedFys.join(" or ")}.`;
+        const section = input.section.trim().toUpperCase();
+        const cap = INVESTMENT_SECTION_CAPS[section];
+        if (cap != null) {
+          const used = state.investmentProofs
+            .filter(
+              (p) =>
+                p.employeeId === active.id &&
+                p.financialYear === fy &&
+                p.section.toUpperCase() === section &&
+                p.status !== "rejected" &&
+                p.status !== "withdrawn",
+            )
+            .reduce((total, p) => total + p.amount, 0);
+          if (used + input.amount > cap) {
+            return `Section ${section} allows up to ₹${cap.toLocaleString("en-IN")} a year — you've already declared ₹${used.toLocaleString("en-IN")}.`;
+          }
+        }
+        const duplicate = state.investmentProofs.some(
+          (p) =>
+            p.employeeId === active.id &&
+            p.financialYear === fy &&
+            p.section.toUpperCase() === section &&
+            p.title.trim().toLowerCase() === input.title.trim().toLowerCase() &&
+            p.status !== "rejected" &&
+            p.status !== "withdrawn",
+        );
+        if (duplicate) return "You've already submitted this proof for that year.";
         const item: InvestmentProof = {
           id: uid("poi"),
           employeeId: active.id,
@@ -1159,6 +1567,13 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       addAssetRequest: (item, reason) => {
         if (!item.trim() || !reason.trim()) return "Enter the asset and the reason.";
+        const wanted = item.trim().toLowerCase();
+        if (state.assets.some((a) => a.employeeId === active.id && a.name.toLowerCase() === wanted)) {
+          return `You already have a ${item.trim()} assigned.`;
+        }
+        if (state.assetRequests.some((r) => r.employeeId === active.id && r.status === "pending" && r.item.toLowerCase() === wanted)) {
+          return "You already have a pending request for this asset.";
+        }
         const request: AssetRequest = {
           id: uid("ar"),
           employeeId: active.id,
@@ -1170,19 +1585,25 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({ ...prev, assetRequests: [request, ...prev.assetRequests] }));
         return null;
       },
-      setAssetStatus: (requestId, status) => {
+      setAssetStatus: (requestId, status, note) => {
         const item = state.assetRequests.find((entry) => entry.id === requestId);
-        if (!item) return;
-        const isOwn = item.employeeId === active.id;
-        if (!isOwn && !canApproveTeam(active.role)) return;
-        if (isOwn && (status === "approved" || status === "rejected")) return;
-        setState((prev) => ({ ...prev, assetRequests: patchById(prev.assetRequests, requestId, { status }) }));
+        if (!item) return "Request not found.";
+        const error = decisionError(item.employeeId, item.status, status);
+        if (error) return error;
+        setState((prev) => ({ ...prev, assetRequests: patchById(prev.assetRequests, requestId, { status, ...decision(status, note) }) }));
+        return null;
       },
       addCash: (input) => {
         if (!input.category.trim()) return "Select an expense category.";
         if (!input.purpose.trim()) return "Enter the business purpose.";
         if (!input.requiredBy) return "Select the required-by date.";
+        if (input.requiredBy < todayISO()) return "The required-by date can't be in the past.";
         if (!Number.isFinite(input.amount) || input.amount <= 0) return "Enter an amount greater than zero.";
+        if (!Number.isInteger(input.amount)) return "Enter the amount in whole rupees.";
+        if (input.amount > MAX_CASH_ADVANCE) return `A cash advance can't be more than ₹${MAX_CASH_ADVANCE.toLocaleString("en-IN")}.`;
+        if (state.cashAdvances.some((c) => c.employeeId === active.id && c.status === "pending")) {
+          return "You already have a cash advance waiting for approval.";
+        }
         const request: CashAdvance = {
           id: uid("ca"),
           employeeId: active.id,
@@ -1196,16 +1617,24 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({ ...prev, cashAdvances: [request, ...prev.cashAdvances] }));
         return null;
       },
-      setCashStatus: (requestId, status) => {
+      setCashStatus: (requestId, status, note) => {
         const item = state.cashAdvances.find((entry) => entry.id === requestId);
-        if (!item) return;
-        const isOwn = item.employeeId === active.id;
-        if (!isOwn && !canApproveTeam(active.role)) return;
-        if (isOwn && (status === "approved" || status === "rejected")) return;
-        setState((prev) => ({ ...prev, cashAdvances: patchById(prev.cashAdvances, requestId, { status }) }));
+        if (!item) return "Request not found.";
+        const error = decisionError(item.employeeId, item.status, status);
+        if (error) return error;
+        setState((prev) => ({ ...prev, cashAdvances: patchById(prev.cashAdvances, requestId, { status, ...decision(status, note) }) }));
+        return null;
       },
       addSoftware: (software, justification) => {
         if (!software.trim() || !justification.trim()) return "Enter the software and why you need it.";
+        const wanted = software.trim().toLowerCase();
+        if (
+          state.softwareRequests.some(
+            (r) => r.employeeId === active.id && (r.status === "pending" || r.status === "approved") && r.software.toLowerCase() === wanted,
+          )
+        ) {
+          return "You already have a pending or approved request for this software.";
+        }
         const request: SoftwareRequest = {
           id: uid("sw"),
           employeeId: active.id,
@@ -1217,18 +1646,36 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({ ...prev, softwareRequests: [request, ...prev.softwareRequests] }));
         return null;
       },
-      setSoftwareStatus: (requestId, status) => {
+      setSoftwareStatus: (requestId, status, note) => {
         const item = state.softwareRequests.find((entry) => entry.id === requestId);
-        if (!item) return;
-        const isOwn = item.employeeId === active.id;
-        if (!isOwn && !canApproveTeam(active.role)) return;
-        if (isOwn && (status === "approved" || status === "rejected")) return;
-        setState((prev) => ({ ...prev, softwareRequests: patchById(prev.softwareRequests, requestId, { status }) }));
+        if (!item) return "Request not found.";
+        const error = decisionError(item.employeeId, item.status, status);
+        if (error) return error;
+        setState((prev) => ({
+          ...prev,
+          softwareRequests: patchById(prev.softwareRequests, requestId, { status, ...decision(status, note) }),
+        }));
+        return null;
       },
       addCab: (booking) => {
         if (!booking.date || !booking.time || !booking.from.trim() || !booking.to.trim()) {
           return "Date, time, pickup, and drop are required.";
         }
+        const now = new Date();
+        const nowTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+        if (booking.date < todayISO() || (booking.date === todayISO() && booking.time <= nowTime)) {
+          return "Pick a pickup time in the future.";
+        }
+        if (booking.from.trim().toLowerCase() === booking.to.trim().toLowerCase()) return "Pickup and drop can't be the same place.";
+        const toMinutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+        const clash = state.cabBookings.some(
+          (c) =>
+            c.employeeId === active.id &&
+            (c.status === "pending" || c.status === "approved") &&
+            c.date === booking.date &&
+            Math.abs(toMinutes(c.time) - toMinutes(booking.time)) < 30,
+        );
+        if (clash) return "You already have a cab within 30 minutes of that time.";
         const request: CabBooking = {
           id: uid("cab"),
           employeeId: active.id,
@@ -1240,23 +1687,48 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({ ...prev, cabBookings: [request, ...prev.cabBookings] }));
         return null;
       },
-      setCabStatus: (requestId, status) => {
+      setCabStatus: (requestId, status, note) => {
         const item = state.cabBookings.find((entry) => entry.id === requestId);
-        if (!item) return;
-        const isOwn = item.employeeId === active.id;
-        if (!isOwn && !canApproveTeam(active.role)) return;
-        if (isOwn && (status === "approved" || status === "rejected")) return;
-        setState((prev) => ({ ...prev, cabBookings: patchById(prev.cabBookings, requestId, { status }) }));
+        if (!item) return "Booking not found.";
+        // A booked cab can be cancelled until the trip date.
+        const cancellingBooked =
+          status === "withdrawn" && item.employeeId === active.id && item.status === "approved" && item.date >= todayISO();
+        const error = cancellingBooked ? null : decisionError(item.employeeId, item.status, status);
+        if (error) return error;
+        setState((prev) => ({ ...prev, cabBookings: patchById(prev.cabBookings, requestId, { status, ...decision(status, note) }) }));
+        return null;
       },
       orderMeal: (menuItemId) => {
-        if (!state.menu.some((item) => item.id === menuItemId)) return "That item is not on the menu.";
+        const menuItem = state.menu.find((item) => item.id === menuItemId);
+        if (!menuItem) return "That item is not on the menu.";
+        const today = todayISO();
+        const ordersToday = state.cafeteriaOrders.filter(
+          (order) => order.employeeId === active.id && order.date === today && order.status !== "cancelled",
+        ).length;
+        if (ordersToday >= MAX_MEAL_ORDERS_PER_DAY) return `You can place up to ${MAX_MEAL_ORDERS_PER_DAY} orders a day.`;
         setState((prev) => ({
           ...prev,
           cafeteriaOrders: [
-            { id: uid("cafe"), employeeId: active.id, menuItemId, date: todayISO(), status: "placed" },
+            {
+              id: uid("cafe"),
+              employeeId: active.id,
+              menuItemId,
+              date: today,
+              status: "placed",
+              itemName: menuItem.name,
+              unitPrice: menuItem.price,
+            },
             ...prev.cafeteriaOrders,
           ],
         }));
+        return null;
+      },
+      cancelMeal: (orderId) => {
+        const order = state.cafeteriaOrders.find((item) => item.id === orderId);
+        if (!order || order.employeeId !== active.id) return "Order not found.";
+        if (order.status === "cancelled") return "This order is already cancelled.";
+        if (order.date !== todayISO()) return "Only today's orders can be cancelled.";
+        setState((prev) => ({ ...prev, cafeteriaOrders: patchById(prev.cafeteriaOrders, orderId, { status: "cancelled" as const }) }));
         return null;
       },
       addDocument: (input) => {

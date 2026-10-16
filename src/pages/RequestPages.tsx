@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
-import { formatShortDate, inr, maskInr } from "../model.ts";
+import { formatShortDate, inr, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
 export function EncashmentPage() {
@@ -96,7 +96,7 @@ export function CashPage() {
       <section className="cash-summary" aria-label="Cash advance summary">
         <div className="cash-stat">
           <span>Total requested</span>
-          <strong>{maskInr(totalRequested)}</strong>
+          <strong>{inr(totalRequested)}</strong>
         </div>
         <div className="cash-stat">
           <span>Pending requests</span>
@@ -153,7 +153,7 @@ export function CashPage() {
             />
           </Field>
           <Field label="Required by date">
-            <input type="date" value={requiredBy} onChange={(event) => setRequiredBy(event.target.value)} />
+            <input type="date" min={todayISO()} value={requiredBy} onChange={(event) => setRequiredBy(event.target.value)} />
           </Field>
           <button className="btn cash-submit" type="submit">
             Submit request
@@ -173,7 +173,7 @@ export function CashPage() {
                   <h3>{item.category || item.purpose}</h3>
                   <StatusPill status={item.status} />
                 </div>
-                <strong className="cash-request-amount">{maskInr(item.amount)}</strong>
+                <strong className="cash-request-amount">{inr(item.amount)}</strong>
                 {item.purpose && item.purpose !== item.category && <p className="muted cash-request-purpose">{item.purpose}</p>}
                 <p className="cash-request-meta">Submitted {formatShortDate(item.date)}</p>
                 {item.requiredBy && <p className="cash-request-meta">Needed by {formatShortDate(item.requiredBy)}</p>}
@@ -296,7 +296,7 @@ export function CabPage() {
           >
             <div className="form-grid">
               <Field label="Date">
-                <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+                <input type="date" min={todayISO()} value={date} onChange={(event) => setDate(event.target.value)} />
               </Field>
               <Field label="Time">
                 <input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
@@ -406,7 +406,7 @@ export function SoftwarePage() {
 }
 
 export function CafeteriaPage() {
-  const { state, employee, menuItem, orderMeal } = usePortal();
+  const { state, employee, menuItem, orderMeal, cancelMeal } = usePortal();
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const orders = state.cafeteriaOrders.filter((order) => order.employeeId === employee.id);
   return (
@@ -441,13 +441,29 @@ export function CafeteriaPage() {
             <tbody>
               {orders.map((order) => {
                 const item = menuItem(order.menuItemId);
+                // Use the name and price saved with the order; older orders fall back to today's menu.
+                const price = order.unitPrice ?? item?.price;
                 return (
                   <tr key={order.id}>
                     <td>{order.date}</td>
-                    <td>{item?.name ?? "Menu item"}</td>
-                    <td>{item ? inr(item.price) : "—"}</td>
+                    <td>{order.itemName ?? item?.name ?? "Menu item"}</td>
+                    <td>{price != null ? inr(price) : "—"}</td>
                     <td>
                       <StatusPill status={order.status} />
+                    </td>
+                    <td>
+                      {order.status === "placed" && order.date === todayISO() && (
+                        <button
+                          type="button"
+                          className="btn-ghost btn-tiny"
+                          onClick={() => {
+                            const error = cancelMeal(order.id);
+                            setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Order cancelled." });
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

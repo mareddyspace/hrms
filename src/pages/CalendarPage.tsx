@@ -11,7 +11,10 @@ import {
 import {
   CALENDAR_KIND_LABEL,
   eventSpansDate,
+  declineLocalMeeting,
   eventsForPerson,
+  isLocalEvent,
+  reminderError,
   removeLocalReminder,
   saveLocalReminder,
   type CalendarEvent,
@@ -92,6 +95,7 @@ export function CalendarPage() {
   const [time, setTime] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   const schedule = useMemo(
     () =>
@@ -120,7 +124,7 @@ export function CalendarPage() {
         endDate: r.to,
         kind: (r.code === "wfh" || r.code === "emergency_wfh" ? "wfh" : "leave") as CalendarEventKind,
         title: r.code === "wfh" || r.code === "emergency_wfh" ? "WFH (approved)" : `Leave · ${r.code}`,
-        description: "Approved leave from your requests (demo).",
+        description: "Approved leave from your requests.",
         audienceIds: [employee.id],
       }));
   }, [state.leaveRequests, employee.id]);
@@ -178,12 +182,11 @@ export function CalendarPage() {
 
   function onAddReminder(event: FormEvent) {
     event.preventDefault();
-    if (!title.trim()) {
-      setError("Add a short reminder title.");
-      return;
-    }
-    if (!date) {
-      setError("Pick a date.");
+    const now = new Date();
+    const nowHm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    const invalid = reminderError({ title, date, time }, today, nowHm);
+    if (invalid) {
+      setError(invalid);
       return;
     }
     setError("");
@@ -201,6 +204,22 @@ export function CalendarPage() {
     setTick((n) => n + 1);
   }
 
+  function onLocalAction(e: CalendarEvent, action: "remove" | "decline") {
+    const err = action === "decline" ? declineLocalMeeting(e.id, employee.id) : removeLocalReminder(e.id, employee.id);
+    if (err) {
+      setNotice({ tone: "err", text: err });
+      return;
+    }
+    const done =
+      action === "decline"
+        ? "Meeting declined — removed from your calendar."
+        : e.kind === "meeting"
+          ? "Meeting cancelled for all attendees."
+          : "Reminder removed.";
+    setNotice({ tone: "ok", text: done });
+    setTick((n) => n + 1);
+  }
+
   return (
     <Page
       title="My calendar"
@@ -209,9 +228,10 @@ export function CalendarPage() {
       <Banner
         message={{
           tone: "ok",
-          text: "Personal work calendar (demo). Weekly offs follow your assigned schedule; holiday names use your country calendar.",
+          text: "Weekly offs follow your assigned schedule; holiday names use your country calendar.",
         }}
       />
+      {notice && <Banner message={notice} />}
 
       <FilterBar>
         <div className="chip-row" role="tablist" aria-label="Event type">
@@ -307,7 +327,7 @@ export function CalendarPage() {
             })}
           </div>
           <p className="note" style={{ marginTop: 10 }}>
-            Shift: {schedule.shiftName} · {schedule.hoursLabel}. Weekly offs from schedule ({schedule.workDaysLabel}) — not a legal entitlement.
+            Shift: {schedule.shiftName} · {schedule.hoursLabel}. Weekly offs from schedule ({schedule.workDaysLabel}).
           </p>
         </Card>
 
@@ -330,15 +350,17 @@ export function CalendarPage() {
                       {[e.time, e.location].filter(Boolean).join(" · ") || CALENDAR_KIND_LABEL[e.kind]}
                     </p>
                     {e.description && <p className="note">{e.description}</p>}
-                    {e.id.startsWith("cal-local-") && (
+                    {isLocalEvent(e) && e.kind === "meeting" && (
                       <button
                         type="button"
                         className="btn-ghost btn-tiny"
-                        onClick={() => {
-                          removeLocalReminder(e.id);
-                          setTick((n) => n + 1);
-                        }}
+                        onClick={() => onLocalAction(e, e.ownerId === employee.id ? "remove" : "decline")}
                       >
+                        {e.ownerId === employee.id ? "Cancel meeting" : "Decline"}
+                      </button>
+                    )}
+                    {isLocalEvent(e) && e.kind === "reminder" && e.ownerId === employee.id && (
+                      <button type="button" className="btn-ghost btn-tiny" onClick={() => onLocalAction(e, "remove")}>
                         Remove reminder
                       </button>
                     )}
@@ -361,10 +383,10 @@ export function CalendarPage() {
               </Field>
               <div className="form-grid-2">
                 <Field label="Date">
-                  <input type="date" value={date} onChange={(ev) => setDate(ev.target.value)} />
+                  <input type="date" value={date} min={today} onChange={(ev) => setDate(ev.target.value)} />
                 </Field>
                 <Field label="Time (optional)">
-                  <input value={time} onChange={(ev) => setTime(ev.target.value)} placeholder="e.g. 16:00" />
+                  <input value={time} onChange={(ev) => setTime(ev.target.value)} placeholder="HH:MM, e.g. 16:00" />
                 </Field>
               </div>
               <Field label="Note (optional)" wide>

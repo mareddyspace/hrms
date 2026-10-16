@@ -15,7 +15,15 @@ import {
   type EmploymentStatus,
   type PersonRecord,
 } from "../data/peopleData.ts";
-import { getPerson, listPeople, subscribePeople, upsertPerson } from "../data/peopleLocal.ts";
+import {
+  getExitDetails,
+  getPerson,
+  isTerminated,
+  listPeople,
+  subscribePeople,
+  upsertPerson,
+  type LocalPersonRecord,
+} from "../data/peopleLocal.ts";
 import {
   canManagePeople,
   canViewPeopleDirectory,
@@ -24,7 +32,7 @@ import {
 } from "../data/peoplePermissions.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
-import { maskEmail } from "../model.ts";
+import { maskEmail, TIMEZ_COUNTRIES } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { Employee360View } from "./Employee360View.tsx";
 
@@ -67,13 +75,52 @@ const EMPTY_FORM: Omit<PersonRecord, "id"> = {
   address: "Bengaluru, India",
 };
 
-function validatePerson(draft: Omit<PersonRecord, "id"> | PersonRecord): string[] {
+function statusTone(status: EmploymentStatus): "ok" | "warn" | "danger" {
+  if (status === "Active") return "ok";
+  if (status === "Terminated") return "danger";
+  return "warn";
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** A TZ code no one in the directory already uses. */
+function nextEmployeeCode(people: PersonRecord[]): string {
+  const taken = new Set(people.map((p) => p.employeeCode.trim().toUpperCase()));
+  let n = 8000 + Math.floor(Math.random() * 1000);
+  while (taken.has(`TZ${n}`)) n += 1;
+  return `TZ${n}`;
+}
+
+function validatePerson(draft: LocalPersonRecord, people: PersonRecord[]): string[] {
   const errors: string[] = [];
+  const others = people.filter((p) => p.id !== draft.id);
+  const code = draft.employeeCode.trim().toUpperCase();
+  const email = draft.email.trim().toLowerCase();
   if (!draft.fullName.trim()) errors.push("Full name is required.");
-  if (!draft.employeeCode.trim()) errors.push("Employee ID is required.");
-  if (!draft.email.trim() || !draft.email.includes("@")) errors.push("Valid work email is required.");
+  if (!code) errors.push("Employee ID is required.");
+  else if (others.some((p) => p.employeeCode.trim().toUpperCase() === code)) {
+    errors.push(`Employee ID ${code} is already used by someone else.`);
+  }
+  if (!EMAIL_PATTERN.test(email)) errors.push("Enter a valid work email (name@company.com).");
+  else if (others.some((p) => p.email.trim().toLowerCase() === email)) {
+    errors.push("That work email already belongs to another employee.");
+  }
   if (!draft.designation.trim()) errors.push("Job title is required.");
   if (!draft.department.trim()) errors.push("Department is required.");
+
+  // An empty manager means top of the organization.
+  if (draft.managerId) {
+    const manager = others.find((p) => p.id === draft.managerId);
+    if (draft.managerId === draft.id) errors.push("An employee cannot report to themselves.");
+    else if (!manager) errors.push("Pick a manager from the directory.");
+    else if (isTerminated(manager)) errors.push(`${manager.fullName} is no longer with the company — pick another manager.`);
+  }
+
+  if (draft.employmentStatus === "Terminated") {
+    if (!draft.exitDate) errors.push("Exit date is required for a terminated employee.");
+    else if (draft.dateOfJoining && draft.exitDate < draft.dateOfJoining) errors.push("Exit date cannot be before the joining date.");
+    if (!draft.exitReason?.trim()) errors.push("Exit reason is required for a terminated employee.");
+  }
   return errors;
 }
 
@@ -216,7 +263,9 @@ export function PeopleDirectoryPage() {
   return (
     <Page
       title="People"
-      subtitle={`${filtered.length.toLocaleString()} in scope (${listScope}) · ${people.length.toLocaleString()} total demo records`}
+      subtitle={`${filtered.length.toLocaleString()} ${filtered.length === 1 ? "employee" : "employees"}${
+        listScope === "team" ? " in your team" : listScope === "self" ? " (your profile)" : ""
+      }`}
       action={
         canEdit ? (
           <Link className="btn" to="/directory/new">
@@ -384,16 +433,7 @@ export function PeopleDirectoryPage() {
                     <td>{person.department}</td>
                     <td>{person.countryName}</td>
                     <td>
-                      <StatusBadge
-                        status={person.employmentStatus}
-                        tone={
-                          person.employmentStatus === "Active"
-                            ? "ok"
-                            : person.employmentStatus === "Terminated"
-                              ? "danger"
-                              : "warn"
-                        }
-                      />
+                      <StatusBadge status={person.employmentStatus} tone={statusTone(person.employmentStatus)} />
                     </td>
                     <td>{maskEmail(person.email)}</td>
                     <td>{person.managerName}</td>
@@ -421,7 +461,7 @@ export function PeopleDirectoryPage() {
               <span className="muted">
                 {person.employeeCode} · {person.location}
               </span>
-              <StatusBadge status={person.employmentStatus} tone={person.employmentStatus === "Active" ? "ok" : "warn"} />
+              <StatusBadge status={person.employmentStatus} tone={statusTone(person.employmentStatus)} />
             </button>
           ))}
         </div>
@@ -430,17 +470,16 @@ export function PeopleDirectoryPage() {
       <div className="row-between people-pager">
         <span className="muted">
           Page {safePage + 1} of {pageCount}
-          {employee.id ? ` · Signed in as ${employee.fullName}` : ""}
         </span>
         <div className="row-gap">
-          <button type="button" className="btn-ghost" disabled={safePage <= 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+          <button type="button" className="btn-ghost" disabled={safePage <= 0} onClick={() => setPage(Math.max(0, safePage - 1))}>
             Previous
           </button>
           <button
             type="button"
             className="btn-ghost"
             disabled={safePage >= pageCount - 1}
-            onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+            onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
           >
             Next
           </button>
@@ -498,33 +537,40 @@ export function PeopleDetailPage() {
         selfId={employee.id}
         onEdit={canEdit && depth === "full_hr" ? () => setEditOpen(true) : undefined}
       />
-      <EmployeeFormDialog
-        open={editOpen}
-        title="Edit employee"
-        initial={person}
-        onClose={() => setEditOpen(false)}
-        onSave={(next) => {
-          upsertPerson(next);
-          setEditOpen(false);
-        }}
-      />
+      {/* Mounted only while open (and keyed by person) so every open starts from the saved record. */}
+      {editOpen && (
+        <EmployeeFormDialog
+          key={person.id}
+          open
+          title="Edit employee"
+          initial={person}
+          people={people}
+          onClose={() => setEditOpen(false)}
+          onSave={(next) => {
+            upsertPerson(next);
+            setEditOpen(false);
+          }}
+        />
+      )}
     </Page>
   );
 }
 
 export function PeopleNewPage() {
   const { demoProfile } = usePortal();
+  const people = usePeople();
   const navigate = useNavigate();
   if (!canManagePeople(demoProfile.role)) {
     return <Navigate to="/directory" replace />;
   }
   return (
-    <Page title="Add employee" subtitle="Creates a local demo record only (localStorage overlay).">
+    <Page title="Add employee">
       <EmployeeFormDialog
         open
         embedded
         title="New employee"
         initial={null}
+        people={people}
         onClose={() => navigate("/directory")}
         onSave={(next) => {
           upsertPerson(next);
@@ -539,6 +585,7 @@ function EmployeeFormDialog({
   open,
   title,
   initial,
+  people,
   onClose,
   onSave,
   embedded = false,
@@ -546,32 +593,66 @@ function EmployeeFormDialog({
   open: boolean;
   title: string;
   initial: PersonRecord | null;
+  people: PersonRecord[];
   onClose: () => void;
-  onSave: (person: PersonRecord) => void;
+  onSave: (person: LocalPersonRecord) => void;
   embedded?: boolean;
 }) {
-  const [draft, setDraft] = useState<PersonRecord>(
-    () =>
-      initial ?? {
-        id: `local-${Date.now()}`,
-        ...EMPTY_FORM,
-        employeeCode: `TZ${String(Math.floor(8000 + Math.random() * 1000))}`,
-      },
-  );
+  const freshDraft = (): LocalPersonRecord =>
+    initial
+      ? {
+          ...initial,
+          ...getExitDetails(initial),
+          // Seed data has the top executive "reporting" to themselves; treat that as no manager.
+          ...(initial.managerId === initial.id ? { managerId: "", managerName: "" } : null),
+        }
+      : { id: `local-${Date.now()}`, ...EMPTY_FORM, employeeCode: nextEmployeeCode(people) };
+  const [draft, setDraft] = useState<LocalPersonRecord>(freshDraft);
   const [errors, setErrors] = useState<string[]>([]);
+  const [managerQuery, setManagerQuery] = useState("");
+  const [wasOpen, setWasOpen] = useState(open);
+
+  // Re-opening always starts from the saved record, so discarded edits never come back.
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setDraft(freshDraft());
+      setErrors([]);
+      setManagerQuery("");
+    }
+  }
+
+  // Anyone still with the company can be picked as manager (never the person themselves).
+  const managerOptions = useMemo(() => {
+    const needle = managerQuery.trim().toLowerCase();
+    const eligible = people.filter(
+      (p) =>
+        p.id !== draft.id &&
+        !isTerminated(p) &&
+        (!needle || `${p.fullName} ${p.employeeCode} ${p.designation}`.toLowerCase().includes(needle)),
+    );
+    const shown = eligible.slice(0, 100);
+    const current = people.find((p) => p.id === draft.managerId);
+    if (current && !shown.includes(current)) shown.unshift(current);
+    return shown;
+  }, [people, managerQuery, draft.id, draft.managerId]);
+  const managerKnown = !draft.managerId || people.some((p) => p.id === draft.managerId);
 
   if (!open) return null;
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    const nextErrors = validatePerson(draft);
+    const nextErrors = validatePerson(draft, people);
     setErrors(nextErrors);
     if (nextErrors.length) return;
+    const terminated = draft.employmentStatus === "Terminated";
     onSave({
       ...draft,
       fullName: draft.fullName.trim(),
       employeeCode: draft.employeeCode.trim().toUpperCase(),
       email: draft.email.trim().toLowerCase(),
+      exitDate: terminated ? draft.exitDate : undefined,
+      exitReason: terminated ? draft.exitReason?.trim() : undefined,
     });
   }
 
@@ -614,10 +695,14 @@ function EmployeeFormDialog({
             onChange={(e) => {
               const countryName = e.target.value;
               const idx = FILTER_OPTIONS.countries.findIndex((c) => c === countryName);
+              const country = TIMEZ_COUNTRIES.find((c) => c.name === countryName);
               setDraft({
                 ...draft,
                 countryName,
                 legalEntity: idx >= 0 ? FILTER_OPTIONS.legalEntities[idx] : draft.legalEntity,
+                ...(country
+                  ? { countryCode: country.code, timeZone: country.timeZone, currency: country.currency }
+                  : null),
               });
             }}
           >
@@ -646,8 +731,55 @@ function EmployeeFormDialog({
             ))}
           </select>
         </Field>
-        <Field label="Manager name">
-          <input value={draft.managerName} onChange={(e) => setDraft({ ...draft, managerName: e.target.value })} />
+        {draft.employmentStatus === "Terminated" && (
+          <>
+            <Field label="Exit date">
+              <input
+                type="date"
+                value={draft.exitDate ?? ""}
+                min={draft.dateOfJoining || undefined}
+                onChange={(e) => setDraft({ ...draft, exitDate: e.target.value })}
+                required
+              />
+            </Field>
+            <Field label="Exit reason">
+              <input
+                value={draft.exitReason ?? ""}
+                onChange={(e) => setDraft({ ...draft, exitReason: e.target.value })}
+                placeholder="e.g. Resignation, end of contract"
+                required
+              />
+            </Field>
+          </>
+        )}
+        <Field label="Manager">
+          <div className="people-manager-picker">
+            <input
+              type="search"
+              value={managerQuery}
+              onChange={(e) => setManagerQuery(e.target.value)}
+              placeholder="Search name or ID…"
+              aria-label="Search managers"
+            />
+            <select
+              value={draft.managerId}
+              onChange={(e) => {
+                const manager = people.find((p) => p.id === e.target.value);
+                setDraft({ ...draft, managerId: manager?.id ?? "", managerName: manager?.fullName ?? "" });
+              }}
+            >
+              <option value="">No manager (top of organization)</option>
+              {!managerKnown && (
+                <option value={draft.managerId}>{draft.managerName || draft.managerId} (not in directory)</option>
+              )}
+              {managerOptions.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.fullName} · {p.employeeCode}
+                  {isTerminated(p) ? " (terminated)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
         </Field>
         <Field label="Grade">
           <input value={draft.grade} onChange={(e) => setDraft({ ...draft, grade: e.target.value })} />

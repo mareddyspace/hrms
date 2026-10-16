@@ -1,0 +1,373 @@
+import { useMemo, useState, useSyncExternalStore } from "react";
+import { Banner, Card, EmptyState, Page, StatusBadge, Tabs } from "../components/ui.tsx";
+import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
+import { taskPersonById } from "../data/taskTeam.ts";
+import { formatShortDate, holidaySet, inr, workingDays } from "../model.ts";
+import type { DecisionInfo, PortalState } from "../model.ts";
+import { usePortal } from "../store.tsx";
+
+/** One row in the approvals inbox, whatever kind of request it came from. */
+type RequestItem = {
+  key: string;
+  kind: string;
+  employeeId: string;
+  title: string;
+  detail?: string;
+  raisedOn?: string;
+  status: string;
+  /** True while the request can still be approved, declined or withdrawn. */
+  open: boolean;
+  decided?: DecisionInfo;
+  approveLabel?: string;
+  declineLabel?: string;
+  decide?: (decision: "approved" | "rejected", note?: string) => string | null | Promise<string | null>;
+  withdraw?: () => string | null | Promise<string | null>;
+};
+
+const STATUS_TONE: Record<string, "ok" | "warn" | "danger" | "neutral" | "info"> = {
+  pending: "warn",
+  submitted: "warn",
+  approved: "ok",
+  verified: "ok",
+  rejected: "danger",
+  withdrawn: "neutral",
+  used: "info",
+  draft: "neutral",
+};
+
+const STATUS_TEXT: Record<string, string> = {
+  pending: "Waiting for approval",
+  submitted: "Waiting for approval",
+  approved: "Approved",
+  verified: "Verified",
+  rejected: "Declined",
+  withdrawn: "Withdrawn",
+  used: "Leave applied",
+  draft: "Sent back for changes",
+};
+
+/** How many requests are waiting on this person — drives the approvals badge. */
+export function countWaitingOnMe(
+  state: PortalState,
+  myId: string,
+  canApprove: (employeeId: string) => boolean,
+  canVerifyProofs: boolean,
+): number {
+  const open = (status: string) => status === "pending" || status === "submitted";
+  const mine = (employeeId: string) => employeeId !== myId && canApprove(employeeId);
+  const lists: { employeeId: string; status: string }[][] = [
+    state.backdatedPermissions,
+    state.leaveRequests,
+    state.encashments,
+    state.expenses,
+    state.reimbursements,
+    state.cashAdvances,
+    state.assetRequests,
+    state.softwareRequests,
+    state.cabBookings,
+  ];
+  const requests = lists.flat().filter((item) => open(item.status) && mine(item.employeeId)).length;
+  const timesheets = state.orgTimesheets.filter((row) => row.status === "submitted" && mine(row.personId)).length;
+  const proofs = canVerifyProofs
+    ? state.investmentProofs.filter((p) => p.status === "submitted" && p.employeeId !== myId).length
+    : 0;
+  return requests + timesheets + proofs;
+}
+
+/** Approvals inbox built from real requests: decide what's waiting on you, track what you've asked for. */
+export function ApprovalsCenterPage() {
+  const portal = usePortal();
+  const { state, employee, demoAccounts, leaveTable, canApproveLeaveFor, canVerifyProofs } = portal;
+  const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
+  const [tab, setTab] = useState<"waiting" | "mine">("waiting");
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  const nameOf = (id: string) =>
+    demoAccounts.find((a) => a.id === id)?.fullName ??
+    people.find((p) => p.id === id)?.fullName ??
+    taskPersonById(id)?.fullName ??
+    id;
+  const leaveName = (code: string) => leaveTable.find((row) => row.code === code)?.name ?? code;
+  const holidays = holidaySet(state.holidays);
+
+  const items = useMemo<RequestItem[]>(() => {
+    const isOpen = (status: string) => status === "pending" || status === "submitted";
+    const list: RequestItem[] = [];
+
+    for (const p of state.backdatedPermissions) {
+      list.push({
+        key: `bdp-${p.id}`,
+        kind: "Backdated leave permission",
+        employeeId: p.employeeId,
+        title: `${leaveName(p.code)} · ${formatShortDate(p.from)} – ${formatShortDate(p.to)}`,
+        detail: p.reason,
+        raisedOn: p.requestedOn,
+        status: p.status,
+        open: p.status === "pending",
+        decided: p,
+        decide: (d, note) => portal.decideBackdatedPermission(p.id, d, note),
+        withdraw: () => portal.withdrawBackdatedPermission(p.id),
+      });
+    }
+    for (const r of state.leaveRequests) {
+      list.push({
+        key: `lv-${r.id}`,
+        kind: "Leave",
+        employeeId: r.employeeId,
+        title: `${leaveName(r.code)} · ${formatShortDate(r.from)} – ${formatShortDate(r.to)} · ${workingDays(r.from, r.to, holidays)} day(s)`,
+        detail: r.reason,
+        raisedOn: r.appliedOn,
+        status: r.status,
+        open: r.status === "pending",
+        decided: r,
+        decide: (d, note) => portal.setLeaveStatus(r.id, d, note),
+        withdraw: () => portal.setLeaveStatus(r.id, "withdrawn"),
+      });
+    }
+    for (const e of state.encashments) {
+      list.push({
+        key: `enc-${e.id}`,
+        kind: "Leave encashment",
+        employeeId: e.employeeId,
+        title: `${e.days} day(s) of ${leaveName(e.code)}`,
+        raisedOn: e.appliedOn,
+        status: e.status,
+        open: e.status === "pending",
+        decided: e,
+        decide: (d, note) => portal.setEncashmentStatus(e.id, d, note),
+        withdraw: () => portal.setEncashmentStatus(e.id, "withdrawn"),
+      });
+    }
+    for (const x of state.expenses) {
+      list.push({
+        key: `ex-${x.id}`,
+        kind: "Expense claim",
+        employeeId: x.employeeId,
+        title: `${x.category} · ${inr(x.amount)} · ${formatShortDate(x.date)}`,
+        detail: x.description,
+        status: x.status,
+        open: isOpen(x.status),
+        decided: x,
+        decide: (d, note) => portal.setExpenseStatus(x.id, d, note),
+        withdraw: () => portal.setExpenseStatus(x.id, "withdrawn"),
+      });
+    }
+    for (const x of state.reimbursements) {
+      list.push({
+        key: `rb-${x.id}`,
+        kind: "Reimbursement",
+        employeeId: x.employeeId,
+        title: `${x.category} · ${inr(x.amount)} · ${formatShortDate(x.date)}`,
+        detail: x.description,
+        status: x.status,
+        open: isOpen(x.status),
+        decided: x,
+        decide: (d, note) => portal.setReimbursementStatus(x.id, d, note),
+        withdraw: () => portal.setReimbursementStatus(x.id, "withdrawn"),
+      });
+    }
+    for (const x of state.cashAdvances) {
+      list.push({
+        key: `ca-${x.id}`,
+        kind: "Cash advance",
+        employeeId: x.employeeId,
+        title: `${inr(x.amount)} · ${x.category} · needed by ${formatShortDate(x.requiredBy)}`,
+        detail: x.purpose,
+        raisedOn: x.date,
+        status: x.status,
+        open: isOpen(x.status),
+        decided: x,
+        decide: (d, note) => portal.setCashStatus(x.id, d, note),
+        withdraw: () => portal.setCashStatus(x.id, "withdrawn"),
+      });
+    }
+    for (const x of state.assetRequests) {
+      list.push({
+        key: `ar-${x.id}`,
+        kind: "Asset request",
+        employeeId: x.employeeId,
+        title: x.item,
+        detail: x.reason,
+        raisedOn: x.date,
+        status: x.status,
+        open: isOpen(x.status),
+        decided: x,
+        decide: (d, note) => portal.setAssetStatus(x.id, d, note),
+        withdraw: () => portal.setAssetStatus(x.id, "withdrawn"),
+      });
+    }
+    for (const x of state.softwareRequests) {
+      list.push({
+        key: `sw-${x.id}`,
+        kind: "Software request",
+        employeeId: x.employeeId,
+        title: x.software,
+        detail: x.justification,
+        raisedOn: x.date,
+        status: x.status,
+        open: isOpen(x.status),
+        decided: x,
+        decide: (d, note) => portal.setSoftwareStatus(x.id, d, note),
+        withdraw: () => portal.setSoftwareStatus(x.id, "withdrawn"),
+      });
+    }
+    for (const x of state.cabBookings) {
+      list.push({
+        key: `cab-${x.id}`,
+        kind: "Cab booking",
+        employeeId: x.employeeId,
+        title: `${formatShortDate(x.date)} ${x.time} · ${x.from} → ${x.to}`,
+        status: x.status,
+        open: isOpen(x.status),
+        decided: x,
+        decide: (d, note) => portal.setCabStatus(x.id, d, note),
+        withdraw: () => portal.setCabStatus(x.id, "withdrawn"),
+      });
+    }
+    for (const x of state.investmentProofs) {
+      list.push({
+        key: `poi-${x.id}`,
+        kind: "Tax-saving proof",
+        employeeId: x.employeeId,
+        title: `${x.section} · ${x.title} · ${inr(x.amount)} · FY ${x.financialYear}`,
+        raisedOn: x.submittedOn,
+        status: x.status,
+        open: x.status === "submitted",
+        decided: x,
+        approveLabel: "Verify",
+        decide: (d, note) => portal.setInvestmentProofStatus(x.id, d === "approved" ? "verified" : "rejected", note),
+        withdraw: () => portal.setInvestmentProofStatus(x.id, "withdrawn"),
+      });
+    }
+    for (const row of state.orgTimesheets) {
+      if (row.status !== "submitted") continue;
+      list.push({
+        key: `ts-${row.id}`,
+        kind: "Timesheet",
+        employeeId: row.personId,
+        title: `Week of ${formatShortDate(row.weekStart)} · ${row.hours} h`,
+        detail: row.projectSummary,
+        status: row.status,
+        open: true,
+        declineLabel: "Send back",
+        decide: (d) => portal.setOrgTimesheetStatus(row.id, d === "approved" ? "approved" : "draft"),
+      });
+    }
+    return list;
+    // portal functions are recreated with state, so state is the real dependency
+  }, [state, portal, leaveTable]);
+
+  const waiting = items.filter(
+    (item) =>
+      item.open &&
+      item.decide &&
+      item.employeeId !== employee.id &&
+      (item.kind === "Tax-saving proof" ? canVerifyProofs : canApproveLeaveFor(item.employeeId)),
+  );
+  const mine = items
+    .filter((item) => item.employeeId === employee.id && item.kind !== "Timesheet")
+    .sort((a, b) => Number(b.open) - Number(a.open) || (b.raisedOn ?? "").localeCompare(a.raisedOn ?? ""));
+
+  async function run(action: () => string | null | Promise<string | null>, success: string, key?: string) {
+    const error = await action();
+    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: success });
+    if (!error && key) setNotes((prev) => ({ ...prev, [key]: "" }));
+  }
+
+  return (
+    <Page title="Approvals" subtitle="Requests waiting on you, and the status of everything you've asked for">
+      <Tabs
+        tabs={[
+          { id: "waiting", label: `Waiting on me (${waiting.length})` },
+          { id: "mine", label: `My requests (${mine.filter((m) => m.open).length} open)` },
+        ]}
+        value={tab}
+        onChange={(next) => setTab(next as typeof tab)}
+      />
+      <Banner message={message} />
+
+      {tab === "waiting" && (
+        <Card>
+          {waiting.length === 0 ? (
+            <EmptyState title="Nothing waiting on you" description="Requests from people who report to you will appear here." />
+          ) : (
+            <ul className="approval-list">
+              {waiting.map((item) => (
+                <li key={item.key} className="approval-item">
+                  <div className="row-between">
+                    <strong>{nameOf(item.employeeId)}</strong>
+                    <span className="pill">{item.kind}</span>
+                  </div>
+                  <span>{item.title}</span>
+                  {item.detail && <span className="muted">{item.detail}</span>}
+                  {item.raisedOn && <span className="muted">Raised {formatShortDate(item.raisedOn)}</span>}
+                  <div className="approval-actions">
+                    {item.kind !== "Timesheet" && (
+                      <input
+                        value={notes[item.key] ?? ""}
+                        onChange={(e) => setNotes((prev) => ({ ...prev, [item.key]: e.target.value }))}
+                        placeholder="Note (optional)"
+                        aria-label={`Note for ${nameOf(item.employeeId)}`}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-tiny"
+                      onClick={() => run(() => item.decide!("approved", notes[item.key]), `${item.kind} approved.`, item.key)}
+                    >
+                      {item.approveLabel ?? "Approve"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost btn-tiny"
+                      onClick={() => run(() => item.decide!("rejected", notes[item.key]), `${item.kind} declined.`, item.key)}
+                    >
+                      {item.declineLabel ?? "Decline"}
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
+
+      {tab === "mine" && (
+        <Card>
+          {mine.length === 0 ? (
+            <EmptyState title="No requests yet" description="Leave, claims and other requests you raise will be tracked here." />
+          ) : (
+            <ul className="approval-list">
+              {mine.map((item) => (
+                <li key={item.key} className="approval-item">
+                  <div className="row-between">
+                    <strong>{item.kind}</strong>
+                    <StatusBadge status={STATUS_TEXT[item.status] ?? item.status} tone={STATUS_TONE[item.status]} literal />
+                  </div>
+                  <span>{item.title}</span>
+                  <span className="muted">
+                    {item.decided?.decidedByName
+                      ? `${item.status === "rejected" ? "Declined" : "Decided"} by ${item.decided.decidedByName}${
+                          item.decided.decidedOn ? ` on ${formatShortDate(item.decided.decidedOn)}` : ""
+                        }${item.decided.decisionNote ? ` · “${item.decided.decisionNote}”` : ""}`
+                      : item.raisedOn
+                        ? `Raised ${formatShortDate(item.raisedOn)}`
+                        : ""}
+                  </span>
+                  {item.open && item.withdraw && (
+                    <div className="approval-actions">
+                      <button type="button" className="btn-ghost btn-tiny" onClick={() => run(item.withdraw!, "Request withdrawn.")}>
+                        Withdraw
+                      </button>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
+    </Page>
+  );
+}

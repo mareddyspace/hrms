@@ -169,11 +169,14 @@ function normalizeStatusLabel(status: string): string {
 export function StatusBadge({
   status,
   tone,
+  literal = false,
 }: {
   status: string;
   tone?: "ok" | "warn" | "danger" | "info" | "neutral";
+  /** Show the status as written instead of mapping it to approval wording (e.g. "Completed" → "Approved"). */
+  literal?: boolean;
 }) {
-  const label = normalizeStatusLabel(status);
+  const label = literal ? status : normalizeStatusLabel(status);
   const key = label.toLowerCase();
   const resolved =
     tone ??
@@ -220,18 +223,21 @@ export function Dialog({
   children,
   onClose,
   actions,
+  wide = false,
 }: {
   open: boolean;
   title: string;
   children: ReactNode;
   onClose: () => void;
   actions?: ReactNode;
+  /** Wider panel for previews such as certificates. */
+  wide?: boolean;
 }) {
   if (!open) return null;
   return (
     <div className="dialog-root" role="presentation">
       <button className="dialog-scrim" type="button" aria-label="Close dialog" onClick={onClose} />
-      <div className="dialog-panel" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div className={`dialog-panel${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <h2 id="dialog-title">{title}</h2>
         <div className="dialog-body">{children}</div>
         {actions && <div className="dialog-actions">{actions}</div>}

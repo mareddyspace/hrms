@@ -29,7 +29,6 @@ import {
   ANALYTICS_RANGES,
   COMP_REVIEW_STATUS,
   COPILOT_SUGGESTIONS,
-  DEMO_ONLY,
   LEARNING_METRICS,
   PAYROLL_STATUS,
   PERFORMANCE_CYCLE,
@@ -47,6 +46,7 @@ import {
 } from "../data/platformData.ts";
 import { ProgressBar } from "./dashboards/widgets.tsx";
 import {
+  canEditRolePermissions,
   effectiveNavIds,
   getPlatformVersion,
   listAuditLog,
@@ -92,14 +92,10 @@ function BarRows({
   );
 }
 
-function DemoBanner({ text = DEMO_ONLY }: { text?: string }) {
-  return <Banner message={{ tone: "info", text }} />;
-}
-
 /* ───────────────── Analytics ───────────────── */
 
 export function AnalyticsPage() {
-  const { demoProfile, employee, state } = usePortal();
+  const { demoProfile, employee, state, canApproveLeaveFor } = usePortal();
   const { regionCode, activeCountry, t, formatMoney } = useLocale();
   const [range, setRange] = useState<AnalyticsRange>("30d");
   const [dept, setDept] = useState<string>("All departments");
@@ -121,9 +117,10 @@ export function AnalyticsPage() {
   const compAccess = getCompensationAccess(demoProfile);
   const canCompTab = canCompReport && compAccess.othersAmounts !== "hidden";
 
-  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && item.employeeId !== employee.id);
-  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted");
-  const expensePending = state.expenses.filter((item) => item.status === "submitted" && item.employeeId !== employee.id);
+  // Only items this viewer can actually decide (above the employee in the reporting line, or HR).
+  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && canApproveLeaveFor(item.employeeId));
+  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted" && canApproveLeaveFor(item.personId));
+  const expensePending = state.expenses.filter((item) => item.status === "submitted" && canApproveLeaveFor(item.employeeId));
   const pendingApprovals = leavePending.length + timesheetPending.length + expensePending.length;
 
   if (!hasModuleAccess(demoProfile, "analytics") && !canSystem) {
@@ -227,8 +224,8 @@ export function AnalyticsPage() {
 
             <Card title="Action queue · clear these first">
               <MetricGrid>
-                <MetricCard label="Leave" value={leavePending.length || 2} />
-                <MetricCard label="Timesheets" value={timesheetPending.length || 2} />
+                <MetricCard label="Leave" value={leavePending.length} />
+                <MetricCard label="Timesheets" value={timesheetPending.length} />
                 <MetricCard label="Expenses" value={expensePending.length} />
                 <MetricCard label="1:1s due" value={TZ_TEAM.oneOnOnesDue} hint="This week" />
               </MetricGrid>
@@ -259,7 +256,7 @@ export function AnalyticsPage() {
                       .slice(0, 3)
                       .map((req) => `${req.employeeId} (${req.code.toUpperCase()})`)
                       .join(" · ")
-                  : "Kabir Sharma (PTO) · Diya Patel (WFH)"}
+                  : "None waiting on you"}
               </p>
             </Card>
 
@@ -351,7 +348,7 @@ export function AnalyticsPage() {
                   <StatusBadge status="warn" tone="warn" /> {TZ_TEAM.onLeaveToday} on leave today — confirm coverage
                 </li>
                 <li>
-                  <StatusBadge status="info" tone="info" /> {timesheetPending.length || 2} timesheet(s) waiting on you
+                  <StatusBadge status="info" tone="info" /> {timesheetPending.length} timesheet(s) waiting on you
                 </li>
                 <li>
                   <StatusBadge status="warn" tone="warn" /> QA automation stretch — hire or upskill
@@ -390,7 +387,6 @@ export function AnalyticsPage() {
               <MetricCard label="Offers out" value={8} />
               <MetricCard label="Open reqs" value={24} />
             </MetricGrid>
-            <p className="note">Pipeline counts respond to the active demo region filter.</p>
           </Card>
         </div>
       )}
@@ -454,7 +450,6 @@ export function AnalyticsPage() {
       {activeTab === "comp" && canCompTab && (
         <Card title="Compensation review status">
           <Banner message={{ tone: "warn", text: COMP_REVIEW_STATUS.note }} />
-          <p className="note">Authorized via Compensation nav — not granted by executive title alone.</p>
           <MetricGrid>
             <MetricCard label="Submitted" value={`${COMP_REVIEW_STATUS.submittedPct}%`} />
             <MetricCard label="Pending managers" value={COMP_REVIEW_STATUS.pendingManagers} />
@@ -483,7 +478,7 @@ export function AiCopilotPage() {
   function ask(question: string) {
     const q = question.trim();
     if (!q) return;
-    const answer = answerCopilot(q);
+    const answer = answerCopilot(q, demoProfile);
     const stamp = Date.now();
     const userTurn: ChatTurn = { id: `u-${stamp}`, role: "user", text: q };
     const botTurn: ChatTurn = {
@@ -513,12 +508,11 @@ export function AiCopilotPage() {
 
   return (
     <Page title="AI Copilot" subtitle={`${PRODUCT_NAME} contextual assistant · ${demoProfile.personaLabel}`}>
-      <DemoBanner text="Simulated Copilot — answers are rule-based mock responses. Not connected to an AI model or gateway." />
       <div className="copilot-layout">
         <aside className="copilot-history card">
           <h2 className="card-title">Conversation history</h2>
           {conversations.length === 0 ? (
-            <p className="note">Ask a question to start a demo thread.</p>
+            <p className="note">Ask a question to get started.</p>
           ) : (
             <ul className="stack-tight">
               {conversations.map((c) => (
@@ -555,7 +549,7 @@ export function AiCopilotPage() {
               )}
               {history.map((turn) => (
                 <div key={turn.id} className={`copilot-bubble ${turn.role}`}>
-                  <p className="copilot-role">{turn.role === "user" ? "You" : `${PRODUCT_NAME} Copilot (simulated)`}</p>
+                  <p className="copilot-role">{turn.role === "user" ? "You" : `${PRODUCT_NAME} Copilot`}</p>
                   <p>{turn.text || turn.answer?.summary || "—"}</p>
                   {turn.answer && <CopilotAnswerCard answer={turn.answer} highlight={turn.id === activeId || turn.id === `a-${activeId?.replace(/^u-/, "")}`} />}
                 </div>
@@ -571,7 +565,7 @@ export function AiCopilotPage() {
                 />
               </Field>
               <button className="btn" type="submit">
-                Send (demo)
+                Send
               </button>
             </form>
           </Card>
@@ -617,17 +611,16 @@ function CopilotAnswerCard({ answer, highlight }: { answer: CopilotAnswer; highl
 
 export function AiAgentsPage() {
   const { demoProfile } = usePortal();
-  if (!hasModuleAccess(demoProfile, "agents") && !hasModuleAccess(demoProfile, "*") && !hasModuleAccess(demoProfile, "copilot")) {
+  if (!hasModuleAccess(demoProfile, "agents")) {
     return (
-      <Page title="AI Agents" subtitle="Autonomous assistants (demo catalog)">
+      <Page title="AI Agents" subtitle="Autonomous assistants">
         <EmptyState title="Not authorized" description="Switch to a persona with AI Agents access." />
       </Page>
     );
   }
 
   return (
-    <Page title="AI Agents" subtitle="Overview of planned Infotech agents — demo catalog only">
-      <DemoBanner text="These agents are not connected to actual AI services. Status reflects frontend prototype readiness only." />
+    <Page title="AI Agents">
       <div className="agent-grid">
         {AI_AGENTS.map((agent) => (
           <Card key={agent.id} title={agent.name} className="agent-card">
@@ -651,9 +644,6 @@ export function AiAgentsPage() {
           </Card>
         ))}
       </div>
-      <p className="note">
-        Try suggested prompts in <Link to="/ai/copilot">AI Copilot</Link> — same mock data, no live models.
-      </p>
     </Page>
   );
 }
@@ -693,8 +683,7 @@ export function IntegrationsPage() {
   }
 
   return (
-    <Page title="Integration Center" subtitle="SSO, collaboration, workforce and payroll connectors (demo)">
-      <DemoBanner />
+    <Page title="Integration Center" subtitle="SSO, collaboration, workforce and payroll connectors">
       {toast && <Banner message={{ tone: "ok", text: toast }} />}
       <div className="grid-2">
         {integrations.map((item) => (
@@ -744,7 +733,7 @@ export function IntegrationsPage() {
           title={`${active.name} · logs`}
           action={
             <button className="btn" type="button" onClick={() => requestRetry(active.id)} disabled={active.status === "Not configured"}>
-              Retry sync (demo)
+              Retry sync
             </button>
           }
         >
@@ -761,7 +750,7 @@ export function IntegrationsPage() {
 
       <Dialog
         open={reviewOpen}
-        title="Authorized review required (simulated)"
+        title="Authorized review required"
         onClose={() => { setReviewOpen(false); setPendingRetry(null); }}
         actions={
           <>
@@ -777,7 +766,6 @@ export function IntegrationsPage() {
         <p>
           Retrying a connector updates mock last-sync and logs in localStorage only. No external system is contacted.
         </p>
-        <p className="note">Sensitive platform actions require this simulated authorized review step.</p>
       </Dialog>
     </Page>
   );
@@ -793,14 +781,14 @@ export function PayrollPage() {
 
   if (!hasModuleAccess(demoProfile, "payroll") && !hasModuleAccess(demoProfile, "*")) {
     return (
-      <Page title="Payroll" subtitle="External payroll integration placeholder">
+      <Page title="Payroll" subtitle="External payroll integration">
         <EmptyState title="Not authorized" description="Switch to Compensation or Admin to view Payroll." />
       </Page>
     );
   }
 
   return (
-    <Page title="Payroll" subtitle="Integration status only — processing is out of scope">
+    <Page title="Payroll" subtitle="Integration status">
       <Banner
         message={{
           tone: "err",
@@ -831,13 +819,12 @@ export function PayrollPage() {
               <dd>{payrollConn?.lastSync ?? PAYROLL_STATUS.lastSync}</dd>
             </div>
             <div className="info-fact">
-              <dt>Records (demo)</dt>
+              <dt>Records</dt>
               <dd>{payrollConn?.recordsProcessed ?? 500}</dd>
             </div>
           </dl>
           <p className="note">
-            Manage connector retries in <Link to="/integrations">Integration Center</Link>. Employee-facing{" "}
-            <Link to="/payslips">payslips</Link> use seed data, not a payroll engine.
+            Manage connector retries in <Link to="/integrations">Integration Center</Link>.
           </p>
         </Card>
         <Card title="Not in this product scope">
@@ -863,8 +850,11 @@ export function AdminPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [draftPerms, setDraftPerms] = useState<string[]>([]);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const prefs = listNotificationPrefs();
   const audit = listAuditLog();
+  // HR can open the console but only platform admins change permissions / settings.
+  const canEdit = canEditRolePermissions(demoProfile.role);
 
   if (!hasModuleAccess(demoProfile, "administration") && !hasModuleAccess(demoProfile, "*")) {
     return (
@@ -879,31 +869,41 @@ export function AdminPage() {
   function openEditor(accountId: string) {
     const acc = DEMO_ACCOUNTS.find((a) => a.id === accountId);
     if (!acc) return;
+    setSaveError("");
     setEditId(accountId);
     setDraftPerms(effectiveNavIds(accountId, acc.navAccess.filter((x) => x !== "*") as string[]));
   }
 
+  const editingSelf = editId === employee.id;
+  const editable = canEdit && !editingSelf;
+
   function togglePerm(id: string) {
+    if (!editable) return;
     setDraftPerms((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
   }
 
   function requestSave() {
+    if (!editable) return;
     setReviewOpen(true);
   }
 
   function confirmSave() {
     if (!editId) return;
-    saveRoleEdit(editId, draftPerms, employee.email);
+    const error = saveRoleEdit(editId, draftPerms, { id: employee.id, email: employee.email, role: demoProfile.role });
     setReviewOpen(false);
+    if (error) {
+      setSaveError(error);
+      return;
+    }
+    setSaveError("");
     setEditId(null);
   }
 
   return (
-    <Page title="Administration" subtitle="Demo users, roles, countries, org settings, audit & notifications">
-      <DemoBanner text="Administration edits are stored in browser localStorage for this prototype. They do not change signed-in identity mid-session unless you re-apply role overlays in a later build." />
+    <Page title="Administration" subtitle="Users, roles, countries, org settings, audit & notifications">
       <Tabs
         tabs={[
-          { id: "users", label: "Demo users" },
+          { id: "users", label: "Users" },
           { id: "roles", label: "Roles & permissions" },
           { id: "country", label: "Country & legal entity" },
           { id: "org", label: "Organization & locations" },
@@ -915,13 +915,8 @@ export function AdminPage() {
       />
 
       {tab === "users" && (
-        <Card title="Demo org chart">
-          <p className="note" style={{ marginTop: 0 }}>
-            Same chart every role sees under <Link to="/org-chart">Me → Org chart</Link>. Reporting ≠ permissions —
-            Sophie/Helen/Alex/Jordan access still comes from their roles.
-          </p>
+        <Card title="Org chart">
           <OrgChart />
-          <p className="note">Passwords are listed on the login demo panel. Use the profile menu role switcher to change persona.</p>
         </Card>
       )}
 
@@ -929,7 +924,7 @@ export function AdminPage() {
         <Card
           title="Role & permission editor"
           action={
-            editing ? (
+            editing && editable ? (
               <button className="btn" type="button" onClick={requestSave}>
                 Save with review…
               </button>
@@ -950,18 +945,34 @@ export function AdminPage() {
               ))}
             </select>
           </FilterBar>
-          {!editing && <EmptyState title="Select a user" description="Edit a subset of module permissions for demo overlays." />}
+          {!canEdit && (
+            <Banner message={{ tone: "err", text: "Read-only: only Admin or Super Admin can change role permissions." }} />
+          )}
+          {canEdit && editingSelf && (
+            <Banner message={{ tone: "err", text: "You cannot change permissions on your own account." }} />
+          )}
+          {saveError && <Banner message={{ tone: "err", text: saveError }} />}
+          {!editing && (
+            <EmptyState
+              title="Select a user"
+              description={canEdit ? "Edit a subset of module permissions for demo overlays." : "View module permissions for demo users."}
+            />
+          )}
           {editing && (
             <>
               <p>
                 Editing <strong>{editing.personaLabel}</strong> ({editing.email}) · baseline role {roleLabel(editing.role)}
               </p>
-              <p className="note">Changes are demo overlays only. They do not elevate the currently signed-in session automatically.</p>
               <ul className="perm-grid">
                 {ROLE_PERMISSION_CATALOG.map((p) => (
                   <li key={p.id}>
                     <label className="perm-item">
-                      <input type="checkbox" checked={draftPerms.includes(p.id)} onChange={() => togglePerm(p.id)} />
+                      <input
+                        type="checkbox"
+                        checked={draftPerms.includes(p.id)}
+                        disabled={!editable}
+                        onChange={() => togglePerm(p.id)}
+                      />
                       <span>
                         <strong>{p.label}</strong>
                         <span className="note">{p.description}</span>
@@ -1048,24 +1059,23 @@ export function AdminPage() {
       )}
 
       {tab === "notifications" && (
-        <Card title="Notification preferences (demo)">
+        <Card title="Notification preferences">
           <DataTable
             headers={["Channel", "Description", "Email", "In-app", "Digests"]}
             rows={prefs.map((p) => [
               p.channel,
               p.description,
-              <PrefToggle key={`${p.id}-e`} checked={p.email} onChange={(v) => updateNotificationPref(p.id, { email: v })} />,
-              <PrefToggle key={`${p.id}-i`} checked={p.inApp} onChange={(v) => updateNotificationPref(p.id, { inApp: v })} />,
-              <PrefToggle key={`${p.id}-d`} checked={p.digests} onChange={(v) => updateNotificationPref(p.id, { digests: v })} />,
+              <PrefToggle key={`${p.id}-e`} disabled={!canEdit} checked={p.email} onChange={(v) => updateNotificationPref(p.id, { email: v })} />,
+              <PrefToggle key={`${p.id}-i`} disabled={!canEdit} checked={p.inApp} onChange={(v) => updateNotificationPref(p.id, { inApp: v })} />,
+              <PrefToggle key={`${p.id}-d`} disabled={!canEdit} checked={p.digests} onChange={(v) => updateNotificationPref(p.id, { digests: v })} />,
             ])}
           />
-          <p className="note">Toggles persist in localStorage and append a simulated audit row.</p>
         </Card>
       )}
 
       <Dialog
         open={reviewOpen}
-        title="Authorized review required (simulated)"
+        title="Authorized review required"
         onClose={() => setReviewOpen(false)}
         actions={
           <>
@@ -1082,17 +1092,25 @@ export function AdminPage() {
           You are about to save a demo permission overlay for <strong>{editing?.fullName}</strong>. This does not call a backend and
           does not elevate the currently signed-in session automatically.
         </p>
-        <p className="note">Sensitive administration actions require this simulated authorized review.</p>
       </Dialog>
     </Page>
   );
 }
 
-function PrefToggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function PrefToggle({
+  checked,
+  onChange,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
   return (
     <input
       type="checkbox"
       checked={checked}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.checked)}
       aria-label="Toggle preference"
     />

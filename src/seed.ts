@@ -163,8 +163,8 @@ export function createSeed(): PortalState {
         id: "lv-oct-wfh",
         employeeId: id,
         code: "wfh",
-        from: "2026-10-20",
-        to: "2026-10-20",
+        from: "2026-10-22",
+        to: "2026-10-22",
         reason: "Home repair appointment",
         status: "pending",
         appliedOn: "2026-10-08",
@@ -1246,6 +1246,7 @@ export function createSeed(): PortalState {
         status: "submitted",
       },
     ],
+    backdatedPermissions: [],
     investmentProofs: [
       {
         id: "poi-1",

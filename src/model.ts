@@ -1,5 +1,13 @@
 export type LeaveCode = "comp_off" | "pto" | "wfh" | "emergency_wfh" | "sick" | "casual" | "unpaid" | "bereavement";
 export type RequestStatus = "pending" | "approved" | "rejected" | "withdrawn";
+
+/** Who decided a request, when, and what they said — shown to the requester. */
+export interface DecisionInfo {
+  decidedById?: string;
+  decidedByName?: string;
+  decidedOn?: string;
+  decisionNote?: string;
+}
 export type TimesheetStatus = "draft" | "submitted" | "approved";
 export type OrgTimesheetStatus = "missing" | "draft" | "submitted" | "approved";
 
@@ -170,7 +178,7 @@ export interface LeavePolicy {
   quota: number;
 }
 
-export interface LeaveRequest {
+export interface LeaveRequest extends DecisionInfo {
   id: string;
   employeeId: string;
   code: LeaveCode;
@@ -181,7 +189,27 @@ export interface LeaveRequest {
   appliedOn: string;
 }
 
-export interface Encashment {
+/**
+ * Permission to apply for leave on past dates. Raised by the employee, decided by someone above them
+ * in the reporting line (or HR); once approved, the employee can apply for leave on those dates.
+ */
+export interface BackdatedLeavePermission {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  code: LeaveCode;
+  from: string;
+  to: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected" | "withdrawn" | "used";
+  requestedOn: string;
+  decidedById?: string;
+  decidedByName?: string;
+  decidedOn?: string;
+  decisionNote?: string;
+}
+
+export interface Encashment extends DecisionInfo {
   id: string;
   employeeId: string;
   code: LeaveCode;
@@ -272,7 +300,7 @@ export interface Payslip {
   deductions: PayLine[];
 }
 
-export interface Expense {
+export interface Expense extends DecisionInfo {
   id: string;
   employeeId: string;
   date: string;
@@ -280,7 +308,7 @@ export interface Expense {
   amount: number;
   description: string;
   projectId: string;
-  status: "submitted" | "approved" | "rejected";
+  status: "submitted" | "approved" | "rejected" | "withdrawn";
 }
 
 export interface TaskSubtask {
@@ -458,7 +486,7 @@ export interface AssetAssignment {
   condition: string;
 }
 
-export interface AssetRequest {
+export interface AssetRequest extends DecisionInfo {
   id: string;
   employeeId: string;
   item: string;
@@ -467,7 +495,7 @@ export interface AssetRequest {
   date: string;
 }
 
-export interface CashAdvance {
+export interface CashAdvance extends DecisionInfo {
   id: string;
   employeeId: string;
   amount: number;
@@ -478,7 +506,7 @@ export interface CashAdvance {
   date: string;
 }
 
-export interface SoftwareRequest {
+export interface SoftwareRequest extends DecisionInfo {
   id: string;
   employeeId: string;
   software: string;
@@ -487,7 +515,7 @@ export interface SoftwareRequest {
   date: string;
 }
 
-export interface CabBooking {
+export interface CabBooking extends DecisionInfo {
   id: string;
   employeeId: string;
   date: string;
@@ -509,7 +537,10 @@ export interface CafeteriaOrder {
   employeeId: string;
   menuItemId: string;
   date: string;
-  status: "placed";
+  status: "placed" | "cancelled";
+  /** Name and price at the time of ordering, so later menu changes don't rewrite history. */
+  itemName?: string;
+  unitPrice?: number;
 }
 
 export interface ChatMessage {
@@ -529,24 +560,24 @@ export interface ChatThread {
   messages: ChatMessage[];
 }
 
-export interface Reimbursement {
+export interface Reimbursement extends DecisionInfo {
   id: string;
   employeeId: string;
   date: string;
   category: string;
   amount: number;
   description: string;
-  status: "submitted" | "approved" | "rejected";
+  status: "submitted" | "approved" | "rejected" | "withdrawn";
 }
 
-export interface InvestmentProof {
+export interface InvestmentProof extends DecisionInfo {
   id: string;
   employeeId: string;
   section: string;
   title: string;
   amount: number;
   financialYear: string;
-  status: "submitted" | "verified" | "rejected";
+  status: "submitted" | "verified" | "rejected" | "withdrawn";
   submittedOn: string;
 }
 
@@ -560,8 +591,12 @@ export interface SignatureRecord {
 
 export interface PortalState {
   version: 25;
+  /** @deprecated single shared slot from older versions — migrated into `profiles` on load. */
   profilePhoto?: string;
+  /** @deprecated see `profiles`. */
   profile?: Pick<Employee, "fullName" | "designation" | "mobile" | "email" | "address" | "shiftName" | "shiftHours">;
+  /** Each person's own edits to their contact details and photo, keyed by employee id. */
+  profiles?: Record<string, ProfileOverride>;
   leavePolicies: LeavePolicy[];
   leaveRequests: LeaveRequest[];
   encashments: Encashment[];
@@ -592,6 +627,16 @@ export interface PortalState {
   absences: string[];
   reimbursements: Reimbursement[];
   investmentProofs: InvestmentProof[];
+  backdatedPermissions: BackdatedLeavePermission[];
+}
+
+/** What employees may change about themselves. Job title and shift are HR-owned. */
+export interface ProfileOverride {
+  fullName: string;
+  mobile: string;
+  email: string;
+  address: string;
+  photo?: string;
 }
 
 export interface LeaveRow {
@@ -806,11 +851,18 @@ export function leaveRows(
   holidays: Holiday[],
   employeeId: string,
   weeklyOffDays: number[] = [0, 6],
+  /** Leave year to count; quotas reset each calendar year. Omit to count every year. */
+  year?: number,
 ): LeaveRow[] {
   const dates = holidaySet(holidays);
+  const inYear = (iso: string) => year == null || iso.startsWith(String(year));
   return policies.map((policy) => {
-    const mine = requests.filter((request) => request.employeeId === employeeId && request.code === policy.code);
-    const encashed = encashments.filter((item) => item.employeeId === employeeId && item.code === policy.code);
+    const mine = requests.filter(
+      (request) => request.employeeId === employeeId && request.code === policy.code && inYear(request.from),
+    );
+    const encashed = encashments.filter(
+      (item) => item.employeeId === employeeId && item.code === policy.code && inYear(item.appliedOn),
+    );
     const utilized =
       sum(
         mine
@@ -836,15 +888,75 @@ export function leaveRows(
   });
 }
 
+/** An approved, unused permission that covers the whole requested range, if there is one. */
+export function backdatedPermissionFor(
+  state: PortalState,
+  employeeId: string,
+  from: string,
+  to: string,
+  code?: LeaveCode,
+  today: string = todayISO(),
+): BackdatedLeavePermission | undefined {
+  return (state.backdatedPermissions ?? []).find(
+    (p) =>
+      p.employeeId === employeeId &&
+      p.status === "approved" &&
+      (code == null || p.code === code) &&
+      p.from <= from &&
+      to <= p.to &&
+      (!p.decidedOn || addDaysISO(p.decidedOn, BACKDATED_PERMISSION_VALID_DAYS) >= today),
+  );
+}
+
+/** Approved backdated-leave permissions must be used within this many days. */
+export const BACKDATED_PERMISSION_VALID_DAYS = 30;
+/** Sick leave may be applied this many days after the fact without separate permission. */
+export const SICK_LEAVE_GRACE_DAYS = 7;
+/** Leave types that do not block logging work (you still work, just from elsewhere). */
+const WORKING_LEAVE: LeaveCode[] = ["wfh", "emergency_wfh"];
+
+export function addDaysISO(iso: string, days: number): string {
+  const date = parseISODate(iso);
+  date.setDate(date.getDate() + days);
+  return toISO(date);
+}
+
+/** Past dates need manager permission, except recent sick leave (people apply for that after being ill). */
+export function needsBackdatedPermission(code: LeaveCode, from: string, today: string = todayISO()): boolean {
+  if (from >= today) return false;
+  if (code === "sick" && from >= addDaysISO(today, -SICK_LEAVE_GRACE_DAYS)) return false;
+  return true;
+}
+
 export function validateLeave(
   state: PortalState,
   employeeId: string,
   input: LeaveInput,
   weeklyOffDays: number[] = [0, 6],
+  today: string = todayISO(),
 ): string | null {
   if (!input.reason.trim()) return "Enter a reason.";
   if (!input.from || !input.to) return "Choose the from and to dates.";
   if (input.to < input.from) return "The end date is before the start date.";
+  if (input.from.slice(0, 4) !== input.to.slice(0, 4)) {
+    return "Leave can't cross into the next year — split it into two requests.";
+  }
+  if (input.code === "sick" && input.from > today) return "Sick leave can't be booked in advance.";
+  if (
+    needsBackdatedPermission(input.code, input.from, today) &&
+    !backdatedPermissionFor(state, employeeId, input.from, input.to, input.code, today)
+  ) {
+    return input.code === "sick"
+      ? `Sick leave older than ${SICK_LEAVE_GRACE_DAYS} days needs your manager's permission first. Request permission for these dates.`
+      : "Leave for past dates needs approval from your manager first. Request permission for these dates.";
+  }
+  if (!WORKING_LEAVE.includes(input.code)) {
+    const worked = state.timesheets
+      .filter((sheet) => sheet.employeeId === employeeId)
+      .flatMap((sheet) => Object.entries(sheet.hours))
+      .find(([date, hours]) => hours > 0 && input.from <= date && date <= input.to);
+    if (worked) return `You logged work on ${formatLongDate(worked[0])}. Remove those hours before applying leave.`;
+  }
   const days = workingDays(input.from, input.to, holidaySet(state.holidays), weeklyOffDays);
   if (days <= 0) return "That range has no working days (weekly offs and holidays are skipped).";
   const row = leaveRows(
@@ -854,6 +966,7 @@ export function validateLeave(
     state.holidays,
     employeeId,
     weeklyOffDays,
+    Number(input.from.slice(0, 4)),
   ).find((item) => item.code === input.code);
   if (!row) return "Choose a leave type.";
   if (days > row.available) return `Only ${row.available} day(s) are available for ${row.name}.`;
@@ -885,11 +998,14 @@ export function blockingLeave(requests: LeaveRequest[], employeeId: string, date
     (request) =>
       request.employeeId === employeeId &&
       request.status === "approved" &&
-      (request.code === "pto" || request.code === "comp_off") &&
+      !WORKING_LEAVE.includes(request.code) &&
       request.from <= date &&
       date <= request.to,
   );
 }
+
+/** Most hours one person can log in a day across all projects. */
+export const MAX_DAILY_HOURS = 9;
 
 export function validateTimesheet(
   state: PortalState,
@@ -899,10 +1015,17 @@ export function validateTimesheet(
   weeklyOffDays: number[] = [0, 6],
 ): string | null {
   const dates = holidaySet(state.holidays);
+  const today = todayISO();
   let total = 0;
   for (const [date, value] of Object.entries(hours)) {
     if (!Number.isFinite(value) || value < 0) return "Hours cannot be negative.";
-    if (value > 9) return "A day cannot be more than 9 hours on this shift.";
+    if (value > 0 && date > today) return `${formatLongDate(date)} is in the future — log time after you've worked it.`;
+    const otherProjects = state.timesheets
+      .filter((sheet) => sheet.employeeId === employeeId && sheet.projectId !== project.id)
+      .reduce((sum, sheet) => sum + (sheet.hours[date] ?? 0), 0);
+    if (value + otherProjects > MAX_DAILY_HOURS) {
+      return `${formatLongDate(date)} would total ${value + otherProjects} hours across projects — the daily limit is ${MAX_DAILY_HOURS}.`;
+    }
     const day = parseISODate(date).getDay();
     if (weeklyOffDays.includes(day) && value > 0) {
       return `${formatLongDate(date)} is a weekly off on your schedule.`;
@@ -927,11 +1050,22 @@ export function validateExpense(input: {
   description: string;
 }): string | null {
   if (!input.date) return "Choose a date.";
+  const today = todayISO();
+  if (input.date > today) return "The expense date can't be in the future.";
+  if (input.date < addDaysISO(today, -EXPENSE_CLAIM_WINDOW_DAYS)) {
+    return `Expenses must be claimed within ${EXPENSE_CLAIM_WINDOW_DAYS} days.`;
+  }
   if (!input.category) return "Choose a category.";
   if (!input.description.trim()) return "Enter a description.";
   if (!Number.isFinite(input.amount) || input.amount <= 0) return "Enter an amount greater than zero.";
+  if (input.amount > MAX_CLAIM_AMOUNT) return `A single claim can't be more than ${MAX_CLAIM_AMOUNT.toLocaleString("en-IN")}. Split it or contact Finance.`;
   return null;
 }
+
+/** Claims older than this are rejected (typical reimbursement policy). */
+export const EXPENSE_CLAIM_WINDOW_DAYS = 90;
+/** Largest single expense / reimbursement claim accepted without Finance. */
+export const MAX_CLAIM_AMOUNT = 200000;
 
 export function toPayslipView(payslip: Payslip): PayslipView {
   const gross = sum(payslip.earnings.map((line) => line.amount));

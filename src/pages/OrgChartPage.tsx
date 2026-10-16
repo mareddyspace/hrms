@@ -6,7 +6,7 @@ export function OrgChartPage() {
   return (
     <Page
       title="Org chart"
-      subtitle={`${COMPANY_NAME} reporting tree — available to every persona under Me`}
+      subtitle={`${COMPANY_NAME} reporting tree`}
     >
       <Card title="Company hierarchy">
         <OrgChart />

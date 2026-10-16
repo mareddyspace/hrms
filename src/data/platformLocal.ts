@@ -68,7 +68,7 @@ export function retryIntegration(id: string): IntegrationCard | null {
   item.recordsProcessed += item.status === "Not configured" ? 0 : 25;
   item.logs = (
     [
-      { at: stamp, level: "info" as const, message: "Manual retry simulated in browser localStorage (demo-only)" },
+      { at: stamp, level: "info" as const, message: "Manual retry requested" },
       ...item.logs,
     ] as IntegrationCard["logs"]
   ).slice(0, 8);
@@ -76,7 +76,7 @@ export function retryIntegration(id: string): IntegrationCard | null {
   writeJson(INT_KEY, list);
   appendAudit({
     actor: "current-demo-user",
-    action: "Retry integration sync (demo)",
+    action: "Retry integration sync",
     target: item.name,
     outcome: "Simulated",
   });
@@ -109,7 +109,7 @@ export function updateNotificationPref(id: string, patch: Partial<NotificationPr
   writeJson(NOTIF_KEY, list);
   appendAudit({
     actor: "current-demo-user",
-    action: "Updated notification preference (demo)",
+    action: "Updated notification preference",
     target: id,
     outcome: "Simulated",
   });
@@ -122,15 +122,28 @@ export function getRoleEdits(): RoleEditMap {
   return readJson(ROLE_KEY, {});
 }
 
-export function saveRoleEdit(accountId: string, permissions: string[], actorEmail: string) {
+/** Only platform admins may change role permissions — and never on their own account. */
+export function canEditRolePermissions(actorRole: string): boolean {
+  return actorRole === "admin" || actorRole === "super_admin";
+}
+
+/** Returns an error message, or null when saved. */
+export function saveRoleEdit(
+  accountId: string,
+  permissions: string[],
+  actor: { id: string; email: string; role: string },
+): string | null {
+  if (!canEditRolePermissions(actor.role)) return "Only Admin or Super Admin can edit role permissions.";
+  if (accountId === actor.id) return "You cannot change permissions on your own account.";
   const map = { ...getRoleEdits(), [accountId]: permissions };
   writeJson(ROLE_KEY, map);
   appendAudit({
-    actor: actorEmail,
+    actor: actor.email,
     action: "Edited demo role permissions (authorized review simulated)",
     target: accountId,
     outcome: "Simulated",
   });
+  return null;
 }
 
 export function effectiveNavIds(accountId: string, baseline: readonly string[]): string[] {

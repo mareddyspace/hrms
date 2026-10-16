@@ -118,7 +118,7 @@ export function OrganizationPage() {
   return (
     <Page
       title="Organization"
-      subtitle={`${activeCountry.legalEntity} · demo region ${activeCountry.name} · hierarchy shared across Infotech`}
+      subtitle={`${activeCountry.legalEntity} · ${activeCountry.name}`}
     >
       <LocaleContextBanner />
       <FilterBar>
@@ -200,7 +200,7 @@ export function OrganizationPage() {
             rows={relationships}
             empty={<EmptyState title="No rows" description="No active employees for this filter." />}
           />
-          <p className="note">Showing up to 40 rows for prototype performance. Full directory is under People.</p>
+          <p className="note">Showing up to 40 rows. Full directory is under People.</p>
         </Card>
       )}
 
@@ -420,7 +420,6 @@ export function JobsPage() {
                 <li key={r}>{r}</li>
               ))}
             </ul>
-            <p className="note">Requisition workflow continues in Recruiting (prototype).</p>
             <Link to="/recruiting" className="btn" style={{ marginTop: 8, display: "inline-flex" }}>
               Open recruiting
             </Link>

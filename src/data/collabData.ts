@@ -1,5 +1,10 @@
 /** Infotech collaboration & workflow — fictional demo data only. */
 
+import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
+
+/** Seed rows that start out "already read" are marked read for every demo persona. */
+const SEEN_BY_ALL: string[] = DEMO_ACCOUNTS.map((a) => a.id);
+
 export const COLLAB_DISCLAIMER =
   "Demo collaboration only. Real-time messaging, email delivery, and external integrations are not operational without a backend.";
 
@@ -57,7 +62,8 @@ export interface ChatMessage {
   fromName: string;
   text: string;
   at: string;
-  read: boolean;
+  /** User ids who have read this message (the sender always counts as read). */
+  readBy: string[];
   attachmentName?: string;
 }
 
@@ -67,7 +73,6 @@ export interface Conversation {
   title: string;
   participantIds: string[];
   participantNames: string[];
-  unread: number;
   messages: ChatMessage[];
   /** When set, only authorized roles among participants may view the thread. */
   restricted?: "compensation" | "hr_confidential";
@@ -86,7 +91,10 @@ export interface Announcement {
   publishedAt?: string;
   scheduledFor?: string;
   author: string;
-  readByMe: boolean;
+  /** Persona id of the author, when known (used for manager Team-scope publishing). */
+  authorId?: string;
+  /** User ids who have read this announcement. */
+  readBy: string[];
 }
 
 export type NotifCategory =
@@ -118,8 +126,11 @@ export interface AppNotification {
   title: string;
   body: string;
   at: string;
-  read: boolean;
+  /** User ids who have read this notification. */
+  readBy: string[];
   audience: NotifAudience;
+  /** When set, only this user sees the notification (audience is ignored). */
+  recipientId?: string;
   href?: string;
   /** Primary CTA label (shown when actions[] omitted). */
   actionLabel?: string;
@@ -182,7 +193,8 @@ export function isManagerNotifRole(role: string): boolean {
   return role === "manager" || role === "hiring_manager";
 }
 
-export function notificationVisibleForRole(n: AppNotification, role: string): boolean {
+export function notificationVisibleForRole(n: AppNotification, role: string, userId?: string): boolean {
+  if (n.recipientId) return n.recipientId === userId;
   if (n.audience === "all") return true;
   if (n.audience === "manager") return isManagerNotifRole(role);
   return !isManagerNotifRole(role);
@@ -208,6 +220,9 @@ export interface HrRequest {
   subject: string;
   description: string;
   status: "Open" | "In progress" | "Waiting on you" | "Resolved" | "Closed";
+  /** Who raised the ticket. Older saved tickets lack this and are visible to HR only. */
+  requesterId?: string;
+  requesterName?: string;
   createdAt: string;
   updatedAt: string;
   comments: HrRequestComment[];
@@ -362,6 +377,27 @@ export function canAccessRestrictedChat(
   return true;
 }
 
+export const HR_ROLES = ["hr", "hr_admin", "hrbp"];
+export const ADMIN_ROLES = ["admin", "super_admin", "it_admin"];
+
+export function isHrRole(role: string): boolean {
+  return HR_ROLES.includes(role);
+}
+
+/**
+ * HR / admin may publish or unpublish any announcement; managers may only manage
+ * Team-scope posts they authored themselves.
+ */
+export function canManageAnnouncement(
+  a: Pick<Announcement, "scope" | "author" | "authorId">,
+  user: { id: string; fullName: string; role: string },
+): boolean {
+  if (isHrRole(user.role) || ADMIN_ROLES.includes(user.role)) return true;
+  if (!isManagerNotifRole(user.role)) return false;
+  const authored = a.authorId ? a.authorId === user.id : a.author === user.fullName;
+  return a.scope === "Team" && authored;
+}
+
 export const INBOX_SEED: InboxTask[] = [
   {
     id: "ib-1",
@@ -491,7 +527,6 @@ export const CONVERSATIONS_SEED: Conversation[] = [
     title: "Ram Krishnan",
     participantIds: ["emp-mahesh", "emp-ram"],
     participantNames: ["Babu Menon", "Ram Krishnan"],
-    unread: 1,
     messages: [
       {
         id: "m1",
@@ -499,7 +534,7 @@ export const CONVERSATIONS_SEED: Conversation[] = [
         fromName: "Ram Krishnan",
         text: "Can you update the timesheet before Friday standup?",
         at: "2026-10-13T16:02:00",
-        read: false,
+        readBy: ["emp-ram"],
       },
       {
         id: "m2",
@@ -507,7 +542,7 @@ export const CONVERSATIONS_SEED: Conversation[] = [
         fromName: "Babu Menon",
         text: "Will do — drafting now.",
         at: "2026-10-13T16:10:00",
-        read: true,
+        readBy: ["emp-mahesh", "emp-ram"],
       },
     ],
   },
@@ -517,7 +552,6 @@ export const CONVERSATIONS_SEED: Conversation[] = [
     title: "Meera Iyer",
     participantIds: ["emp-mahesh", "demo-hrbp"],
     participantNames: ["Babu Menon", "Meera Iyer"],
-    unread: 0,
     messages: [
       {
         id: "m3",
@@ -525,7 +559,7 @@ export const CONVERSATIONS_SEED: Conversation[] = [
         fromName: "Meera Iyer",
         text: "Your policy acknowledgement is still open — ping me if the link fails.",
         at: "2026-10-10T11:20:00",
-        read: true,
+        readBy: ["emp-mahesh", "demo-hrbp"],
       },
     ],
   },
@@ -535,7 +569,6 @@ export const CONVERSATIONS_SEED: Conversation[] = [
     title: "Engineering Bengaluru",
     participantIds: ["emp-mahesh", "emp-ram", "demo-learning"],
     participantNames: ["Babu Menon", "Ram Krishnan", "Priya Nair"],
-    unread: 2,
     messages: [
       {
         id: "m4",
@@ -543,7 +576,7 @@ export const CONVERSATIONS_SEED: Conversation[] = [
         fromName: "Ram Krishnan",
         text: "Sprint demo moved to Thursday 4pm IST.",
         at: "2026-10-14T08:15:00",
-        read: false,
+        readBy: ["emp-ram"],
       },
       {
         id: "m5",
@@ -551,7 +584,7 @@ export const CONVERSATIONS_SEED: Conversation[] = [
         fromName: "Priya Nair",
         text: "Secure coding module due end of month — please enroll.",
         at: "2026-10-14T09:00:00",
-        read: false,
+        readBy: ["demo-learning"],
         attachmentName: "secure-coding-outline-demo.txt",
       },
     ],
@@ -562,16 +595,15 @@ export const CONVERSATIONS_SEED: Conversation[] = [
     title: "Helen Brooks · Compensation case",
     participantIds: ["demo-compensation", "demo-hr-admin"],
     participantNames: ["Helen Brooks", "Farhan Ali"],
-    unread: 0,
     restricted: "compensation",
     messages: [
       {
         id: "m-comp-1",
         fromId: "demo-hr-admin",
         fromName: "Farhan Ali",
-        text: "Please review the band exception draft for L5 London (demo — confidential).",
+        text: "Please review the band exception draft for L5 London (confidential).",
         at: "2026-10-12T15:00:00",
-        read: true,
+        readBy: ["demo-compensation", "demo-hr-admin"],
       },
       {
         id: "m-comp-2",
@@ -579,7 +611,7 @@ export const CONVERSATIONS_SEED: Conversation[] = [
         fromName: "Helen Brooks",
         text: "Received — I'll mark the case in Comp review. Do not forward outside Comp/HR.",
         at: "2026-10-12T15:40:00",
-        read: true,
+        readBy: ["demo-compensation", "demo-hr-admin"],
       },
     ],
   },
@@ -589,7 +621,6 @@ export const CONVERSATIONS_SEED: Conversation[] = [
     title: "Farhan Ali · Employee relations",
     participantIds: ["demo-hr-admin", "demo-hrbp"],
     participantNames: ["Farhan Ali", "Meera Iyer"],
-    unread: 0,
     restricted: "hr_confidential",
     messages: [
       {
@@ -598,7 +629,7 @@ export const CONVERSATIONS_SEED: Conversation[] = [
         fromName: "Meera Iyer",
         text: "ER intake logged for demo case #ER-204 — keep this thread HR-only.",
         at: "2026-10-11T10:00:00",
-        read: true,
+        readBy: ["demo-hr-admin", "demo-hrbp"],
       },
     ],
   },
@@ -614,7 +645,7 @@ export const ANNOUNCEMENTS_SEED: Announcement[] = [
     state: "Published",
     publishedAt: "2026-10-08T10:00:00",
     author: "Internal Comms",
-    readByMe: false,
+    readBy: [],
   },
   {
     id: "an-2",
@@ -625,7 +656,7 @@ export const ANNOUNCEMENTS_SEED: Announcement[] = [
     state: "Published",
     publishedAt: "2026-10-01T09:00:00",
     author: "People Ops IN",
-    readByMe: true,
+    readBy: SEEN_BY_ALL,
   },
   {
     id: "an-3",
@@ -636,18 +667,20 @@ export const ANNOUNCEMENTS_SEED: Announcement[] = [
     state: "Published",
     publishedAt: "2026-10-11T12:00:00",
     author: "Ram Krishnan",
-    readByMe: false,
+    authorId: "emp-ram",
+    readBy: [],
   },
   {
     id: "an-4",
     title: "Team lunch · Platform squad",
-    body: "Optional team lunch Thursday — RSVP in the channel (demo).",
+    body: "Optional team lunch Thursday — RSVP in the channel.",
     scope: "Team",
     audience: "Platform squad",
     state: "Scheduled",
     scheduledFor: "2026-10-16T08:00:00",
     author: "Ram Krishnan",
-    readByMe: false,
+    authorId: "emp-ram",
+    readBy: [],
   },
   {
     id: "an-5",
@@ -657,7 +690,7 @@ export const ANNOUNCEMENTS_SEED: Announcement[] = [
     audience: "United States",
     state: "Draft",
     author: "Helen Brooks",
-    readByMe: false,
+    readBy: [],
   },
 ];
 
@@ -669,7 +702,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Leave approved",
     body: "Your WFH on 3 Oct was approved by Ram Krishnan.",
     at: "2026-10-01T16:41:00",
-    read: false,
+    readBy: [],
     audience: "employee",
     href: "/leave",
     actionLabel: "View Calendar",
@@ -681,7 +714,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Timesheet reminder",
     body: "Submit timesheet for week of 13 Oct.",
     at: "2026-10-14T08:00:00",
-    read: false,
+    readBy: [],
     audience: "employee",
     href: "/timesheet",
     actionLabel: "Open Timesheet",
@@ -693,7 +726,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "New message from Ram Krishnan",
     body: "Can you update the timesheet before Friday standup?",
     at: "2026-10-13T16:02:00",
-    read: false,
+    readBy: [],
     audience: "employee",
     href: "/chat",
     actionLabel: "Open Message",
@@ -705,7 +738,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Upcoming holiday",
     body: "Dussehra holiday appears on your calendar next week.",
     at: "2026-10-12T07:00:00",
-    read: true,
+    readBy: SEEN_BY_ALL,
     audience: "all",
     href: "/calendar",
     actionLabel: "View Calendar",
@@ -720,7 +753,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Learning deadline",
     body: "Secure coding fundamentals due 31 Oct.",
     at: "2026-10-10T09:00:00",
-    read: false,
+    readBy: [],
     audience: "employee",
     href: "/programs",
     actionLabel: "Review",
@@ -732,7 +765,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Performance review reminder",
     body: "H2 mid-year self-assessment still in Draft.",
     at: "2026-10-09T10:00:00",
-    read: false,
+    readBy: [],
     audience: "employee",
     href: "/evaluations",
     actionLabel: "Review",
@@ -744,7 +777,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "HR announcement",
     body: "Q4 All-hands published — open Announcements to read.",
     at: "2026-10-08T10:05:00",
-    read: false,
+    readBy: [],
     audience: "all",
     href: "/announcements",
     actionLabel: "Open",
@@ -758,7 +791,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Leave approval · Diya Patel",
     body: "PTO 16–17 Oct (2 working days) waiting on your approval.",
     at: "2026-10-14T09:20:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/approvals",
     inboxTaskId: "ib-1",
@@ -778,7 +811,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Leave request · Kabir Sharma",
     body: "PTO 14–16 Oct — currently on leave; confirm sprint coverage.",
     at: "2026-10-13T11:05:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/leave",
     actionLabel: "View Calendar",
@@ -794,7 +827,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Timesheet submitted · Kabir Sharma",
     body: "Week of 6 Oct · 40h on Project Maple Health awaiting review.",
     at: "2026-10-13T18:10:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/timesheet",
     inboxTaskId: "ib-2",
@@ -812,7 +845,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Timesheet submitted · Anu Rao",
     body: "Week of 6 Oct · performance cycle hours need your sign-off.",
     at: "2026-10-13T17:40:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/timesheet",
     actionLabel: "Open Timesheet",
@@ -827,7 +860,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Attendance correction · Babu Menon",
     body: "Missed check-out on 10 Oct · requested correction to 18:32.",
     at: "2026-10-11T08:05:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/attendance",
     inboxTaskId: "ib-3",
@@ -845,7 +878,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Missing check-in · Diya Patel",
     body: "No clock-in recorded this morning (office expected). Follow up or mark exception.",
     at: "2026-10-14T10:15:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/attendance",
     actionLabel: "View Attendance",
@@ -861,7 +894,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "New message · Babu Menon",
     body: "Asked about sprint scope for Maple Health UAT this week.",
     at: "2026-10-14T08:42:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/chat",
     actionLabel: "Open Message",
@@ -873,7 +906,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "New message · Priya Nair",
     body: "Shared L&D session notes and asked for mid-year check-in slot.",
     at: "2026-10-13T15:20:00",
-    read: true,
+    readBy: SEEN_BY_ALL,
     audience: "manager",
     href: "/chat",
     actionLabel: "Open Message",
@@ -885,7 +918,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "HR announcement · Q4 All-hands",
     body: "All-hands on 22 Oct — share with your reports and block calendars.",
     at: "2026-10-08T10:05:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/announcements",
     actionLabel: "Open",
@@ -897,7 +930,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Upcoming holiday · Dussehra",
     body: "20 Oct public holiday (India). Plan sprint capacity for your team.",
     at: "2026-10-12T07:00:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/calendar",
     actionLabel: "View Calendar",
@@ -912,7 +945,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Review due · Priya Nair",
     body: "Mid-year check-in scheduled 18 Oct — prepare feedback notes.",
     at: "2026-10-12T09:00:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/evaluations",
     actionLabel: "Review",
@@ -928,7 +961,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Learning deadline · team mandatory",
     body: "2 direct reports still pending Secure coding fundamentals (due 31 Oct).",
     at: "2026-10-10T09:30:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/programs",
     actionLabel: "Review",
@@ -943,7 +976,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "New joiner · Isha Reddy",
     body: "Engineer started 06 Oct — schedule 30-day check-in and buddy intro.",
     at: "2026-10-06T09:00:00",
-    read: true,
+    readBy: SEEN_BY_ALL,
     audience: "manager",
     href: "/team",
     actionLabel: "Open",
@@ -958,7 +991,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     title: "Coverage risk · leave today",
     body: "1 report on leave today (Kabir). Confirm Maple Health ownership before standup.",
     at: "2026-10-14T07:30:00",
-    read: false,
+    readBy: [],
     audience: "manager",
     href: "/team",
     actionLabel: "Review",
@@ -988,8 +1021,10 @@ export const HR_REQUESTS_SEED: HrRequest[] = [
     id: "hr-1",
     category: "Documents",
     subject: "Employment letter for bank KYC",
-    description: "Need employment particulars letter for account opening (demo).",
+    description: "Need employment particulars letter for account opening.",
     status: "Resolved",
+    requesterId: "emp-mahesh",
+    requesterName: "Babu Menon",
     createdAt: "2026-09-01",
     updatedAt: "2026-09-03",
     comments: [
@@ -1003,11 +1038,13 @@ export const HR_REQUESTS_SEED: HrRequest[] = [
     subject: "Add dependent to medical plan",
     description: "Please add spouse to Group Medical (India).",
     status: "In progress",
+    requesterId: "emp-mahesh",
+    requesterName: "Babu Menon",
     createdAt: "2026-10-05",
     updatedAt: "2026-10-12",
     comments: [
       { at: "2026-10-05T09:30:00", author: "Babu Menon", text: "Submitted dependent details." },
-      { at: "2026-10-12T10:00:00", author: "HR Ops", text: "Waiting on insurer confirmation (demo)." },
+      { at: "2026-10-12T10:00:00", author: "HR Ops", text: "Waiting on insurer confirmation." },
     ],
   },
 ];
