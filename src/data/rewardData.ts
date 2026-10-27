@@ -137,12 +137,28 @@ export type LetterType =
   | "Salary revision"
   | "Experience"
   | "Relieving"
-  | "Confirmation";
+  | "Confirmation"
+  | "NOC"
+  | "Visa/Travel"
+  | "Address proof";
 
 export type LetterStatus = "Draft" | "Pending approval" | "Approved" | "Rejected" | "Issued";
 
 /** Letters that must stay hidden from their subject until issued. */
 export const SENSITIVE_LETTER_TYPES: LetterType[] = ["Salary revision", "Promotion"];
+
+/** One generated, approved version of a letter. The markup is frozen at generation time. */
+export interface IssuedLetter {
+  docId: string;
+  version: number;
+  referenceNo: string;
+  generatedOn: string;
+  generatedBy: string;
+  approvedBy: string;
+  approvedOn: string;
+  /** Rendered letter body (HTML, escaped). Wrapped in the print stylesheet when opened. */
+  html: string;
+}
 
 export interface LetterRequest {
   id: string;
@@ -159,6 +175,14 @@ export interface LetterRequest {
   note: string;
   /** Template preview body — not a legal document */
   previewBody: string;
+  /** Type-specific input, e.g. destination for a travel letter or purpose for a NOC. */
+  details?: string;
+  /** Effective date entered by HR (transfer, confirmation…). */
+  effectiveDate?: string;
+  /** Account id of whoever approved or rejected. */
+  approverId?: string;
+  /** Generated versions, oldest first. The last one is current. */
+  issued?: IssuedLetter[];
 }
 
 export interface DocLibraryItem {
@@ -174,6 +198,9 @@ export interface DocLibraryItem {
   /** text or data-url preview */
   preview: string;
   isDemoFile: boolean;
+  /** Generated letters: the request and document id, so the PDF can be opened. */
+  letterId?: string;
+  docId?: string;
 }
 
 export const GRADE_BANDS: GradeBand[] = [
@@ -371,17 +398,38 @@ export const BENEFIT_HISTORY: BenefitHistoryRow[] = [
   { id: "bh-3", employeeId: "demo-hiring-manager", date: "2025-11-15", event: "Open enrollment", detail: "Confirmed PPO + 401(k)" },
 ];
 
-export const LETTER_TEMPLATES: { type: LetterType; description: string }[] = [
-  { type: "Offer", description: "Offer letter template — not a binding offer" },
-  { type: "Appointment", description: "Appointment confirmation template" },
-  { type: "Employment", description: "Employment particulars summary" },
-  { type: "Promotion", description: "Promotion notification template" },
-  { type: "Transfer", description: "Internal transfer confirmation" },
-  { type: "Salary revision", description: "Salary revision notice template" },
-  { type: "Experience", description: "Experience letter template" },
-  { type: "Relieving", description: "Relieving letter — issued on the last working day" },
-  { type: "Confirmation", description: "Confirmation of employment after probation" },
+export interface LetterTemplateInfo {
+  type: LetterType;
+  label: string;
+  description: string;
+  /** Employees may request this for themselves; HR can issue any type. */
+  employeeCanRequest: boolean;
+  /** Pay letters carry salary from compensation data. */
+  payLetter: boolean;
+  /** Label for the type-specific input, when the letter needs one. */
+  detailsLabel?: string;
+  /** HR enters an effective date for this letter. */
+  effectiveInput?: boolean;
+}
+
+export const LETTER_TEMPLATES: LetterTemplateInfo[] = [
+  { type: "Employment", label: "Employment certificate", description: "Confirms current employment, role and joining date.", employeeCanRequest: true, payLetter: false },
+  { type: "Experience", label: "Experience letter", description: "Service period and role. Available after exit.", employeeCanRequest: true, payLetter: false },
+  { type: "Relieving", label: "Relieving letter", description: "Confirms release from duties on the last working day.", employeeCanRequest: false, payLetter: false },
+  { type: "Offer", label: "Offer letter", description: "Role, grade, start date and base salary.", employeeCanRequest: false, payLetter: true },
+  { type: "Appointment", label: "Appointment letter", description: "Formal appointment with grade, manager and salary.", employeeCanRequest: false, payLetter: true },
+  { type: "Confirmation", label: "Confirmation letter", description: "Confirms employment after probation.", employeeCanRequest: false, payLetter: false, effectiveInput: true },
+  { type: "Promotion", label: "Promotion letter", description: "New grade and salary from the approved review.", employeeCanRequest: false, payLetter: true },
+  { type: "Salary revision", label: "Salary revision letter", description: "Revised base salary from compensation data.", employeeCanRequest: false, payLetter: true },
+  { type: "Transfer", label: "Transfer letter", description: "Move to a new location or department.", employeeCanRequest: false, payLetter: false, detailsLabel: "New location / department", effectiveInput: true },
+  { type: "NOC", label: "No objection certificate", description: "No objection for a stated purpose.", employeeCanRequest: true, payLetter: false, detailsLabel: "Purpose" },
+  { type: "Visa/Travel", label: "Visa / travel letter", description: "Supports a visa or travel application.", employeeCanRequest: true, payLetter: false, detailsLabel: "Destination and travel dates" },
+  { type: "Address proof", label: "Address proof letter", description: "Confirms the address on the employee record.", employeeCanRequest: true, payLetter: false },
 ];
+
+export function letterTemplate(type: LetterType): LetterTemplateInfo {
+  return LETTER_TEMPLATES.find((t) => t.type === type) ?? LETTER_TEMPLATES[0];
+}
 
 export const LETTER_REQUESTS: LetterRequest[] = [
   {

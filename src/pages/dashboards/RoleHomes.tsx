@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { countUnreadNotificationsFor } from "../../data/notificationFeed.ts";
 import { Link } from "react-router-dom";
 import { COMPANY_NAME } from "../../brand.ts";
 import { Card, DataTable, LeaveTable, MetricCard, MetricGrid, StatusBadge, StatusPill } from "../../components/ui.tsx";
@@ -47,7 +48,6 @@ import {
   subscribeAttendance,
 } from "../../data/attendanceLocal.ts";
 import {
-  countUnreadNotifications,
   getCollabState,
   listNotificationsForRole,
   notifPrefsFor,
@@ -413,7 +413,7 @@ export function EmployeeHome() {
   const myNotes = listNotificationsForRole(demoProfile.role, employee.id)
     .filter((n) => prefs[notifPrefKey(n.category)] !== false)
     .sort((a, b) => b.at.localeCompare(a.at));
-  const unread = countUnreadNotifications(demoProfile.role, employee.id);
+  const unread = countUnreadNotificationsFor(employee.id, state, demoProfile.role);
 
   function punch(action: "check_in" | "end_break" | "check_out") {
     setPunchError(attendanceAction(employee.id, action, dayContext));

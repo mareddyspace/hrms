@@ -10,6 +10,7 @@ import {
 } from "./attendanceData.ts";
 import { formatShortDate, parseISODate, toISO, todayISO } from "../model.ts";
 import { managementChain } from "../demoAccounts.ts";
+import { delegatedAuthority } from "./delegations.ts";
 
 const KEY = "timez.attendance.state.v1";
 const CORRECTION_WINDOW_DAYS = 30;
@@ -295,7 +296,10 @@ export function decideCorrection(
   if (!row) return "Correction not found.";
   if (row.employeeId === approver.id) return "You cannot decide your own correction request.";
   // Corrections are decided by the reporting line, like every other request.
-  const inLine = managementChain(row.employeeId).some((m) => m.id === approver.id);
+  // An active approval delegation covering attendance corrections counts too (§25).
+  const inLine =
+    managementChain(row.employeeId).some((m) => m.id === approver.id) ||
+    delegatedAuthority(approver.id, row.employeeId, "attendance") !== null;
   if (!inLine) return "Only someone above this person in their reporting line can review this correction.";
   if (row.status !== "Pending") return "This request was already decided.";
   update((s) => {

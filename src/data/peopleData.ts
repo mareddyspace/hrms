@@ -300,6 +300,9 @@ const CEO_ID = "demo-ceo";
  */
 function personaManagerId(account: (typeof DEMO_ACCOUNTS)[number], workforce: WorkforceRow[]): string {
   if (account.id === CEO_ID) return "";
+  // A Country Manager account holds a generated seat: keep that seat's manager (the CEO).
+  const seat = workforce.find((w) => w.id === account.id);
+  if (seat) return seat.managerId;
   const fixed = PERSONA_FIXED_MANAGER[account.id];
   if (fixed) return fixed;
   const countryCode = account.countryCode ?? "IN";
@@ -364,7 +367,10 @@ function buildBasePeople(): PersonRecord[] {
     const department = account.department ?? "Engineering";
     const family = familyForDepartment(department);
     const managerId = personaManagerId(account, workforce);
-    const facts = NAMED_PEOPLE[account.id] ?? { gender: "Unspecified", dateOfJoining: "2020-01-06" };
+    // Accounts that hold a generated directory seat (Country Managers) keep that seat's facts and position.
+    const seat = workforce.find((w) => w.id === account.id);
+    const facts = NAMED_PEOPLE[account.id] ??
+      (seat ? { gender: seat.gender, dateOfJoining: seat.dateOfJoining } : { gender: "Unspecified", dateOfJoining: "2020-01-06" });
     return {
       id: account.id,
       employeeCode: account.employeeCode,
@@ -380,8 +386,8 @@ function buildBasePeople(): PersonRecord[] {
       designation: account.designation,
       jobFamily: family,
       jobProfileId: jobProfileFor(account.designation, family)?.id ?? "",
-      positionId: positionIdFor(department, country.code, account.employeeCode),
-      grade: gradeForTitle(account.designation),
+      positionId: seat?.positionId ?? positionIdFor(department, country.code, account.employeeCode),
+      grade: seat?.grade ?? gradeForTitle(account.designation),
       department,
       division: divisionForDepartment(department),
       businessUnit: `Infotech ${country.name}`,
@@ -392,7 +398,7 @@ function buildBasePeople(): PersonRecord[] {
       legalEntity: account.legalEntity ?? LEGAL_BY_COUNTRY[country.code],
       managerId,
       managerName: managerId ? nameById.get(managerId) ?? "" : "",
-      availability: "In Office",
+      availability: seat?.availability ?? "In Office",
       timeZone: account.timeZone,
       currency: account.currency ?? country.currency,
       address: account.address,

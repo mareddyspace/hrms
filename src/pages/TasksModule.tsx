@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Banner,
   Card,
@@ -110,7 +110,15 @@ export function TasksPage() {
 
   const [tab, setTab] = useState<TaskTab>(isManager ? "dashboard" : "mine");
   const [view, setView] = useState<ViewMode>("list");
-  const [selectedId, setSelectedId] = useState(scopeTasks.find((task) => task.status !== "done")?.id ?? scopeTasks[0]?.id ?? "");
+  // A notification link (/tasks?task=TSK-…) opens that task directly.
+  const [params] = useSearchParams();
+  const linked = params.get("task");
+  const [selectedId, setSelectedId] = useState(
+    (linked && scopeTasks.find((task) => task.id === linked || (task as { code?: string }).code === linked)?.id) ||
+      scopeTasks.find((task) => task.status !== "done")?.id ||
+      scopeTasks[0]?.id ||
+      "",
+  );
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [calCursor, setCalCursor] = useState(() => {
     const now = new Date();

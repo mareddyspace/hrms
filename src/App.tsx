@@ -1,70 +1,91 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { getPreferences } from "./data/preferences.ts";
-import { PersonalisationPage } from "./pages/PersonalisationPage.tsx";
-import { AuditLogPage } from "./pages/AuditLogPage.tsx";
+
 import { Shell } from "./components/Shell.tsx";
-import { ExpensesPage } from "./pages/ExpensesPage.tsx";
-import { MailPage } from "./pages/MailPage.tsx";
-import { LoginPage, TermsPage } from "./pages/InfoPages.tsx";
-import { LeavePage } from "./pages/LeavePage.tsx";
-import { Dashboard } from "./pages/Dashboard.tsx";
-import { PayslipDetail, PayslipsPage } from "./pages/PayslipsPage.tsx";
-import { PayPreviewPage } from "./pages/PayPreviewPage.tsx";
-import { CalendarPage } from "./pages/CalendarPage.tsx";
-import { OrgChartPage } from "./pages/OrgChartPage.tsx";
-import { PersonProfilePage } from "./pages/PersonProfilePage.tsx";
-import { AttendancePage, HolidaysPage, MyInfo, ProjectsPage } from "./pages/ProfilePages.tsx";
-import { AssetsPage, CashPage, EncashmentPage, SoftwarePage } from "./pages/RequestPages.tsx";
-import { MyPoliciesPage } from "./pages/MyPoliciesPage.tsx";
-import { EvaluationsPage, ProgramsPage, TasksPage } from "./pages/TeamPages.tsx";
-import {
-  AnnouncementsPage,
-  ChatPage,
-  HelpPage,
-  NotificationCenterPage,
-} from "./pages/CollabModules.tsx";
-import { DirectoryPage, PeopleDetailPage, PeopleNewPage } from "./pages/PeopleModule.tsx";
-import { JobsPage, OrganizationPage } from "./pages/OrganizationJobsPages.tsx";
-import { BenefitsPage, CompensationPage, DocumentsPage } from "./pages/RewardModules.tsx";
-import {
-  CountryAdminPage,
-  CountryBenefitsConfigPage,
-  CountryDocumentsConfigPage,
-  LocaleSettingsPage,
-} from "./pages/LocalePages.tsx";
-import { InvestmentProofPage, ReimbursementPage } from "./pages/PayExtrasPages.tsx";
-import { TimesheetPage } from "./pages/TimesheetPage.tsx";
-import { TicketsPage } from "./pages/TicketsPage.tsx";
-import {
-  AdminPage,
-  AiAgentsPage,
-  AiCopilotPage,
-  AnalyticsPage,
-  IntegrationsPage,
-  MyTeamPage,
-  OnboardingPage,
-  PayrollPage,
-  RecruitingPage,
-  SkillsCareerPage,
-  WorkflowsPage,
-} from "./pages/TimezModules.tsx";
-import { ApprovalsCenterPage } from "./pages/ApprovalsCenter.tsx";
-import { AllExitsPage, MyExitPage, TeamExitsPage } from "./features/lifecycle/ExitPages.tsx";
-import { MyProbationPage, ProbationReviewsPage } from "./features/lifecycle/ProbationPages.tsx";
-import { ImmigrationPage } from "./features/compliance/ImmigrationPage.tsx";
-import { PrivacyCentrePage } from "./features/compliance/PrivacyCentrePage.tsx";
-import { GrievancePage } from "./features/compliance/GrievancePage.tsx";
-import { BackgroundChecksPage } from "./features/compliance/BackgroundChecksPage.tsx";
-import { EngagementSurveysPage, InternalJobBoardPage, SuccessionPage } from "./features/talentplus/index.ts";
-import { BulkDataPage } from "./features/datatools/BulkDataPage.tsx";
-import { ReportBuilderPage } from "./features/datatools/ReportBuilderPage.tsx";
-import { ShiftRosterPage } from "./features/workforce/ShiftRosterPage.tsx";
-import { OptionalHolidaysPage } from "./features/workforce/OptionalHolidaysPage.tsx";
-import { ContractorsPage } from "./features/workforce/ContractorsPage.tsx";
+
+import { LoginPage } from "./pages/InfoPages.tsx";
+
 import { EmptyState, Page } from "./components/ui.tsx";
 import { accountHasNavAccess, type NavAccessId } from "./demoAccounts.ts";
 import { usePortal } from "./store.tsx";
+
+// Pages load on first visit, so the first screen opens fast.
+const PersonalisationPage = lazy(() => import("./pages/PersonalisationPage.tsx").then((m) => ({ default: m.PersonalisationPage })));
+const AuditLogPage = lazy(() => import("./pages/AuditLogPage.tsx").then((m) => ({ default: m.AuditLogPage })));
+const ExpensesPage = lazy(() => import("./pages/ExpensesPage.tsx").then((m) => ({ default: m.ExpensesPage })));
+const MailPage = lazy(() => import("./pages/MailPage.tsx").then((m) => ({ default: m.MailPage })));
+const TermsPage = lazy(() => import("./pages/InfoPages.tsx").then((m) => ({ default: m.TermsPage })));
+const LeavePage = lazy(() => import("./pages/LeavePage.tsx").then((m) => ({ default: m.LeavePage })));
+const TeamLeaveCalendarPage = lazy(() => import("./pages/TeamLeaveCalendar.tsx").then((m) => ({ default: m.TeamLeaveCalendarPage })));
+const Dashboard = lazy(() => import("./pages/Dashboard.tsx").then((m) => ({ default: m.Dashboard })));
+const PayslipDetail = lazy(() => import("./pages/PayslipsPage.tsx").then((m) => ({ default: m.PayslipDetail })));
+const PayslipsPage = lazy(() => import("./pages/PayslipsPage.tsx").then((m) => ({ default: m.PayslipsPage })));
+const PayPreviewPage = lazy(() => import("./pages/PayPreviewPage.tsx").then((m) => ({ default: m.PayPreviewPage })));
+const CalendarPage = lazy(() => import("./pages/CalendarPage.tsx").then((m) => ({ default: m.CalendarPage })));
+const OrgChartPage = lazy(() => import("./pages/OrgChartPage.tsx").then((m) => ({ default: m.OrgChartPage })));
+const PersonProfilePage = lazy(() => import("./pages/PersonProfilePage.tsx").then((m) => ({ default: m.PersonProfilePage })));
+const AttendancePage = lazy(() => import("./pages/ProfilePages.tsx").then((m) => ({ default: m.AttendancePage })));
+const HolidaysPage = lazy(() => import("./pages/ProfilePages.tsx").then((m) => ({ default: m.HolidaysPage })));
+const MyInfo = lazy(() => import("./pages/ProfilePages.tsx").then((m) => ({ default: m.MyInfo })));
+const ProjectsPage = lazy(() => import("./pages/ProfilePages.tsx").then((m) => ({ default: m.ProjectsPage })));
+const AssetsPage = lazy(() => import("./pages/RequestPages.tsx").then((m) => ({ default: m.AssetsPage })));
+const CashPage = lazy(() => import("./pages/RequestPages.tsx").then((m) => ({ default: m.CashPage })));
+const EncashmentPage = lazy(() => import("./pages/RequestPages.tsx").then((m) => ({ default: m.EncashmentPage })));
+const SoftwarePage = lazy(() => import("./pages/RequestPages.tsx").then((m) => ({ default: m.SoftwarePage })));
+const MyPoliciesPage = lazy(() => import("./pages/MyPoliciesPage.tsx").then((m) => ({ default: m.MyPoliciesPage })));
+const EvaluationsPage = lazy(() => import("./pages/TeamPages.tsx").then((m) => ({ default: m.EvaluationsPage })));
+const ProgramsPage = lazy(() => import("./pages/TeamPages.tsx").then((m) => ({ default: m.ProgramsPage })));
+const TasksPage = lazy(() => import("./pages/TeamPages.tsx").then((m) => ({ default: m.TasksPage })));
+const AnnouncementsPage = lazy(() => import("./pages/CollabModules.tsx").then((m) => ({ default: m.AnnouncementsPage })));
+const ChatPage = lazy(() => import("./pages/CollabModules.tsx").then((m) => ({ default: m.ChatPage })));
+const HelpPage = lazy(() => import("./pages/CollabModules.tsx").then((m) => ({ default: m.HelpPage })));
+const NotificationCenterPage = lazy(() => import("./pages/CollabModules.tsx").then((m) => ({ default: m.NotificationCenterPage })));
+const DirectoryPage = lazy(() => import("./pages/PeopleModule.tsx").then((m) => ({ default: m.DirectoryPage })));
+const PeopleDetailPage = lazy(() => import("./pages/PeopleModule.tsx").then((m) => ({ default: m.PeopleDetailPage })));
+const PeopleNewPage = lazy(() => import("./pages/PeopleModule.tsx").then((m) => ({ default: m.PeopleNewPage })));
+const JobsPage = lazy(() => import("./pages/OrganizationJobsPages.tsx").then((m) => ({ default: m.JobsPage })));
+const OrganizationPage = lazy(() => import("./pages/OrganizationJobsPages.tsx").then((m) => ({ default: m.OrganizationPage })));
+const BenefitsPage = lazy(() => import("./pages/RewardModules.tsx").then((m) => ({ default: m.BenefitsPage })));
+const CompensationPage = lazy(() => import("./pages/RewardModules.tsx").then((m) => ({ default: m.CompensationPage })));
+const DocumentsPage = lazy(() => import("./pages/RewardModules.tsx").then((m) => ({ default: m.DocumentsPage })));
+const CountryAdminPage = lazy(() => import("./pages/LocalePages.tsx").then((m) => ({ default: m.CountryAdminPage })));
+const CountryBenefitsConfigPage = lazy(() => import("./pages/LocalePages.tsx").then((m) => ({ default: m.CountryBenefitsConfigPage })));
+const CountryDocumentsConfigPage = lazy(() => import("./pages/LocalePages.tsx").then((m) => ({ default: m.CountryDocumentsConfigPage })));
+const LocaleSettingsPage = lazy(() => import("./pages/LocalePages.tsx").then((m) => ({ default: m.LocaleSettingsPage })));
+const InvestmentProofPage = lazy(() => import("./pages/PayExtrasPages.tsx").then((m) => ({ default: m.InvestmentProofPage })));
+const ReimbursementPage = lazy(() => import("./pages/PayExtrasPages.tsx").then((m) => ({ default: m.ReimbursementPage })));
+const TimesheetPage = lazy(() => import("./pages/TimesheetPage.tsx").then((m) => ({ default: m.TimesheetPage })));
+const TicketsPage = lazy(() => import("./pages/TicketsPage.tsx").then((m) => ({ default: m.TicketsPage })));
+const AdminPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.AdminPage })));
+const AiAgentsPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.AiAgentsPage })));
+const AiCopilotPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.AiCopilotPage })));
+const AnalyticsPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.AnalyticsPage })));
+const IntegrationsPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.IntegrationsPage })));
+const MyTeamPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.MyTeamPage })));
+const OnboardingPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.OnboardingPage })));
+const PayrollPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.PayrollPage })));
+const RecruitingPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.RecruitingPage })));
+const SkillsCareerPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.SkillsCareerPage })));
+const WorkflowsPage = lazy(() => import("./pages/TimezModules.tsx").then((m) => ({ default: m.WorkflowsPage })));
+const ApprovalsCenterPage = lazy(() => import("./pages/ApprovalsCenter.tsx").then((m) => ({ default: m.ApprovalsCenterPage })));
+const AllExitsPage = lazy(() => import("./features/lifecycle/ExitPages.tsx").then((m) => ({ default: m.AllExitsPage })));
+const MyExitPage = lazy(() => import("./features/lifecycle/ExitPages.tsx").then((m) => ({ default: m.MyExitPage })));
+const TeamExitsPage = lazy(() => import("./features/lifecycle/ExitPages.tsx").then((m) => ({ default: m.TeamExitsPage })));
+const MyProbationPage = lazy(() => import("./features/lifecycle/ProbationPages.tsx").then((m) => ({ default: m.MyProbationPage })));
+const ProbationReviewsPage = lazy(() => import("./features/lifecycle/ProbationPages.tsx").then((m) => ({ default: m.ProbationReviewsPage })));
+const ImmigrationPage = lazy(() => import("./features/compliance/ImmigrationPage.tsx").then((m) => ({ default: m.ImmigrationPage })));
+const PrivacyCentrePage = lazy(() => import("./features/compliance/PrivacyCentrePage.tsx").then((m) => ({ default: m.PrivacyCentrePage })));
+const GrievancePage = lazy(() => import("./features/compliance/GrievancePage.tsx").then((m) => ({ default: m.GrievancePage })));
+const BackgroundChecksPage = lazy(() => import("./features/compliance/BackgroundChecksPage.tsx").then((m) => ({ default: m.BackgroundChecksPage })));
+const EngagementSurveysPage = lazy(() => import("./features/talentplus/index.ts").then((m) => ({ default: m.EngagementSurveysPage })));
+const InternalJobBoardPage = lazy(() => import("./features/talentplus/index.ts").then((m) => ({ default: m.InternalJobBoardPage })));
+const SuccessionPage = lazy(() => import("./features/talentplus/index.ts").then((m) => ({ default: m.SuccessionPage })));
+const BulkDataPage = lazy(() => import("./features/datatools/BulkDataPage.tsx").then((m) => ({ default: m.BulkDataPage })));
+const ReportBuilderPage = lazy(() => import("./features/datatools/ReportBuilderPage.tsx").then((m) => ({ default: m.ReportBuilderPage })));
+const ShiftRosterPage = lazy(() => import("./features/workforce/ShiftRosterPage.tsx").then((m) => ({ default: m.ShiftRosterPage })));
+const OptionalHolidaysPage = lazy(() => import("./features/workforce/OptionalHolidaysPage.tsx").then((m) => ({ default: m.OptionalHolidaysPage })));
+const ContractorsPage = lazy(() => import("./features/workforce/ContractorsPage.tsx").then((m) => ({ default: m.ContractorsPage })));
 
 /** Pages are reachable only when the signed-in role has them in its access list — not just from the menu. */
 function Allowed({ id, children }: { id: NavAccessId; children: ReactNode }) {
@@ -97,6 +118,7 @@ function Guard() {
 
 export function App() {
   return (
+    <Suspense fallback={<div className="page-loading" aria-busy="true" />}>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<Guard />}>
@@ -135,6 +157,7 @@ export function App() {
         <Route path="/tickets" element={<Allowed id="tickets"><TicketsPage /></Allowed>} />
         <Route path="/attendance" element={<Allowed id="attendance"><AttendancePage /></Allowed>} />
         <Route path="/leave" element={<Allowed id="leave"><LeavePage /></Allowed>} />
+        <Route path="/leave/team-calendar" element={<Allowed id="leave"><TeamLeaveCalendarPage /></Allowed>} />
         <Route path="/directory" element={<Allowed id="people"><DirectoryPage /></Allowed>} />
         <Route path="/directory/new" element={<Allowed id="people"><PeopleNewPage /></Allowed>} />
         <Route path="/directory/:id" element={<Allowed id="people"><PeopleDetailPage /></Allowed>} />
@@ -177,5 +200,6 @@ export function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
+    </Suspense>
   );
 }

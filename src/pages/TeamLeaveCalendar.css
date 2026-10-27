@@ -1,0 +1,34 @@
+.tlc-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tlc-toolbar h2 { margin: 0 8px; font-size: 1.05rem; min-width: 150px; }
+.tlc-legend { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 0.82rem; color: var(--muted); }
+.tlc-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.tlc-swatch { width: 14px; height: 10px; border-radius: 3px; display: inline-block; }
+.tlc-swatch.pending { background: transparent !important; border: 2px dashed currentColor; }
+.tlc-swatch.holiday { background: color-mix(in srgb, var(--muted) 35%, transparent); }
+.tlc-swatch.off { background: var(--surface-stripe); border: 1px solid var(--line); }
+
+.tlc-scroll { overflow-x: auto; max-width: 100%; }
+.tlc-grid { border-collapse: separate; border-spacing: 0; font-size: 0.78rem; min-width: 100%; }
+.tlc-grid th, .tlc-grid td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); padding: 0; text-align: center; }
+.tlc-grid thead th { padding: 4px 0; font-weight: 600; min-width: 28px; color: var(--muted); }
+.tlc-grid thead th.today { color: var(--accent); }
+.tlc-grid .tlc-name {
+  position: sticky; left: 0; z-index: 1; background: var(--card); text-align: left;
+  padding: 4px 10px; min-width: 150px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tlc-grid .tlc-name small { display: block; color: var(--muted); font-weight: 400; }
+.tlc-cell { height: 30px; position: relative; }
+.tlc-cell.off { background: var(--surface-stripe); }
+.tlc-cell.holiday { background: color-mix(in srgb, var(--muted) 30%, transparent); }
+.tlc-cell.today { box-shadow: inset 0 0 0 1px var(--accent); }
+.tlc-bar { position: absolute; top: 6px; bottom: 6px; left: 0; right: 0; border-radius: 3px; }
+.tlc-bar.first { right: 50%; }
+.tlc-bar.second { left: 50%; }
+.tlc-bar.pending { background: transparent !important; border: 2px dashed; }
+.tlc-count td { padding: 4px 0; font-weight: 600; }
+.tlc-count td.warn { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+
+.tlc-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.tlc-summary ul { margin: 0; padding-left: 18px; }
+.tlc-summary li { margin: 2px 0; }
+.tlc-warn { color: var(--danger); }

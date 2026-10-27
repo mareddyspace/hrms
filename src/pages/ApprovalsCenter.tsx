@@ -14,9 +14,50 @@ import { money } from "../countryPay.ts";
 import { Banner, Card, EmptyState, Page, StatusBadge, Tabs } from "../components/ui.tsx";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
-import { formatShortDate, holidaySet, holidaysForPerson, parseISODate, todayISO, workingDays } from "../model.ts";
+import { addDaysISO, formatShortDate, holidaySet, holidaysForPerson, parseISODate, todayISO, workingDays } from "../model.ts";
 import type { DecisionInfo, PortalState } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import {
+  activeDelegationFor,
+  chainIds,
+  covers,
+  delegatedAuthority,
+  getDelegationState,
+  hasReports,
+  isAboveInLine,
+  noteLeaves,
+  onBehalfNote,
+  parseOnBehalf,
+  personLabel,
+  scopeText,
+  subscribeDelegations,
+  type DelegationScope,
+} from "../data/delegations.ts";
+import { DelegationSettings } from "./DelegationSettings.tsx";
+
+/** Which delegation scope (§25) a request kind falls under. */
+function scopeOf(kind: string): DelegationScope {
+  switch (kind) {
+    case "Leave":
+    case "Backdated leave permission":
+    case "Leave encashment":
+      return "leave";
+    case "Expense claim":
+    case "Reimbursement":
+    case "Cash advance":
+      return "expenses";
+    case "Timesheet":
+      return "timesheets";
+    case "Attendance correction":
+      return "attendance";
+    default:
+      return "others";
+  }
+}
+
+/** Waiting longer than the SLA flags a request as overdue; overdue by more than this many working days escalates it. */
+const SLA_DAYS = 3;
+const ESCALATE_AFTER_WORKING_DAYS = 5;
 
 /** One row in the approvals inbox, whatever kind of request it came from. */
 type RequestItem = {
@@ -62,28 +103,32 @@ const STATUS_TEXT: Record<string, string> = {
 export function countWaitingOnMe(
   state: PortalState,
   myId: string,
-  canApprove: (employeeId: string) => boolean,
+  canApprove: (employeeId: string, scope?: DelegationScope) => boolean,
   canVerifyProofs: boolean,
 ): number {
   const open = (status: string) => status === "pending" || status === "submitted";
-  const mine = (employeeId: string) => employeeId !== myId && canApprove(employeeId);
-  const lists: { employeeId: string; status: string }[][] = [
-    state.backdatedPermissions,
-    state.leaveRequests,
-    state.encashments,
-    state.expenses,
-    state.reimbursements,
-    state.cashAdvances,
-    state.assetRequests,
-    state.softwareRequests,
-    state.cabBookings,
+  // Delegated requests (§25) count for the delegate, within the delegation's scope.
+  const mine = (employeeId: string, scope: DelegationScope = "others") => employeeId !== myId && canApprove(employeeId, scope);
+  const lists: [DelegationScope, { employeeId: string; status: string }[]][] = [
+    ["leave", state.backdatedPermissions],
+    ["leave", state.leaveRequests],
+    ["leave", state.encashments],
+    ["expenses", state.expenses],
+    ["expenses", state.reimbursements],
+    ["expenses", state.cashAdvances],
+    ["others", state.assetRequests],
+    ["others", state.softwareRequests],
+    ["others", state.cabBookings],
   ];
-  const requests = lists.flat().filter((item) => open(item.status) && mine(item.employeeId)).length;
-  const timesheets = state.orgTimesheets.filter((row) => row.status === "submitted" && mine(row.personId)).length;
+  const requests = lists.reduce(
+    (sum, [scope, list]) => sum + list.filter((item) => open(item.status) && mine(item.employeeId, scope)).length,
+    0,
+  );
+  const timesheets = state.orgTimesheets.filter((row) => row.status === "submitted" && mine(row.personId, "timesheets")).length;
   const proofs = canVerifyProofs
     ? state.investmentProofs.filter((p) => p.status === "submitted" && p.employeeId !== myId).length
     : 0;
-  const corrections = getAttendanceState().corrections.filter((c) => c.status === "Pending" && mine(c.employeeId)).length;
+  const corrections = getAttendanceState().corrections.filter((c) => c.status === "Pending" && mine(c.employeeId, "attendance")).length;
   const shifts = getShiftState();
   const swaps = shifts.swaps.filter(
     (w) =>
@@ -100,9 +145,12 @@ export function ApprovalsCenterPage() {
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
   const attendance = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
   const shifts = useSyncExternalStore(subscribeShifts, getShiftState, getShiftState);
+  const delegations = useSyncExternalStore(subscribeDelegations, getDelegationState, getDelegationState);
+  noteLeaves(state.leaveRequests);
   const actor = { id: employee.id, fullName: employee.fullName, role: portal.demoProfile.role };
   const rosterCtx = { leaves: state.leaveRequests, holidays: state.holidays };
-  const [tab, setTab] = useState<"waiting" | "mine">("waiting");
+  const [tab, setTab] = useState<"waiting" | "mine" | "delegate">("waiting");
+  const canDelegate = useMemo(() => hasReports(employee.id), [employee.id, people]);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
@@ -317,7 +365,7 @@ export function ApprovalsCenterPage() {
           kind: "Shift swap",
           employeeId: w.requesterId,
           status: w.status === "awaiting_manager" ? "pending" : w.status === "approved" ? "approved" : w.status === "cancelled" ? "withdrawn" : "rejected",
-          open: w.status === "awaiting_manager" && canDecideFor(w.teammateId),
+          open: w.status === "awaiting_manager" && canDecideFor(w.teammateId, "others"),
           decide: (d, note) => decideSwap(actor, rosterCtx, w.id, d === "approved", note ?? ""),
         });
       }
@@ -337,7 +385,7 @@ export function ApprovalsCenterPage() {
     }
     return list;
     // portal functions are recreated with state, so state is the real dependency
-  }, [state, portal, leaveTable, attendance, shifts]);
+  }, [state, portal, leaveTable, attendance, shifts, delegations]);
 
   const waiting = items.filter((item) => {
     if (!item.open || !item.decide || item.employeeId === employee.id) return false;
@@ -346,17 +394,34 @@ export function ApprovalsCenterPage() {
     if (item.kind === "Leave encashment" && managementChain(item.employeeId, demoAccounts).length === 0) {
       return portal.demoProfile.role === "compensation_admin";
     }
-    return canDecideFor(item.employeeId);
+    return canDecideFor(item.employeeId, scopeOf(item.kind));
   });
   const mine = items
     .filter((item) => item.employeeId === employee.id && item.kind !== "Timesheet" && item.kind !== "Comp-off")
     .sort((a, b) => Number(b.open) - Number(a.open) || (b.raisedOn ?? "").localeCompare(a.raisedOn ?? ""));
 
-  // SLA: requests waiting more than this many days are flagged, and the next person up can act on them.
-  const SLA_DAYS = 3;
+  // SLA: requests waiting more than SLA_DAYS are flagged overdue; overdue by more than ESCALATE_AFTER_WORKING_DAYS
+  // working days they escalate: the approver's own manager (already above in the line) sees them marked "Escalated".
   const today = todayISO();
   const ageOf = (item: RequestItem) =>
     item.raisedOn ? Math.max(0, Math.round((parseISODate(today).getTime() - parseISODate(item.raisedOn).getTime()) / 86400000)) : 0;
+  const overdueWorkingDays = (item: RequestItem) => {
+    if (!item.raisedOn || ageOf(item) <= SLA_DAYS) return 0;
+    const breach = addDaysISO(item.raisedOn, SLA_DAYS + 1);
+    return workingDays(breach, today, holidaySet(holidaysForPerson(state.holidays, item.employeeId)));
+  };
+  const isEscalated = (item: RequestItem) => overdueWorkingDays(item) > ESCALATE_AFTER_WORKING_DAYS;
+  /** How the signed-in person holds this item: as an approver above (possibly by escalation) or by delegation. */
+  const holdOf = (item: RequestItem): { escalated?: boolean; delegatedFrom?: string } => {
+    if (item.key.startsWith("swt-") || item.kind === "Tax-saving proof") return {};
+    if (isAboveInLine(employee.id, item.employeeId)) {
+      const first = chainIds(item.employeeId)[0];
+      return { escalated: first !== employee.id && isEscalated(item) };
+    }
+    const d = delegatedAuthority(employee.id, item.employeeId, scopeOf(item.kind));
+    return d ? { delegatedFrom: d.delegatorId } : {};
+  };
+  const myDelegation = activeDelegationFor(employee.id, today);
   const awayToday = (personId: string) =>
     state.leaveRequests.some(
       (r) => r.employeeId === personId && r.status === "approved" && r.code !== "wfh" && r.code !== "emergency_wfh" && r.from <= today && today <= r.to,
@@ -381,11 +446,20 @@ export function ApprovalsCenterPage() {
         tabs={[
           { id: "waiting", label: `Waiting on me (${waiting.length})` },
           { id: "mine", label: `My requests (${mine.filter((m) => m.open).length} open)` },
+          ...(canDelegate ? [{ id: "delegate", label: "Delegate approvals" }] : []),
         ]}
         value={tab}
         onChange={(next) => setTab(next as typeof tab)}
       />
       <Banner message={message} />
+      {myDelegation && (
+        <p className="note info">
+          Delegated to {personLabel(myDelegation.delegateId)} until {formatShortDate(myDelegation.to)} · {scopeText(myDelegation.scope)}
+          {myDelegation.auto ? " (automatic while you're on leave)" : ""}
+        </p>
+      )}
+
+      {tab === "delegate" && canDelegate && <DelegationSettings myId={employee.id} />}
 
       {tab === "waiting" && (
         <Card>
@@ -393,11 +467,18 @@ export function ApprovalsCenterPage() {
             <EmptyState title="Nothing waiting on you" />
           ) : (
             <ul className="approval-list">
-              {waiting.map((item) => (
+              {waiting.map((item) => {
+                const hold = holdOf(item);
+                const noteFor = (raw?: string) => (hold.delegatedFrom ? onBehalfNote(hold.delegatedFrom, raw) : raw);
+                return (
                 <li key={item.key} className="approval-item">
                   <div className="row-between">
                     <strong>{nameOf(item.employeeId)}</strong>
-                    <span className="pill">{item.kind}</span>
+                    <span>
+                      {hold.delegatedFrom && <span className="pill">Delegated from {personLabel(hold.delegatedFrom)}</span>}
+                      {hold.escalated && <span className="pill pill-mandatory">Escalated</span>}
+                      <span className="pill">{item.kind}</span>
+                    </span>
                   </div>
                   <span>{item.title}</span>
                   {item.detail && <span className="muted">{item.detail}</span>}
@@ -419,20 +500,21 @@ export function ApprovalsCenterPage() {
                     <button
                       type="button"
                       className="btn btn-tiny"
-                      onClick={() => run(() => item.decide!("approved", notes[item.key]), `${item.kind} approved.`, item.key)}
+                      onClick={() => run(() => item.decide!("approved", noteFor(notes[item.key])), `${item.kind} approved.`, item.key)}
                     >
                       {item.approveLabel ?? "Approve"}
                     </button>
                     <button
                       type="button"
                       className="btn-ghost btn-tiny"
-                      onClick={() => run(() => item.decide!("rejected", notes[item.key]), `${item.kind} declined.`, item.key)}
+                      onClick={() => run(() => item.decide!("rejected", noteFor(notes[item.key])), `${item.kind} declined.`, item.key)}
                     >
                       {item.declineLabel ?? "Decline"}
                     </button>
                   </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </Card>
@@ -454,23 +536,29 @@ export function ApprovalsCenterPage() {
                   {item.open && (() => {
                     const { first, available } = currentApprover(item.employeeId);
                     if (!first) return null;
-                    const away = available && available.id !== first.id;
+                    // An active delegation (§25) from the first approver puts the request with the delegate.
+                    const d = activeDelegationFor(first.id, today);
+                    const delegated = d && covers(d, scopeOf(item.kind)) && d.delegateId !== item.employeeId ? d : undefined;
+                    const away = !delegated && available && available.id !== first.id;
+                    const escalatedTo = isEscalated(item) ? chainIds(item.employeeId)[1] : undefined;
                     return (
                       <span className="muted">
-                        With {available?.fullName ?? first.fullName}
+                        With {delegated ? personLabel(delegated.delegateId) : (available?.fullName ?? first.fullName)}
+                        {delegated ? ` (delegated by ${first.fullName} until ${formatShortDate(delegated.to)})` : ""}
                         {away ? ` (${first.fullName} is away)` : ""} · {ageOf(item)} day(s)
                         {ageOf(item) > SLA_DAYS && <span className="pill pill-mandatory"> Overdue</span>}
+                        {escalatedTo && <span className="pill pill-mandatory"> Escalated to {personLabel(escalatedTo)}</span>}
                       </span>
                     );
                   })()}
                   <span className="muted">
-                    {item.decided?.decidedByName
-                      ? `${item.status === "rejected" ? "Declined" : "Decided"} by ${item.decided.decidedByName}${
-                          item.decided.decidedOn ? ` on ${formatShortDate(item.decided.decidedOn)}` : ""
-                        }${item.decided.decisionNote ? ` · “${item.decided.decisionNote}”` : ""}`
-                      : item.raisedOn
-                        ? `Raised ${formatShortDate(item.raisedOn)}`
-                        : ""}
+                    {(() => {
+                      if (!item.decided?.decidedByName) return item.raisedOn ? `Raised ${formatShortDate(item.raisedOn)}` : "";
+                      const { onBehalfOf, note } = parseOnBehalf(item.decided.decisionNote);
+                      return `${item.status === "rejected" ? "Declined" : "Decided"} by ${item.decided.decidedByName}${
+                        onBehalfOf ? ` on behalf of ${onBehalfOf}` : ""
+                      }${item.decided.decidedOn ? ` on ${formatShortDate(item.decided.decidedOn)}` : ""}${note ? ` · “${note}”` : ""}`;
+                    })()}
                   </span>
                   {item.open && item.withdraw && (
                     <div className="approval-actions">

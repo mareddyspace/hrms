@@ -1,6 +1,6 @@
 import type { Colleague } from "./model.ts";
 import { TIMEZ_COUNTRIES } from "./model.ts";
-import { DEMO_ACCOUNTS, TIMEZ_PERSONAS } from "./demoAccounts.ts";
+import { COUNTRY_MANAGER_IDS, DEMO_ACCOUNTS, TIMEZ_PERSONAS } from "./demoAccounts.ts";
 
 export { DEMO_ACCOUNTS, TIMEZ_PERSONAS } from "./demoAccounts.ts";
 
@@ -266,8 +266,9 @@ function allocate(total: number, min: (dept: string) => number): Record<string, 
 export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
   void _total;
   const rows: WorkforceRow[] = [];
+  // Country Manager accounts hold the generated country-head seats, so they are not counted separately.
   const named = [
-    ...DEMO_ACCOUNTS.map((a) => ({ name: a.fullName, country: a.countryCode ?? "IN" })),
+    ...DEMO_ACCOUNTS.filter((a) => !COUNTRY_MANAGER_IDS.has(a.id)).map((a) => ({ name: a.fullName, country: a.countryCode ?? "IN" })),
     ...TEAMMATES.map((t) => ({ name: t.name, country: "IN" })),
   ];
   const usedNames = new Set(named.map((n) => n.name));
@@ -401,6 +402,18 @@ export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
         });
       }
     }
+  }
+
+  // Country heads who sign in: the seat keeps its id and position; name, email and code come from the account.
+  for (const row of rows) {
+    if (!COUNTRY_MANAGER_IDS.has(row.id)) continue;
+    const account = DEMO_ACCOUNTS.find((a) => a.id === row.id);
+    if (!account) continue;
+    row.name = account.fullName;
+    row.email = account.email;
+    row.employeeCode = account.employeeCode;
+    row.mobile = account.mobile;
+    row.location = account.location ?? row.location;
   }
 
   // Fill in manager names now that everyone exists.

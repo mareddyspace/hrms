@@ -2,6 +2,7 @@ import { DEMO_ACCOUNTS, findDemoById, managementChain, type DemoAccount } from "
 import { taskPersonById } from "../../data/taskTeam.ts";
 import { getPerson } from "../../data/peopleLocal.ts";
 import { pushPersonTaskAlert } from "../../data/collabLocal.ts";
+import { delegatedAuthority, type DelegationScope } from "../../data/delegations.ts";
 import { formatShortDate, parseISODate, toISO, type UserRole } from "../../model.ts";
 
 /** Who is performing an action — the signed-in persona. */
@@ -19,10 +20,14 @@ export function isHrOrAdmin(role: UserRole): boolean {
   return isHrRole(role) || role === "admin";
 }
 
-/** Only someone above the person in their reporting line decides — never the person themselves. */
-export function canDecideFor(actor: WorkforceActor, personId: string): boolean {
+/**
+ * Only someone above the person in their reporting line decides — or a colleague an approver delegated to (§25)
+ * while that delegation is active and covers this request type. Never the person themselves.
+ */
+export function canDecideFor(actor: WorkforceActor, personId: string, scope: DelegationScope = "others"): boolean {
   if (actor.id === personId) return false;
-  return managementChain(personId).some((m) => m.id === actor.id);
+  if (managementChain(personId).some((m) => m.id === actor.id)) return true;
+  return delegatedAuthority(actor.id, personId, scope) !== null;
 }
 
 export function personName(id: string): string {

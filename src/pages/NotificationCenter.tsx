@@ -76,7 +76,13 @@ function relativeLabel(ms: number, now: number, timeZone?: string): string {
 }
 
 function fullStamp(ms: number, timeZone?: string): string {
-  return new Intl.DateTimeFormat(undefined, { timeZone, dateStyle: "medium", timeStyle: "short", timeZoneName: "short" }).format(ms);
+  // dateStyle/timeStyle can't be combined with timeZoneName, so the zone is added separately.
+  try {
+    const stamp = new Intl.DateTimeFormat(undefined, { timeZone, dateStyle: "medium", timeStyle: "short" }).format(ms);
+    return timeZone ? `${stamp} (${timeZone})` : stamp;
+  } catch {
+    return new Date(ms).toLocaleString();
+  }
 }
 
 function atMs(iso: string): number {

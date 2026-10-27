@@ -6367,3 +6367,11 @@ html[data-motion="reduced"] *::after {
 .section-tabs-row::-webkit-scrollbar {
   display: none;
 }
+
+/* Shown for a moment while a page loads for the first time. */
+.page-loading {
+  min-height: 40vh;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
