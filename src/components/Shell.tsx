@@ -21,6 +21,7 @@ import {
   LogOut,
   Menu,
   MessageSquare,
+  Mail,
   Moon,
   Network,
   PanelLeft,
@@ -53,12 +54,16 @@ import { useLocale } from "../locale/LocaleContext.tsx";
 import type { AppLanguage } from "../locale/countryConfig.ts";
 import type { CountryCode } from "../model.ts";
 import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
+import { countUnreadMail, getMailSnapshot, subscribeMail } from "../data/mailStore.ts";
+import { getTickets, subscribeTickets, ticketBadgeCount } from "../data/ticketStore.ts";
 import { usePortal } from "../store.tsx";
 import { countWaitingOnMe } from "../pages/ApprovalsCenter.tsx";
 import { CopilotPopup } from "./CopilotPopup.tsx";
+import { NotesButton } from "./NotesPanel.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Banner, Dropdown, Field } from "./ui.tsx";
 import { updatePreferences, useApplyPreferences } from "../data/preferences.ts";
+import { useTaskAutoReminders } from "../data/taskAutoReminders.ts";
 
 
 const groupIcons: Record<NavGroupKey, ReactNode> = {
@@ -70,6 +75,7 @@ const groupIcons: Record<NavGroupKey, ReactNode> = {
   talent: <Briefcase size={18} strokeWidth={1.75} />,
   insights: <Sparkles size={18} strokeWidth={1.75} />,
   admin: <Building2 size={18} strokeWidth={1.75} />,
+  ai: <Bot size={18} strokeWidth={1.75} />,
 };
 
 const linkIcons: Record<string, ReactNode> = {
@@ -81,6 +87,7 @@ const linkIcons: Record<string, ReactNode> = {
   "/tasks": <ClipboardList size={18} strokeWidth={1.75} />,
   "/approvals": <Inbox size={18} strokeWidth={1.75} />,
   "/chat": <MessageSquare size={18} strokeWidth={1.75} />,
+  "/mail": <Mail size={18} strokeWidth={1.75} />,
   "/announcements": <FileText size={18} strokeWidth={1.75} />,
   "/notifications": <Bell size={18} strokeWidth={1.75} />,
   "/directory": <Users size={18} strokeWidth={1.75} />,
@@ -289,6 +296,8 @@ export function Shell() {
   const [query, setQuery] = useState("");
   const [headerSearch, setHeaderSearch] = useState("");
   const prefs = useApplyPreferences(employee.id);
+  // Task due/overdue reminders fire on any page, not only when Tasks is open.
+  useTaskAutoReminders();
   const collapsed = prefs.menuStyle === "icons";
   const theme = document.documentElement.dataset.theme === "night" ? "night" : "light";
   const [openGroups, setOpenGroups] = useState<string[]>(["Me", "Time & pay"]);
@@ -308,6 +317,8 @@ export function Shell() {
   useEffect(() => subscribeCollab(() => setCollabTick((n) => n + 1)), []);
 
   const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+  const mail = useSyncExternalStore(subscribeMail, getMailSnapshot, getMailSnapshot);
+  const tickets = useSyncExternalStore(subscribeTickets, getTickets, getTickets);
 
   const badges = useMemo(() => {
     const mine = <T extends { employeeId: string }>(items: T[]) => items.filter((item) => item.employeeId === employee.id);
@@ -321,14 +332,16 @@ export function Shell() {
       "/leave": leavePending,
       "/timesheet": counts.timesheet,
       "/tasks": counts.tasks,
+      "/tickets": ticketBadgeCount(employee.id, tickets),
       // Open course enrollments — the same list the Learning page and home page use.
       "/programs": talent.enrollments.filter((e) => e.employeeId === employee.id && e.status !== "Completed").length,
       "/evaluations": counts.evaluation,
       "/approvals": countWaitingOnMe(state, employee.id, canDecideFor, canVerifyProofs),
       "/chat": countUnreadMessages(employee.id, demoProfile.role),
+      "/mail": countUnreadMail(employee.id, mail),
       "/notifications": countUnreadNotifications(demoProfile.role),
     } as Record<string, number>;
-  }, [counts, employee.id, state, collabTick, demoProfile.role, talent, canDecideFor, canVerifyProofs]);
+  }, [counts, employee.id, state, collabTick, demoProfile.role, talent, mail, tickets, canDecideFor, canVerifyProofs]);
 
   const needle = query.trim().toLowerCase();
   const allowedLinks = [...filterPinnedForAccount(demoProfile), ...filterNavForAccount(demoProfile).flatMap((group) => group.links)];
@@ -537,6 +550,7 @@ export function Shell() {
                 {passwordPrompt.label}
               </button>
             )}
+            <NotesButton userId={employee.id} timeZone={employee.timeZone} />
             <Link to="/notifications" className="top-icon-btn" aria-label="Notification center">
               <Bell size={18} strokeWidth={1.75} />
               {(badges["/notifications"] ?? 0) > 0 && <span className="dot" />}
@@ -551,6 +565,10 @@ export function Shell() {
             <Link to="/chat" className="top-icon-btn" aria-label="Messages">
               <MessageSquare size={18} strokeWidth={1.75} />
               {(badges["/chat"] ?? 0) > 0 && <span className="dot" />}
+            </Link>
+            <Link to="/mail" className="top-icon-btn" aria-label="Mail">
+              <Mail size={18} strokeWidth={1.75} />
+              {(badges["/mail"] ?? 0) > 0 && <span className="dot" />}
             </Link>
             <Link to="/announcements" className="top-icon-btn" aria-label="Announcements">
               <FileText size={18} strokeWidth={1.75} />

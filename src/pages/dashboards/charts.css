@@ -1,0 +1,181 @@
+/* Dashboard SVG charts — theme-aware via CSS variables. */
+:root {
+  --chart-1: var(--accent, #0e7490);
+  --chart-2: #2563eb;
+  --chart-3: #7c3aed;
+  --chart-4: #db2777;
+  --chart-5: #ea580c;
+  --chart-6: #ca8a04;
+  --chart-7: #16a34a;
+  --chart-8: #64748b;
+}
+
+html[data-theme="night"] {
+  --chart-1: var(--accent, #5fd0e4);
+  --chart-2: #60a5fa;
+  --chart-3: #a78bfa;
+  --chart-4: #f472b6;
+  --chart-5: #fb923c;
+  --chart-6: #facc15;
+  --chart-7: #4ade80;
+  --chart-8: #94a3b8;
+}
+
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  overflow: visible;
+}
+
+.chart-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-axis {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.chart-axis-strong {
+  fill: var(--ink, currentColor);
+  font-size: 11px;
+}
+
+.chart-value {
+  fill: var(--ink, currentColor);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.chart-bar {
+  fill: var(--accent);
+  transition: fill 0.15s ease;
+}
+
+.chart-mark:hover .chart-bar {
+  fill: var(--accent-bright);
+}
+
+.chart-track {
+  fill: var(--accent-soft);
+}
+
+.chart-track-ring {
+  fill: none;
+  stroke: var(--accent-soft);
+  stroke-width: 16;
+}
+
+.chart-seg {
+  fill: none;
+  stroke-width: 16;
+  transition: stroke-width 0.15s ease;
+}
+
+.chart-seg:hover {
+  stroke-width: 19;
+}
+
+.chart-center-value {
+  fill: var(--ink, currentColor);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-hover {
+  fill: transparent;
+}
+
+.chart-hover:hover {
+  fill: var(--accent-soft);
+  fill-opacity: 0.45;
+}
+
+.chart-donut {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+
+.chart-donut-svg {
+  width: 132px;
+  flex: 0 0 132px;
+}
+
+.chart-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  flex: 1 1 140px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.chart-legend li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-legend-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 6px;
+}
+
+.chart-legend-inline li {
+  display: inline-grid;
+}
+
+.chart-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.chart-swatch-dashed {
+  height: 3px;
+}
+
+.chart-legend-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-legend-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chart-empty {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.chart-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.chart-table-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+  max-width: 100%;
+}

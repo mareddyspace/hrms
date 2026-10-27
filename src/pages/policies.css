@@ -1,0 +1,25 @@
+.pol-alert { margin: 0; font-weight: 600; }
+.pol-layout { display: grid; grid-template-columns: minmax(260px, 380px) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 860px) { .pol-layout { grid-template-columns: 1fr; } }
+.pol-search { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--input-bg, var(--card)); color: var(--ink); margin-bottom: 8px; }
+.pol-group h3 { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 12px 4px 4px; }
+.pol-group ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.pol-row { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink); }
+.pol-row:hover { background: var(--soft); }
+.pol-row.active { background: var(--accent-soft); }
+.pol-row-title { font-weight: 600; }
+.pol-row-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: var(--text-xs); color: var(--muted); }
+.pol-badge { display: inline-flex; align-items: center; border-radius: 4px; padding: 1px 7px; font-size: var(--text-xs); font-weight: 600; }
+.pol-badge-due { background: var(--accent-soft); color: var(--warn, var(--danger)); border: 1px solid currentColor; }
+.pol-badge-ok { background: var(--soft); color: var(--ok); }
+.pol-article header h2 { margin: 0 0 4px; }
+.pol-article section h3 { font-size: var(--text-md); margin: 16px 0 6px; }
+.pol-article section ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; line-height: 1.5; }
+.pol-hit { background: var(--accent-soft); border-radius: 3px; }
+.pol-ack { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--line); }
+.pol-hint { margin: 0 0 8px; font-size: var(--text-sm); }
+.pol-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: var(--text-sm); margin-bottom: 8px; }
+.pol-meter { width: 90px; height: 6px; border-radius: 3px; background: var(--soft); overflow: hidden; margin-bottom: 4px; }
+.pol-meter span { display: block; height: 100%; background: var(--accent); }
+.pol-person { display: inline-block; margin: 0 8px 2px 0; font-size: var(--text-sm); }
+.pol-person em { color: var(--muted); font-style: normal; }

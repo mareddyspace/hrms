@@ -40,6 +40,7 @@ import {
   type PipelineStage,
   type Requisition,
   type SkillProfile,
+  type StageStep,
 } from "./talentData.ts";
 import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../demoAccounts.ts";
 import { TIMEZ_COUNTRIES, todayISO, type UserRole } from "../model.ts";
@@ -49,8 +50,12 @@ import { GRADE_BANDS, type GradeBand } from "./rewardData.ts";
 import { upsertPerson, type LocalPersonRecord } from "./peopleLocal.ts";
 
 // v3: recruiting seed made consistent (approval trails, structured offers, joiners linked to hires).
-const KEY = "timez.talent.state.v3";
+// v4: manager → HR → recruiter hiring flow and per-candidate stage history.
+const KEY = "timez.talent.state.v4";
+/** v3 data is migrated once: recruiting and onboarding restart from the v4 seed, everything else is kept. */
+const LEGACY_KEY = "timez.talent.state.v3";
 const OLD_KEYS = ["timez.talent.state.v1", "timez.talent.state.v2"];
+const RESEEDED_ON_MIGRATION = ["requisitions", "candidates", "interviews", "offers", "joiners", "tasks"] as const;
 
 type TalentState = {
   requisitions: Requisition[];
@@ -97,24 +102,32 @@ function defaults(): TalentState {
 /** Drops data that should never exist: reviews for people with no one above them (the CEO). */
 function clean(state: TalentState): TalentState {
   state.reviews = state.reviews.filter((r) => managementChain(r.employeeId, DEMO_ACCOUNTS).length > 0);
-  return deriveJoiners(state);
+  return deriveJoiners(ensureHistory(state));
 }
 
 function read(): TalentState {
   try {
     OLD_KEYS.forEach((k) => localStorage.removeItem(k));
-    const raw = localStorage.getItem(KEY);
+    let raw = localStorage.getItem(KEY);
+    const legacy = !raw ? localStorage.getItem(LEGACY_KEY) : null;
+    if (legacy) raw = legacy;
     if (!raw) return clean(defaults());
     const saved = JSON.parse(raw) as Partial<Record<keyof TalentState, unknown>>;
     const base = defaults();
     // Keep only saved lists that are still lists; anything damaged falls back to defaults.
     for (const key of Object.keys(base) as (keyof TalentState)[]) {
       if (key === "cycleStatus") continue;
+      if (legacy && (RESEEDED_ON_MIGRATION as readonly string[]).includes(key)) continue;
       if (Array.isArray(saved?.[key])) (base as Record<keyof TalentState, unknown>)[key] = saved[key];
     }
     const status = saved?.cycleStatus;
     if (status && typeof status === "object" && !Array.isArray(status)) base.cycleStatus = status as TalentState["cycleStatus"];
-    return clean(base);
+    const state = clean(base);
+    if (legacy) {
+      localStorage.setItem(KEY, JSON.stringify(state));
+      localStorage.removeItem(LEGACY_KEY);
+    }
+    return state;
   } catch {
     return clean(defaults());
   }
@@ -189,6 +202,13 @@ function sameName(a: string | undefined, b: string | undefined): boolean {
 }
 
 /* ───────────── Recruiting ───────────── */
+// Order: the hiring manager raises a requisition → HR approves it and assigns a recruiter →
+// the recruiter runs the pipeline (HR may too) → the hiring manager gives interview feedback and the
+// Final Review decision → offer: recruiter prepares → hiring manager agrees → HR approves
+// (+ Compensation above band) → recruiter sends and records the answer. Nobody approves their own step.
+
+/** Recruiter assigned when HR approves without picking one. */
+export const DEFAULT_RECRUITER_ID = "demo-recruiter";
 
 function accountId(name: string): string | undefined {
   return DEMO_ACCOUNTS.find((a) => sameName(a.fullName, name))?.id;
@@ -203,29 +223,91 @@ export function isHiringManagerOf(actor: TalentActor, req: Requisition): boolean
   return hiringManagerIdOf(req) === actor.id;
 }
 
-/** Recruiters and HR run hiring for every requisition; a hiring manager only for their own. */
-export function canActOnRequisition(actor: TalentActor, req: Requisition): boolean {
-  return actor.role === "recruiter" || isHrRole(actor.role) || isHiringManagerOf(actor, req);
+/** True when the actor is the recruiter HR assigned to this requisition. */
+export function isAssignedRecruiter(actor: TalentActor, req: Requisition): boolean {
+  if (actor.role !== "recruiter") return false;
+  return req.recruiterId ? req.recruiterId === actor.id : sameName(req.recruiter, actor.fullName);
 }
 
-/** People above the hiring manager in the reporting line: they decide the requisition and approve offers. */
+/** Pipeline work — screening, interviews, stage moves, offers: the assigned recruiter, or HR. */
+export function canRunPipeline(actor: TalentActor, req: Requisition): boolean {
+  return isAssignedRecruiter(actor, req) || isHrRole(actor.role);
+}
+
+/** Anyone with a part in this requisition: its recruiter, HR or its hiring manager. */
+export function canActOnRequisition(actor: TalentActor, req: Requisition): boolean {
+  return canRunPipeline(actor, req) || isHiringManagerOf(actor, req);
+}
+
+const RAISING_ROLES: readonly UserRole[] = ["manager", "hiring_manager", "executive", "founder", "cofounder"];
+
+/** The manager who needs the role raises the requisition. */
+export function canRaiseRequisition(actor: TalentActor): boolean {
+  return RAISING_ROLES.includes(actor.role);
+}
+
+/** HR decides requisitions — never the requisition's own hiring manager. */
 export function requisitionApprovers(req: Requisition): DemoAccount[] {
   const hm = hiringManagerIdOf(req);
-  return hm ? managementChain(hm, DEMO_ACCOUNTS) : [];
+  return DEMO_ACCOUNTS.filter((a) => isHrRole(a.role) && a.id !== hm);
 }
 
-function isReqApprover(actor: TalentActor, req: Requisition): boolean {
-  return !isHiringManagerOf(actor, req) && requisitionApprovers(req).some((a) => a.id === actor.id);
+function isReqDecider(actor: TalentActor, req: Requisition): boolean {
+  return isHrRole(actor.role) && !isHiringManagerOf(actor, req);
+}
+
+/** Recruiters HR can assign. */
+export function recruiterOptions(): DemoAccount[] {
+  return DEMO_ACCOUNTS.filter((a) => a.role === "recruiter");
 }
 
 function reqFor(s: TalentState, id: string): Requisition | undefined {
   return s.requisitions.find((r) => r.id === id);
 }
 
+/** Approved and staffed: candidates can be added and moved. */
+export function isRequisitionOpen(req: Requisition): boolean {
+  return req.approvalStatus === "Approved" && !!(req.recruiterId || req.recruiter);
+}
+
+/** Requisitions in this actor's pipeline: HR sees all; a recruiter the ones assigned to them; a hiring manager their own. */
+export function myPipelineRequisitions(actor: TalentActor, reqs: Requisition[]): Requisition[] {
+  if (isHrRole(actor.role)) return reqs;
+  return reqs.filter((r) => isAssignedRecruiter(actor, r) || isHiringManagerOf(actor, r));
+}
+
+/** Local date + time, e.g. "2026-10-27T14:05". */
+export function nowStamp(date = new Date()): string {
+  return `${localISO(date)}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+/** Stage history, oldest first. Older records without one get a minimal trail. */
+export function candidateHistory(c: Candidate): StageStep[] {
+  if (Array.isArray(c.history) && c.history.length) return c.history;
+  return backfillHistory(c);
+}
+
+function backfillHistory(c: Candidate): StageStep[] {
+  const seed = CANDIDATES.find((s) => s.id === c.id);
+  if (seed?.history?.length) {
+    const upTo = seed.history.findIndex((h) => h.stage === c.stage);
+    if (upTo >= 0) return structuredClone(seed.history.slice(0, upTo + 1));
+  }
+  const on = `${todayISO()}T09:00`;
+  const steps: StageStep[] = [{ stage: "Applied", enteredOn: on, by: c.name }];
+  if (c.stage !== "Applied") steps.push({ stage: c.stage, enteredOn: on, by: "Recruiting", note: "Recorded before stage history" });
+  return steps;
+}
+
+function ensureHistory(state: TalentState): TalentState {
+  for (const c of state.candidates) if (!Array.isArray(c.history) || !c.history.length) c.history = backfillHistory(c);
+  return state;
+}
+
 /** Next stage forward (blueprint order), or exit to Rejected / Withdrawn. Hired only once the offer is accepted. */
 export function allowedStageMoves(candidate: Candidate, offers: OfferRecord[], req?: Requisition): PipelineStage[] {
   if (CLOSED_STAGES.includes(candidate.stage)) return [];
-  if (req && req.approvalStatus !== "Approved") return [];
+  if (req && !isRequisitionOpen(req)) return [];
   const next = PIPELINE_STAGES[PIPELINE_STAGES.indexOf(candidate.stage) + 1];
   const moves: PipelineStage[] = [];
   if (next && !EXIT_STAGES.includes(next)) {
@@ -234,26 +316,50 @@ export function allowedStageMoves(candidate: Candidate, offers: OfferRecord[], r
   return [...moves, ...EXIT_STAGES];
 }
 
+/** Moves this actor may make. The recruiter (or HR) runs the pipeline; at Final Review the hiring manager decides. */
+export function stageMovesFor(actor: TalentActor, candidate: Candidate, offers: OfferRecord[], req: Requisition | undefined): PipelineStage[] {
+  if (!req) return [];
+  const moves = allowedStageMoves(candidate, offers, req);
+  if (candidate.stage === "Final Review") {
+    return moves.filter((m) => (m === "Withdrawn" ? canRunPipeline(actor, req) : isHiringManagerOf(actor, req)));
+  }
+  return canRunPipeline(actor, req) ? moves : [];
+}
+
 function hasAcceptedOffer(candidateId: string, offers: OfferRecord[]): boolean {
   return offers.some((o) => o.candidateId === candidateId && o.status === "Accepted");
 }
 
-export function setCandidateStage(actor: TalentActor, id: string, stage: PipelineStage): TalentResult {
+function pushStep(candidate: Candidate, actor: TalentActor, stage: PipelineStage, note = "") {
+  candidate.history = [
+    ...candidateHistory(candidate),
+    { stage, enteredOn: nowStamp(), by: actor.fullName, byId: actor.id, ...(note.trim() ? { note: note.trim() } : {}) },
+  ];
+  candidate.stage = stage;
+}
+
+export function setCandidateStage(actor: TalentActor, id: string, stage: PipelineStage, note = ""): TalentResult {
   return guarded((s) => {
     const row = s.candidates.find((c) => c.id === id);
     if (!row) return "Candidate not found.";
     const req = reqFor(s, row.requisitionId);
     if (!req) return "Requisition not found.";
-    if (!canActOnRequisition(actor, req)) return "Only recruiting, HR or this role's hiring manager can move candidates.";
+    if (!canActOnRequisition(actor, req)) return "Only the assigned recruiter, HR or the hiring manager can move candidates.";
     if (stage === row.stage) return null;
-    if (req.approvalStatus !== "Approved") return `${req.id} is ${req.approvalStatus.toLowerCase()}. Candidates can't move until it is approved.`;
+    if (req.approvalStatus !== "Approved") return `${req.id} is ${req.approvalStatus.toLowerCase()}. Candidates can't move until HR approves it.`;
+    if (!isRequisitionOpen(req)) return `${req.id} has no recruiter yet.`;
     if (stage === "Hired" && !hasAcceptedOffer(id, s.offers)) return "A candidate can only be hired after accepting an offer.";
     if (!allowedStageMoves(row, s.offers, req).includes(stage)) {
       return CLOSED_STAGES.includes(row.stage)
         ? `${row.name} is already ${row.stage}.`
         : "Candidates move forward one stage at a time (or to Rejected / Withdrawn).";
     }
-    row.stage = stage;
+    if (!stageMovesFor(actor, row, s.offers, req).includes(stage)) {
+      return row.stage === "Final Review" && stage !== "Withdrawn"
+        ? "The hiring manager makes the Final Review decision."
+        : "Only the assigned recruiter or HR runs the pipeline.";
+    }
+    pushStep(row, actor, stage, note);
     if (stage === "Hired") createJoiner(s, row, req);
     return null;
   });
@@ -262,28 +368,47 @@ export function setCandidateStage(actor: TalentActor, id: string, stage: Pipelin
 const REQ_TRANSITIONS: Record<ApprovalStatus, ApprovalStatus[]> = {
   Draft: ["Pending approval"],
   "Pending approval": ["Approved", "Rejected", "On hold"],
-  // On hold is a parked decision: the approver can still approve or reject it.
+  // On hold is a parked decision: HR can still approve or reject it.
   "On hold": ["Approved", "Rejected"],
-  Approved: [],
+  // HR can pause an approved requisition (e.g. budget review).
+  Approved: ["On hold"],
   Rejected: [],
 };
 
-/** Submit: recruiting or the hiring manager. Decide: someone above the hiring manager — never the hiring manager, and not HR by role. */
+/** Raise: the hiring manager. Decide (approve / reject / hold): HR, never the hiring manager. */
 export function requisitionMoves(actor: TalentActor, req: Requisition): ApprovalStatus[] {
   return REQ_TRANSITIONS[req.approvalStatus].filter((next) =>
-    next === "Pending approval" ? canActOnRequisition(actor, req) : isReqApprover(actor, req),
+    next === "Pending approval" ? isHiringManagerOf(actor, req) : isReqDecider(actor, req),
   );
 }
 
 const REQ_ACTION: Record<ApprovalStatus, string> = {
   Draft: "Saved as draft",
-  "Pending approval": "Submitted for approval",
+  "Pending approval": "Raised",
   Approved: "Approved",
   Rejected: "Rejected",
   "On hold": "Put on hold",
 };
 
-export function setRequisitionApproval(actor: TalentActor, id: string, approvalStatus: ApprovalStatus, note = ""): TalentResult {
+/** Raised-by-manager → HR approved → recruiter assigned, with who and when. */
+export function requisitionSteps(req: Requisition): { label: string; done: boolean; by?: string; on?: string }[] {
+  const find = (...actions: string[]) => [...(req.history ?? [])].reverse().find((h) => actions.includes(h.action));
+  const raised = find("Raised", "Submitted for approval");
+  const approved = find("Approved");
+  const assigned = find("Recruiter assigned");
+  return [
+    { label: "Manager raised", done: !!raised, by: raised?.by, on: raised?.on },
+    { label: "HR approved", done: !!approved, by: approved?.by, on: approved?.on },
+    {
+      label: "Recruiter assigned",
+      done: !!(req.recruiterId || req.recruiter),
+      by: req.recruiter || assigned?.note,
+      on: req.recruiterAssignedOn ?? assigned?.on,
+    },
+  ];
+}
+
+export function setRequisitionApproval(actor: TalentActor, id: string, approvalStatus: ApprovalStatus, note = "", recruiterId = DEFAULT_RECRUITER_ID): TalentResult {
   return guarded((s) => {
     const row = reqFor(s, id);
     if (!row) return "Requisition not found.";
@@ -295,11 +420,12 @@ export function setRequisitionApproval(actor: TalentActor, id: string, approvalS
       return "The hiring manager cannot decide their own requisition.";
     }
     if (!requisitionMoves(actor, row).includes(approvalStatus)) {
-      return approvalStatus === "Pending approval"
-        ? "Only recruiting or the hiring manager can submit this requisition."
-        : "Only someone above the hiring manager can decide this requisition.";
+      return approvalStatus === "Pending approval" ? "Only the hiring manager can raise this requisition." : "Only HR can decide this requisition.";
     }
     const today = todayISO();
+    const recruiter = approvalStatus === "Approved" && !row.recruiterId ? recruiterOptions().find((a) => a.id === recruiterId) : undefined;
+    if (approvalStatus === "Approved" && !row.recruiterId && !recruiter) return "Choose a recruiter.";
+    const step = { on: today, by: actor.fullName, byId: actor.id };
     row.approvalStatus = approvalStatus;
     if (approvalStatus === "Pending approval") row.stageSummary = "Awaiting approval";
     else {
@@ -307,7 +433,75 @@ export function setRequisitionApproval(actor: TalentActor, id: string, approvalS
       row.decidedOn = today;
       row.stageSummary = approvalStatus === "Approved" ? "Sourcing" : approvalStatus === "On hold" ? "On hold" : "Closed";
     }
-    row.history = [...(row.history ?? []), { on: today, by: actor.fullName, byId: actor.id, action: REQ_ACTION[approvalStatus], ...(note.trim() ? { note: note.trim() } : {}) }];
+    row.history = [...(row.history ?? []), { ...step, action: REQ_ACTION[approvalStatus], ...(note.trim() ? { note: note.trim() } : {}) }];
+    if (recruiter) {
+      row.recruiter = recruiter.fullName;
+      row.recruiterId = recruiter.id;
+      row.recruiterAssignedOn = today;
+      row.history.push({ ...step, action: "Recruiter assigned", note: recruiter.fullName });
+    }
+    return null;
+  });
+}
+
+export type RequisitionInput = { title: string; department: string; country: string; location: string; openings: number };
+
+/** The hiring manager raises a requisition; it goes straight to HR for approval. */
+export function raiseRequisition(actor: TalentActor, input: RequisitionInput): TalentResult {
+  return guarded((s) => {
+    if (!canRaiseRequisition(actor)) return "Only the manager who needs the role can raise a requisition.";
+    const title = input.title.trim();
+    if (!title) return "Enter a job title.";
+    if (!input.department.trim()) return "Enter a department.";
+    if (!TIMEZ_COUNTRIES.some((c) => c.name === input.country)) return "Choose a country.";
+    if (!input.location.trim()) return "Enter a location.";
+    if (!Number.isInteger(input.openings) || input.openings < 1 || input.openings > 50) return "Openings must be 1–50.";
+    const next = Math.max(200, ...s.requisitions.map((r) => Number(r.id.replace(/\D/g, "")) || 0)) + 1;
+    const today = todayISO();
+    s.requisitions.unshift({
+      id: `JOB-${next}`,
+      title,
+      department: input.department.trim(),
+      country: input.country,
+      location: input.location.trim(),
+      openings: input.openings,
+      hiringManager: actor.fullName,
+      hiringManagerId: actor.id,
+      recruiter: "",
+      approvalStatus: "Pending approval",
+      stageSummary: "Awaiting approval",
+      created: today,
+      history: [{ on: today, by: actor.fullName, byId: actor.id, action: "Raised" }],
+    });
+    return null;
+  });
+}
+
+/* ───────────── Interviews ───────────── */
+
+export type InterviewInput = { when: string; panel: string; type: string };
+
+/** The assigned recruiter (or HR) schedules interviews for candidates at the Interview stage. */
+export function scheduleInterview(actor: TalentActor, candidateId: string, input: InterviewInput): TalentResult {
+  return guarded((s) => {
+    const candidate = s.candidates.find((c) => c.id === candidateId);
+    if (!candidate) return "Candidate not found.";
+    const req = reqFor(s, candidate.requisitionId);
+    if (!req || !canRunPipeline(actor, req)) return "Only the assigned recruiter or HR schedules interviews.";
+    if (!isRequisitionOpen(req)) return `${req.id} is not open.`;
+    if (candidate.stage !== "Interview") return "Move the candidate to Interview first.";
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(input.when) || input.when <= nowStamp()) return "Choose a future date and time.";
+    if (!input.panel.trim()) return "Add the panel.";
+    s.interviews.push({
+      id: newId("int"),
+      candidateId,
+      candidateName: candidate.name,
+      role: candidate.role,
+      when: input.when.replace("T", " "),
+      panel: input.panel.trim(),
+      type: input.type.trim() || "Interview",
+      feedbackStatus: "Pending",
+    });
     return null;
   });
 }
@@ -341,27 +535,30 @@ export function needsCompApproval(offer: Pick<OfferRecord, "grade" | "baseSalary
   return !band || offer.baseSalary > parseAmount(band.max);
 }
 
-/** Approval still missing on a pending offer: "Line" (above the hiring manager), "Compensation", or null when done. */
+/** Next approval on a pending offer: hiring manager → HR → Compensation (above band), or null when done. */
 export function offerApprovalNeeded(offer: OfferRecord, req: Requisition | undefined): OfferApproval["role"] | null {
-  if (!offer.approvals.some((a) => a.role === "Line")) return "Line";
-  if (needsCompApproval(offer, req) && !offer.approvals.some((a) => a.role === "Compensation")) return "Compensation";
+  const has = (role: OfferApproval["role"]) => offer.approvals.some((a) => a.role === role);
+  if (!has("Hiring manager")) return "Hiring manager";
+  if (!has("HR")) return "HR";
+  if (needsCompApproval(offer, req) && !has("Compensation")) return "Compensation";
   return null;
 }
 
 export function canApproveOffer(actor: TalentActor, offer: OfferRecord, req: Requisition | undefined): boolean {
   if (offer.status !== "Pending approval" || !req) return false;
-  if (offer.createdById === actor.id || isHiringManagerOf(actor, req)) return false;
+  if (offer.createdById === actor.id) return false;
   if (offer.approvals.some((a) => a.byId === actor.id)) return false;
   const step = offerApprovalNeeded(offer, req);
-  if (step === "Line") return requisitionApprovers(req).some((a) => a.id === actor.id);
-  if (step === "Compensation") return actor.role === "compensation_admin";
+  if (step === "Hiring manager") return isHiringManagerOf(actor, req);
+  if (step === "HR") return isHrRole(actor.role) && !isHiringManagerOf(actor, req);
+  if (step === "Compensation") return actor.role === "compensation_admin" && !isHiringManagerOf(actor, req);
   return false;
 }
 
 /** Status moves this actor may make (approval itself goes through approveOffer). */
 export function offerMoves(actor: TalentActor, offer: OfferRecord, req: Requisition | undefined): OfferStatus[] {
   if (!req) return [];
-  const staff = canActOnRequisition(actor, req);
+  const staff = canRunPipeline(actor, req);
   return OFFER_TRANSITIONS[offer.status].filter((next) => {
     if (next === "Approved") return false;
     if (next === "Preparing") return canApproveOffer(actor, offer, req); // send back
@@ -373,12 +570,12 @@ function hasOpenOffer(candidateId: string, offers: OfferRecord[]): boolean {
   return offers.some((o) => o.candidateId === candidateId && o.status !== "Declined" && o.status !== "Withdrawn");
 }
 
-/** Candidates at Final Review / Offer without an open offer, on requisitions this actor works on. */
+/** Candidates the hiring manager moved to Offer, without an open offer, on requisitions this actor runs. */
 export function offerEligibleCandidates(state: Pick<TalentState, "candidates" | "offers" | "requisitions">, actor?: TalentActor): Candidate[] {
   return state.candidates.filter((c) => {
     if (!OFFER_ELIGIBLE_STAGES.includes(c.stage) || hasOpenOffer(c.id, state.offers)) return false;
     const req = state.requisitions.find((r) => r.id === c.requisitionId);
-    return !!req && req.approvalStatus === "Approved" && (!actor || canActOnRequisition(actor, req));
+    return !!req && isRequisitionOpen(req) && (!actor || canRunPipeline(actor, req));
   });
 }
 
@@ -389,9 +586,9 @@ export function createOffer(actor: TalentActor, input: OfferInput): TalentResult
     const candidate = s.candidates.find((c) => c.id === input.candidateId);
     if (!candidate) return "Candidate not found.";
     const req = reqFor(s, candidate.requisitionId);
-    if (!req || !canActOnRequisition(actor, req)) return "Only recruiting, HR or this role's hiring manager can prepare offers.";
-    if (req.approvalStatus !== "Approved") return "The requisition is not approved.";
-    if (!OFFER_ELIGIBLE_STAGES.includes(candidate.stage)) return "Offers can only be prepared at Final Review or Offer stage.";
+    if (!req || !canRunPipeline(actor, req)) return "Only the assigned recruiter or HR prepares offers.";
+    if (!isRequisitionOpen(req)) return "The requisition is not approved.";
+    if (!OFFER_ELIGIBLE_STAGES.includes(candidate.stage)) return "The hiring manager must move the candidate to Offer first.";
     if (hasOpenOffer(candidate.id, s.offers)) return `${candidate.name} already has an open offer.`;
     if (!input.grade) return "Choose a grade.";
     if (!Number.isFinite(input.baseSalary) || input.baseSalary <= 0) return "Enter the annual base salary.";
@@ -411,12 +608,18 @@ export function createOffer(actor: TalentActor, input: OfferInput): TalentResult
       packageNote: input.packageNote.trim(),
       createdBy: actor.fullName,
       createdById: actor.id,
+      createdOn: todayISO(),
       approvals: [],
     });
-    if (candidate.stage === "Final Review") candidate.stage = "Offer";
     return null;
   });
 }
+
+const APPROVAL_REFUSAL: Record<OfferApproval["role"], string> = {
+  "Hiring manager": "The hiring manager must agree first.",
+  HR: "HR approves after the hiring manager (not the hiring manager themselves).",
+  Compensation: "This offer is outside the band and needs Compensation approval.",
+};
 
 export function approveOffer(actor: TalentActor, id: string): TalentResult {
   return guarded((s) => {
@@ -424,12 +627,9 @@ export function approveOffer(actor: TalentActor, id: string): TalentResult {
     if (!row) return "Offer not found.";
     const req = reqFor(s, row.requisitionId);
     if (row.createdById === actor.id) return "You can't approve an offer you created.";
-    if (!canApproveOffer(actor, row, req)) {
-      return offerApprovalNeeded(row, req) === "Compensation"
-        ? "This offer is outside the band and needs Compensation approval."
-        : "Only someone above the hiring manager can approve this offer.";
-    }
-    const step = offerApprovalNeeded(row, req)!;
+    if (row.approvals.some((a) => a.byId === actor.id)) return "You already approved a step of this offer.";
+    const step = offerApprovalNeeded(row, req);
+    if (!step || !canApproveOffer(actor, row, req)) return step ? APPROVAL_REFUSAL[step] : "Nothing left to approve.";
     row.approvals.push({ role: step, by: actor.fullName, byId: actor.id, on: todayISO() });
     if (!offerApprovalNeeded(row, req)) row.status = "Approved";
     return null;
@@ -471,16 +671,20 @@ export function averageTimeToHire(state: Pick<TalentState, "offers" | "requisiti
   return days.length ? Math.round(days.reduce((a, b) => a + b, 0) / days.length) : null;
 }
 
+/** Feedback comes from the panel and the hiring manager. */
 export function canSubmitInterviewFeedback(actor: TalentActor, interview: Interview): boolean {
-  if (actor.role === "recruiter" || isHrRole(actor.role)) return true;
-  return interview.panel.toLowerCase().includes(actor.fullName.trim().toLowerCase());
+  if (interview.panel.toLowerCase().includes(actor.fullName.trim().toLowerCase())) return true;
+  const state = getTalentState();
+  const candidate = state.candidates.find((c) => c.id === interview.candidateId);
+  const req = candidate ? state.requisitions.find((r) => r.id === candidate.requisitionId) : undefined;
+  return !!req && isHiringManagerOf(actor, req);
 }
 
 export function submitInterviewFeedback(actor: TalentActor, id: string, score: number, feedback: string): TalentResult {
   return guarded((s) => {
     const row = s.interviews.find((i) => i.id === id);
     if (!row) return "Interview not found.";
-    if (!canSubmitInterviewFeedback(actor, row)) return "Only panel members, recruiters or HR can submit feedback.";
+    if (!canSubmitInterviewFeedback(actor, row)) return "Only the panel or the hiring manager can submit feedback.";
     if (row.feedbackStatus === "Submitted") return "Feedback for this interview was already submitted.";
     if (!Number.isInteger(score) || score < 1 || score > 5) return "Score must be a whole number from 1 to 5.";
     if (!feedback.trim()) return "Add feedback notes.";
@@ -1173,6 +1377,7 @@ export function updateEmployeeSkill(
 
 export function resetTalentState() {
   localStorage.removeItem(KEY);
+  localStorage.removeItem(LEGACY_KEY);
   cache = null;
   listeners.forEach((fn) => fn());
 }

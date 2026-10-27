@@ -5,16 +5,18 @@ import { PersonalisationPage } from "./pages/PersonalisationPage.tsx";
 import { AuditLogPage } from "./pages/AuditLogPage.tsx";
 import { Shell } from "./components/Shell.tsx";
 import { ExpensesPage } from "./pages/ExpensesPage.tsx";
+import { MailPage } from "./pages/MailPage.tsx";
 import { LoginPage, TermsPage } from "./pages/InfoPages.tsx";
 import { LeavePage } from "./pages/LeavePage.tsx";
 import { Dashboard } from "./pages/Dashboard.tsx";
 import { PayslipDetail, PayslipsPage } from "./pages/PayslipsPage.tsx";
+import { PayPreviewPage } from "./pages/PayPreviewPage.tsx";
 import { CalendarPage } from "./pages/CalendarPage.tsx";
 import { OrgChartPage } from "./pages/OrgChartPage.tsx";
 import { PersonProfilePage } from "./pages/PersonProfilePage.tsx";
 import { AttendancePage, HolidaysPage, MyInfo, ProjectsPage } from "./pages/ProfilePages.tsx";
 import { AssetsPage, CashPage, EncashmentPage, SoftwarePage } from "./pages/RequestPages.tsx";
-import { PoliciesPage } from "./pages/ResourcePages.tsx";
+import { MyPoliciesPage } from "./pages/MyPoliciesPage.tsx";
 import { EvaluationsPage, ProgramsPage, TasksPage } from "./pages/TeamPages.tsx";
 import {
   AnnouncementsPage,
@@ -33,6 +35,7 @@ import {
 } from "./pages/LocalePages.tsx";
 import { InvestmentProofPage, ReimbursementPage } from "./pages/PayExtrasPages.tsx";
 import { TimesheetPage } from "./pages/TimesheetPage.tsx";
+import { TicketsPage } from "./pages/TicketsPage.tsx";
 import {
   AdminPage,
   AiAgentsPage,
@@ -112,6 +115,7 @@ export function App() {
         <Route path="/compensation" element={<Allowed id="compensation"><CompensationPage /></Allowed>} />
         <Route path="/benefits" element={<Allowed id="benefits"><BenefitsPage /></Allowed>} />
         <Route path="/payroll" element={<Allowed id="payroll"><PayrollPage /></Allowed>} />
+        <Route path="/payroll/preview" element={<Allowed id="paypreview"><PayPreviewPage /></Allowed>} />
         <Route path="/analytics" element={<Allowed id="analytics"><AnalyticsPage /></Allowed>} />
         <Route path="/ai/copilot" element={<Allowed id="copilot"><AiCopilotPage /></Allowed>} />
         <Route path="/ai/agents" element={<Allowed id="agents"><AiAgentsPage /></Allowed>} />
@@ -126,8 +130,9 @@ export function App() {
         <Route path="/encashment" element={<EncashmentPage />} />
         <Route path="/documents" element={<Allowed id="documents"><DocumentsPage /></Allowed>} />
         <Route path="/timesheet" element={<Allowed id="timesheet"><TimesheetPage /></Allowed>} />
-        <Route path="/policies" element={<PoliciesPage />} />
+        <Route path="/policies" element={<Allowed id="policies"><MyPoliciesPage /></Allowed>} />
         <Route path="/tasks" element={<Allowed id="tasks"><TasksPage /></Allowed>} />
+        <Route path="/tickets" element={<Allowed id="tickets"><TicketsPage /></Allowed>} />
         <Route path="/attendance" element={<Allowed id="attendance"><AttendancePage /></Allowed>} />
         <Route path="/leave" element={<Allowed id="leave"><LeavePage /></Allowed>} />
         <Route path="/directory" element={<Allowed id="people"><DirectoryPage /></Allowed>} />
@@ -136,6 +141,7 @@ export function App() {
         <Route path="/cash" element={<CashPage />} />
         <Route path="/approvals" element={<ApprovalsCenterPage />} />
         <Route path="/chat" element={<Allowed id="messages"><ChatPage /></Allowed>} />
+        <Route path="/mail" element={<Allowed id="mail"><MailPage /></Allowed>} />
         <Route path="/announcements" element={<Allowed id="announcements"><AnnouncementsPage /></Allowed>} />
         <Route path="/notifications" element={<Allowed id="notifications"><NotificationCenterPage /></Allowed>} />
         <Route path="/assets" element={<AssetsPage />} />

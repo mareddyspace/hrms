@@ -1,4 +1,3 @@
-import { COMPANY_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from "../brand.ts";
 import type { DemoAccount, NavAccessId } from "../demoAccounts.ts";
 import type { CountryCode, UserRole } from "../model.ts";
 import { TIMEZ_COUNTRIES } from "../model.ts";
@@ -36,14 +35,14 @@ export function copilotPersonaFromRole(role: UserRole): CopilotPersona {
 
 export const COPILOT_SUGGESTIONS: Record<CopilotPersona, string[]> = {
   employee: [
-    "How do I apply for leave?",
     "What is my leave balance?",
-    "What are my working hours?",
-    "Which holidays are coming up?",
+    "When is the next holiday?",
+    "My last payslip net pay",
+    "Timesheet status this week",
   ],
   manager: [
     "What is waiting on my approval?",
-    "Who in my team took the most leave?",
+    "Who is on leave this week?",
     "Summarise Babu Menon",
     "What is my leave balance?",
   ],
@@ -51,19 +50,19 @@ export const COPILOT_SUGGESTIONS: Record<CopilotPersona, string[]> = {
     "Give me a headcount snapshot",
     "What is waiting on my approval?",
     "Summarise Ram Krishnan",
-    "What is my leave balance?",
+    "Who is on leave today?",
   ],
   recruiter: [
-    "Where do I see the recruiting pipeline?",
+    "How many open positions are there?",
+    "How many candidates are in the pipeline?",
     "What is my leave balance?",
-    "Which holidays are coming up?",
-    "How do I apply for leave?",
+    "When is the next holiday?",
   ],
   executive: [
     "Give me a headcount snapshot",
+    "Headcount by country",
     "What is waiting on my approval?",
     "Summarise Ram Krishnan",
-    "Which holidays are coming up?",
   ],
   admin: [
     "Where do I retry an integration?",
@@ -89,14 +88,6 @@ export interface CopilotAnswer {
   links?: { label: string; to: string }[];
 }
 
-function hasAny(q: string, words: string[]) {
-  return words.some((w) => q.includes(w));
-}
-
-function hasAll(q: string, words: string[]) {
-  return words.every((w) => q.includes(w));
-}
-
 /** Who is asking — answers and links are trimmed to what this persona may open. */
 export type CopilotViewer = Pick<DemoAccount, "role" | "navAccess">;
 
@@ -111,7 +102,7 @@ export interface CopilotContext {
   timeZone: string;
   shiftHours: string;
   managerName?: string;
-  leaveRows: { name: string; code: string; available: number; pending: number }[];
+  leaveRows: { name: string; code: string; available: number; pending: number; quota?: number; utilized?: number }[];
   holidays: { date: string; name: string }[];
   /** Items the viewer decides — same rules and total as countWaitingOnMe. */
   approvals: { who: string; kind: string; detail: string; date: string }[];
@@ -121,9 +112,60 @@ export interface CopilotContext {
   teamLeave: { name: string; days: number }[];
   /** True when the viewer may see company-wide workforce numbers. */
   orgWide: boolean;
-  workforce?: { headcount: number; joiners: number; exits: number; attritionPct: number };
+  workforce?: {
+    headcount: number;
+    joiners: number;
+    exits: number;
+    attritionPct: number;
+    joinersMonth?: number;
+    exitsMonth?: number;
+    /** Sentence with 12-month attrition, exits and joiners. */
+    attrition12?: string;
+    byCountry?: { name: string; count: number }[];
+    byDepartment?: { name: string; count: number }[];
+  };
   /** Set when no live data was supplied. */
   limited?: boolean;
+  /* —— Richer live data (all optional; filled by buildCopilotContext) —— */
+  today?: string;
+  fullName?: string;
+  countryCode?: string;
+  currency?: string;
+  shiftName?: string;
+  todayShift?: string;
+  weeklyOff?: string[];
+  /** Every holiday that applies to the viewer (country list plus optional picks), all dates. */
+  allHolidays?: { date: string; name: string }[];
+  leavePolicies?: { code: string; name: string; quota: number; accrual?: string; carryForwardMax?: number }[];
+  policies?: { title: string; body?: string }[];
+  /** The viewer's own leave requests, newest first. */
+  myLeave?: { type: string; code: string; from: string; to: string; days: number; status: string; appliedOn: string; decidedBy?: string; note?: string }[];
+  backdated?: { type: string; from: string; to: string; status: string }[];
+  team?: { name: string; direct: boolean; designation: string }[];
+  /** Approved leave/WFH from today for the next two weeks, within awayScope. */
+  away?: { name: string; self: boolean; type: string; wfh: boolean; from: string; to: string }[];
+  awayScope?: "org" | "team" | "self";
+  recruiting?: {
+    approvedReqs: number;
+    openings: number;
+    pendingReqs: number;
+    onHoldReqs: number;
+    roles: { title: string; country: string; openings: number }[];
+    /** Pipeline figures: only with recruiting access (not just Jobs). */
+    candidates?: number;
+    byStage?: { stage: string; count: number }[];
+    openOffers?: number;
+  };
+  compReview?: { cycle: string; status: string; total: number; submittedPct: number; approved: number; awaiting: number; avgIncreasePct: number } | null;
+  /** The viewer's own payslips, newest first. */
+  payslips?: { label: string; month: string; currency: string; gross: number; net: number; tax: number; deductions: { name: string; amount: number }[] }[];
+  /** This week, then last week. */
+  timesheetWeeks?: { weekStart: string; hours: number; status: string }[];
+  corrections?: { date: string; kind: string; status: string }[];
+  goals?: { cycle: string; items: { title: string; progress: number; weight: number }[]; weighted: number; review?: string };
+  learning?: { title: string; mandatory: boolean; status: string; progress: number; due?: string }[];
+  mandatoryCourses?: { title: string; audience: string; status: string; due?: string }[];
+  expenses?: { kind: string; category: string; amount: number; currency: string; status: string; date: string }[];
   /**
    * "AI Employee 360": finds a colleague by name and returns their summary only when the viewer is HR,
    * the person themselves, or above them in the reporting line. Never includes pay.
@@ -146,57 +188,9 @@ export type CopilotPersonLookup =
   | { status: "not_found" }
   | { status: "ambiguous"; names: string[] };
 
-const SUMMARY_INTENT =
-  /^(?:please |can you |could you )?(?:summari[sz]e|give me (?:a )?summary of|summary of|summary for|employee 360 (?:for|of)|ai employee 360 (?:for|of)|360 (?:view )?(?:for|of))\s+(.+)$/;
+import { copilotAnswer, NO_DECISIONS } from "../features/copilot/answers.ts";
 
-/** The name asked about in "summarise <name>" style questions, or null. */
-export function summaryTarget(question: string): string | null {
-  const q = question.toLowerCase().replace(/[?!.,'"]/g, " ").replace(/\s+/g, " ").trim();
-  const match = q.match(SUMMARY_INTENT);
-  const name = match?.[1]?.replace(/^(?:of|for|about)\s+/, "").replace(/\s+(?:please|profile|record)$/, "").trim();
-  if (!name || name.length < 2 || /^(?:my|our|the|this|these|all|team|leave|approvals?)\b/.test(name)) return null;
-  return name;
-}
-
-function personSummaryAnswer(target: string, ctx: CopilotContext): RawCopilotAnswer {
-  if (!ctx.summarisePerson) {
-    return {
-      kind: "text",
-      summary: "Open the full Copilot page to get a colleague summary.",
-      links: [{ label: "AI Copilot", to: "/ai/copilot" }],
-    };
-  }
-  const found = ctx.summarisePerson(target);
-  if (found.status === "denied") {
-    return {
-      kind: "text",
-      summary: "I can only summarise people below you in the reporting line. HR can summarise anyone.",
-      links: [{ label: "Directory", to: "/directory" }],
-    };
-  }
-  if (found.status === "not_found") {
-    return { kind: "text", summary: `I couldn't find anyone called "${target}". Try their full name.`, links: [{ label: "Directory", to: "/directory" }] };
-  }
-  if (found.status === "ambiguous") {
-    return {
-      kind: "text",
-      summary: `More than one person matches "${target}": ${found.names.join(", ")}. Which one did you mean?`,
-    };
-  }
-  return {
-    kind: "metrics",
-    summary: [found.headline, ...found.notes].join(" "),
-    metrics: found.metrics,
-    table: found.table,
-    links: [
-      { label: "Open profile", to: `/people/${found.id}` },
-      { label: "Performance", to: "/evaluations" },
-    ],
-  };
-}
-
-/** Internal: an answer may name the module whose data it reveals. */
-type RawCopilotAnswer = CopilotAnswer & { requires?: NavAccessId };
+export { summaryTarget } from "../features/copilot/answers.ts";
 
 /** Route → nav access id, so Copilot never links to pages the viewer can't open. */
 const COPILOT_LINK_ACCESS: Record<string, NavAccessId> = {
@@ -241,8 +235,6 @@ function viewerHas(viewer: CopilotViewer, id: NavAccessId): boolean {
   return viewer.navAccess.includes("*") || viewer.navAccess.includes(id);
 }
 
-const NO_DECISIONS = "I can't approve, reject or change anything — decisions are made in Approvals.";
-
 /** Rule-based Copilot over the viewer's own, already-scoped data. */
 export function answerCopilot(question: string, input: CopilotContext | CopilotViewer): CopilotAnswer {
   // Callers that only pass the viewer get no personal data: answers point to the right page instead.
@@ -267,7 +259,7 @@ export function answerCopilot(question: string, input: CopilotContext | CopilotV
   const { viewer } = ctx;
   if (ctx.limited) {
     const q = question.toLowerCase();
-    if (/(leave|balance|holiday|approv|waiting|pending|shift|hours|team|headcount|attrition)/.test(q)) {
+    if (/(leave|lea?vs?|pto|vacation|balance|holi|approv|waiting|pending|shift|hours|team|headcount|attrition|pay|salary|tax|goal|course|timesheet|manager|report)/.test(q)) {
       return {
         kind: "text",
         summary: `Open the full Copilot page for answers from your own data. ${NO_DECISIONS}`,
@@ -275,7 +267,7 @@ export function answerCopilot(question: string, input: CopilotContext | CopilotV
       };
     }
   }
-  const { requires, ...raw } = rawCopilotAnswer(question, ctx);
+  const { requires, ...raw } = copilotAnswer(question, ctx);
   const allowedLink = (l: { to: string }) => {
     const id = COPILOT_LINK_ACCESS[l.to];
     return !id || viewerHas(viewer, id);
@@ -289,336 +281,6 @@ export function answerCopilot(question: string, input: CopilotContext | CopilotV
   }
   const links = raw.links?.filter(allowedLink);
   return { ...raw, links: links?.length ? links : undefined };
-}
-
-function fmtDate(iso: string): string {
-  const d = new Date(`${iso}T00:00:00`);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-function rawCopilotAnswer(question: string, ctx: CopilotContext): RawCopilotAnswer {
-  const q = question.toLowerCase().replace(/[?!.,'"]/g, " ").replace(/\s+/g, " ").trim();
-  const balances = ctx.leaveRows.filter((r) => r.code !== "unpaid");
-
-  const target = summaryTarget(question);
-  if (target) return personSummaryAnswer(target, ctx);
-
-  if (hasAny(q, ["company name", "organisation name", "organization name", "who are we", "brand name"]) ||
-      (hasAny(q, ["company", "organisation", "organization", "employer"]) && hasAny(q, ["name", "called", "brand"]))) {
-    return {
-      kind: "text",
-      summary: `You work for ${COMPANY_NAME} (${PRODUCT_TAGLINE}).`,
-      links: [
-        { label: "My profile", to: "/info" },
-        { label: "Organization", to: "/organization" },
-      ],
-    };
-  }
-
-  if (hasAny(q, ["product name", "app name", "portal name", "what is this app", "what is this portal"])) {
-    return { kind: "text", summary: `${PRODUCT_NAME} is the ${COMPANY_NAME} employee portal.`, links: [{ label: "Home", to: "/" }] };
-  }
-
-  if (hasAny(q, ["copilot", "how do you work", "are you real", "llm", "chatgpt", "what can you do"])) {
-    return {
-      kind: "text",
-      summary: `I answer from your own portal data and your team's, within your access. Ask "Summarise <name>" for a colleague below you. ${NO_DECISIONS}`,
-      links: [{ label: "Help", to: "/help" }],
-    };
-  }
-
-  if (
-    hasAny(q, ["working hours", "work hours", "office hours", "shift", "business hours", "start time", "end time", "what time do i", "when do i work", "working time", "duty hours"]) ||
-    (hasAny(q, ["hours", "timing", "timings"]) && hasAny(q, ["work", "working", "office", "day"]))
-  ) {
-    return {
-      kind: "metrics",
-      summary: `Your shift is ${ctx.shiftHours} (${ctx.timeZone}).`,
-      metrics: [
-        { label: "Shift", value: ctx.shiftHours },
-        { label: "Time zone", value: ctx.timeZone },
-      ],
-      links: [
-        { label: "Attendance", to: "/attendance" },
-        { label: "Timesheet", to: "/timesheet" },
-      ],
-    };
-  }
-
-  if (
-    hasAny(q, ["most holiday", "most leave", "most pto", "most vacation", "took most", "who took", "top leave", "highest leave"]) ||
-    (hasAny(q, ["who", "which"]) && hasAny(q, ["holiday", "leave", "pto", "vacation", "absence"]) && hasAny(q, ["most", "highest", "top", "max"]))
-  ) {
-    if (!ctx.teamSize) {
-      return { kind: "text", summary: "You can only see your own leave. Nobody reports to you.", links: [{ label: "Leave", to: "/leave" }] };
-    }
-    const rows = ctx.teamLeave.filter((r) => r.days > 0).slice(0, 5);
-    return {
-      kind: rows.length ? "table" : "text",
-      summary: rows.length ? "Approved leave this year for people in your reporting line." : "No approved leave yet this year in your team.",
-      table: rows.length ? { headers: ["Person", "Days"], rows: rows.map((r) => [r.name, String(r.days)]) } : undefined,
-      links: [{ label: "Leave", to: "/leave" }],
-    };
-  }
-
-  if (hasAny(q, ["org chart", "orgchart", "organisation chart", "organization chart", "reporting tree", "who is my manager", "my manager", "reports to"])) {
-    return {
-      kind: "text",
-      summary: ctx.managerName
-        ? `You report to ${ctx.managerName}. Your requests are decided by people above you in the line.`
-        : "Nobody is above you in the reporting line, so your requests are approved automatically.",
-      links: [
-        { label: "Org chart", to: "/org-chart" },
-        { label: "My profile", to: "/info" },
-      ],
-    };
-  }
-
-  if (hasAny(q, ["calendar", "schedule", "meeting", "meetings", "reminder", "reminders", "ip day", "ip days", "in-person"])) {
-    return {
-      kind: "text",
-      summary: "My calendar shows in-person days, meetings, reminders, leave and holidays.",
-      links: [
-        { label: "My calendar", to: "/calendar" },
-        { label: "Holidays", to: "/holidays" },
-      ],
-    };
-  }
-
-  if (hasAny(q, ["holiday", "holidays", "festival", "closure", "public holiday"])) {
-    return {
-      kind: ctx.holidays.length ? "table" : "text",
-      summary: ctx.holidays.length ? `Upcoming holidays in ${ctx.countryName}.` : `No more holidays this year in ${ctx.countryName}.`,
-      table: ctx.holidays.length
-        ? { headers: ["Date", "Holiday"], rows: ctx.holidays.map((h) => [fmtDate(h.date), h.name]) }
-        : undefined,
-      links: [
-        { label: "Holidays", to: "/holidays" },
-        { label: "Leave", to: "/leave" },
-      ],
-    };
-  }
-
-  if (hasAny(q, ["payslip", "payslips", "salary slip", "pay stub", "paycheck", "net pay", "my pay"])) {
-    return {
-      kind: "text",
-      summary: "Open My payslips to view and download your own slips. I don't read or share anyone's pay.",
-      links: [{ label: "My payslips", to: "/payslips" }],
-    };
-  }
-
-  if (hasAny(q, ["compensation", "salary band", "pay band", "ctc", "bonus cycle", "salary"])) {
-    return {
-      kind: "text",
-      requires: "compensation",
-      summary: "Pay details are in Compensation. I don't show other people's pay here.",
-      links: [{ label: "Compensation", to: "/compensation" }],
-    };
-  }
-
-  if (hasAny(q, ["benefit", "benefits", "medical", "insurance", "dependents", "pf", "provident"])) {
-    return { kind: "text", summary: `Benefits shows the plans for ${ctx.countryName}, your enrolment and dependents.`, links: [{ label: "Benefits", to: "/benefits" }] };
-  }
-
-  if (hasAny(q, ["profile", "my info", "my details", "employee id", "who am i", "my email", "contact"])) {
-    return { kind: "text", summary: "Open My profile to see and update your details.", links: [{ label: "My profile", to: "/info" }] };
-  }
-
-  if (
-    hasAny(q, ["timesheet", "time sheet", "log hours", "fill hours", "submit timesheet", "project hours", "billable"]) &&
-    !hasAny(q, ["approv", "waiting", "pending"])
-  ) {
-    return {
-      kind: "text",
-      summary: "Log project hours for the week in Timesheet, then submit. Your manager reviews it.",
-      links: [
-        { label: "Timesheet", to: "/timesheet" },
-        { label: "Attendance", to: "/attendance" },
-      ],
-    };
-  }
-
-  if (hasAny(q, ["task", "tasks", "to-do", "todo", "my tasks"])) {
-    return { kind: "text", summary: "Tasks lists your open, scheduled and closed work.", links: [{ label: "Tasks", to: "/tasks" }] };
-  }
-
-  if (hasAny(q, ["notification", "notifications", "alert", "alerts"])) {
-    return { kind: "text", summary: "Notifications holds your payslip, policy and project alerts.", links: [{ label: "Notifications", to: "/notifications" }] };
-  }
-
-  if (hasAny(q, ["announcement", "announcements", "company news"])) {
-    return { kind: "text", summary: "Company announcements are under Announcements.", links: [{ label: "Announcements", to: "/announcements" }] };
-  }
-
-  if (hasAny(q, ["message", "messages", "chat", "dm"])) {
-    return { kind: "text", summary: "Use Messages to chat with colleagues.", links: [{ label: "Messages", to: "/chat" }] };
-  }
-
-  if (hasAny(q, ["document", "documents", "letter", "offer letter", "forms"])) {
-    return { kind: "text", summary: "Documents holds your letters, forms and requests.", links: [{ label: "Documents", to: "/documents" }] };
-  }
-
-  if (hasAny(q, ["password", "change password", "reset password", "login"])) {
-    return {
-      kind: "text",
-      summary: "Change your password from the profile menu, or use Forgot password on the sign-in page. I never see or share passwords.",
-      links: [{ label: "Help", to: "/help" }],
-    };
-  }
-
-  if (hasAny(q, ["onboarding", "new joiner", "day 0", "joining"])) {
-    return { kind: "text", summary: "Onboarding tracks joiner checklists.", links: [{ label: "Onboarding", to: "/onboarding" }] };
-  }
-
-  if (hasAny(q, ["performance", "evaluation", "appraisal", "goals", "okr"])) {
-    return {
-      kind: "text",
-      summary: "Your goals and reviews are in Performance.",
-      links: [
-        { label: "Performance", to: "/evaluations" },
-        { label: "Skills", to: "/skills" },
-      ],
-    };
-  }
-
-  if (
-    (hasAny(q, ["leave", "pto", "wfh", "absence", "timesheet", "expense"]) && hasAny(q, ["approv", "waiting", "pending", "queue"])) ||
-    hasAll(q, ["waiting", "approval"]) ||
-    hasAny(q, ["approvals", "approve", "inbox"])
-  ) {
-    if (!ctx.approvalsCount) {
-      return { kind: "text", summary: `Nothing is waiting on you. ${NO_DECISIONS}`, links: [{ label: "Approvals", to: "/approvals" }] };
-    }
-    return {
-      kind: "table",
-      summary: `${ctx.approvalsCount} item${ctx.approvalsCount === 1 ? " is" : "s are"} waiting on you. ${NO_DECISIONS}`,
-      table: {
-        headers: ["Person", "Type", "Detail", "Date"],
-        rows: ctx.approvals.slice(0, 8).map((a) => [a.who, a.kind, a.detail, a.date ? fmtDate(a.date) : "—"]),
-      },
-      links: [{ label: "Open Approvals", to: "/approvals" }],
-    };
-  }
-
-  if (
-    hasAny(q, ["apply for leave", "request leave", "how do i apply", "take leave", "book leave"]) ||
-    (hasAny(q, ["leave"]) && hasAny(q, ["apply", "request", "how", "submit"]))
-  ) {
-    return {
-      kind: "text",
-      summary: ctx.managerName
-        ? `Open Leave, pick the type and dates, and submit. ${ctx.managerName} or someone above them decides it.`
-        : "Open Leave, pick the type and dates, and submit. Your leave is approved automatically.",
-      links: [
-        { label: "Leave", to: "/leave" },
-        { label: "Holidays", to: "/holidays" },
-      ],
-    };
-  }
-
-  if (hasAny(q, ["leave", "pto", "wfh", "absence", "comp off", "casual", "balance"]) && !hasAny(q, ["policy"])) {
-    return {
-      kind: "metrics",
-      summary: balances.length
-        ? `Your leave this year: ${balances.map((r) => `${r.name} ${r.available}`).join(" · ")} days available.`
-        : "No leave balances found.",
-      metrics: balances.slice(0, 6).map((r) => ({
-        label: r.name,
-        value: `${r.available} day${r.available === 1 ? "" : "s"}${r.pending ? ` (${r.pending} pending)` : ""}`,
-      })),
-      links: [{ label: "Leave", to: "/leave" }],
-    };
-  }
-
-  if (hasAny(q, ["policy", "policies", "acknowledg", "handbook"])) {
-    return { kind: "text", summary: "Company policies and your acknowledgements are under Policies.", links: [{ label: "Policies", to: "/policies" }] };
-  }
-
-  if (hasAny(q, ["team", "direct report", "my reports", "who reports", "my team"])) {
-    return {
-      kind: "text",
-      summary: ctx.teamSize
-        ? `${ctx.teamSize} ${ctx.teamSize === 1 ? "person is" : "people are"} below you in the reporting line.`
-        : "Nobody reports to you.",
-      links: [
-        { label: "Team", to: "/team" },
-        { label: "Org chart", to: "/org-chart" },
-      ],
-    };
-  }
-
-  if (hasAny(q, ["attrition", "workforce", "headcount", "hiring", "exit", "exits", "turnover", "analytics", "skill", "skills", "capacity", "gap"])) {
-    if (!ctx.orgWide || !ctx.workforce) {
-      return {
-        kind: "text",
-        summary: ctx.teamSize
-          ? `You can see your own team only: ${ctx.teamSize} ${ctx.teamSize === 1 ? "person" : "people"}. Company-wide numbers need HR or executive access.`
-          : "Company-wide numbers need HR or executive access.",
-        links: [{ label: "Team", to: "/team" }],
-      };
-    }
-    return {
-      kind: "metrics",
-      requires: "analytics",
-      summary: "Workforce snapshot from the people directory (year to date).",
-      metrics: [
-        { label: "Headcount", value: String(ctx.workforce.headcount) },
-        { label: "Joiners", value: String(ctx.workforce.joiners) },
-        { label: "Exits", value: String(ctx.workforce.exits) },
-        { label: "Attrition", value: `${ctx.workforce.attritionPct}%` },
-      ],
-      links: [{ label: "Analytics", to: "/analytics" }],
-    };
-  }
-
-  if (hasAny(q, ["pipeline", "time-to-hire", "time to hire", "recruit", "requisition", "interview", "candidate", "offer", "ats"])) {
-    return { kind: "text", requires: "recruiting", summary: "Requisitions, candidates and interviews are in Recruiting.", links: [{ label: "Recruiting", to: "/recruiting" }] };
-  }
-
-  if (hasAny(q, ["attendance", "overtime", "check in", "check-in", "check out", "check-out", "present", "punch", "clock in"])) {
-    return { kind: "text", summary: "Check in and out from Home or Attendance. Corrections go to your manager.", links: [{ label: "Attendance", to: "/attendance" }] };
-  }
-
-  if (hasAny(q, ["integration", "sso", "audit", "connector", "admin", "administration"])) {
-    return {
-      kind: "text",
-      requires: "integrations",
-      summary: "Connector status and retries are in Integration Center; the audit log is in Administration.",
-      links: [
-        { label: "Integration Center", to: "/integrations" },
-        { label: "Administration", to: "/admin" },
-      ],
-    };
-  }
-
-  if (hasAny(q, ["learning", "certif", "training", "course", "lms", "program"])) {
-    return { kind: "text", summary: "Your courses and certifications are in Learning.", links: [{ label: "Learning", to: "/programs" }] };
-  }
-
-  if (hasAny(q, ["expense", "expenses", "reimbursement", "claim"])) {
-    return {
-      kind: "text",
-      summary: "Submit claims in Expenses. They go to someone above you in the reporting line.",
-      links: [
-        { label: "Expenses", to: "/expenses" },
-        { label: "Reimbursement", to: "/reimbursement" },
-      ],
-    };
-  }
-
-  if (hasAny(q, ["help", "hr request", "support", "ticket", "faq"])) {
-    return { kind: "text", summary: "Raise a ticket or browse FAQs in Help.", links: [{ label: "Help", to: "/help" }] };
-  }
-
-  return {
-    kind: "text",
-    summary: "Try asking about your leave balance, holidays, approvals, timesheet, payslips or working hours.",
-    links: [
-      { label: "Leave", to: "/leave" },
-      { label: "Timesheet", to: "/timesheet" },
-      { label: "Help", to: "/help" },
-    ],
-  };
 }
 
 /* —— AI Agents —— */

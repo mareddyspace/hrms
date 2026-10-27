@@ -15,6 +15,7 @@ export type NavAccessId =
   | "profile"
   | "team"
   | "tasks"
+  | "tickets"
   | "inbox"
   | "messages"
   | "announcements"
@@ -65,7 +66,10 @@ export type NavAccessId =
   | "shifts"
   | "optionalholidays"
   | "contractors"
-  | "auditlog";
+  | "auditlog"
+  | "mail"
+  | "paypreview"
+  | "policies";
 
 export interface DemoAccount extends Employee {
   /** Prototype-only plain-text password (frontend mock). */
@@ -89,7 +93,9 @@ const ACCESS_EMPLOYEE: NavAccessId[] = [
   "home",
   "profile",
   "tasks",
+  "tickets",
   "messages",
+  "mail",
   "notifications",
   "announcements",
   "calendar",
@@ -120,6 +126,7 @@ const ACCESS_EMPLOYEE: NavAccessId[] = [
   "internaljobs",
   "shifts",
   "optionalholidays",
+  "policies",
 ];
 
 const ACCESS_MANAGER: NavAccessId[] = [
@@ -147,7 +154,6 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "people",
   "organization",
   "jobs",
-  "agents",
   "locale",
   "integrations",
   "payroll", // integration status only
@@ -206,7 +212,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     department: "Engineering",
     currency: "INR",
     reportsToId: "emp-ram",
-    navAccess: ACCESS_EMPLOYEE,
+    navAccess: [...ACCESS_EMPLOYEE, "agents"], // AI agents are for employees only
   }),
   account({
     id: "emp-ram",
@@ -255,7 +261,6 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "jobs",
       "onboarding",
       "compensation",
-      "agents",
       "locale",
       "administration",
       "exitsadmin",
@@ -263,6 +268,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "bulkdata",
       "reportbuilder",
       "auditlog",
+      "paypreview",
     ],
   }),
   account({
@@ -294,7 +300,6 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "recruiting",
       "onboarding",
       "analytics",
-      "agents",
       "bgv",
     ],
   }),
@@ -346,7 +351,6 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "organization",
       "jobs",
       "recruiting",
-      "agents",
       "reportbuilder",
       "exitsadmin",
       // no compensation — salary stays restricted unless salaryAuthorized
@@ -382,6 +386,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "payroll",
       "payslips",
       "reportbuilder",
+      "paypreview",
     ],
   }),
   account({

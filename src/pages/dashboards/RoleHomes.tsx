@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { COMPANY_NAME } from "../../brand.ts";
 import { Card, DataTable, LeaveTable, MetricCard, MetricGrid, StatusBadge, StatusPill } from "../../components/ui.tsx";
@@ -7,12 +7,6 @@ import { COURSES } from "../../data/talentData.ts";
 import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
 import { listPeople, subscribePeople, getExitDetails } from "../../data/peopleLocal.ts";
 import { TASK_TEAM } from "../../data/taskTeam.ts";
-import {
-  COPILOT_SUGGESTIONS,
-  answerCopilot,
-  copilotPersonaFromRole,
-  type CopilotAnswer,
-} from "../../data/platformData.ts";
 import { getPlatformVersion, listAuditLog, listIntegrations, subscribePlatform } from "../../data/platformLocal.ts";
 import {
   dayStatus,
@@ -64,7 +58,6 @@ import { getExitState, subscribeExits } from "../../features/lifecycle/exitStore
 import { getProbationState, subscribeProbation, trackedProbations } from "../../features/lifecycle/probationStore.ts";
 import { getBgvState, overallResult, subscribeBgv } from "../../features/compliance/bgvStore.ts";
 import { docStatus, getImmigrationState, subscribeImmigration } from "../../features/compliance/immigrationStore.ts";
-import { useCopilotContext } from "../../features/copilot/copilotContext.ts";
 import {
   TIMEZ_COUNTRIES,
   addDaysISO,
@@ -81,6 +74,21 @@ import { useLocale } from "../../locale/LocaleContext.tsx";
 import { usePortal } from "../../store.tsx";
 import { countWaitingOnMe } from "../ApprovalsCenter.tsx";
 import { AuthShortcuts, DashGreeting, DateRangeFilter, MiniBars, ProgressBar, useDateRange } from "./widgets.tsx";
+import {
+  CoverageRisksCard,
+  HeadcountAnalysisCard,
+  LateArrivalsCard,
+  NewHiringCard,
+  OfferAcceptanceCard,
+  TeamCoverCard,
+  TimeToHireCard,
+  WhereTeamWorksCard,
+} from "./HrInsightCards.tsx";
+import { attendanceSample, lateArrivals, teamAbsence, teamWorkplace } from "../../data/hrAnalytics.ts";
+import { BarChart, ChartEmpty, DonutChart, HBarChart, LineChart, paletteColor } from "./charts.tsx";
+import { countInto, dailyCounts, monthlyMovement } from "../../data/adminCharts.ts";
+import { useAuditTrail } from "../../data/auditTrail.ts";
+import { TICKET_STATUSES, useTickets } from "../../data/ticketStore.ts";
 
 /** Map dashboard shortcut labels to real routes. */
 const R = {
@@ -298,76 +306,6 @@ function useRegionFilter(): CountryCode | "ALL" {
 
 function countryNameOf(code: string | undefined): string | undefined {
   return TIMEZ_COUNTRIES.find((c) => c.code === code)?.name;
-}
-
-/** Ask box on Home: answers inline from the same Copilot rules, with quick prompts. */
-function AssistantCard() {
-  const { demoProfile } = usePortal();
-  const buildContext = useCopilotContext();
-  const prompts = COPILOT_SUGGESTIONS[copilotPersonaFromRole(demoProfile.role)].slice(0, 3);
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<{ q: string; a: CopilotAnswer } | null>(null);
-  function ask(q: string) {
-    const text = q.trim();
-    if (!text) return;
-    setAnswer({ q: text, a: answerCopilot(text, buildContext()) });
-    setQuestion("");
-  }
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    ask(question);
-  }
-  return (
-    <Card title="AI Assistant" to={R.copilot}>
-      <form onSubmit={onSubmit} className="row-gap" style={{ alignItems: "center" }}>
-        <input
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Ask about leave, holidays, approvals…"
-          aria-label="Ask the assistant"
-          style={{ flex: 1, minWidth: 0 }}
-        />
-        <button type="submit" className="btn">
-          Ask
-        </button>
-      </form>
-      <div className="row-gap" style={{ marginTop: 8, flexWrap: "wrap" }}>
-        {prompts.map((p) => (
-          <button key={p} type="button" className="btn-ghost" onClick={() => ask(p)}>
-            {p}
-          </button>
-        ))}
-      </div>
-      {answer && (
-        <div style={{ marginTop: 10 }} aria-live="polite">
-          <p className="muted">{answer.q}</p>
-          <p>{answer.a.summary}</p>
-          {answer.a.metrics && (
-            <ul className="todo">
-              {answer.a.metrics.slice(0, 4).map((m) => (
-                <li key={m.label}>
-                  {m.label}: <strong>{m.value}</strong>
-                </li>
-              ))}
-            </ul>
-          )}
-          {answer.a.table && <DataTable headers={answer.a.table.headers} rows={answer.a.table.rows.slice(0, 4)} />}
-          {answer.a.links && (
-            <div className="row-gap" style={{ marginTop: 6 }}>
-              {answer.a.links.map((l) => (
-                <Link key={l.to} to={l.to} className="quiet-link">
-                  {l.label}
-                </Link>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-      <Link to={R.copilot} className="quiet-link">
-        Open Copilot
-      </Link>
-    </Card>
-  );
 }
 
 /* ───────────────────────────────────────────── EMPLOYEE ── */
@@ -717,7 +655,6 @@ export function EmployeeHome() {
         </Card>
       ),
     },
-    { id: "assistant", label: "AI Assistant", node: <AssistantCard /> },
     {
       id: "pay",
       label: "Pay & benefits",
@@ -803,6 +740,11 @@ export function ManagerHome() {
   const checkedIn = new Set(
     attState.sessions.filter((s) => s.date === today && s.phase !== "not_started" && teamIds.has(s.employeeId)).map((s) => s.employeeId),
   );
+  const workplace = teamWorkplace(
+    data.statuses.map((x) => ({ id: x.member.id, name: x.member.name, status: x.status })),
+    peopleById,
+    checkedIn,
+  );
   const leaveQueue = state.leaveRequests.filter((r) => r.status === "pending" && data.waiting.some((w) => w.id === r.id));
   const timesheetQueue = data.waiting.filter((w) => w.kind === "Timesheet");
   const upcomingLeave = state.leaveRequests
@@ -871,6 +813,7 @@ export function ManagerHome() {
     { id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> },
     { id: "myday", label: "My day", node: <MyDayCard /> },
     { id: "team", label: "Team attendance today", node: <TeamTodayCard statuses={data.statuses} title="Team attendance today" checkedIn={checkedIn} /> },
+    { id: "team-workplace", label: "Where the team works", node: <WhereTeamWorksCard members={workplace} /> },
     {
       id: "alerts",
       label: "Team alerts",
@@ -1044,7 +987,6 @@ export function ManagerHome() {
       ),
     },
     { id: "holidays", label: "Upcoming holidays", node: <HolidaysCard holidays={data.holidays} countryName={employee.countryName} /> },
-    { id: "assistant", label: "AI Assistant", node: <AssistantCard /> },
     {
       id: "links",
       label: "Quick links",
@@ -1170,6 +1112,22 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
   const reviews = reviewStatusFor(talent.reviews, scopeIds, cycle.id);
   const learning = learningCompletion(talent.enrollments, scopeIds ?? undefined, today);
   const insights = useMemo(() => workforceInsights(data.people, country, today), [data.people, country, today]);
+  const countryPeople = useMemo(
+    () => (country === "ALL" ? data.people : data.people.filter((p) => p.countryCode === country)),
+    [data.people, country],
+  );
+  const late = useMemo(
+    () => lateArrivals(attendanceSample(data.people, country), state, attState, today),
+    // state slices used: holidays, leaveRequests, absences
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data.people, country, state.holidays, state.leaveRequests, state.absences, attState, today],
+  );
+  const cover = useMemo(
+    () => teamAbsence(data.people, scopePeople, state, today),
+    // state slices used: holidays, leaveRequests
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data.people, scopePeople, state.holidays, state.leaveRequests, today],
+  );
 
   const title = hrbp ? "HRBP Home" : "HR Home";
   useTitle(title);
@@ -1218,6 +1176,13 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
         </Card>
       ),
     },
+    { id: "headcount-analysis", label: "Headcount analysis", node: <HeadcountAnalysisCard scopePeople={scopePeople} allPeople={data.people} today={today} /> },
+    { id: "new-hiring", label: "New hiring", node: <NewHiringCard people={countryPeople} today={today} /> },
+    { id: "time-to-hire", label: "Time to hire", node: <TimeToHireCard offers={talent.offers} requisitions={talent.requisitions} countryName={scopeName} /> },
+    { id: "offer-acceptance", label: "Offer acceptance", node: <OfferAcceptanceCard offers={talent.offers} requisitions={talent.requisitions} countryName={scopeName} /> },
+    { id: "late-arrivals", label: "Late arrivals", node: <LateArrivalsCard data={late} /> },
+    { id: "team-cover", label: "Team absence & cover", node: <TeamCoverCard data={cover} /> },
+    { id: "coverage-risks", label: "Coverage risks", node: <CoverageRisksCard risks={cover.risks} /> },
     {
       id: "joiners",
       label: "New joiners",
@@ -1710,11 +1675,152 @@ export function AdministrationHome() {
       return acc;
     }, {}),
   );
+  const auditTrail = useAuditTrail();
+  const tickets = useTickets();
+  const movement = useMemo(() => monthlyMovement(data.people, data.today), [data.people, data.today]);
+  const activity = dailyCounts([...auditTrail.map((e) => e.at), ...audit.map((e) => e.at)], data.today, 14);
+  const countryData = stats.byCountry.map((c, i) => ({ label: c.code, title: c.name, value: c.count, color: paletteColor(i) }));
+  const accessData = DEMO_ACCOUNTS.map((a) => ({
+    label: ROLE_LABELS[a.role] ?? a.personaLabel,
+    title: `${a.personaLabel} (${a.fullName})`,
+    value: PERMISSION_ROWS.filter(([id]) => accountHasNavAccess(a, id)).length,
+  }));
+  const INTEGRATION_STATES = ["Connected", "Degraded", "Disconnected", "Not configured"] as const;
+  const integrationData = countInto(INTEGRATION_STATES, integrations.map((i) => i.status))
+    .filter((d) => d.label !== "Not configured" || d.value > 0)
+    .map((d) => ({
+      ...d,
+      color: d.label === "Connected" ? "var(--ok)" : d.label === "Degraded" ? "var(--warn)" : d.label === "Disconnected" ? "var(--danger)" : "var(--muted)",
+    }));
+  const ticketData = countInto(TICKET_STATUSES, tickets.map((t) => t.status));
 
   useTitle("Administration Home");
 
   const sections: Section[] = [
     { id: "myday", label: "My day", node: <MyDayCard /> },
+    {
+      id: "chart-country",
+      label: "Headcount by country",
+      node: (
+        <Card title="Headcount by country" to={R.directory}>
+          {stats.headcount ? (
+            <BarChart
+              data={countryData.map(({ label, title, value }) => ({ label, title, value }))}
+              ariaLabel={`Headcount by country: ${stats.byCountry.map((c) => `${c.name} ${c.count}`).join(", ")}.`}
+            />
+          ) : (
+            <ChartEmpty>No active people in this scope.</ChartEmpty>
+          )}
+        </Card>
+      ),
+    },
+    {
+      id: "entities",
+      label: "Countries & entities",
+      node: (
+        <Card title="Country distribution">
+          <DonutChart
+            data={countryData}
+            centerLabel="people"
+            ariaLabel={`Workforce share by country: ${stats.byCountry
+              .map((c) => `${c.name} ${stats.headcount ? Math.round((c.count / stats.headcount) * 100) : 0}%`)
+              .join(", ")}.`}
+          />
+          <div className="chart-table-wrap">
+            <DataTable
+              headers={["Country", "Legal entity", "Currency", "Time zone", "People"]}
+              rows={stats.byCountry.map((c) => {
+                const cfg = countries.find((x) => x.code === c.code);
+                return [c.name, cfg?.legalEntity ?? "—", cfg?.currency ?? "—", cfg?.timeZone ?? "—", String(c.count)];
+              })}
+            />
+          </div>
+        </Card>
+      ),
+    },
+    {
+      id: "chart-access",
+      label: "Access by role",
+      node: (
+        <Card title="Admin modules by role" to={R.admin}>
+          <HBarChart
+            data={accessData}
+            max={PERMISSION_ROWS.length}
+            ariaLabel={`Admin modules each role can open, out of ${PERMISSION_ROWS.length}: ${accessData.map((d) => `${d.label} ${d.value}`).join(", ")}.`}
+          />
+          <p className="chart-note muted">
+            {DEMO_ACCOUNTS.length} sign-in accounts · out of {PERMISSION_ROWS.length} modules
+          </p>
+        </Card>
+      ),
+    },
+    {
+      id: "chart-movement",
+      label: "Joiners vs exits",
+      node: (
+        <Card title="Joiners vs exits · 12 months">
+          <LineChart
+            labels={movement.labels}
+            titles={movement.titles}
+            labelEvery={2}
+            series={[
+              { name: "Joiners", values: movement.joiners, color: "var(--accent)" },
+              { name: "Exits", values: movement.exits, color: "var(--warn)", dashed: true },
+            ]}
+            ariaLabel={`Joiners and exits per month, ${movement.titles[0]} to ${movement.titles[movement.titles.length - 1]}: ${movement.joiners.reduce((a, b) => a + b, 0)} joiners, ${movement.exits.reduce((a, b) => a + b, 0)} exits.`}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "chart-activity",
+      label: "System activity",
+      node: (
+        <Card title="System activity · 14 days" to={R.admin}>
+          <LineChart
+            labels={activity.dates.map((d) => d.slice(8, 10))}
+            titles={activity.dates.map(formatShortDate)}
+            labelEvery={3}
+            series={[{ name: "Audit events", values: activity.counts, color: "var(--accent)" }]}
+            ariaLabel={`Audit events per day over the last 14 days: ${activity.counts.reduce((a, b) => a + b, 0)} in total, most in a day ${Math.max(0, ...activity.counts)}.`}
+          />
+          <p className="chart-note muted">{activity.counts.reduce((a, b) => a + b, 0)} audit events in 14 days</p>
+        </Card>
+      ),
+    },
+    {
+      id: "chart-integrations",
+      label: "Integration status",
+      node: (
+        <Card title="Integration status" to="/integrations">
+          {integrations.length ? (
+            <DonutChart
+              data={integrationData}
+              centerLabel="integrations"
+              ariaLabel={`Integration status: ${integrationData.map((d) => `${d.label} ${d.value}`).join(", ")}.`}
+            />
+          ) : (
+            <ChartEmpty>No integrations set up.</ChartEmpty>
+          )}
+        </Card>
+      ),
+    },
+    {
+      id: "chart-tickets",
+      label: "Tickets by status",
+      node: (
+        <Card title="Tickets by status" to="/tickets">
+          {tickets.length ? (
+            <BarChart
+              data={ticketData.map((d) => ({ label: d.label === "In progress" ? "Doing" : d.label, title: d.label, value: d.value }))}
+              ariaLabel={`Tickets by status: ${ticketData.map((d) => `${d.label} ${d.value}`).join(", ")}.`}
+            />
+          ) : (
+            <ChartEmpty>No tickets yet.</ChartEmpty>
+          )}
+        </Card>
+      ),
+    },
     {
       id: "roles",
       label: "Sign-in roles",
@@ -1732,21 +1838,6 @@ export function AdministrationHome() {
           <DataTable
             headers={["Module", ...DEMO_ACCOUNTS.map((a) => a.personaLabel)]}
             rows={PERMISSION_ROWS.map(([id, label]) => [label, ...DEMO_ACCOUNTS.map((a) => (accountHasNavAccess(a, id) ? "Yes" : "—"))])}
-          />
-        </Card>
-      ),
-    },
-    {
-      id: "entities",
-      label: "Countries & entities",
-      node: (
-        <Card title="Countries & legal entities">
-          <DataTable
-            headers={["Country", "Headcount", "Currency", "Legal entity"]}
-            rows={stats.byCountry.map((c) => {
-              const cfg = countries.find((x) => x.code === c.code);
-              return [c.name, String(c.count), cfg?.currency ?? "—", cfg?.legalEntity ?? "—"];
-            })}
           />
         </Card>
       ),

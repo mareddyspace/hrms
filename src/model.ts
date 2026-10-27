@@ -181,6 +181,20 @@ export interface LeavePolicy {
   accrual?: "monthly";
   /** Unused days that roll over into the next year, at most. */
   carryForwardMax?: number;
+  /** Country rules that replace the default name, days a year or carry-over (0 days = not offered there). */
+  byCountry?: Partial<Record<CountryCode, { quota: number; name?: string; carryForwardMax?: number }>>;
+}
+
+/** The leave policy as it applies in one country. */
+export function localPolicy(policy: LeavePolicy, country: CountryCode | undefined): LeavePolicy {
+  const local = policy.byCountry?.[country ?? "IN"];
+  if (!local) return policy;
+  return {
+    ...policy,
+    name: local.name ?? policy.name,
+    quota: local.quota,
+    carryForwardMax: local.carryForwardMax ?? policy.carryForwardMax,
+  };
 }
 
 /** Days of a monthly-accruing quota earned by `today` in `year` (whole year for past years). */
@@ -286,6 +300,12 @@ export interface TimeEntry {
   hours: number;
   note: string;
   billable: boolean;
+  /** What the time was spent on. Missing = plain project time. Hours still roll up to the sheet's project. */
+  workType?: "project" | "ticket" | "task";
+  /** Ticket id (e.g. TCK-1042) or task id when workType is ticket/task. */
+  workId?: string;
+  /** Short label kept with the entry, e.g. "TCK-1042 Login timeout". */
+  workLabel?: string;
 }
 
 export interface Timesheet {
@@ -342,6 +362,11 @@ export interface Payslip {
   currency?: string;
   earnings: PayLine[];
   deductions: PayLine[];
+  /** Set when only part of the month was worked (joining or leaving month). */
+  paidDays?: number;
+  totalDays?: number;
+  /** The last payslip for someone who has left, including leave settlement. */
+  finalSettlement?: boolean;
 }
 
 export interface Expense extends DecisionInfo {
@@ -948,12 +973,14 @@ export function leaveRows(
   withCarryOver = true,
 ): LeaveRow[] {
   const dates = holidaySet(holidaysForPerson(holidays, employeeId));
+  const country = personCountry(employeeId) ?? "IN";
   const lastYear =
-    year != null && withCarryOver && policies.some((p) => p.carryForwardMax)
+    year != null && withCarryOver && policies.some((p) => p.carryForwardMax || p.byCountry)
       ? leaveRows(policies, requests, encashments, holidays, employeeId, weeklyOffDays, year - 1, false)
       : [];
   const inYear = (iso: string) => year == null || iso.startsWith(String(year));
-  return policies.map((policy) => {
+  const rows = policies.map((basePolicy) => {
+    const policy = localPolicy(basePolicy, country);
     const mine = requests.filter(
       (request) => request.employeeId === employeeId && request.code === policy.code && inYear(request.from),
     );
@@ -989,6 +1016,8 @@ export function leaveRows(
       available: balance - pending,
     };
   });
+  // Leave types not offered in the person's country (0 days, never used) are left out.
+  return rows.filter((row) => row.quota > 0 || row.utilized > 0 || row.pending > 0 || row.code === "comp_off");
 }
 
 /** An approved, unused permission that covers the whole requested range, if there is one. */

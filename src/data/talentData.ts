@@ -21,7 +21,8 @@ export const EXIT_STAGES: readonly PipelineStage[] = ["Rejected", "Withdrawn"];
 /** Final stages — no further moves. */
 export const CLOSED_STAGES: readonly PipelineStage[] = ["Hired", "Rejected", "Withdrawn"];
 /** Candidates at these stages can be given an offer. */
-export const OFFER_ELIGIBLE_STAGES: readonly PipelineStage[] = ["Final Review", "Offer"];
+/** An offer is prepared once the hiring manager has moved the candidate from Final Review to Offer. */
+export const OFFER_ELIGIBLE_STAGES: readonly PipelineStage[] = ["Offer"];
 
 export type ApprovalStatus = "Draft" | "Pending approval" | "Approved" | "Rejected" | "On hold";
 
@@ -44,7 +45,10 @@ export interface Requisition {
   hiringManager: string;
   /** Account id of the hiring manager; approval goes to people above them. */
   hiringManagerId: string;
+  /** Assigned by HR when the requisition is approved; empty until then. */
   recruiter: string;
+  recruiterId?: string;
+  recruiterAssignedOn?: string;
   approvalStatus: ApprovalStatus;
   stageSummary: string;
   created: string;
@@ -52,6 +56,15 @@ export interface Requisition {
   approver?: string;
   decidedOn?: string;
   history: ApprovalStep[];
+}
+
+/** One stage move. enteredOn is local date + time, e.g. "2026-09-12T10:30". */
+export interface StageStep {
+  stage: PipelineStage;
+  enteredOn: string;
+  by: string;
+  byId?: string;
+  note?: string;
 }
 
 export interface Candidate {
@@ -67,6 +80,8 @@ export interface Candidate {
   experienceYears: number;
   skills: string[];
   resumeNote: string;
+  /** Every stage move, oldest first. */
+  history?: StageStep[];
 }
 
 export interface Interview {
@@ -85,7 +100,8 @@ export interface Interview {
 export type OfferStatus = "Preparing" | "Pending approval" | "Approved" | "Sent" | "Accepted" | "Declined" | "Withdrawn";
 
 export interface OfferApproval {
-  role: "Line" | "Compensation";
+  /** Order: hiring manager agrees → HR approves → Compensation (only above band). */
+  role: "Hiring manager" | "HR" | "Compensation";
   by: string;
   byId: string;
   on: string;
@@ -106,6 +122,7 @@ export interface OfferRecord {
   packageNote: string;
   createdBy: string;
   createdById: string;
+  createdOn?: string;
   approvals: OfferApproval[];
   sentOn?: string;
   /** The candidate's answer, recorded by recruiting with how it was received. */
@@ -310,8 +327,25 @@ export interface SkillProfile {
   skills: EmployeeSkill[];
 }
 
+/*
+ * Hiring flow: the hiring manager raises a requisition → HR approves it and assigns a recruiter →
+ * the recruiter runs the pipeline → the hiring manager decides at Final Review → offer
+ * (recruiter prepares → hiring manager agrees → HR approves, + Compensation above band) → recruiter sends.
+ */
 const SOPHIE = { by: "Sophie Clark", byId: "demo-recruiter" };
+const FARHAN = { by: "Farhan Ali", byId: "demo-hr-admin" };
 const JORDAN = { by: "Jordan Blake", byId: "demo-ceo" };
+const DANIEL = { by: "Daniel Ortiz", byId: "demo-hiring-manager" };
+const RAM = { by: "Ram Krishnan", byId: "emp-ram" };
+
+/** Standard trail: manager raised → HR approved → recruiter assigned. */
+function raisedApproved(manager: { by: string; byId: string }, raised: string, approved: string): ApprovalStep[] {
+  return [
+    { ...manager, on: raised, action: "Raised" },
+    { ...FARHAN, on: approved, action: "Approved" },
+    { ...FARHAN, on: approved, action: "Recruiter assigned", note: "Sophie Clark" },
+  ];
+}
 
 export const REQUISITIONS: Requisition[] = [
   {
@@ -324,15 +358,14 @@ export const REQUISITIONS: Requisition[] = [
     hiringManager: "Ram Krishnan",
     hiringManagerId: "emp-ram",
     recruiter: "Sophie Clark",
+    recruiterId: "demo-recruiter",
+    recruiterAssignedOn: "2026-08-14",
     approvalStatus: "Approved",
     stageSummary: "Interviewing",
     created: "2026-08-12",
-    approver: "Jordan Blake",
+    approver: "Farhan Ali",
     decidedOn: "2026-08-14",
-    history: [
-      { ...SOPHIE, on: "2026-08-12", action: "Submitted for approval" },
-      { ...JORDAN, on: "2026-08-14", action: "Approved" },
-    ],
+    history: raisedApproved(RAM, "2026-08-12", "2026-08-14"),
   },
   {
     id: "JOB-218",
@@ -341,18 +374,17 @@ export const REQUISITIONS: Requisition[] = [
     country: "United Kingdom",
     location: "London",
     openings: 1,
-    hiringManager: "Farhan Ali",
-    hiringManagerId: "demo-hr-admin",
+    hiringManager: "Jordan Blake",
+    hiringManagerId: "demo-ceo",
     recruiter: "Sophie Clark",
+    recruiterId: "demo-recruiter",
+    recruiterAssignedOn: "2026-07-30",
     approvalStatus: "Approved",
     stageSummary: "Offer",
     created: "2026-07-28",
-    approver: "Jordan Blake",
+    approver: "Farhan Ali",
     decidedOn: "2026-07-30",
-    history: [
-      { ...SOPHIE, on: "2026-07-28", action: "Submitted for approval" },
-      { ...JORDAN, on: "2026-07-30", action: "Approved" },
-    ],
+    history: raisedApproved(JORDAN, "2026-07-28", "2026-07-30"),
   },
   {
     id: "JOB-210",
@@ -361,13 +393,13 @@ export const REQUISITIONS: Requisition[] = [
     country: "United States",
     location: "New York",
     openings: 2,
-    hiringManager: "Farhan Ali",
-    hiringManagerId: "demo-hr-admin",
-    recruiter: "Sophie Clark",
+    hiringManager: "Jordan Blake",
+    hiringManagerId: "demo-ceo",
+    recruiter: "",
     approvalStatus: "Pending approval",
     stageSummary: "Awaiting approval",
     created: "2026-09-05",
-    history: [{ ...SOPHIE, on: "2026-09-05", action: "Submitted for approval" }],
+    history: [{ ...JORDAN, on: "2026-09-05", action: "Raised" }],
   },
   {
     id: "JOB-205",
@@ -379,14 +411,16 @@ export const REQUISITIONS: Requisition[] = [
     hiringManager: "Daniel Ortiz",
     hiringManagerId: "demo-hiring-manager",
     recruiter: "Sophie Clark",
+    recruiterId: "demo-recruiter",
+    recruiterAssignedOn: "2026-06-22",
     approvalStatus: "On hold",
     stageSummary: "On hold",
     created: "2026-06-18",
-    approver: "Jordan Blake",
+    approver: "Farhan Ali",
     decidedOn: "2026-07-02",
     history: [
-      { ...SOPHIE, on: "2026-06-18", action: "Submitted for approval" },
-      { ...JORDAN, on: "2026-07-02", action: "Put on hold", note: "Budget review" },
+      ...raisedApproved(DANIEL, "2026-06-18", "2026-06-22"),
+      { ...FARHAN, on: "2026-07-02", action: "Put on hold", note: "Budget review" },
     ],
   },
   {
@@ -399,15 +433,14 @@ export const REQUISITIONS: Requisition[] = [
     hiringManager: "Daniel Ortiz",
     hiringManagerId: "demo-hiring-manager",
     recruiter: "Sophie Clark",
+    recruiterId: "demo-recruiter",
+    recruiterAssignedOn: "2026-10-03",
     approvalStatus: "Approved",
     stageSummary: "Interviewing",
     created: "2026-10-01",
-    approver: "Jordan Blake",
+    approver: "Farhan Ali",
     decidedOn: "2026-10-03",
-    history: [
-      { ...SOPHIE, on: "2026-10-01", action: "Submitted for approval" },
-      { ...JORDAN, on: "2026-10-03", action: "Approved" },
-    ],
+    history: raisedApproved(DANIEL, "2026-10-01", "2026-10-03"),
   },
   {
     id: "JOB-226",
@@ -419,15 +452,14 @@ export const REQUISITIONS: Requisition[] = [
     hiringManager: "Daniel Ortiz",
     hiringManagerId: "demo-hiring-manager",
     recruiter: "Sophie Clark",
+    recruiterId: "demo-recruiter",
+    recruiterAssignedOn: "2026-08-03",
     approvalStatus: "Approved",
     stageSummary: "Filled",
     created: "2026-08-01",
-    approver: "Jordan Blake",
+    approver: "Farhan Ali",
     decidedOn: "2026-08-03",
-    history: [
-      { ...SOPHIE, on: "2026-08-01", action: "Submitted for approval" },
-      { ...JORDAN, on: "2026-08-03", action: "Approved" },
-    ],
+    history: raisedApproved(DANIEL, "2026-08-01", "2026-08-03"),
   },
   {
     id: "JOB-224",
@@ -436,20 +468,31 @@ export const REQUISITIONS: Requisition[] = [
     country: "United Arab Emirates",
     location: "Dubai",
     openings: 1,
-    hiringManager: "Farhan Ali",
-    hiringManagerId: "demo-hr-admin",
+    hiringManager: "Daniel Ortiz",
+    hiringManagerId: "demo-hiring-manager",
     recruiter: "Sophie Clark",
+    recruiterId: "demo-recruiter",
+    recruiterAssignedOn: "2026-08-22",
     approvalStatus: "Approved",
     stageSummary: "Filled",
     created: "2026-08-20",
-    approver: "Jordan Blake",
+    approver: "Farhan Ali",
     decidedOn: "2026-08-22",
-    history: [
-      { ...SOPHIE, on: "2026-08-20", action: "Submitted for approval" },
-      { ...JORDAN, on: "2026-08-22", action: "Approved" },
-    ],
+    history: raisedApproved(DANIEL, "2026-08-20", "2026-08-22"),
   },
 ];
+
+type StepRow = [PipelineStage, string, { by: string; byId?: string } | string, string?];
+
+/** Builds a stage history; a string `who` is the candidate applying. */
+function steps(rows: StepRow[]): StageStep[] {
+  return rows.map(([stage, enteredOn, who, note]) => ({
+    stage,
+    enteredOn,
+    ...(typeof who === "string" ? { by: who } : who),
+    ...(note ? { note } : {}),
+  }));
+}
 
 export const CANDIDATES: Candidate[] = [
   {
@@ -465,6 +508,12 @@ export const CANDIDATES: Candidate[] = [
     experienceYears: 7,
     skills: ["React", "TypeScript", "Design systems"],
     resumeNote: "Strong frontend portfolio; hybrid Bengaluru preference.",
+    history: steps([
+      ["Applied", "2026-08-20T09:15", "Aisha Khan", "Applied via LinkedIn"],
+      ["Screening", "2026-08-24T11:00", SOPHIE, "Phone screen"],
+      ["Shortlisted", "2026-09-02T15:30", SOPHIE],
+      ["Interview", "2026-09-30T10:00", SOPHIE, "Tech panel booked for 15 Oct"],
+    ]),
   },
   {
     id: "cand-2",
@@ -479,6 +528,15 @@ export const CANDIDATES: Candidate[] = [
     experienceYears: 9,
     skills: ["Employee relations", "Workforce planning"],
     resumeNote: "EMEA HRBP background; offer in preparation.",
+    history: steps([
+      ["Applied", "2026-08-03T10:20", "Lucas Meyer", "Submitted by agency"],
+      ["Screening", "2026-08-06T14:00", SOPHIE],
+      ["Shortlisted", "2026-08-14T12:30", SOPHIE],
+      ["Interview", "2026-08-25T09:45", SOPHIE, "Panel with Jordan Blake"],
+      ["Assessment", "2026-09-08T16:00", SOPHIE, "HR case study"],
+      ["Final Review", "2026-09-22T11:30", SOPHIE],
+      ["Offer", "2026-10-20T16:10", JORDAN, "Hiring manager: go ahead"],
+    ]),
   },
   {
     id: "cand-4",
@@ -493,6 +551,10 @@ export const CANDIDATES: Candidate[] = [
     experienceYears: 5,
     skills: ["SQL", "Product analytics", "Experimentation"],
     resumeNote: "Open to Toronto relocation. Requisition is on hold.",
+    history: steps([
+      ["Applied", "2026-06-24T08:40", "Jonas Weber", "Applied on careers site"],
+      ["Screening", "2026-06-29T12:00", SOPHIE, "Paused when the role went on hold"],
+    ]),
   },
   {
     id: "cand-5",
@@ -507,6 +569,12 @@ export const CANDIDATES: Candidate[] = [
     experienceYears: 6,
     skills: ["Roadmapping", "Discovery", "Analytics"],
     resumeNote: "B2B SaaS PM.",
+    history: steps([
+      ["Applied", "2026-10-05T09:30", "Priya Desai", "Applied on careers site"],
+      ["Screening", "2026-10-07T11:00", SOPHIE],
+      ["Shortlisted", "2026-10-12T15:00", SOPHIE, "Daniel Ortiz agreed"],
+      ["Interview", "2026-10-22T10:00", SOPHIE, "Round booked for 29 Oct"],
+    ]),
   },
   {
     id: "cand-6",
@@ -521,6 +589,13 @@ export const CANDIDATES: Candidate[] = [
     experienceYears: 8,
     skills: ["React", "Node", "System design"],
     resumeNote: "Completed take-home; panel review next.",
+    history: steps([
+      ["Applied", "2026-08-18T13:05", "Karthik Rao", "Applied via LinkedIn"],
+      ["Screening", "2026-08-21T10:30", SOPHIE],
+      ["Shortlisted", "2026-08-28T14:00", SOPHIE],
+      ["Interview", "2026-09-15T09:00", SOPHIE, "Technical round booked for 10 Oct"],
+      ["Assessment", "2026-10-13T09:30", SOPHIE, "Take-home sent after technical (4/5)"],
+    ]),
   },
   {
     id: "cand-7",
@@ -535,6 +610,16 @@ export const CANDIDATES: Candidate[] = [
     experienceYears: 5,
     skills: ["React", "Testing"],
     resumeNote: "Offer accepted. Started 06 Oct.",
+    history: steps([
+      ["Applied", "2026-08-15T10:00", "Riya Kapoor", "Employee referral"],
+      ["Screening", "2026-08-17T11:15", SOPHIE],
+      ["Shortlisted", "2026-08-21T16:00", SOPHIE],
+      ["Interview", "2026-08-26T10:30", SOPHIE],
+      ["Assessment", "2026-09-03T12:00", SOPHIE],
+      ["Final Review", "2026-09-10T15:00", SOPHIE],
+      ["Offer", "2026-09-16T11:00", RAM, "Hiring manager: go ahead"],
+      ["Hired", "2026-09-22T17:30", SOPHIE, "Offer accepted"],
+    ]),
   },
   {
     id: "cand-8",
@@ -549,6 +634,14 @@ export const CANDIDATES: Candidate[] = [
     experienceYears: 8,
     skills: ["HRBP", "Change management"],
     resumeNote: "Final panel complete; hiring manager decision pending.",
+    history: steps([
+      ["Applied", "2026-08-01T09:00", "Tom Hughes", "Employee referral"],
+      ["Screening", "2026-08-04T10:00", SOPHIE],
+      ["Shortlisted", "2026-08-12T15:45", SOPHIE],
+      ["Interview", "2026-08-27T09:30", SOPHIE],
+      ["Assessment", "2026-09-10T14:00", SOPHIE, "HR case study"],
+      ["Final Review", "2026-10-16T15:00", SOPHIE, "Final panel complete"],
+    ]),
   },
   {
     id: "cand-9",
@@ -563,6 +656,16 @@ export const CANDIDATES: Candidate[] = [
     experienceYears: 6,
     skills: ["Figma", "Design systems", "User research"],
     resumeNote: "Offer accepted. Started 13 Oct.",
+    history: steps([
+      ["Applied", "2026-08-05T09:20", "Noah Garcia", "Employee referral"],
+      ["Screening", "2026-08-07T13:00", SOPHIE],
+      ["Shortlisted", "2026-08-12T10:00", SOPHIE],
+      ["Interview", "2026-08-19T11:00", SOPHIE],
+      ["Assessment", "2026-08-26T15:30", SOPHIE, "Portfolio review"],
+      ["Final Review", "2026-09-02T12:00", SOPHIE],
+      ["Offer", "2026-09-08T10:00", DANIEL, "Hiring manager: go ahead"],
+      ["Hired", "2026-09-15T18:00", SOPHIE, "Offer accepted"],
+    ]),
   },
   {
     id: "cand-10",
@@ -577,6 +680,56 @@ export const CANDIDATES: Candidate[] = [
     experienceYears: 3,
     skills: ["Customer support", "Arabic", "English"],
     resumeNote: "Offer accepted. Starts 27 Oct.",
+    history: steps([
+      ["Applied", "2026-08-24T08:30", "Amira Hassan", "Applied on careers site"],
+      ["Screening", "2026-08-26T10:00", SOPHIE],
+      ["Shortlisted", "2026-08-31T14:30", SOPHIE],
+      ["Interview", "2026-09-07T11:00", SOPHIE],
+      ["Assessment", "2026-09-14T10:00", SOPHIE, "Language check"],
+      ["Final Review", "2026-09-19T16:00", SOPHIE],
+      ["Offer", "2026-09-23T10:30", DANIEL, "Hiring manager: go ahead"],
+      ["Hired", "2026-09-30T16:00", SOPHIE, "Offer accepted"],
+    ]),
+  },
+  {
+    id: "cand-11",
+    name: "Vikram Nair",
+    email: "vikram.nair@example.com",
+    phone: "+91 98xxx x6120",
+    role: "Product Manager",
+    requisitionId: "JOB-230",
+    stage: "Rejected",
+    country: "India",
+    source: "LinkedIn",
+    experienceYears: 4,
+    skills: ["Roadmapping", "Stakeholder management"],
+    resumeNote: "Consumer PM; light on B2B.",
+    history: steps([
+      ["Applied", "2026-10-06T12:10", "Vikram Nair", "Applied via LinkedIn"],
+      ["Screening", "2026-10-08T10:00", SOPHIE],
+      ["Shortlisted", "2026-10-12T15:10", SOPHIE],
+      ["Interview", "2026-10-15T09:30", SOPHIE, "Round booked for 20 Oct"],
+      ["Rejected", "2026-10-23T11:00", SOPHIE, "Panel: not enough B2B depth"],
+    ]),
+  },
+  {
+    id: "cand-12",
+    name: "Meera Iyer",
+    email: "meera.iyer@example.com",
+    phone: "+91 98xxx x4408",
+    role: "Senior React Engineer",
+    requisitionId: "JOB-221",
+    stage: "Withdrawn",
+    country: "India",
+    source: "Careers site",
+    experienceYears: 6,
+    skills: ["React", "GraphQL"],
+    resumeNote: "Took another offer.",
+    history: steps([
+      ["Applied", "2026-09-05T18:20", "Meera Iyer", "Applied on careers site"],
+      ["Screening", "2026-09-08T11:30", SOPHIE],
+      ["Withdrawn", "2026-09-12T09:15", SOPHIE, "Accepted another offer"],
+    ]),
   },
 ];
 
@@ -613,6 +766,18 @@ export const INTERVIEWS: Interview[] = [
     score: 4,
     feedback: "Solid system design; lean yes.",
   },
+  {
+    id: "int-5",
+    candidateId: "cand-11",
+    candidateName: "Vikram Nair",
+    role: "Product Manager",
+    when: "2026-10-20 14:00",
+    panel: "Daniel Ortiz",
+    type: "Hiring manager",
+    feedbackStatus: "Submitted",
+    score: 2,
+    feedback: "Good consumer instincts; not enough B2B depth.",
+  },
 ];
 
 export const OFFERS: OfferRecord[] = [
@@ -630,6 +795,7 @@ export const OFFERS: OfferRecord[] = [
     packageNote: "London hybrid · relocation support TBD",
     createdBy: "Sophie Clark",
     createdById: "demo-recruiter",
+    createdOn: "2026-10-21",
     approvals: [],
   },
   {
@@ -646,7 +812,11 @@ export const OFFERS: OfferRecord[] = [
     packageNote: "Bengaluru hybrid",
     createdBy: "Sophie Clark",
     createdById: "demo-recruiter",
-    approvals: [{ role: "Line", ...JORDAN, on: "2026-09-18" }],
+    createdOn: "2026-09-16",
+    approvals: [
+      { role: "Hiring manager", ...RAM, on: "2026-09-17" },
+      { role: "HR", ...FARHAN, on: "2026-09-18" },
+    ],
     sentOn: "2026-09-20",
     responseNote: "Signed offer letter returned by email.",
     responseRecordedBy: "Sophie Clark",
@@ -666,7 +836,11 @@ export const OFFERS: OfferRecord[] = [
     packageNote: "San Francisco office",
     createdBy: "Sophie Clark",
     createdById: "demo-recruiter",
-    approvals: [{ role: "Line", ...JORDAN, on: "2026-09-10" }],
+    createdOn: "2026-09-08",
+    approvals: [
+      { role: "Hiring manager", ...DANIEL, on: "2026-09-09" },
+      { role: "HR", ...FARHAN, on: "2026-09-10" },
+    ],
     sentOn: "2026-09-12",
     responseNote: "Signed through the e-sign portal.",
     responseRecordedBy: "Sophie Clark",
@@ -686,8 +860,10 @@ export const OFFERS: OfferRecord[] = [
     packageNote: "Dubai office · no UAE band yet, so Compensation approved",
     createdBy: "Sophie Clark",
     createdById: "demo-recruiter",
+    createdOn: "2026-09-23",
     approvals: [
-      { role: "Line", ...JORDAN, on: "2026-09-25" },
+      { role: "Hiring manager", ...DANIEL, on: "2026-09-24" },
+      { role: "HR", ...FARHAN, on: "2026-09-25" },
       { role: "Compensation", by: "Helen Brooks", byId: "demo-compensation", on: "2026-09-26" },
     ],
     sentOn: "2026-09-27",
@@ -734,8 +910,8 @@ export const ONBOARDING_JOINERS: OnboardingJoiner[] = [
     role: "Customer Success Associate",
     startDate: "2026-10-27",
     country: "United Arab Emirates",
-    manager: "Farhan Ali",
-    managerId: "demo-hr-admin",
+    manager: "Daniel Ortiz",
+    managerId: "demo-hiring-manager",
     candidateId: "cand-10",
     requisitionId: "JOB-224",
     preboardingPct: 40,

@@ -172,3 +172,25 @@ export function SoftTabs({
     </div>
   );
 }
+
+/** Bar list with a count and its share of the total. */
+export function ShareBars({ items }: { items: { label: string; count: number; pct: number }[] }) {
+  const max = Math.max(...items.map((i) => i.count), 1);
+  return (
+    <ul className="mini-bars">
+      {items.map((item) => (
+        <li key={item.label} style={{ gridTemplateColumns: "minmax(72px, 120px) 1fr auto" }}>
+          <span className="mini-bars-label" title={item.label}>
+            {item.label}
+          </span>
+          <div className="mini-bars-track">
+            <div className="mini-bars-fill" style={{ width: `${(item.count / max) * 100}%` }} />
+          </div>
+          <span className="mini-bars-value" style={{ whiteSpace: "nowrap" }}>
+            {item.count} <span className="muted">· {item.pct}%</span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}

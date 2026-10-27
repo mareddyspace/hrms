@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { appendAuditEntries, diffForAudit } from "./data/auditTrail.ts";
+import { getTickets, isOpenTicket } from "./data/ticketStore.ts";
 import { compOffCreditsFor, getShiftState, subscribeShifts } from "./features/workforce/shiftsStore.ts";
 import { claimLimitsFor, declarableTaxYears, money, payRulesFor, receiptThresholdFor } from "./countryPay.ts";
 import type { ReactNode } from "react";
@@ -71,11 +72,15 @@ import {
 import { canApproveTeam, holidaysForPerson, setEarnedLeaveSource, setHolidayContext } from "./model.ts";
 import { getOptionalHolidayState, subscribeOptionalHolidays } from "./features/workforce/optionalHolidaysStore.ts";
 import { getPerson, isAccountActive, managerChainIds } from "./data/peopleLocal.ts";
+import { cachedPayslips, generatePayslips } from "./data/payslipGenerator.ts";
+import { getTaxRegime } from "./data/taxRegime.ts";
+import { getExitState, subscribeExits } from "./features/lifecycle/exitStore.ts";
 import { getNavOverrides } from "./data/platformLocal.ts";
 import { createSeed, DEMO_PASSWORD, EMPLOYEE, findAccountByCode, findAccountById } from "./seed.ts";
 import { taskPersonById } from "./data/taskTeam.ts";
 import { pushManagerTaskAlert, pushPersonTaskAlert } from "./data/collabLocal.ts";
 import { taskProgress } from "./data/taskHelpers.ts";
+import { isTaskAutoMode } from "./data/taskAutoMode.ts";
 
 const STORAGE_KEY = "kastech.ess.state.v1";
 const SESSION_KEY = "kastech.ess.session";
@@ -219,7 +224,7 @@ function loadState(): PortalState {
       }
     }
     // Leave policies gained accrual / carry-forward and comp-off became earned-only.
-    if (!parsed.leavePolicies.some((p) => p.accrual)) {
+    if (!parsed.leavePolicies.some((p) => p.byCountry)) {
       parsed.leavePolicies = seed.leavePolicies;
       renamed = true;
     }
@@ -349,6 +354,8 @@ interface PortalApi {
   ) => string | null;
   toggleTaskSubtask: (taskId: string, subtaskId: string) => string | null;
   addTaskComment: (taskId: string, text: string) => string | null;
+  /** Automatic mode: append system activity entries (e.g. reminders sent). */
+  recordTaskAutoEvents: (events: { taskId: string; action: string; detail?: string }[]) => void;
   addReimbursement: (input: Omit<Reimbursement, "id" | "employeeId" | "status">) => string | null;
   setReimbursementStatus: (id: string, status: Reimbursement["status"], note?: string) => string | null;
   /** Payroll/HR verify or reject a tax-saving proof; the employee may withdraw while it is submitted. */
@@ -446,6 +453,7 @@ setEarnedLeaveSource((employeeId, code, year) =>
 export function PortalProvider({ children }: { children: ReactNode }) {
   const shiftState = useSyncExternalStore(subscribeShifts, getShiftState);
   const optionalHolidayState = useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState);
+  const exitState = useSyncExternalStore(subscribeExits, getExitState);
   const [state, setState] = useState<PortalState>(() => {
     ensureDemoLastLogin();
     return loadState();
@@ -768,9 +776,37 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       state,
       leaveTable,
       counts: actionCounts(state, active.id),
-      payslipViews: mine(state.payslips)
-        .map(toPayslipView)
-        .sort((a, b) => (a.month < b.month ? 1 : -1)),
+      // Payslips run from joining (last 12 months) to the last completed month; a leaver's final
+      // month is pro-rated and settles unused privilege leave. Tax follows the country's rules, the
+      // India regime choice and verified declarations; hourly staff are paid approved timesheet hours.
+      // A getter so a regime change shows on the next read (cached per state + inputs).
+      get payslipViews() {
+        const exit = getExitState().cases.find(
+          (c) => c.employeeId === active.id && (c.status === "Accepted" || c.status === "Completed"),
+        );
+        const person = getPerson(active.id);
+        const regime = getTaxRegime(active.id);
+        const unusedLeaveDays = Math.max(0, leaveTable.find((row) => row.code === "pto")?.balance ?? 0);
+        const today = todayISO();
+        return cachedPayslips(state, [active.id, regime, exit?.lastWorkingDay ?? "", unusedLeaveDays, today].join("|"), () =>
+          generatePayslips({
+            employeeId: active.id,
+            role: active.role,
+            countryCode: active.countryCode,
+            joiningDate: person?.dateOfJoining,
+            lastWorkingDay: exit?.lastWorkingDay,
+            unusedLeaveDays,
+            today,
+            location: active.location ?? person?.location,
+            nationality: person?.nationality,
+            employmentStatus: person?.employmentStatus,
+            regime,
+            investmentProofs: state.investmentProofs,
+            timesheets: state.timesheets,
+            orgTimesheets: state.orgTimesheets,
+          }).map((slip) => ({ ...slip, ...toPayslipView(slip) })),
+        );
+      },
       currentProjects,
       previousProjects,
       hoursFor: (projectId: string) => projectHours(mine(state.timesheets), projectId),
@@ -1072,6 +1108,17 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (input.startHour < 0 || input.startHour >= 24) return "Enter a valid start time.";
         if (input.startHour + input.hours > 24) return "A block can't run past midnight.";
         if (input.date < weekStart || input.date > addDaysISO(weekStart, 6)) return "That date isn't in this week.";
+        // Ticket/task time only against open work assigned to you (tasks must be accepted).
+        if (input.workType === "ticket") {
+          const ticket = getTickets().find((t) => t.id === input.workId);
+          if (!ticket || ticket.assigneeId !== active.id) return "Pick a ticket assigned to you.";
+          if (!isOpenTicket(ticket)) return "That ticket is already resolved.";
+        } else if (input.workType === "task") {
+          const task = state.tasks.find((t) => t.id === input.workId);
+          if (!task || task.employeeId !== active.id) return "Pick a task assigned to you.";
+          if (!task.accepted) return "Accept the task before logging time.";
+          if (task.status === "done" || task.status === "scheduled") return "That task isn't open.";
+        }
         const overlapping = state.timesheets
           .filter((sheet) => sheet.employeeId === active.id)
           .flatMap((sheet) => sheet.entries ?? [])
@@ -1595,6 +1642,68 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const now = new Date().toISOString();
         const actor = active.fullName.split(" ")[0] || "User";
         const flipped = subtasks.find((s) => s.id === subtaskId);
+        if (isTaskAutoMode(task.employeeId)) {
+          // Automatic mode: only moves forward, only on accepted, unblocked tasks.
+          const accepted = task.accepted ?? task.status !== "open";
+          const checklistEntry = {
+            id: uid("tact"),
+            at: now,
+            actor,
+            action: flipped?.done ? "Checklist item done" : "Checklist item reopened",
+            detail: flipped?.title,
+          };
+          const autoEntries: { id: string; at: string; actor: string; action: string }[] = [];
+          const autoEntry = (action: string) => autoEntries.push({ id: uid("tact"), at: now, actor: "Auto", action });
+          const patch: Partial<Task> = {
+            subtasks,
+            progressPct: Math.min(99, progressPct),
+            lastActivityAt: now,
+            automationNote: flipped?.done ? `Checklist: ${flipped.title}` : "Checklist updated",
+          };
+          let sendReview = false;
+          if (accepted && !task.blocked && flipped?.done) {
+            if (task.status === "open") {
+              patch.status = "progress";
+              autoEntry("Moved to In progress automatically (subtask ticked)");
+            }
+            if (subtasks.length > 0 && doneCount === subtasks.length) {
+              const needsReview = task.employeeId === active.id && managementChain(task.employeeId, TIMEZ_DEMOS).length > 0;
+              if (needsReview) {
+                if (!task.inReview) {
+                  Object.assign(patch, { status: "progress", inReview: true, automationNote: "Ready for review" });
+                  autoEntry("Moved to Ready for review automatically (all subtasks done)");
+                  sendReview = true;
+                }
+              } else {
+                Object.assign(patch, {
+                  status: "done",
+                  progressPct: 100,
+                  inReview: false,
+                  automationNote: "Completed automatically",
+                  hoursSpent: Math.max(task.hoursSpent, task.estimatedHours * 0.8),
+                  score: Math.min(100, Math.max(task.score, 85)),
+                });
+                autoEntry("Moved to Done automatically (all subtasks done)");
+              }
+            }
+          }
+          setState((prev) => ({
+            ...prev,
+            tasks: patchById(prev.tasks, taskId, {
+              ...patch,
+              activity: [...(task.activity ?? []), checklistEntry, ...autoEntries],
+            }),
+          }));
+          if (sendReview) {
+            pushManagerTaskAlert({
+              title: `Ready for review · ${task.code}`,
+              body: `All checklist items on “${task.subject}” are done.`,
+              href: "/tasks",
+              employeeId: task.employeeId,
+            });
+          }
+          return null;
+        }
         setState((prev) => ({
           ...prev,
           tasks: patchById(prev.tasks, taskId, {
@@ -1627,18 +1736,49 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (!trimmed) return "Enter a comment.";
         const now = new Date().toISOString();
         const actor = active.fullName.split(" ")[0] || "User";
+        // Automatic mode: the owner's work note on an accepted To-do task starts it.
+        const autoStart =
+          isTaskAutoMode(task.employeeId) &&
+          task.employeeId === active.id &&
+          task.status === "open" &&
+          (task.accepted ?? false) &&
+          !task.blocked;
         setState((prev) => ({
           ...prev,
           tasks: patchById(prev.tasks, taskId, {
             comments: [...(task.comments ?? []), { id: uid("tc"), author: actor, text: trimmed, at: now }],
             lastActivityAt: now,
+            ...(autoStart
+              ? { status: "progress" as TaskStatus, progressPct: Math.max(taskProgress(task), 10), automationNote: "In progress" }
+              : {}),
             activity: [
               ...(task.activity ?? []),
               { id: uid("tact"), at: now, actor, action: "Commented", detail: trimmed },
+              ...(autoStart
+                ? [{ id: uid("tact"), at: now, actor: "Auto", action: "Moved to In progress automatically (work note added)" }]
+                : []),
             ],
           }),
         }));
         return null;
+      },
+      recordTaskAutoEvents: (events) => {
+        if (events.length === 0) return;
+        const now = new Date().toISOString();
+        setState((prev) => ({
+          ...prev,
+          tasks: prev.tasks.map((t) => {
+            const mine = events.filter((e) => e.taskId === t.id);
+            if (mine.length === 0) return t;
+            return {
+              ...t,
+              activity: [
+                ...(t.activity ?? []),
+                ...mine.map((e) => ({ id: uid("tact"), at: now, actor: "Auto", action: e.action, detail: e.detail })),
+              ],
+            };
+          }),
+        }));
       },
       addReimbursement: (input) => {
         const error = validateExpense(
@@ -2021,7 +2161,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
     };
-  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState]);
+  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState, exitState]);
 
   return <PortalContext.Provider value={api}>{children}</PortalContext.Provider>;
 }

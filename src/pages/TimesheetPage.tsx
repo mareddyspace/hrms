@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
 import {
+  blockingLeave,
+  holidaysForPerson,
   formatHourCompact,
   formatHourLabel,
   formatHoursAmount,
@@ -14,6 +17,9 @@ import {
 } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
+import { ticketsAssignedTo, useTickets } from "../data/ticketStore.ts";
+import type { Project, Task } from "../model.ts";
+import "./tickets.css";
 
 const DAY_TARGET = 8;
 const GRID_START = 8;
@@ -29,7 +35,24 @@ type CalendarBlock = {
   hours: number;
   note: string;
   billable: boolean;
+  workType: WorkType;
+  workLabel: string;
 };
+
+type WorkType = "project" | "ticket" | "task";
+type LogKind = WorkType | "leave";
+
+/** Internal clients are non-billable by default; client work is billable. */
+function billableFor(project: Project | undefined): boolean {
+  return !!project && !/alderline|internal/i.test(project.client);
+}
+
+function parseWork(raw: string | null): { type: "ticket" | "task"; id: string } | null {
+  if (!raw) return null;
+  const [type, ...rest] = raw.split(":");
+  const id = rest.join(":");
+  return (type === "ticket" || type === "task") && id ? { type, id } : null;
+}
 
 function weekRangeLabel(weekStart: string): string {
   const dates = weekDates(weekStart);
@@ -64,6 +87,16 @@ export function TimesheetPage() {
   const [hours, setHours] = useState("1");
   const [note, setNote] = useState("");
   const [billable, setBillable] = useState(true);
+  const [logKind, setLogKind] = useState<LogKind>("project");
+  const [workId, setWorkId] = useState("");
+  const [params, setParams] = useSearchParams();
+  const tickets = useTickets();
+  const myTickets = useMemo(() => ticketsAssignedTo(employee.id, tickets), [employee.id, tickets]);
+  const myTasks = useMemo(
+    () => state.tasks.filter((t) => t.employeeId === employee.id && (t.status === "open" || t.status === "progress")),
+    [employee.id, state.tasks],
+  );
+  const loggableTasks = myTasks.filter((t) => t.accepted);
 
   useEffect(() => {
     if (!isManager && view === "company") setView("mine");
@@ -77,6 +110,21 @@ export function TimesheetPage() {
   }).weeklyOffDays;
   const workDates = weekDates(weekStart).filter((d) => !weeklyOffDays.includes(parseISODate(d).getDay()));
   const weekSheets = state.timesheets.filter((sheet) => sheet.employeeId === employee.id && sheet.weekStart === weekStart);
+
+  // Approved leave and holidays show as non-working days; no hours can go on them.
+  const holidayByDate = new Map(holidaysForPerson(state.holidays, employee.id).map((h) => [h.date, h.name]));
+  const offDays: Record<string, string> = {};
+  for (const day of workDates) {
+    if (holidayByDate.has(day)) offDays[day] = `Holiday · ${holidayByDate.get(day)}`;
+    else if (blockingLeave(state.leaveRequests, employee.id, day)) {
+      const request = state.leaveRequests.find(
+        (r) => r.employeeId === employee.id && r.status === "approved" && r.from <= day && day <= r.to,
+      );
+      const name = state.leavePolicies.find((p) => p.code === request?.code)?.name ?? "Leave";
+      offDays[day] = `On leave · ${name}`;
+    }
+  }
+  const leaveDays = workDates.filter((d) => offDays[d]?.startsWith("On leave"));
 
   const blocks = useMemo<CalendarBlock[]>(() => {
     const list: CalendarBlock[] = [];
@@ -92,6 +140,8 @@ export function TimesheetPage() {
           hours: entry.hours,
           note: entry.note,
           billable: entry.billable,
+          workType: entry.workType ?? "project",
+          workLabel: entry.workLabel ?? "",
         });
       }
     }
@@ -117,28 +167,130 @@ export function TimesheetPage() {
       : "draft";
   const locked = weekStatus === "approved";
 
-  function openLog(forDate?: string) {
-    setDate(forDate && workDates.includes(forDate) ? forDate : workDates.includes(todayISO()) ? todayISO() : workDates[0] ?? todayISO());
-    setProjectId(projects[0]?.id ?? "");
+  /** Tickets carry a project id; tasks a project or client name. Falls back to the first current project. */
+  function projectForWork(type: WorkType, id: string): Project | undefined {
+    if (type === "ticket") {
+      const t = tickets.find((x) => x.id === id);
+      return projects.find((p) => p.id === t?.projectId) ?? projects.find((p) => p.name === t?.projectName) ?? projects[0];
+    }
+    if (type === "task") {
+      const t = state.tasks.find((x) => x.id === id);
+      return (
+        projects.find((p) => !!t?.projectName && p.name === t.projectName) ??
+        projects.find((p) => !!t?.client && p.client === t.client) ??
+        projects[0]
+      );
+    }
+    return projects.find((p) => p.id === id) ?? projects[0];
+  }
+
+  function chooseWork(kind: LogKind, id: string) {
+    setLogKind(kind);
+    setWorkId(id);
+    if (kind === "leave") return;
+    const project = kind === "project" ? projects.find((p) => p.id === id) ?? projects[0] : projectForWork(kind, id);
+    setProjectId(project?.id ?? "");
+    setBillable(billableFor(project));
+    if (kind === "ticket") setNote(tickets.find((t) => t.id === id)?.title ?? "");
+    else if (kind === "task") setNote(state.tasks.find((t) => t.id === id)?.subject ?? "");
+  }
+
+  function openLog(forDate?: string, work?: { type: WorkType; id: string }) {
+    const free = (d: string) => workDates.includes(d) && !offDays[d];
+    setDate(
+      forDate && free(forDate)
+        ? forDate
+        : free(todayISO())
+          ? todayISO()
+          : workDates.filter((d) => !offDays[d] && d <= todayISO()).pop() ?? workDates.find((d) => !offDays[d]) ?? workDates[0] ?? todayISO(),
+    );
     setStartHour("9.5");
     setHours("1");
     setNote("");
-    setBillable(true);
+    chooseWork(work?.type ?? "project", work?.id ?? projects[0]?.id ?? "");
     setLogOpen(true);
+  }
+
+  // /timesheet?work=ticket:TCK-1042 or task:<id> opens the dialog prefilled.
+  const workParam = params.get("work");
+  useEffect(() => {
+    const work = parseWork(workParam);
+    if (!workParam) return;
+    const next = new URLSearchParams(params);
+    next.delete("work");
+    setParams(next, { replace: true });
+    if (!work) return;
+    setView("mine");
+    const known =
+      work.type === "ticket" ? myTickets.some((t) => t.id === work.id) : loggableTasks.some((t) => t.id === work.id);
+    if (!known) {
+      setMessage({
+        tone: "err",
+        text: work.type === "ticket" ? "That ticket isn't open and assigned to you." : "Accept that task before logging time.",
+      });
+      return;
+    }
+    if (locked) {
+      setMessage({ tone: "err", text: "This week is approved and locked." });
+      return;
+    }
+    openLog(undefined, work);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workParam]);
+
+  function workLabelFor(type: WorkType, id: string): string {
+    if (type === "ticket") {
+      const t = tickets.find((x) => x.id === id);
+      return t ? `${t.id} ${t.title}` : id;
+    }
+    if (type === "task") {
+      const t = state.tasks.find((x) => x.id === id);
+      return t ? `${t.code} ${t.subject}` : id;
+    }
+    return "";
   }
 
   function onLog(event: FormEvent) {
     event.preventDefault();
+    if (logKind === "leave") return;
+    if (logKind !== "project" && !workId) {
+      setMessage({ tone: "err", text: `Pick a ${logKind}.` });
+      return;
+    }
+    if (offDays[date]) {
+      setMessage({ tone: "err", text: `${formatShortDate(date)}: ${offDays[date]}. No hours on this day.` });
+      return;
+    }
     const error = addTimeEntry(projectId, weekStart, {
       date,
       startHour: Number(startHour),
       hours: Number(hours),
       note,
       billable,
+      workType: logKind,
+      ...(logKind === "project" ? {} : { workId, workLabel: workLabelFor(logKind, workId) }),
     });
-    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Time block added to the week." });
+    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Time block added." });
     if (!error) setLogOpen(false);
   }
+
+  // Week summary by what the time went on.
+  const breakdown = useMemo(() => {
+    const sum = (key: (b: CalendarBlock) => string | null) => {
+      const map = new Map<string, number>();
+      for (const b of blocks) {
+        const k = key(b);
+        if (k) map.set(k, (map.get(k) ?? 0) + b.hours);
+      }
+      return [...map.entries()].sort((a, b) => b[1] - a[1]);
+    };
+    return {
+      project: sum((b) => b.projectName),
+      ticket: sum((b) => (b.workType === "ticket" ? b.workLabel || "Ticket" : null)),
+      task: sum((b) => (b.workType === "task" ? b.workLabel || "Task" : null)),
+      projectOnly: blocks.filter((b) => b.workType === "project").reduce((a, b) => a + b.hours, 0),
+    };
+  }, [blocks]);
 
   function onSubmitWeek() {
     const error = submitWeekTimesheets(weekStart);
@@ -358,6 +510,60 @@ export function TimesheetPage() {
         )}
       </div>
 
+      <Card title="Assigned to you" action={<span className="muted">Tickets and accepted tasks</span>}>
+        {myTickets.length + myTasks.length === 0 ? (
+          <p className="muted">Nothing assigned right now. Work assigned to you shows up here.</p>
+        ) : (
+          <ul className="ts-assigned">
+            {myTickets.map((t) => (
+              <li key={t.id}>
+                <div>
+                  <span className="ts-kind">Ticket · {t.status}</span>
+                  <strong title={t.title}>
+                    {t.id} {t.title}
+                  </strong>
+                  <span className="muted">
+                    {t.projectName ?? "No project"}
+                    {t.due ? ` · due ${formatShortDate(t.due)}` : ""}
+                  </span>
+                </div>
+                <span className="form-actions" style={{ marginTop: 0 }}>
+                  <Link className="btn-ghost btn-tiny" to={`/tickets?id=${t.id}`}>
+                    Open
+                  </Link>
+                  <button className="btn btn-tiny" type="button" disabled={locked} onClick={() => openLog(undefined, { type: "ticket", id: t.id })}>
+                    Log time
+                  </button>
+                </span>
+              </li>
+            ))}
+            {myTasks.map((t: Task) => (
+              <li key={t.id}>
+                <div>
+                  <span className="ts-kind">Task · {t.status === "progress" ? "In progress" : t.accepted ? "Accepted" : "Not accepted"}</span>
+                  <strong title={t.subject}>
+                    {t.code} {t.subject}
+                  </strong>
+                  <span className="muted">
+                    {t.projectName ?? t.client}
+                    {t.due ? ` · due ${formatShortDate(t.due)}` : ""} · from {t.assignedBy}
+                  </span>
+                </div>
+                {t.accepted ? (
+                  <button className="btn btn-tiny" type="button" disabled={locked} onClick={() => openLog(undefined, { type: "task", id: t.id })}>
+                    Log time
+                  </button>
+                ) : (
+                  <Link className="btn-ghost btn-tiny" to="/tasks">
+                    Accept first
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
       <Card>
         <div className="ts-cal">
           <div className="ts-cal-head">
@@ -370,9 +576,9 @@ export function TimesheetPage() {
                 <div key={day} className="ts-day-head">
                   <strong>{label}</strong>
                   <span>
-                    {formatHoursAmount(total)} / {DAY_TARGET}h
+                    {offDays[day] ? offDays[day].split(" · ")[0] : `${formatHoursAmount(total)} / ${DAY_TARGET}h`}
                   </span>
-                  {!locked && (
+                  {!locked && !offDays[day] && (
                     <button className="ts-add-day" type="button" onClick={() => openLog(day)} aria-label={`Log time on ${label}`}>
                       +
                     </button>
@@ -396,6 +602,17 @@ export function TimesheetPage() {
                 {hourMarks.map((hour) => (
                   <div key={hour} className="ts-hour-line" style={{ top: (hour - GRID_START) * HOUR_PX }} />
                 ))}
+                {offDays[day] && (
+                  <article
+                    className="ts-block offday"
+                    style={{ top: (9 - GRID_START) * HOUR_PX, height: DAY_TARGET * HOUR_PX - 4 }}
+                    title={offDays[day]}
+                  >
+                    <strong>{offDays[day].split(" · ")[0]}</strong>
+                    <span>{offDays[day].split(" · ").slice(1).join(" · ")}</span>
+                    <em>No hours</em>
+                  </article>
+                )}
                 {blocks
                   .filter((block) => block.date === day)
                   .map((block) => {
@@ -406,8 +623,13 @@ export function TimesheetPage() {
                         key={block.id}
                         className={`ts-block ${block.billable ? "billable" : "nonbillable"}`}
                         style={{ top, height }}
-                        title={`${block.projectName}: ${block.note}`}
+                        title={`${block.projectName}${block.workLabel ? ` · ${block.workLabel}` : ""}: ${block.note}`}
                       >
+                        {block.workType !== "project" && (
+                          <span className="ts-work-tag">
+                            {block.workType === "ticket" ? block.workLabel.split(" ")[0] || "Ticket" : "Task"}
+                          </span>
+                        )}
                         <strong>{block.note}</strong>
                         <span>
                           {formatHourCompact(block.startHour)} – {formatHourCompact(block.startHour + block.hours)}
@@ -465,6 +687,42 @@ export function TimesheetPage() {
         </div>
         <Banner message={message} />
       </Card>
+
+      <Card title="Week by work">
+        <div className="ts-breakdown">
+          {(
+            [
+              ["Projects", breakdown.project, "No time yet."],
+              ["Tickets", breakdown.ticket, "No ticket time."],
+              ["Tasks", breakdown.task, "No task time."],
+            ] as const
+          ).map(([label, rows, empty]) => (
+            <section key={label}>
+              <h4>
+                {label}
+                <span>{formatHoursAmount(rows.reduce((a, [, h]) => a + h, 0))}</span>
+              </h4>
+              {rows.length === 0 ? (
+                <p className="muted">{empty}</p>
+              ) : (
+                <ul>
+                  {rows.map(([name, h]) => (
+                    <li key={name}>
+                      <span title={name}>{name}</span>
+                      <strong>{formatHoursAmount(h)}</strong>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ))}
+        </div>
+        {breakdown.projectOnly > 0 && (
+          <p className="muted">
+            General project time (no ticket or task): {formatHoursAmount(breakdown.projectOnly)}
+          </p>
+        )}
+      </Card>
         </>
       )}
 
@@ -475,8 +733,96 @@ export function TimesheetPage() {
             <h2 id="log-time-title">Log time</h2>
             <form onSubmit={onLog}>
               <div className="stack" style={{ marginTop: 12 }}>
-                <Field label="Project">
-                  <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+                <div className="ts-worktype" role="radiogroup" aria-label="Log time against">
+                  {(
+                    [
+                      ["project", "Project"],
+                      ["ticket", `Ticket (${myTickets.length})`],
+                      ["task", `Task (${loggableTasks.length})`],
+                      ["leave", "Leave"],
+                    ] as [LogKind, string][]
+                  ).map(([kind, label]) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      role="radio"
+                      aria-checked={logKind === kind}
+                      className={logKind === kind ? "active" : undefined}
+                      onClick={() =>
+                        chooseWork(
+                          kind,
+                          kind === "ticket"
+                            ? myTickets[0]?.id ?? ""
+                            : kind === "task"
+                              ? loggableTasks[0]?.id ?? ""
+                              : kind === "project"
+                                ? projects[0]?.id ?? ""
+                                : "",
+                        )
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {logKind === "leave" ? (
+                  <div>
+                    {leaveDays.length === 0 ? (
+                      <p className="muted">No approved leave this week.</p>
+                    ) : (
+                      <ul className="ts-assigned">
+                        {leaveDays.map((d) => (
+                          <li key={d}>
+                            <span>{formatShortDate(d)}</span>
+                            <span className="muted">{offDays[d].split(" · ")[1]}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <p className="muted">
+                      Approved leave shows on the calendar. No hours can be logged. <Link to="/leave">Leave</Link>
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                {logKind === "ticket" && (
+                  <Field label="Ticket">
+                    {myTickets.length === 0 ? (
+                      <span className="muted">No open tickets assigned to you.</span>
+                    ) : (
+                      <select value={workId} onChange={(event) => chooseWork("ticket", event.target.value)}>
+                        {myTickets.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.id} · {t.title}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </Field>
+                )}
+                {logKind === "task" && (
+                  <Field label="Task">
+                    {loggableTasks.length === 0 ? (
+                      <span className="muted">No accepted open tasks.</span>
+                    ) : (
+                      <select value={workId} onChange={(event) => chooseWork("task", event.target.value)}>
+                        {loggableTasks.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.code} · {t.subject}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </Field>
+                )}
+                <Field label={logKind === "project" ? "Project" : "Charged to project"}>
+                  <select
+                    value={projectId}
+                    onChange={(event) => {
+                      setProjectId(event.target.value);
+                      setBillable(billableFor(projects.find((p) => p.id === event.target.value)));
+                    }}
+                  >
                     {projects.map((project) => (
                       <option key={project.id} value={project.id}>
                         {project.name}
@@ -487,8 +833,9 @@ export function TimesheetPage() {
                 <Field label="Date">
                   <select value={date} onChange={(event) => setDate(event.target.value)}>
                     {workDates.map((day) => (
-                      <option key={day} value={day}>
+                      <option key={day} value={day} disabled={!!offDays[day]}>
                         {formatShortDate(day)}
+                        {offDays[day] ? ` — ${offDays[day].split(" · ")[0]}` : ""}
                       </option>
                     ))}
                   </select>
@@ -512,14 +859,18 @@ export function TimesheetPage() {
                   <input type="checkbox" checked={billable} onChange={(event) => setBillable(event.target.checked)} />
                   Billable time
                 </label>
+                  </>
+                )}
               </div>
               <div className="form-actions">
                 <button className="btn-ghost" type="button" onClick={() => setLogOpen(false)}>
-                  Cancel
+                  {logKind === "leave" ? "Close" : "Cancel"}
                 </button>
-                <button className="btn" type="submit">
-                  Add block
-                </button>
+                {logKind !== "leave" && (
+                  <button className="btn" type="submit" disabled={logKind !== "project" && !workId}>
+                    Add block
+                  </button>
+                )}
               </div>
             </form>
           </div>

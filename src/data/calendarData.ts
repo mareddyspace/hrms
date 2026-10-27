@@ -1,4 +1,5 @@
-/** Shared work calendar — meetings, reminders, IP (in-person) days, leave, holidays. */
+/** Shared work calendar — meetings, reminders, IP (in-person) days, leave, holidays, personal notes. */
+import type { Note } from "./notesStore.ts";
 
 export type CalendarEventKind =
   | "meeting"
@@ -8,7 +9,8 @@ export type CalendarEventKind =
   | "leave"
   | "wfh"
   | "deadline"
-  | "interview";
+  | "interview"
+  | "note";
 
 export type CalendarEvent = {
   id: string;
@@ -23,6 +25,9 @@ export type CalendarEvent = {
   audienceIds?: string[];
   /** Who created a locally saved event (reminder owner / meeting organiser). Seed events have none. */
   ownerId?: string;
+  /** Set for events made from a personal note (see notesStore). */
+  noteId?: string;
+  done?: boolean;
 };
 
 export const CALENDAR_KIND_LABEL: Record<CalendarEventKind, string> = {
@@ -34,7 +39,29 @@ export const CALENDAR_KIND_LABEL: Record<CalendarEventKind, string> = {
   wfh: "WFH",
   deadline: "Deadline",
   interview: "Interview",
+  note: "My note",
 };
+
+/** Dated notes become calendar events; undated ones stay off the calendar. */
+export function notesToEvents(notes: Note[], ownerId: string): CalendarEvent[] {
+  return notes
+    .filter((n) => Boolean(n.date))
+    .map((n) => {
+      const firstLine = n.text.split(/\r?\n/)[0] || "Note";
+      return {
+        id: `cal-note-${n.id}`,
+        date: n.date as string,
+        kind: "note" as const,
+        title: firstLine.length > 60 ? `${firstLine.slice(0, 59)}…` : firstLine,
+        time: n.time,
+        description: n.text.trim() !== firstLine.trim() || firstLine.length > 60 ? n.text : undefined,
+        audienceIds: [ownerId],
+        ownerId,
+        noteId: n.id,
+        done: n.done,
+      };
+    });
+}
 
 const KEY = "kastech.calendar.reminders.v1";
 const DECLINED_KEY = "kastech.calendar.declined.v1";

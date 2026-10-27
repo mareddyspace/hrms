@@ -4,6 +4,7 @@ import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
 import { claimLimitsFor, itemCurrency, money, moneyTotals, payRulesFor, receiptThresholdFor } from "../countryPay.ts";
 import { addDaysISO, EXPENSE_CATEGORIES, EXPENSE_CLAIM_WINDOW_DAYS, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 
 export function ExpensesPage() {
   const { state, employee, currentProjects, addExpense, hasApprover } = usePortal();
@@ -15,13 +16,24 @@ export function ExpensesPage() {
   const [date, setDate] = useState("");
   const [category, setCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
   const [amount, setAmount] = useState("");
-  const [description, setDescription] = useState("");
+  const {
+    value: description,
+    setValue: setDescription,
+    ref: descriptionRef,
+    fill: fillDescription,
+    fillIfEmpty: fillDescriptionIfEmpty,
+    reset: resetDescription,
+  } = useTemplatedText();
   const [projectId, setProjectId] = useState(currentProjects[0]?.id ?? "");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const mine = state.expenses.filter((expense) => expense.employeeId === employee.id);
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (hasTemplateBlanks(description)) {
+      setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
+      return;
+    }
     const value = Number(amount);
     if (value > receiptAbove && !receipt) {
       setMessage({ tone: "err", text: `Attach a receipt for claims over ${money(receiptAbove, currency)}.` });
@@ -43,7 +55,7 @@ export function ExpensesPage() {
     );
     if (!error) {
       setAmount("");
-      setDescription("");
+      resetDescription();
       setDate("");
       setReceipt("");
       setFileKey((key) => key + 1);
@@ -81,7 +93,13 @@ export function ExpensesPage() {
                 />
               </Field>
               <Field label="Category">
-                <select value={category} onChange={(event) => setCategory(event.target.value)}>
+                <select
+                  value={category}
+                  onChange={(event) => {
+                    setCategory(event.target.value);
+                    fillDescription("expense", event.target.value);
+                  }}
+                >
                   {EXPENSE_CATEGORIES.map((item) => (
                     <option key={item}>{item}</option>
                   ))}
@@ -108,7 +126,12 @@ export function ExpensesPage() {
                 </select>
               </Field>
               <Field label="Description" wide>
-                <textarea value={description} onChange={(event) => setDescription(event.target.value)} />
+                <textarea
+                  ref={descriptionRef}
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  onFocus={() => fillDescriptionIfEmpty("expense", category)}
+                />
               </Field>
             </div>
             <div className="form-actions">

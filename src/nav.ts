@@ -11,7 +11,8 @@ export type NavGroupKey =
   | "people"
   | "talent"
   | "insights"
-  | "admin";
+  | "admin"
+  | "ai";
 
 export type NavLink = {
   id: string;
@@ -45,11 +46,12 @@ export const navGroups: readonly NavGroup[] = [
       { id: "calendar", label: "Calendar", to: "/calendar" },
       { id: "orgchart", label: "Org chart", to: "/org-chart" },
       { id: "tasks", label: "Tasks", to: "/tasks", badgeKey: "/tasks" },
+      { id: "tickets", label: "Tickets", to: "/tickets", badgeKey: "/tickets" },
       { id: "messages", label: "Messages", to: "/chat", badgeKey: "/chat" },
+      { id: "mail", label: "Mail", to: "/mail", badgeKey: "/mail" },
       { id: "notifications", label: "Notifications", to: "/notifications", badgeKey: "/notifications" },
       { id: "announcements", label: "Announcements", to: "/announcements" },
       { id: "help", label: "Helpdesk", to: "/help" },
-      { id: "copilot", label: "AI Copilot", to: "/ai/copilot" },
     ],
   },
   {
@@ -131,12 +133,20 @@ export const navGroups: readonly NavGroup[] = [
     key: "admin",
     label: "Admin",
     links: [
-      { id: "locale", label: "Locale", to: "/settings/locale" },
       { id: "integrations", label: "Integrations", to: "/integrations" },
+      { id: "paypreview", label: "Pay preview", to: "/payroll/preview" },
       { id: "payroll", label: "Payroll", to: "/payroll" },
       { id: "bulkdata", label: "Bulk data", to: "/data-tools/bulk" },
       { id: "auditlog", label: "Audit log", to: "/admin/audit" },
       { id: "administration", label: "Console", to: "/admin" },
+    ],
+  },
+  {
+    key: "ai",
+    label: "Copilot & policies",
+    links: [
+      { id: "copilot", label: "AI Copilot", to: "/ai/copilot" },
+      { id: "policies", label: "Policies", to: "/policies" },
     ],
   },
 ] as const;
