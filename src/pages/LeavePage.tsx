@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Banner, Card, Field, LeaveTable, Page, StatusBadge, StatusPill } from "../components/ui.tsx";
 import { managementChain } from "../demoAccounts.ts";
@@ -17,6 +18,7 @@ import {
 import { usePortal } from "../store.tsx";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
+import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 
 const PERMISSION_LABEL: Record<BackdatedLeavePermission["status"], { text: string; tone: "ok" | "warn" | "danger" | "neutral" | "info" }> = {
   pending: { text: "Awaiting approval", tone: "warn" },
@@ -71,7 +73,15 @@ export function LeavePage() {
     formYear,
   );
   const [to, setTo] = useState("");
-  const [reason, setReason] = useState("");
+  const {
+    value: reason,
+    setValue: setReason,
+    ref: reasonRef,
+    fill: fillReason,
+    fillIfEmpty: fillReasonIfEmpty,
+    swapIfAuto: swapReasonIfAuto,
+    reset: resetReason,
+  } = useTemplatedText();
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   // Set when the form was filled from an approved permission: the permission only covers that leave type.
   const [lockedCode, setLockedCode] = useState<LeaveCode | null>(null);
@@ -96,9 +106,15 @@ export function LeavePage() {
   const nameOf = (id: string) => demoAccounts.find((a) => a.id === id)?.fullName ?? taskPersonById(id)?.fullName ?? id;
   const leaveName = (leaveCode: LeaveCode) => leaveTable.find((row) => row.code === leaveCode)?.name ?? leaveCode;
   const [notes, setNotes] = useState<Record<string, string>>({});
+  // Past dates turn the form into a permission request, which has its own starter text.
+  const reasonForm = needsPermission ? "leavePermission" : "leave";
+  useEffect(() => {
+    swapReasonIfAuto(reasonForm, code);
+    // Only react to the form switching between leave and permission request.
+  }, [reasonForm]);
 
   function resetForm() {
-    setReason("");
+    resetReason();
     setFrom("");
     setTo("");
     setLockedCode(null);
@@ -106,6 +122,10 @@ export function LeavePage() {
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (hasTemplateBlanks(reason)) {
+      setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
+      return;
+    }
     if (needsPermission) {
       const error = requestBackdatedPermission({ code, from, to, reason });
       setMessage(
@@ -138,7 +158,7 @@ export function LeavePage() {
     setLockedCode(p.code);
     setFrom(p.from);
     setTo(p.to);
-    setReason(p.reason);
+    resetReason(p.reason);
     setMessage({ tone: "ok", text: "Dates filled in. Review and submit." });
   }
 
@@ -347,13 +367,23 @@ export function LeavePage() {
           </Card>
         </div>
         <Card title={hasApprover ? "Apply Leave" : "Mark time off"}>
+          {hasApprover && approver && (
+            <p className="muted" style={{ marginTop: 0 }}>
+              <Link to={`/mail?compose=manager&subject=${encodeURIComponent("Leave request discussion")}`}>
+                Mail {approver.fullName}
+              </Link>
+            </p>
+          )}
           <form onSubmit={onSubmit}>
             <div className="form-grid">
               <Field label="Leave type" wide>
                 <select
                   value={code}
                   disabled={lockedCode != null}
-                  onChange={(event) => setCode(event.target.value as LeaveCode)}
+                  onChange={(event) => {
+                    setCode(event.target.value as LeaveCode);
+                    fillReason(reasonForm, event.target.value);
+                  }}
                   title={lockedCode ? "Fixed by your approved permission" : undefined}
                 >
                   {formRows.map((row) => (
@@ -370,7 +400,12 @@ export function LeavePage() {
                 <input type="date" value={to} onChange={(event) => setTo(event.target.value)} required />
               </Field>
               <Field label="Reason" wide>
-                <textarea value={reason} onChange={(event) => setReason(event.target.value)} />
+                <textarea
+                  ref={reasonRef}
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  onFocus={() => fillReasonIfEmpty(reasonForm, code)}
+                />
               </Field>
             </div>
             <p className="note">Working days: {days}.</p>

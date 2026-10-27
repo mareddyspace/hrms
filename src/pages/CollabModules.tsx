@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Banner,
   Card,
@@ -16,21 +16,17 @@ import {
 import {
   CHAT_PEOPLE,
   FAQ_ITEMS,
-  NOTIF_CATEGORIES,
   chatPersonById,
   canManageAnnouncement,
   isHrRole,
-  isManagerNotifRole,
-  notifPrefKey,
   type AnnouncementScope,
-  type AppNotification,
   type ApprovalKind,
   type ChatAvailability,
   type ChatPerson,
   type HrRequestCategory,
   type InboxTab,
-  type NotifAction,
 } from "../data/collabData.ts";
+import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 import {
   addHrComment,
   allowedHrStatuses,
@@ -45,18 +41,12 @@ import {
   getCollabState,
   hrRequestVisibleTo,
   isMessageUnreadFor,
-  isNotificationReadBy,
   listConversationsForUser,
-  listNotificationsForRole,
-  markAllNotificationsRead,
   markAnnouncementRead,
   markConversationRead,
-  markNotificationRead,
   sendChatMessage,
   setAnnouncementState,
   setHrRequestStatus,
-  setNotifPrefs,
-  notifPrefsFor,
   startDirectChat,
   subscribeCollab,
 } from "../data/collabLocal.ts";
@@ -688,7 +678,8 @@ export function MessagingPage() {
                 {(active.messages ?? []).length === 0 ? (
                   <EmptyState title="No messages yet" />
                 ) : (
-                  (active.messages ?? []).map((m) => (
+                  // Oldest first, newest at the bottom.
+                  [...(active.messages ?? [])].sort((a, b) => a.at.localeCompare(b.at)).map((m) => (
                     <div
                       key={m.id}
                       className={m.fromId === employee.id ? "msg-bubble mine" : "msg-bubble"}
@@ -880,307 +871,8 @@ export function AnnouncementsPage() {
 
 /* ───────────────────────────── 4. NOTIFICATIONS ── */
 
-function notificationActions(n: AppNotification): NotifAction[] {
-  if (n.actions?.length) return n.actions;
-  if (n.href) return [{ id: "open", label: n.actionLabel || "Open", kind: "link", href: n.href }];
-  return [];
-}
-
-export function NotificationCenterPage() {
-  const { employee, demoProfile, canApproveLeaveFor } = usePortal();
-  const navigate = useNavigate();
-  const collab = useCollab();
-  const role = demoProfile.role;
-  const managerView = isManagerNotifRole(role);
-  const [category, setCategory] = useState("");
-  const [prefsOpen, setPrefsOpen] = useState(false);
-  const savedPrefs = notifPrefsFor(employee.id, collab);
-  const [prefs, setPrefs] = useState(savedPrefs);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  useEffect(() => {
-    setPrefs(notifPrefsFor(employee.id, collab));
-  }, [collab.prefsByUser, employee.id]);
-
-  const scoped = useMemo(
-    () => listNotificationsForRole(role, employee.id),
-    [role, employee.id, collab.notifications],
-  );
-  const isRead = (n: AppNotification) => isNotificationReadBy(n, employee.id);
-
-  /** Approve / Reject only while the linked inbox item is pending and the viewer may decide it. */
-  function canDecide(n: AppNotification): boolean {
-    if (!n.inboxTaskId) return false;
-    const task = collab.inbox.find((t) => t.id === n.inboxTaskId);
-    return !!task && task.status === "Pending" && canApproveLeaveFor(task.requesterId);
-  }
-
-  /**
-   * Decisions are made in the Approvals center, which updates the real request. Notifications only link there —
-   * approving from a notification would change a copy and leave the request itself pending.
-   */
-  function visibleActions(n: AppNotification): NotifAction[] {
-    const all = notificationActions(n);
-    const actions = all.filter((a) => a.kind !== "approve" && a.kind !== "reject");
-    const hadDecision = all.length !== actions.length || !!n.inboxTaskId;
-    if (hadDecision && canDecide(n) && !actions.some((a) => a.href === "/approvals")) {
-      actions.unshift({ id: "review", label: "Review in Approvals", kind: "link", href: "/approvals" });
-    }
-    return actions;
-  }
-
-  const list = scoped.filter((n) => {
-    if (category && n.category !== category) return false;
-    return prefs[notifPrefKey(n.category)] !== false;
-  });
-
-  // Same preference filter as the list (and the sidebar badge).
-  const unread = scoped.filter((n) => !isRead(n) && prefs[notifPrefKey(n.category)] !== false).length;
-  const actionRequired = scoped.filter(
-    (n) =>
-      !isRead(n) &&
-      (n.category === "Leave" || n.category === "Timesheet" || n.category === "Attendance") &&
-      canDecide(n),
-  ).length;
-  const unreadTeamMessages = scoped.filter((n) => n.category === "Messages" && !isRead(n)).length;
-  const selected = selectedId ? scoped.find((n) => n.id === selectedId) ?? null : null;
-
-  const categoriesInScope = useMemo(() => {
-    const present = new Set(scoped.map((n) => n.category));
-    return NOTIF_CATEGORIES.filter((c) => present.has(c));
-  }, [scoped]);
-
-  function openDetail(n: AppNotification) {
-    setSelectedId(n.id);
-    if (!isRead(n)) markNotificationRead(n.id, employee.id);
-  }
-
-  function runAction(n: AppNotification, action: NotifAction) {
-    const kind = action.kind ?? "link";
-    if (kind === "detail") {
-      openDetail(n);
-      return;
-    }
-    if (kind === "approve" || kind === "reject") {
-      // Never decide from here — send the approver to the real request.
-      markNotificationRead(n.id, employee.id);
-      navigate("/approvals");
-      return;
-    }
-    markNotificationRead(n.id, employee.id);
-    const href = action.href || n.href;
-    if (href) navigate(href);
-  }
-
-  function markAllReadScoped() {
-    markAllNotificationsRead(role, employee.id);
-  }
-
-  return (
-    <Page
-      title="Notification Center"
-      action={
-        <div className="row-gap">
-          <button type="button" className="btn-ghost" onClick={() => setPrefsOpen((v) => !v)}>
-            Preferences
-          </button>
-          <button type="button" className="btn" onClick={markAllReadScoped} disabled={unread === 0}>
-            Mark all as read
-          </button>
-        </div>
-      }
-    >
-
-      <MetricGrid>
-        <MetricCard label="Unread" value={unread} />
-        <MetricCard label="Total" value={scoped.length} />
-        <MetricCard
-          label={managerView ? "Action required" : "Pending approvals"}
-          value={managerView ? actionRequired : collab.inbox.filter((t) => t.status === "Pending" && canApproveLeaveFor(t.requesterId)).length}
-          hint={managerView ? "Leave · timesheet · attendance" : "Open Inbox"}
-        />
-        <MetricCard
-          label={managerView ? "Team messages" : "Unread messages"}
-          value={managerView ? unreadTeamMessages : countUnreadMessages(employee.id, demoProfile.role)}
-          hint="Open Messages"
-        />
-      </MetricGrid>
-
-      {prefsOpen && (
-        <Card title="Notification preferences">
-          <div className="form-grid-2">
-            {(
-              [
-                ["leave", "Leave approvals"],
-                ["timesheet", "Timesheet updates"],
-                ["attendance", "Attendance alerts"],
-                ["messages", "New messages"],
-                ["holidays", "Upcoming holidays"],
-                ["learning", "Learning deadlines"],
-                ["performance", "Performance reminders"],
-                ["announcements", "HR announcements"],
-                ["team", "Team updates"],
-              ] as const
-            ).map(([key, label]) => (
-              <label key={key} className="filter-label" style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={prefs[key]}
-                  onChange={(e) => setPrefs({ ...prefs, [key]: e.target.checked })}
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="btn"
-            style={{ marginTop: 12 }}
-            onClick={() => {
-              setNotifPrefs(prefs, employee.id);
-              setPrefsOpen(false);
-            }}
-          >
-            Save preferences
-          </button>
-        </Card>
-      )}
-
-      <FilterBar>
-        <label className="filter-label">
-          Category
-          <select value={category} onChange={(e) => setCategory(e.target.value)}>
-            <option value="">All</option>
-            {categoriesInScope.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </label>
-      </FilterBar>
-
-      <div className={selected ? "grid-2" : undefined}>
-        <Card title="Notifications">
-          {list.length === 0 ? (
-            <EmptyState title="No notifications" description="You're all caught up." />
-          ) : (
-            <ul className="collab-list">
-              {list.map((n) => {
-                const actions = visibleActions(n);
-                return (
-                  <li key={n.id}>
-                    <div
-                      className={isRead(n) ? "collab-list-item" : "collab-list-item active"}
-                      style={{ cursor: "default" }}
-                    >
-                      <div className="row-between" style={{ width: "100%", gap: 8, alignItems: "flex-start" }}>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <strong>
-                            {n.title}{" "}
-                            {!isRead(n) ? (
-                              <StatusBadge status="Unread" tone="warn" />
-                            ) : (
-                              <StatusBadge status="Read" tone="neutral" />
-                            )}
-                          </strong>
-                          <div className="muted">
-                            {n.category} · {formatWhen(n.at)}
-                          </div>
-                          <p style={{ margin: "6px 0 0" }}>{n.body}</p>
-                          {actions.length > 0 && (
-                            <div className="row-gap" style={{ marginTop: 10, flexWrap: "wrap" }}>
-                              {actions.map((action) =>
-                                action.kind === "link" || !action.kind ? (
-                                  <Link
-                                    key={action.id}
-                                    to={action.href || n.href || "#"}
-                                    className="btn-ghost"
-                                    style={{ fontSize: 13 }}
-                                    onClick={() => markNotificationRead(n.id, employee.id)}
-                                  >
-                                    {action.label}
-                                  </Link>
-                                ) : (
-                                  <button
-                                    key={action.id}
-                                    type="button"
-                                    className={action.kind === "approve" ? "btn" : "btn-ghost"}
-                                    style={{ fontSize: 13 }}
-                                    onClick={() => runAction(n, action)}
-                                  >
-                                    {action.label}
-                                  </button>
-                                ),
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        <div className="row-gap" style={{ flexShrink: 0 }}>
-                          {(n.detail || n.inboxTaskId) && (
-                            <button type="button" className="btn-ghost" onClick={() => openDetail(n)}>
-                              Details
-                            </button>
-                          )}
-                          {!isRead(n) && (
-                            <button type="button" className="btn-ghost" onClick={() => markNotificationRead(n.id, employee.id)}>
-                              Mark read
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Card>
-
-        {selected && (
-          <Card
-            title="Notification detail"
-            action={
-              <button type="button" className="btn-ghost" onClick={() => setSelectedId(null)}>
-                Close
-              </button>
-            }
-          >
-            <p className="muted">
-              {selected.category} · {formatWhen(selected.at)} · {isRead(selected) ? "Read" : "Unread"}
-            </p>
-            <h3 style={{ margin: "8px 0" }}>{selected.title}</h3>
-            <p>{selected.body}</p>
-            {selected.detail && <p className="note">{selected.detail}</p>}
-            <div className="row-gap" style={{ marginTop: 12, flexWrap: "wrap" }}>
-              {visibleActions(selected).map((action) =>
-                action.kind === "link" || !action.kind ? (
-                  <Link
-                    key={action.id}
-                    to={action.href || selected.href || "#"}
-                    className="btn"
-                    onClick={() => markNotificationRead(selected.id, employee.id)}
-                  >
-                    {action.label}
-                  </Link>
-                ) : action.kind === "detail" ? null : (
-                  <button
-                    key={action.id}
-                    type="button"
-                    className={action.kind === "approve" ? "btn" : "btn-ghost"}
-                    onClick={() => runAction(selected, action)}
-                  >
-                    {action.label}
-                  </button>
-                ),
-              )}
-            </div>
-          </Card>
-        )}
-      </div>
-    </Page>
-  );
-}
+// The Notification Center lives in its own file; re-exported here so existing imports keep working.
+export { NotificationCenterPage } from "./NotificationCenter.tsx";
 
 /* ───────────────────────────── 5. HELP & HR REQUESTS ── */
 
@@ -1193,10 +885,18 @@ export function HelpHrRequestsPage() {
     () => collab.hrRequests.filter((r) => hrRequestVisibleTo(r, employee.id, demoProfile.role)),
     [collab.hrRequests, employee.id, demoProfile.role],
   );
-  const [tab, setTab] = useState("request");
+  // HR handles requests; they don't raise HR requests to themselves.
+  const [tab, setTab] = useState(hrView ? "history" : "request");
   const [category, setCategory] = useState<HrRequestCategory>("Documents");
   const [subject, setSubject] = useState("");
-  const [description, setDescription] = useState("");
+  const {
+    value: description,
+    setValue: setDescription,
+    ref: descriptionRef,
+    fill: fillDescription,
+    fillIfEmpty: fillDescriptionIfEmpty,
+    reset: resetDescription,
+  } = useTemplatedText();
   const [formError, setFormError] = useState("");
   const [formOk, setFormOk] = useState("");
   const [selectedId, setSelectedId] = useState("");
@@ -1219,6 +919,11 @@ export function HelpHrRequestsPage() {
       setFormOk("");
       return;
     }
+    if (hasTemplateBlanks(description)) {
+      setFormError(TEMPLATE_BLANKS_ERROR);
+      setFormOk("");
+      return;
+    }
     createHrRequest({
       category,
       subject,
@@ -1227,29 +932,35 @@ export function HelpHrRequestsPage() {
       requesterId: employee.id,
     });
     setSubject("");
-    setDescription("");
+    resetDescription();
     setFormError("");
     setFormOk("Request submitted.");
     setTab("history");
   }
 
   return (
-    <Page title="Help & HR Requests">
+    <Page title={hrView ? "HR requests" : "Help & HR Requests"}>
       <Tabs
         tabs={[
-          { id: "request", label: "New request" },
-          { id: "history", label: "Request history" },
+          ...(hrView ? [] : [{ id: "request", label: "New request" }]),
+          { id: "history", label: hrView ? "Request queue" : "Request history" },
           { id: "faq", label: "FAQ & policies" },
         ]}
         value={tab}
         onChange={setTab}
       />
 
-      {tab === "request" && (
+      {tab === "request" && !hrView && (
         <Card title="HR service request">
           <form className="stack" onSubmit={submitRequest}>
             <Field label="Category">
-              <select value={category} onChange={(e) => setCategory(e.target.value as HrRequestCategory)}>
+              <select
+                value={category}
+                onChange={(e) => {
+                  setCategory(e.target.value as HrRequestCategory);
+                  fillDescription("hrRequest", e.target.value);
+                }}
+              >
                 {(
                   [
                     "Payroll provider",
@@ -1269,9 +980,11 @@ export function HelpHrRequestsPage() {
             </Field>
             <Field label="Description" wide>
               <textarea
+                ref={descriptionRef}
                 rows={4}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
+                onFocus={() => fillDescriptionIfEmpty("hrRequest", category)}
                 placeholder="Describe your request…"
               />
             </Field>
@@ -1286,9 +999,9 @@ export function HelpHrRequestsPage() {
 
       {tab === "history" && (
         <div className="collab-split">
-          <Card title={hrView ? "All requests" : "My requests"}>
+          <Card title={hrView ? "Requests from employees" : "My requests"}>
             {requests.length === 0 ? (
-              <EmptyState title="No requests yet" description="Use the New request tab." />
+              <EmptyState title="No requests yet" description={hrView ? undefined : "Use the New request tab."} />
             ) : (
               <DataTable
                 headers={hrView ? ["Subject", "Requester", "Category", "Status", "Updated", ""] : ["Subject", "Category", "Status", "Updated", ""]}

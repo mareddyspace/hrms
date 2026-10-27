@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Banner,
   Card,
@@ -36,6 +37,8 @@ import {
 } from "../model.ts";
 import { DEMO_ACCOUNTS } from "../seed.ts";
 import { usePortal } from "../store.tsx";
+import { useTaskAutoMode } from "../data/taskAutoMode.ts";
+import { useTaskAutoReminders } from "../data/taskAutoReminders.ts";
 
 type TaskTab = "dashboard" | "open" | "mine" | "scheduled" | "closed" | "report" | "people" | "history";
 type ViewMode = "list" | "board" | "calendar";
@@ -87,6 +90,8 @@ export function TasksPage() {
     canDecideFor,
   } = usePortal();
   const today = todayISO();
+  const [autoMode, setAutoMode] = useTaskAutoMode(employee.id);
+  useTaskAutoReminders();
   // Own tasks plus tasks of people below you in the reporting line (or anyone, for HR).
   const scopeTasks = useMemo(
     () =>
@@ -420,6 +425,23 @@ export function TasksPage() {
         ) : undefined
       }
     >
+      <div className="row-gap" style={{ alignItems: "center", marginBottom: 12 }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <input
+            type="checkbox"
+            role="switch"
+            aria-checked={autoMode}
+            checked={autoMode}
+            onChange={(e) => setAutoMode(e.target.checked)}
+          />
+          <strong>Automatic mode</strong>
+        </label>
+        <span className="muted">
+          {autoMode
+            ? "Automatic mode on — status and reminders update by themselves."
+            : "Automatic mode off — update status yourself."}
+        </span>
+      </div>
       <MetricGrid>
         <button type="button" className="metric-as-btn" onClick={() => applySummaryFocus("all")}>
           <MetricCard label="Total" value={summary.total} />
@@ -904,6 +926,7 @@ export function TasksPage() {
                               <span className="task-code">{task.code}</span>
                               <StatusPill status={task.priority} />
                               <StatusBadge status={taskStatusLabel(task)} />
+                              {overdue && <StatusBadge status="Overdue" tone="danger" literal />}
                             </div>
                             <strong className="task-list-title">{task.subject}</strong>
                             <div className="task-list-meta">
@@ -938,7 +961,12 @@ export function TasksPage() {
                 ) : (
                   <Card
                     title={selected.code}
-                    action={<StatusBadge status={taskStatusLabel(selected)} />}
+                    action={
+                      <span className="row-gap">
+                        <StatusBadge status={taskStatusLabel(selected)} />
+                        {isTaskOverdue(selected, today) && <StatusBadge status="Overdue" tone="danger" literal />}
+                      </span>
+                    }
                   >
                     <div className="task-next-action">
                       <span className="muted">Next action</span>
@@ -1235,6 +1263,13 @@ export function TasksPage() {
                     <section className="task-section task-actions">
                       <h4 className="task-section-title">Actions</h4>
                       <div className="form-actions" style={{ marginTop: 0 }}>
+                        {selectedIsOwn &&
+                          selected.accepted &&
+                          (selected.status === "open" || selected.status === "progress") && (
+                            <Link className="btn-ghost" to={`/timesheet?work=task:${encodeURIComponent(selected.id)}`}>
+                              Log time
+                            </Link>
+                          )}
                         {canActOnSelected &&
                           selected.status === "open" &&
                           !selected.accepted &&

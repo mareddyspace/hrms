@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import type { DragEvent, FormEvent, PointerEvent as ReactPointerEvent } from "react";
 import * as XLSX from "xlsx";
 import { Banner, Card, Field, Page, downloadText } from "../components/ui.tsx";
-import { DownloadIcon } from "../components/icons.tsx";
 import { DOCUMENT_GROUPS, formatStamp } from "../model.ts";
 import type { DocumentGroup, EmployeeDocument } from "../model.ts";
 import { usePortal } from "../store.tsx";
@@ -69,7 +68,8 @@ export function LegacyEssDocumentsPage() {
 
   return (
     <Page
-      title="My documents"
+      title="My documents"
+
       action={
         <button className="btn" type="button" onClick={openAdd}>
           Add document
@@ -299,126 +299,7 @@ export function FilesPage() {
   );
 }
 
-export function PoliciesPage() {
-  const { state } = usePortal();
-  const [query, setQuery] = useState("");
-  const [pageSize, setPageSize] = useState(10);
-  const [page, setPage] = useState(0);
-  const [openId, setOpenId] = useState("");
-  const filtered = state.policies.filter((policy) => policy.title.toLowerCase().includes(query.trim().toLowerCase()));
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const safePage = Math.min(page, pageCount - 1);
-  const start = safePage * pageSize;
-  const visible = filtered.slice(start, start + pageSize);
-  const open = state.policies.find((policy) => policy.id === openId);
-
-  return (
-    <Page
-      title="Policies"
-      action={
-        <input
-          className="policy-search"
-          value={query}
-          placeholder="Search..."
-          aria-label="Search policies"
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setPage(0);
-          }}
-        />
-      }
-    >
-      <Card>
-        <div className="doc-table-wrap">
-          <table className="data doc-table">
-            <thead>
-              <tr>
-                <th>Document name</th>
-                <th>Type</th>
-                <th>File type</th>
-                <th>Updated by</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((policy) => (
-                <tr key={policy.id}>
-                  <td>{policy.title}</td>
-                  <td>{policy.kind}</td>
-                  <td>{policy.fileType}</td>
-                  <td>{policy.updatedBy}</td>
-                  <td>
-                    <span className="doc-actions">
-                      <button className="icon-btn" type="button" aria-label={`View ${policy.title}`} onClick={() => setOpenId(policy.id === openId ? "" : policy.id)}>
-                        <EyeIcon />
-                      </button>
-                      <button
-                        className="icon-btn"
-                        type="button"
-                        aria-label={`Download ${policy.title}`}
-                        onClick={() => downloadText(`${policy.title}.txt`, `${policy.title}\nUpdated by ${policy.updatedBy} on ${policy.updated}\n\n${policy.body}`)}
-                      >
-                        <DownloadIcon />
-                      </button>
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {visible.length === 0 && <p className="empty">No policy matches that search.</p>}
-        <div className="pager">
-          <label>
-            Rows per page
-            <select
-              value={pageSize}
-              onChange={(event) => {
-                setPageSize(Number(event.target.value));
-                setPage(0);
-              }}
-            >
-              {[10, 25, 100].map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span>
-            {filtered.length === 0 ? "0" : `${start + 1}–${Math.min(start + pageSize, filtered.length)}`} of {filtered.length}
-          </span>
-          <span className="doc-actions">
-            <button className="icon-btn" type="button" aria-label="Previous page" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>
-              ‹
-            </button>
-            <button className="icon-btn" type="button" aria-label="Next page" disabled={safePage >= pageCount - 1} onClick={() => setPage(safePage + 1)}>
-              ›
-            </button>
-          </span>
-        </div>
-        {open && (
-          <div className="prose policy-view">
-            <h2>{open.title}</h2>
-            <p className="muted">
-              {open.fileType} · Updated by {open.updatedBy} on {open.updated}
-            </p>
-            <p>{open.body}</p>
-          </div>
-        )}
-      </Card>
-    </Page>
-  );
-}
-
-function EyeIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-      <path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12Z" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
-    </svg>
-  );
-}
+/* Policies moved to MyPoliciesPage.tsx (per-employee policy library with acknowledgements). */
 
 type ConvertTarget = "csv" | "xlsx" | "qbo";
 

@@ -99,17 +99,19 @@ export interface Announcement {
 }
 
 export type NotifCategory =
+  | "Approvals"
   | "Leave"
-  | "Timesheet"
-  | "Attendance"
+  | "Tasks"
+  | "Tickets"
+  | "Mail"
   | "Messages"
+  | "Attendance"
   | "Holidays"
-  | "Learning"
-  | "Performance"
-  | "Announcements"
-  | "Team";
+  | "Pay"
+  | "Recruiting"
+  | "System";
 
-/** Who should see this notification in the demo Notification Center. */
+/** Who should see this notification in the Notification Center. */
 export type NotifAudience = "employee" | "manager" | "all";
 
 export type NotifActionKind = "link" | "approve" | "reject" | "detail";
@@ -119,6 +121,17 @@ export interface NotifAction {
   label: string;
   kind?: NotifActionKind;
   href?: string;
+}
+
+/**
+ * The record a notification is about. Used to show it as "Done" once that record no longer needs the
+ * reader (leave decided, ticket closed, chat read, ...).
+ */
+export type NotifRefKind = "leave" | "timesheet" | "timesheetSubmit" | "inbox" | "chat" | "ticket" | "task";
+
+export interface NotifRef {
+  kind: NotifRefKind;
+  id: string;
 }
 
 export interface AppNotification {
@@ -134,60 +147,127 @@ export interface AppNotification {
   recipientId?: string;
   /** When set, only people working in this country see it (e.g. a national holiday). */
   countryCode?: string;
+  /** Deep link to the exact item. */
   href?: string;
-  /** Primary CTA label (shown when actions[] omitted). */
+  /** What to do, e.g. "Review" or "Open ticket". */
   actionLabel?: string;
+  /** Older saved rows only; the page uses href + actionLabel. */
   actions?: NotifAction[];
-  /** Optional Approvals inbox task for Approve / Reject. */
+  /** Older saved rows only (collab inbox task). Prefer ref. */
   inboxTaskId?: string;
-  /** Extra copy for the on-page detail panel. */
   detail?: string;
+  ref?: NotifRef;
+  /** User ids who deleted this notification from their own list. */
+  hiddenFor?: string[];
 }
 
 export interface NotifPrefs {
+  approvals: boolean;
   leave: boolean;
-  timesheet: boolean;
-  attendance: boolean;
+  tasks: boolean;
+  tickets: boolean;
+  mail: boolean;
   messages: boolean;
+  attendance: boolean;
   holidays: boolean;
-  learning: boolean;
-  performance: boolean;
-  announcements: boolean;
-  team: boolean;
+  pay: boolean;
+  recruiting: boolean;
+  system: boolean;
+  /** Daily email summary of unread notifications. */
+  emailDigest: boolean;
 }
 
+export type NotifCategoryPrefKey = Exclude<keyof NotifPrefs, "emailDigest">;
+
 export const NOTIF_CATEGORIES: NotifCategory[] = [
+  "Approvals",
   "Leave",
-  "Timesheet",
-  "Attendance",
+  "Tasks",
+  "Tickets",
+  "Mail",
   "Messages",
+  "Attendance",
   "Holidays",
-  "Learning",
-  "Performance",
-  "Announcements",
-  "Team",
+  "Pay",
+  "Recruiting",
+  "System",
 ];
 
-export function notifPrefKey(category: NotifCategory): keyof NotifPrefs {
+export function notifPrefKey(category: NotifCategory): NotifCategoryPrefKey {
+  return category.toLowerCase() as NotifCategoryPrefKey;
+}
+
+/** Category for a notification from its link (and a few titles that always need a decision). */
+export function inferNotifCategory(href = "", title = ""): NotifCategory {
+  if (/^(Approve |Shift swap request|Contract extension request)/i.test(title)) return "Approvals";
+  const path = href.split(/[?#]/)[0];
+  const starts = (...prefixes: string[]) => prefixes.some((p) => path === p || path.startsWith(`${p}/`));
+  if (starts("/approvals")) return "Approvals";
+  if (starts("/leave")) return "Leave";
+  if (starts("/tasks")) return "Tasks";
+  if (starts("/tickets")) return "Tickets";
+  if (starts("/mail")) return "Mail";
+  if (starts("/chat")) return "Messages";
+  if (starts("/attendance", "/timesheet", "/workforce/shifts")) return "Attendance";
+  if (starts("/holidays", "/calendar", "/workforce/optional-holidays")) return "Holidays";
+  if (starts("/payslips", "/pay-preview", "/expenses", "/benefits", "/compensation", "/tax")) return "Pay";
+  if (starts("/internal-jobs", "/recruiting", "/candidates", "/jobs", "/referrals")) return "Recruiting";
+  return "System";
+}
+
+const LEGACY_CATEGORY: Record<string, NotifCategory> = {
+  Timesheet: "Attendance",
+  Learning: "System",
+  Performance: "System",
+  Announcements: "System",
+};
+
+/** Maps older saved categories (Timesheet, Team, ...) onto the current set. */
+export function normalizeNotifCategory(raw: string, href?: string, title?: string): NotifCategory {
+  if ((NOTIF_CATEGORIES as string[]).includes(raw)) return raw as NotifCategory;
+  if (raw === "Team") return inferNotifCategory(href, title);
+  return LEGACY_CATEGORY[raw] ?? inferNotifCategory(href, title);
+}
+
+/** The record behind a deep link, when the link names one. */
+export function notifRefFromHref(href = "", title = ""): NotifRef | undefined {
+  const [path, query = ""] = href.split("?");
+  const params = new URLSearchParams(query);
+  const ticket = params.get("id");
+  const task = params.get("task");
+  const chat = params.get("c");
+  if (path === "/tickets" && ticket && /^Ticket assigned/i.test(title)) return { kind: "ticket", id: ticket };
+  if (path === "/tasks" && task) return { kind: "task", id: task };
+  if (path === "/chat" && chat) return { kind: "chat", id: chat };
+  return undefined;
+}
+
+/** Task alerts carry the task code in the title ("New task · TSK-1042"); link straight to that task. */
+export function taskDeepLink(title: string, href?: string): string | undefined {
+  if (href && href !== "/tasks") return href;
+  const code = title.match(/\b(TSK-\d+)\b/)?.[1];
+  return code ? `/tasks?task=${code}` : href;
+}
+
+/** Default button text: says what to do. */
+export function defaultNotifActionLabel(category: NotifCategory): string {
   switch (category) {
-    case "Leave":
-      return "leave";
-    case "Timesheet":
-      return "timesheet";
-    case "Attendance":
-      return "attendance";
+    case "Approvals":
+      return "Review";
+    case "Tasks":
+      return "Open task";
+    case "Tickets":
+      return "Open ticket";
+    case "Mail":
+      return "Read mail";
     case "Messages":
-      return "messages";
+      return "Reply";
+    case "Leave":
+      return "View leave";
     case "Holidays":
-      return "holidays";
-    case "Learning":
-      return "learning";
-    case "Performance":
-      return "performance";
-    case "Announcements":
-      return "announcements";
-    case "Team":
-      return "team";
+      return "View holidays";
+    default:
+      return "Open";
   }
 }
 
@@ -692,341 +772,136 @@ export const ANNOUNCEMENTS_SEED: Announcement[] = [
   },
 ];
 
+/** Seed times relative to page load so the Today / Yesterday groups have something in them. */
+function hoursAgo(h: number): string {
+  return new Date(Date.now() - h * 3_600_000).toISOString();
+}
+
+/**
+ * Seed notifications. Each one points at a real seeded record (leave, timesheet, chat, holiday,
+ * announcement) so its link opens that item and it turns "Done" once the item is handled.
+ */
 export const NOTIFICATIONS_SEED: AppNotification[] = [
-  /* ── Employee / self alerts ── */
+  /* ── Babu Menon (employee) ── */
   {
     id: "nf-1",
     category: "Leave",
-    title: "Leave approved",
-    body: "Your WFH on 3 Oct was approved by Ram Krishnan.",
-    at: "2026-10-01T16:41:00",
-    readBy: [],
+    title: "WFH on 22 Oct approved",
+    body: "Approved by Ram Krishnan.",
+    at: "2026-10-09T10:00:00",
+    readBy: SEEN_BY_ALL,
     audience: "employee",
     recipientId: "emp-mahesh",
     href: "/leave",
-    actionLabel: "View Calendar",
-    actions: [{ id: "open", label: "View Calendar", kind: "link", href: "/leave" }],
+    actionLabel: "View leave",
   },
   {
     id: "nf-2",
-    category: "Timesheet",
-    title: "Timesheet reminder",
-    body: "Submit timesheet for week of 13 Oct.",
-    at: "2026-10-14T08:00:00",
+    category: "Attendance",
+    title: "Submit timesheet · week of 12 Oct",
+    body: "27 h logged, still in draft.",
+    at: hoursAgo(3),
     readBy: [],
     audience: "employee",
     recipientId: "emp-mahesh",
     href: "/timesheet",
-    actionLabel: "Open Timesheet",
-    actions: [{ id: "open", label: "Open Timesheet", kind: "link", href: "/timesheet" }],
+    actionLabel: "Submit timesheet",
+    ref: { kind: "timesheetSubmit", id: "org-ts-babu" },
   },
   {
     id: "nf-3",
     category: "Messages",
-    title: "New message from Ram Krishnan",
-    body: "Can you update the timesheet before Friday standup?",
-    at: "2026-10-13T16:02:00",
+    title: "New messages in Engineering Bengaluru",
+    body: "Ram Krishnan: Sprint demo moved to Thursday 4pm IST.",
+    at: hoursAgo(27),
     readBy: [],
     audience: "employee",
     recipientId: "emp-mahesh",
-    href: "/chat",
-    actionLabel: "Open Message",
-    actions: [{ id: "open", label: "Open Message", kind: "link", href: "/chat" }],
+    href: "/chat?c=cv-3",
+    actionLabel: "Reply",
+    ref: { kind: "chat", id: "cv-3" },
   },
+
+  /* ── Everyone ── */
   {
     id: "nf-4",
     category: "Holidays",
-    title: "Upcoming holiday",
-    body: "Dussehra holiday appears on your calendar next week.",
-    at: "2026-10-12T07:00:00",
-    readBy: SEEN_BY_ALL,
+    title: "Diwali holidays · 8–11 Nov",
+    body: "Plan cover and leave around the break.",
+    at: hoursAgo(50),
+    readBy: [],
     audience: "all",
     countryCode: "IN",
-    href: "/calendar",
-    actionLabel: "View Calendar",
-    actions: [
-      { id: "cal", label: "View Calendar", kind: "link", href: "/calendar" },
-      { id: "hol", label: "Holidays", kind: "link", href: "/holidays" },
-    ],
-  },
-  {
-    id: "nf-5",
-    category: "Learning",
-    title: "Learning deadline",
-    body: "Secure coding fundamentals due 31 Oct.",
-    at: "2026-10-10T09:00:00",
-    readBy: [],
-    audience: "employee",
-    recipientId: "emp-mahesh",
-    href: "/programs",
-    actionLabel: "Review",
-    actions: [{ id: "open", label: "Review", kind: "link", href: "/programs" }],
-  },
-  {
-    id: "nf-6",
-    category: "Performance",
-    title: "Performance review reminder",
-    body: "H2 mid-year self-assessment still in Draft.",
-    at: "2026-10-09T10:00:00",
-    readBy: [],
-    audience: "employee",
-    recipientId: "emp-mahesh",
-    href: "/evaluations",
-    actionLabel: "Review",
-    actions: [{ id: "open", label: "Review", kind: "link", href: "/evaluations" }],
+    href: "/holidays",
+    actionLabel: "View holidays",
   },
   {
     id: "nf-7",
-    category: "Announcements",
-    title: "HR announcement",
-    body: "Q4 All-hands published — open Announcements to read.",
+    category: "System",
+    title: "New announcement · Q4 All-hands",
+    body: "Roadmap, hiring and wellbeing.",
     at: "2026-10-08T10:05:00",
-    readBy: [],
+    readBy: SEEN_BY_ALL,
     audience: "all",
     href: "/announcements",
-    actionLabel: "Open",
-    actions: [{ id: "open", label: "Open", kind: "link", href: "/announcements" }],
+    actionLabel: "Read",
   },
 
-  /* ── Manager · team-scoped (no payslip / salary content) ── */
+  /* ── Ram Krishnan (manager) ── */
   {
     id: "nf-m1",
-    category: "Leave",
-    title: "Leave approval · Diya Patel",
-    body: "PTO 16–17 Oct (2 working days) waiting on your approval.",
-    at: "2026-10-14T09:20:00",
+    category: "Approvals",
+    title: "Approve leave for Priya Nair",
+    body: "PTO · 1 day · waiting on you.",
+    at: hoursAgo(20),
     readBy: [],
     audience: "manager",
     recipientId: "emp-ram",
     href: "/approvals",
-    inboxTaskId: "ib-1",
     actionLabel: "Review",
-    detail:
-      "Diya Patel · Privilege leave · 16–17 Oct 2026 · Project coverage noted as Babu Menon. Decide it in Approvals.",
-    actions: [
-      { id: "review", label: "Review", kind: "detail" },
-      { id: "inbox", label: "Open Approvals", kind: "link", href: "/approvals" },
-    ],
-  },
-  {
-    id: "nf-m2",
-    category: "Leave",
-    title: "Leave request · Kabir Sharma",
-    body: "PTO 14–16 Oct — currently on leave; confirm sprint coverage.",
-    at: "2026-10-13T11:05:00",
-    readBy: [],
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/leave",
-    actionLabel: "View Calendar",
-    detail: "Kabir Sharma (TZ0042) · Senior Engineer · Leave overlaps Maple Health sprint checkpoint. Coverage: Diya + Babu.",
-    actions: [
-      { id: "cal", label: "View Calendar", kind: "link", href: "/leave" },
-      { id: "team", label: "Team overview", kind: "link", href: "/team" },
-    ],
+    ref: { kind: "leave", id: "lv-priya-pto" },
   },
   {
     id: "nf-m3",
-    category: "Timesheet",
-    title: "Timesheet submitted · Kabir Sharma",
-    body: "Week of 6 Oct · 40h on Project Maple Health awaiting review.",
-    at: "2026-10-13T18:10:00",
+    category: "Approvals",
+    title: "Approve timesheet for Priya Nair",
+    body: "Week of 12 Oct · 30 h.",
+    at: hoursAgo(30),
     readBy: [],
     audience: "manager",
     recipientId: "emp-ram",
-    href: "/timesheet",
-    inboxTaskId: "ib-2",
-    actionLabel: "Open Timesheet",
-    detail: "Kabir Sharma · 40h submitted · no overtime flagged. Approve from Approvals or open Timesheet.",
-    actions: [
-      { id: "ts", label: "Open Timesheet", kind: "link", href: "/timesheet" },
-      { id: "inbox", label: "Open Approvals", kind: "link", href: "/approvals" },
-    ],
-  },
-  {
-    id: "nf-m4",
-    category: "Timesheet",
-    title: "Timesheet submitted · Anu Rao",
-    body: "Week of 6 Oct · performance cycle hours need your sign-off.",
-    at: "2026-10-13T17:40:00",
-    readBy: [],
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/timesheet",
-    actionLabel: "Open Timesheet",
-    actions: [
-      { id: "ts", label: "Open Timesheet", kind: "link", href: "/timesheet" },
-      { id: "inbox", label: "Review", kind: "link", href: "/approvals" },
-    ],
-  },
-  {
-    id: "nf-m5",
-    category: "Attendance",
-    title: "Attendance correction · Babu Menon",
-    body: "Missed check-out on 10 Oct · requested correction to 18:32.",
-    at: "2026-10-11T08:05:00",
-    readBy: [],
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/attendance",
-    inboxTaskId: "ib-3",
-    actionLabel: "View Attendance",
-    detail: "Babu Menon · Forgot to check out · proposed out-time 18:32.",
-    actions: [
-      { id: "att", label: "View Attendance", kind: "link", href: "/attendance" },
-      { id: "inbox", label: "Open Approvals", kind: "link", href: "/approvals" },
-    ],
-  },
-  {
-    id: "nf-m6",
-    category: "Attendance",
-    title: "Missing check-in · Diya Patel",
-    body: "No clock-in recorded this morning (office expected). Follow up or mark exception.",
-    at: "2026-10-14T10:15:00",
-    readBy: [],
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/attendance",
-    actionLabel: "View Attendance",
-    detail: "Diya Patel · Expected In Office · no check-in by 10:15 IST. Confirm WFH or leave if applicable.",
-    actions: [
-      { id: "att", label: "View Attendance", kind: "link", href: "/attendance" },
-      { id: "detail", label: "Review", kind: "detail" },
-    ],
+    href: "/approvals",
+    actionLabel: "Review",
+    ref: { kind: "timesheet", id: "org-ts-priya" },
   },
   {
     id: "nf-m7",
     category: "Messages",
-    title: "New message · Babu Menon",
-    body: "Asked about sprint scope for Maple Health UAT this week.",
-    at: "2026-10-14T08:42:00",
+    title: "New message in Engineering Bengaluru",
+    body: "Priya Nair: Secure coding module due end of month — please enroll.",
+    at: hoursAgo(5),
     readBy: [],
     audience: "manager",
     recipientId: "emp-ram",
-    href: "/chat",
-    actionLabel: "Open Message",
-    actions: [{ id: "msg", label: "Open Message", kind: "link", href: "/chat" }],
-  },
-  {
-    id: "nf-m8",
-    category: "Messages",
-    title: "New message · Priya Nair",
-    body: "Shared L&D session notes and asked for mid-year check-in slot.",
-    at: "2026-10-13T15:20:00",
-    readBy: SEEN_BY_ALL,
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/chat",
-    actionLabel: "Open Message",
-    actions: [{ id: "msg", label: "Open Message", kind: "link", href: "/chat" }],
-  },
-  {
-    id: "nf-m9",
-    category: "Announcements",
-    title: "HR announcement · Q4 All-hands",
-    body: "All-hands on 22 Oct — share with your reports and block calendars.",
-    at: "2026-10-08T10:05:00",
-    readBy: [],
-    audience: "manager",
-    href: "/announcements",
-    actionLabel: "Open",
-    actions: [{ id: "open", label: "Open", kind: "link", href: "/announcements" }],
-  },
-  {
-    id: "nf-m10",
-    category: "Holidays",
-    title: "Upcoming holiday · Dussehra",
-    body: "20 Oct public holiday (India). Plan sprint capacity for your team.",
-    at: "2026-10-12T07:00:00",
-    readBy: [],
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/calendar",
-    actionLabel: "View Calendar",
-    actions: [
-      { id: "cal", label: "View Calendar", kind: "link", href: "/calendar" },
-      { id: "leave", label: "Leave calendar", kind: "link", href: "/leave" },
-    ],
-  },
-  {
-    id: "nf-m11",
-    category: "Performance",
-    title: "Review due · Priya Nair",
-    body: "Mid-year check-in scheduled 18 Oct — prepare feedback notes.",
-    at: "2026-10-12T09:00:00",
-    readBy: [],
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/evaluations",
-    actionLabel: "Review",
-    detail: "Priya Nair · Mid-year check-in · due 18 Oct — prepare qualitative feedback notes.",
-    actions: [
-      { id: "rev", label: "Review", kind: "link", href: "/evaluations" },
-      { id: "detail", label: "Details", kind: "detail" },
-    ],
-  },
-  {
-    id: "nf-m12",
-    category: "Learning",
-    title: "Learning deadline · team mandatory",
-    body: "2 direct reports still pending Secure coding fundamentals (due 31 Oct).",
-    at: "2026-10-10T09:30:00",
-    readBy: [],
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/programs",
-    actionLabel: "Review",
-    actions: [
-      { id: "learn", label: "Review", kind: "link", href: "/programs" },
-      { id: "team", label: "Team overview", kind: "link", href: "/team" },
-    ],
-  },
-  {
-    id: "nf-m13",
-    category: "Team",
-    title: "New joiner · Riya Kapoor",
-    body: "Engineer started 06 Oct — schedule 30-day check-in and buddy intro.",
-    at: "2026-10-06T09:00:00",
-    readBy: SEEN_BY_ALL,
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/team",
-    actionLabel: "Open",
-    actions: [
-      { id: "team", label: "Team overview", kind: "link", href: "/team" },
-      { id: "org", label: "Org chart", kind: "link", href: "/org-chart" },
-    ],
-  },
-  {
-    id: "nf-m14",
-    category: "Team",
-    title: "Coverage risk · leave today",
-    body: "1 report on leave today (Kabir). Confirm Maple Health ownership before standup.",
-    at: "2026-10-14T07:30:00",
-    readBy: [],
-    audience: "manager",
-    recipientId: "emp-ram",
-    href: "/team",
-    actionLabel: "Review",
-    detail: "Kabir Sharma on leave · Diya + Babu covering Maple Health for today.",
-    actions: [
-      { id: "team", label: "Team overview", kind: "link", href: "/team" },
-      { id: "detail", label: "Review", kind: "detail" },
-      { id: "att", label: "View Attendance", kind: "link", href: "/attendance" },
-    ],
+    href: "/chat?c=cv-3",
+    actionLabel: "Reply",
+    ref: { kind: "chat", id: "cv-3" },
   },
 ];
 
 export const DEFAULT_NOTIF_PREFS: NotifPrefs = {
+  approvals: true,
   leave: true,
-  timesheet: true,
-  attendance: true,
+  tasks: true,
+  tickets: true,
+  mail: true,
   messages: true,
+  attendance: true,
   holidays: true,
-  learning: true,
-  performance: true,
-  announcements: true,
-  team: true,
+  pay: true,
+  recruiting: true,
+  system: true,
+  emailDigest: false,
 };
 
 export const HR_REQUESTS_SEED: HrRequest[] = [

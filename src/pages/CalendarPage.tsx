@@ -15,6 +15,7 @@ import {
   declineLocalMeeting,
   eventsForPerson,
   isLocalEvent,
+  notesToEvents,
   reminderError,
   removeLocalReminder,
   saveLocalReminder,
@@ -29,6 +30,9 @@ import {
 } from "../data/workSchedule.ts";
 import { formatLongDate, monthCells, monthLabel, parseISODate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { updateNote, useNotes } from "../data/notesStore.ts";
+import { NoteEditor } from "../components/NotesPanel.tsx";
+import "../components/notes.css";
 
 
 const FILTERS: Array<{ id: "all" | CalendarEventKind; label: string }> = [
@@ -41,6 +45,7 @@ const FILTERS: Array<{ id: "all" | CalendarEventKind; label: string }> = [
   { id: "wfh", label: "WFH" },
   { id: "deadline", label: "Deadlines" },
   { id: "interview", label: "Interviews" },
+  { id: "note", label: "My notes" },
 ];
 
 function kindTone(kind: CalendarEventKind): "ok" | "warn" | "info" | "neutral" {
@@ -74,6 +79,9 @@ function cellPills(events: CalendarEvent[]): { text: string; kind: string }[] {
   const meetings = events.filter((e) => e.kind === "meeting" || e.kind === "interview");
   if (meetings.length === 1) pills.push({ text: shortHolidayName(meetings[0].title, 12), kind: "meeting" });
   else if (meetings.length > 1) pills.push({ text: `${meetings.length} meetings`, kind: "meeting" });
+  const notes = events.filter((e) => e.kind === "note" && !e.done);
+  if (notes.length === 1) pills.push({ text: shortHolidayName(notes[0].title, 12), kind: "note" });
+  else if (notes.length > 1) pills.push({ text: `${notes.length} notes`, kind: "note" });
   if (events.some((e) => e.kind === "deadline")) pills.push({ text: "Deadline", kind: "deadline" });
   if (events.some((e) => e.kind === "reminder") && pills.length < 2) {
     pills.push({ text: "Reminder", kind: "reminder" });
@@ -95,6 +103,8 @@ export function CalendarPage() {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const myNotes = useNotes(employee.id);
+  const [editingNote, setEditingNote] = useState<string | null>(null);
 
   const schedule = useMemo(
     () =>
@@ -126,14 +136,14 @@ export function CalendarPage() {
   const allEvents = useMemo(() => {
     const base = eventsForPerson(employee.id, holidaySource);
     const ids = new Set(base.map((e) => e.id));
-    const extras = leaveEvents.filter((e) => !ids.has(e.id));
+    const extras = [...leaveEvents, ...notesToEvents(myNotes, employee.id)].filter((e) => !ids.has(e.id));
     return [...base, ...extras].sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
       return (a.time ?? "").localeCompare(b.time ?? "");
     });
     // tick refreshes after local reminder add/remove
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employee.id, holidaySource, leaveEvents, tick]);
+  }, [employee.id, holidaySource, leaveEvents, myNotes, tick]);
 
   const cells = monthCells(cursor.year, cursor.month);
 
@@ -270,6 +280,7 @@ export function CalendarPage() {
             <span className="cal-pill holiday">Holiday</span>
             <span className="cal-pill leave">Leave</span>
             <span className="cal-pill wfh">WFH</span>
+            <span className="cal-pill note">My notes</span>
             <span className="cal-pill weekly-off">Weekly Off</span>
           </div>
 
@@ -328,10 +339,19 @@ export function CalendarPage() {
               <EmptyState title="Nothing scheduled" />
             ) : dayEvents.length === 0 ? null : (
               <ul className="calendar-agenda">
-                {dayEvents.map((e) => (
+                {dayEvents.map((e) => {
+                  const note = e.noteId ? myNotes.find((n) => n.id === e.noteId) : undefined;
+                  if (note && editingNote === note.id) {
+                    return (
+                      <li key={e.id}>
+                        <NoteEditor note={note} userId={employee.id} onClose={() => setEditingNote(null)} />
+                      </li>
+                    );
+                  }
+                  return (
                   <li key={e.id}>
                     <div className="row-between">
-                      <strong>{e.title}</strong>
+                      <strong style={e.done ? { textDecoration: "line-through", opacity: 0.7 } : undefined}>{e.title}</strong>
                       <StatusBadge status={CALENDAR_KIND_LABEL[e.kind]} tone={kindTone(e.kind)} />
                     </div>
                     <p className="muted">
@@ -352,8 +372,23 @@ export function CalendarPage() {
                         Remove reminder
                       </button>
                     )}
+                    {note && (
+                      <span className="cal-note-actions">
+                        <button type="button" className="btn-ghost btn-tiny" onClick={() => setEditingNote(note.id)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-ghost btn-tiny"
+                          onClick={() => updateNote(employee.id, note.id, { done: !note.done })}
+                        >
+                          {note.done ? "Not done" : "Mark done"}
+                        </button>
+                      </span>
+                    )}
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             )}
             {!selectedIsOff && dayEvents.length > 0 && (

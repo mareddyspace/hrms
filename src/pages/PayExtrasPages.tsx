@@ -5,6 +5,7 @@ import { claimLimitsFor, declarableTaxYears, itemCurrency, money, payRulesFor, r
 import { addDaysISO, EXPENSE_CLAIM_WINDOW_DAYS, todayISO } from "../model.ts";
 
 import { usePortal } from "../store.tsx";
+import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 
 const REIMBURSE_CATEGORIES = ["Internet", "Books", "Medical", "Conveyance", "Other"] as const;
 
@@ -19,11 +20,22 @@ export function ReimbursementPage() {
   const [date, setDate] = useState("");
   const [category, setCategory] = useState<string>(REIMBURSE_CATEGORIES[0]);
   const [amount, setAmount] = useState("");
-  const [description, setDescription] = useState("");
+  const {
+    value: description,
+    setValue: setDescription,
+    ref: descriptionRef,
+    fill: fillDescription,
+    fillIfEmpty: fillDescriptionIfEmpty,
+    reset: resetDescription,
+  } = useTemplatedText();
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (hasTemplateBlanks(description)) {
+      setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
+      return;
+    }
     const value = Number(amount);
     if (value > receiptAbove && !receipt) {
       setMessage({ tone: "err", text: `Attach a receipt for claims over ${money(receiptAbove, currency)}.` });
@@ -44,7 +56,7 @@ export function ReimbursementPage() {
     if (!error) {
       setDate("");
       setAmount("");
-      setDescription("");
+      resetDescription();
       setReceipt("");
       setFileKey((key) => key + 1);
     }
@@ -67,7 +79,13 @@ export function ReimbursementPage() {
                 />
               </Field>
               <Field label="Category">
-                <select value={category} onChange={(event) => setCategory(event.target.value)}>
+                <select
+                  value={category}
+                  onChange={(event) => {
+                    setCategory(event.target.value);
+                    fillDescription("reimbursement", event.target.value);
+                  }}
+                >
                   {REIMBURSE_CATEGORIES.map((item) => (
                     <option key={item}>{item}</option>
                   ))}
@@ -85,7 +103,12 @@ export function ReimbursementPage() {
                 />
               </Field>
               <Field label="Description" wide>
-                <textarea value={description} onChange={(event) => setDescription(event.target.value)} />
+                <textarea
+                  ref={descriptionRef}
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  onFocus={() => fillDescriptionIfEmpty("reimbursement", category)}
+                />
               </Field>
             </div>
             <div className="form-actions">

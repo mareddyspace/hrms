@@ -4,6 +4,7 @@ import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
 import { claimLimitsFor, itemCurrency, money, moneyTotals, payRulesFor } from "../countryPay.ts";
 import { formatShortDate, inr, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { ASSET_SUGGESTIONS, TEMPLATE_BLANKS_ERROR, hasOwnTemplate, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 
 export function EncashmentPage() {
   const { leaveTable, state, employee, applyEncashment, hasApprover } = usePortal();
@@ -90,7 +91,7 @@ export function CashPage() {
   const { maxCashAdvance } = claimLimitsFor(employee.countryCode);
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
-  const [purpose, setPurpose] = useState("");
+  const { value: purpose, setValue: setPurpose, ref: purposeRef, fill: fillPurpose, reset: resetPurpose } = useTemplatedText();
   const [requiredBy, setRequiredBy] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const rows = state.cashAdvances.filter((item) => item.employeeId === employee.id);
@@ -115,6 +116,10 @@ export function CashPage() {
           className="cash-form"
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
+            if (hasTemplateBlanks(purpose)) {
+              setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
+              return;
+            }
             const error = addCash({
               amount: Number(amount),
               category,
@@ -125,7 +130,7 @@ export function CashPage() {
             if (!error) {
               setAmount("");
               setCategory("");
-              setPurpose("");
+              resetPurpose();
               setRequiredBy("");
             }
           }}
@@ -140,7 +145,13 @@ export function CashPage() {
             />
           </Field>
           <Field label="Expense category">
-            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+            <select
+              value={category}
+              onChange={(event) => {
+                setCategory(event.target.value);
+                fillPurpose("cashAdvance", event.target.value);
+              }}
+            >
               <option value="">Select a category</option>
               {CASH_CATEGORIES.map((item) => (
                 <option key={item} value={item}>
@@ -151,6 +162,7 @@ export function CashPage() {
           </Field>
           <Field label="Business purpose" wide>
             <textarea
+              ref={purposeRef}
               rows={3}
               value={purpose}
               onChange={(event) => setPurpose(event.target.value)}
@@ -194,7 +206,7 @@ export function CashPage() {
 export function AssetsPage() {
   const { state, employee, addAssetRequest, hasApprover } = usePortal();
   const [item, setItem] = useState("");
-  const [reason, setReason] = useState("");
+  const { value: reason, setValue: setReason, ref: reasonRef, fill: fillReason, reset: resetReason } = useTemplatedText<HTMLInputElement>();
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const assigned = state.assets.filter((asset) => asset.employeeId === employee.id);
   const requests = state.assetRequests.filter((request) => request.employeeId === employee.id);
@@ -231,20 +243,42 @@ export function AssetsPage() {
           <form
             onSubmit={(event) => {
               event.preventDefault();
+              if (hasTemplateBlanks(reason)) {
+                setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
+                return;
+              }
               const error = addAssetRequest(item, reason);
               setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Asset request submitted." : "Asset request approved automatically." });
               if (!error) {
                 setItem("");
-                setReason("");
+                resetReason();
               }
             }}
           >
             <div className="form-grid">
               <Field label="Asset">
-                <input value={item} onChange={(event) => setItem(event.target.value)} />
+                <input
+                  list="asset-suggestions"
+                  value={item}
+                  placeholder="e.g. Laptop"
+                  onChange={(event) => {
+                    setItem(event.target.value);
+                    // A suggestion picked from the list fills the reason straight away.
+                    if (hasOwnTemplate("asset", event.target.value)) {
+                      const picked = (event.nativeEvent as InputEvent).inputType !== "insertText";
+                      fillReason("asset", event.target.value, { focus: picked });
+                    }
+                  }}
+                  onBlur={(event) => fillReason("asset", event.target.value, { focus: false })}
+                />
+                <datalist id="asset-suggestions">
+                  {ASSET_SUGGESTIONS.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
               </Field>
               <Field label="Reason" wide>
-                <input value={reason} onChange={(event) => setReason(event.target.value)} />
+                <input ref={reasonRef} value={reason} onChange={(event) => setReason(event.target.value)} />
               </Field>
             </div>
             <div className="form-actions">
@@ -356,7 +390,13 @@ export function CabPage() {
 export function SoftwarePage() {
   const { state, employee, addSoftware, hasApprover } = usePortal();
   const [software, setSoftware] = useState("");
-  const [justification, setJustification] = useState("");
+  const {
+    value: justification,
+    setValue: setJustification,
+    ref: justificationRef,
+    fillIfEmpty: fillJustificationIfEmpty,
+    reset: resetJustification,
+  } = useTemplatedText();
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const rows = state.softwareRequests.filter((item) => item.employeeId === employee.id);
   return (
@@ -366,11 +406,15 @@ export function SoftwarePage() {
           <form
             onSubmit={(event) => {
               event.preventDefault();
+              if (hasTemplateBlanks(justification)) {
+                setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
+                return;
+              }
               const error = addSoftware(software, justification);
               setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Software request submitted." : "Software request approved automatically." });
               if (!error) {
                 setSoftware("");
-                setJustification("");
+                resetJustification();
               }
             }}
           >
@@ -379,7 +423,13 @@ export function SoftwarePage() {
                 <input value={software} onChange={(event) => setSoftware(event.target.value)} />
               </Field>
               <Field label="Why you need it" wide>
-                <textarea value={justification} onChange={(event) => setJustification(event.target.value)} />
+                <textarea
+                  ref={justificationRef}
+                  value={justification}
+                  onChange={(event) => setJustification(event.target.value)}
+                  // Once the software is named, start the justification for the user.
+                  onFocus={() => fillJustificationIfEmpty("software", software)}
+                />
               </Field>
             </div>
             <div className="form-actions">

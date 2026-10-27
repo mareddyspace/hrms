@@ -41,6 +41,7 @@ import {
   type SettlementStatus,
 } from "./exitStore.ts";
 import { NOTICE_POLICY, canActForEmployee, isAboveInLine, isHrRole, lineManagerId, noticeDaysFor, personName, type LifecycleActor } from "./lifecycleShared.ts";
+import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../../data/requestTemplates.ts";
 import "./lifecycle.css";
 
 type Message = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -433,12 +434,16 @@ function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessag
   const earliest = earliestLastDay(actor.id, today);
   const [lastDay, setLastDay] = useState(earliest);
   const [reason, setReason] = useState("");
-  const [note, setNote] = useState("");
+  const { value: note, setValue: setNote, ref: noteRef, fill: fillNote } = useTemplatedText();
   const [early, setEarly] = useState(false);
   const insideNotice = Boolean(lastDay) && lastDay < earliest;
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    if (hasTemplateBlanks(note)) {
+      onMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
+      return;
+    }
     const error = submitResignation(actor, { proposedLastDay: lastDay, reason, note, earlyRelease: early && insideNotice });
     const toBoard = !lineManagerId(actor.id);
     onMessage(
@@ -459,7 +464,14 @@ function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessag
             <input type="date" value={lastDay} min={today} onChange={(e) => setLastDay(e.target.value)} required />
           </Field>
           <Field label="Reason">
-            <select value={reason} onChange={(e) => setReason(e.target.value)} required>
+            <select
+              value={reason}
+              onChange={(e) => {
+                setReason(e.target.value);
+                fillNote("resignation", e.target.value);
+              }}
+              required
+            >
               <option value="">Choose a reason</option>
               {EXIT_REASONS.map((r) => (
                 <option key={r}>{r}</option>
@@ -467,7 +479,7 @@ function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessag
             </select>
           </Field>
           <Field label="Note (optional)" wide>
-            <textarea value={note} maxLength={1000} onChange={(e) => setNote(e.target.value)} />
+            <textarea ref={noteRef} value={note} maxLength={1000} onChange={(e) => setNote(e.target.value)} />
           </Field>
         </div>
         {insideNotice && (

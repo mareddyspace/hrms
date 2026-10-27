@@ -44,7 +44,9 @@ export function summarisePersonFor(viewer: Pick<DemoAccount, "id" | "role">, que
   const today = todayISO();
   const talent = getTalentState();
   const cycle = currentCycle(talent);
+  // The persona reporting line wins over the directory record, so this matches "who is my manager".
   const managerName =
+    managementChain(person.id, DEMO_ACCOUNTS)[0]?.fullName ||
     person.managerName || people.find((p) => p.id === person.managerId)?.fullName || DEMO_ACCOUNTS.find((a) => a.id === person.managerId)?.fullName;
   const tenure = tenureLabel(person.dateOfJoining, today);
 

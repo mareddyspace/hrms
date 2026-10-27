@@ -19,7 +19,7 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import { Banner, Card, Dialog, EmptyState, Field, Page, Tabs } from "../components/ui.tsx";
+import { Banner, Card, Dialog, EmptyState, Field, Page } from "../components/ui.tsx";
 import { SelfProfileEditor } from "../components/SelfProfileEditor.tsx";
 import { initials } from "../components/OrgChart.tsx";
 import { saveLocalMeeting } from "../data/calendarData.ts";
@@ -168,14 +168,12 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [tab, setTab] = useState<"overview" | "record">("overview");
 
   // Opening another person's profile from this one reuses the page, so clear the last banner.
   useEffect(() => {
     setBanner(null);
     setEditing(false);
     setHrEditOpen(false);
-    setTab("overview");
   }, [id]);
 
   const person = useMemo<ProfilePerson | null>(() => {
@@ -319,25 +317,6 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
 
       {isMe && editing && <SelfProfileEditor onClose={() => setEditing(false)} />}
 
-      {canOpenRecord && (
-        <Tabs
-          tabs={[
-            { id: "overview", label: "Overview" },
-            { id: "record", label: isMe ? "My full record" : "Full record" },
-          ]}
-          value={tab}
-          onChange={(next) => setTab(next as typeof tab)}
-        />
-      )}
-
-      {tab === "record" && canOpenRecord && person.record ? (
-        <Employee360View
-          person={{ ...person.record, photo: person.photo }}
-          viewer={demoProfile}
-          selfId={employee.id}
-          hideHeader
-        />
-      ) : (
       <div className="profile-grid">
         <div className="stack">
           <Card title="About">
@@ -550,6 +529,17 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
 
         </div>
       </div>
+      {/* Everything about the person, below the summary — no tab to find it. */}
+      {canOpenRecord && person.record && (
+        <section className="profile-full-record" aria-label={isMe ? "My full record" : "Full record"}>
+          <h2 className="card-title">{isMe ? "My full record" : "Full record"}</h2>
+          <Employee360View
+            person={{ ...person.record, photo: person.photo }}
+            viewer={demoProfile}
+            selfId={employee.id}
+            hideHeader
+          />
+        </section>
       )}
 
       {hrEditOpen && person.record && (

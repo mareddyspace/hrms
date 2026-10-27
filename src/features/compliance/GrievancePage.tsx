@@ -31,6 +31,7 @@ import {
 import { formatStamp, isHr, personName, type ComplianceActor } from "./shared.ts";
 import { PersonPicker, toneFor } from "./ComplianceUi.tsx";
 import { useComplianceActor } from "./useActor.ts";
+import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../../data/requestTemplates.ts";
 import "./compliance.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -131,7 +132,14 @@ export function GrievancePage() {
 
 function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (code: string) => void }) {
   const [category, setCategory] = useState<CaseCategory>("Grievance");
-  const [description, setDescription] = useState("");
+  const {
+    value: description,
+    setValue: setDescription,
+    ref: descriptionRef,
+    fill: fillDescription,
+    fillIfEmpty: fillDescriptionIfEmpty,
+    reset: resetDescription,
+  } = useTemplatedText();
   const [namePerson, setNamePerson] = useState(false);
   const [againstId, setAgainstId] = useState("");
   const [anonymous, setAnonymous] = useState(false);
@@ -139,11 +147,12 @@ function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (cod
   const [pickerKey, setPickerKey] = useState(0);
 
   function submit() {
+    if (hasTemplateBlanks(description)) return setError(TEMPLATE_BLANKS_ERROR);
     if (namePerson && !againstId) return setError("Choose the person from the list, or untick “Name a person”.");
     const result = raiseCase(actor, { category, description, againstId: namePerson ? againstId : undefined, anonymous });
     if ("error" in result) return setError(result.error);
     setError("");
-    setDescription("");
+    resetDescription();
     setAgainstId("");
     setNamePerson(false);
     setAnonymous(false);
@@ -157,14 +166,25 @@ function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (cod
         {error && <p className="note err">{error}</p>}
         <div className="cmp-form">
           <Field label="Category" wide>
-            <select value={category} onChange={(e) => setCategory(e.target.value as CaseCategory)}>
+            <select
+              value={category}
+              onChange={(e) => {
+                setCategory(e.target.value as CaseCategory);
+                fillDescription("grievance", e.target.value);
+              }}
+            >
               {CASE_CATEGORIES.map((c) => (
                 <option key={c}>{c}</option>
               ))}
             </select>
           </Field>
           <Field label="What happened" wide>
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="When, where, who was involved, and anything already tried" />
+            <textarea
+              ref={descriptionRef}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              onFocus={() => fillDescriptionIfEmpty("grievance", category)}
+              placeholder="When, where, who was involved, and anything already tried" />
           </Field>
           <label className="cmp-check" style={{ gridColumn: "1 / -1" }}>
             <input type="checkbox" checked={namePerson} onChange={(e) => setNamePerson(e.target.checked)} />

@@ -7,9 +7,14 @@ import {
   NOTIFICATIONS_SEED,
   canAccessRestrictedChat,
   canManageAnnouncement,
+  defaultNotifActionLabel,
+  inferNotifCategory,
   isHrRole,
+  normalizeNotifCategory,
   notifPrefKey,
+  notifRefFromHref,
   notificationVisibleForRole,
+  taskDeepLink,
   type Announcement,
   type AppNotification,
   type ChatMessage,
@@ -18,12 +23,16 @@ import {
   type HrRequestCategory,
   type InboxTab,
   type InboxTask,
+  type NotifCategory,
   type NotifPrefs,
+  type NotifRef,
 } from "./collabData.ts";
-import { DEMO_ACCOUNTS, managementChain } from "../demoAccounts.ts";
+import { DEMO_ACCOUNTS, findDemoById, managementChain } from "../demoAccounts.ts";
 
-const KEY = "timez.collab.state.v5";
-/** Older saved state: notifications without recipients and one shared preference set. Migrated into v4 on first read. */
+const KEY = "timez.collab.state.v6";
+/** v5: old notification categories and seed rows that pointed at records that don't exist. */
+const PREVIOUS_KEY = "timez.collab.state.v5";
+/** Older saved state: notifications without recipients and one shared preference set. */
 const LEGACY_KEY = "timez.collab.state.v4";
 
 type CollabState = {
@@ -74,44 +83,107 @@ function migrate(state: CollabState): CollabState {
   return state;
 }
 
+/** Seed rows are "nf-<n>" / "nf-m<n>"; anything else was created while using the app. */
+const SEED_ID = /^nf-m?\d+$/;
+/** Features that no longer exist (checked on title + link; bodies quote user text such as task subjects). */
+const RETIRED_FEATURE = /\b(cafeteria|cabs?|convert(ed|s)?|e-?sign(ature|ed|ing)?)\b/i;
+/** Placeholder wording that should never reach a real inbox. */
+const PLACEHOLDER_TEXT = /\b(dummy|lorem ipsum|fake|demo (data|only|account)|sample data)\b/i;
+/** Keep the newest notifications only, so saved state can't grow without bound. */
+const MAX_STORED = 500;
+
 /**
- * v3 seeded notifications had no recipient, so personal items (e.g. Babu's WFH approval) showed to everyone.
- * Replace each seeded row with the current seed (keeping who has read it) and drop decide actions.
+ * Older saves seeded notifications that pointed at records which don't exist (or at generic pages).
+ * Replace seed rows with the current seed (keeping who read or deleted them), drop retired seed rows,
+ * and add new seed rows.
  */
-function fixLegacyNotifications(rows: AppNotification[]): AppNotification[] {
+function refreshSeedNotifications(rows: AppNotification[]): AppNotification[] {
   const seedById = new Map(NOTIFICATIONS_SEED.map((n) => [n.id, n]));
-  return rows.map((row) => {
-    const seed = seedById.get(row.id);
-    const fixed = seed ? { ...structuredClone(seed), readBy: Array.isArray(row.readBy) ? row.readBy : seed.readBy } : row;
-    if (fixed.actions) fixed.actions = fixed.actions.filter((a) => a.kind !== "approve" && a.kind !== "reject");
-    return fixed;
-  });
+  const kept = rows
+    .filter((row) => !SEED_ID.test(row.id) || seedById.has(row.id))
+    .map((row) => {
+      const seed = seedById.get(row.id);
+      if (!seed) return row;
+      return {
+        ...structuredClone(seed),
+        readBy: Array.isArray(row.readBy) ? Array.from(new Set([...row.readBy, ...seed.readBy])) : seed.readBy,
+        hiddenFor: Array.isArray(row.hiddenFor) ? row.hiddenFor : [],
+      };
+    });
+  const present = new Set(kept.map((n) => n.id));
+  return [...kept, ...structuredClone(NOTIFICATIONS_SEED.filter((n) => !present.has(n.id)))];
+}
+
+/**
+ * Brings any saved notification up to date: current categories, deep links to the exact task,
+ * the record it is about, an action label that says what to do. Returns null for rows to drop.
+ */
+function normalizeNotification(row: AppNotification): AppNotification | null {
+  if (!row || typeof row.id !== "string" || typeof row.title !== "string") return null;
+  const body = typeof row.body === "string" ? row.body : "";
+  if (RETIRED_FEATURE.test(`${row.title} ${row.href ?? ""}`) || PLACEHOLDER_TEXT.test(`${row.title} ${body}`)) return null;
+  const rawCategory = String(row.category ?? "");
+  const href = rawCategory === "Team" || rawCategory === "Tasks" || row.href === "/tasks" ? taskDeepLink(row.title, row.href) : row.href;
+  const category = normalizeNotifCategory(rawCategory, href, row.title);
+  const legacyRef: NotifRef | undefined = row.inboxTaskId ? { kind: "inbox", id: row.inboxTaskId } : undefined;
+  return {
+    ...row,
+    body,
+    category,
+    href,
+    at: typeof row.at === "string" ? row.at : new Date(0).toISOString(),
+    readBy: Array.isArray(row.readBy) ? row.readBy : [],
+    hiddenFor: Array.isArray(row.hiddenFor) ? row.hiddenFor : [],
+    ref: row.ref ?? legacyRef ?? notifRefFromHref(href, row.title),
+    actionLabel: row.actionLabel && row.actionLabel !== "Open" ? row.actionLabel : defaultNotifActionLabel(category),
+    // Decisions happen on the request itself, never from a notification.
+    actions: undefined,
+  };
+}
+
+function normalizeNotifications(rows: AppNotification[]): AppNotification[] {
+  return rows
+    .map(normalizeNotification)
+    .filter((n): n is AppNotification => n !== null)
+    .slice(0, MAX_STORED);
 }
 
 function read(): CollabState {
   const base = defaults();
   try {
     let raw = localStorage.getItem(KEY);
-    let legacy = false;
+    let from: "current" | "previous" | "legacy" = "current";
+    if (!raw) {
+      raw = localStorage.getItem(PREVIOUS_KEY);
+      from = "previous";
+    }
     if (!raw) {
       raw = localStorage.getItem(LEGACY_KEY);
-      legacy = !!raw;
+      from = "legacy";
     }
-    if (!raw) return base;
+    if (!raw) {
+      base.notifications = normalizeNotifications(base.notifications);
+      return base;
+    }
+    const legacy = from === "legacy";
     const parsed = JSON.parse(raw) as Partial<CollabState>;
-    const notifications = Array.isArray(parsed.notifications) ? parsed.notifications : base.notifications;
+    const saved = Array.isArray(parsed.notifications) ? parsed.notifications : base.notifications;
     const state = migrate({
       inbox: Array.isArray(parsed.inbox) ? parsed.inbox : base.inbox,
       conversations: Array.isArray(parsed.conversations) ? parsed.conversations : base.conversations,
       announcements: Array.isArray(parsed.announcements) ? parsed.announcements : base.announcements,
-      notifications: legacy ? fixLegacyNotifications(notifications) : notifications,
+      notifications: saved,
       // A legacy shared preference set can't be attributed to one person, so everyone starts from the defaults.
       prefsByUser:
         !legacy && parsed.prefsByUser && typeof parsed.prefsByUser === "object" ? parsed.prefsByUser : base.prefsByUser,
       hrRequests: Array.isArray(parsed.hrRequests) ? parsed.hrRequests : base.hrRequests,
     });
-    if (legacy) {
+    state.notifications = normalizeNotifications(
+      from === "current" ? state.notifications : refreshSeedNotifications(state.notifications),
+    );
+    if (from !== "current") {
       localStorage.setItem(KEY, JSON.stringify(state));
+      localStorage.removeItem(PREVIOUS_KEY);
       localStorage.removeItem(LEGACY_KEY);
     }
     return state;
@@ -183,28 +255,17 @@ export function decideInboxTask(
       comment: reason,
       status: decision,
     });
-    const category =
-      row.kind === "Leave"
-        ? "Leave"
-        : row.kind === "Timesheet"
-          ? "Timesheet"
-          : row.kind === "Attendance correction"
-            ? "Attendance"
-            : "Announcements";
+    const category: NotifCategory =
+      row.kind === "Leave" ? "Leave" : row.kind === "Timesheet" || row.kind === "Attendance correction" ? "Attendance" : "System";
     const href = row.kind === "Attendance correction" ? "/attendance" : row.kind === "Timesheet" ? "/timesheet" : "/leave";
-    s.notifications.unshift({
-      id: `nf-local-${Date.now()}`,
+    // Only the requester hears about the decision on their own request.
+    deliverInto(s, {
       category,
       title: `${row.kind} ${decision.toLowerCase()}`,
-      body: `${row.title} · ${row.requester}`,
-      at: new Date().toISOString(),
-      readBy: [],
+      body: row.title,
       audience: "employee",
-      // Only the requester hears about the decision on their own request.
       recipientId: row.requesterId,
       href,
-      actionLabel: "Open",
-      actions: [{ id: "open", label: "Open", kind: "link", href }],
     });
   });
   return { ok: true };
@@ -387,29 +448,77 @@ export function isNotificationReadBy(n: AppNotification, userId: string | undefi
   return !!userId && n.readBy.includes(userId);
 }
 
-export function markNotificationRead(id: string, userId = currentCollabUserId()) {
-  if (!userId) return;
-  const current = getCollabState().notifications.find((n) => n.id === id);
-  if (!current || current.readBy.includes(userId)) return;
+function roleOf(userId: string): string {
+  return findDemoById(userId)?.role ?? "employee";
+}
+
+function atMs(iso: string): number {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? 0 : t;
+}
+
+/** Applies a per-user change to the given notifications; writes only when something changed. */
+function patchNotifications(ids: string[], userId: string | undefined, change: (n: AppNotification, userId: string) => boolean) {
+  if (!userId || ids.length === 0) return;
+  const wanted = new Set(ids);
+  const probe = structuredClone(getCollabState().notifications.filter((n) => wanted.has(n.id)));
+  if (!probe.some((n) => change(n, userId))) return;
   updateCollab((s) => {
-    const row = s.notifications.find((n) => n.id === id);
-    if (row && !row.readBy.includes(userId)) row.readBy.push(userId);
+    s.notifications.forEach((n) => {
+      if (wanted.has(n.id)) change(n, userId);
+    });
+  });
+}
+
+const addRead = (n: AppNotification, userId: string) => {
+  if (n.readBy.includes(userId)) return false;
+  n.readBy.push(userId);
+  return true;
+};
+
+export function markNotificationsRead(ids: string[], userId = currentCollabUserId()) {
+  patchNotifications(ids, userId, addRead);
+}
+
+export function markNotificationRead(id: string, userId = currentCollabUserId()) {
+  markNotificationsRead([id], userId);
+}
+
+export function markNotificationsUnread(ids: string[], userId = currentCollabUserId()) {
+  patchNotifications(ids, userId, (n, uid) => {
+    if (!n.readBy.includes(uid)) return false;
+    n.readBy = n.readBy.filter((id) => id !== uid);
+    return true;
+  });
+}
+
+/** Deletes notifications from this user's list only (shared notices stay for everyone else). */
+export function deleteNotifications(ids: string[], userId = currentCollabUserId()) {
+  patchNotifications(ids, userId, (n, uid) => {
+    const hidden = n.hiddenFor ?? [];
+    if (hidden.includes(uid)) return false;
+    n.hiddenFor = [...hidden, uid];
+    return true;
   });
 }
 
 export function markAllNotificationsRead(role?: string, userId = currentCollabUserId()) {
   if (!userId) return;
-  updateCollab((s) => {
-    s.notifications.forEach((n) => {
-      if (role && !notificationVisibleForRole(n, role, userId)) return;
-      if (!n.readBy.includes(userId)) n.readBy.push(userId);
-    });
-  });
+  markNotificationsRead(
+    visibleNotificationsFor(userId, role ?? roleOf(userId)).map((n) => n.id),
+    userId,
+  );
 }
 
-/** One user's notification preferences (defaults when they haven't changed any). */
+/** One user's notification preferences (defaults when they haven't changed any). Ignores keys from older versions. */
 export function notifPrefsFor(userId: string | undefined, state: CollabState = getCollabState()): NotifPrefs {
-  return { ...DEFAULT_NOTIF_PREFS, ...(userId ? state.prefsByUser[userId] : undefined) };
+  const out: NotifPrefs = { ...DEFAULT_NOTIF_PREFS };
+  const saved = (userId ? state.prefsByUser[userId] : undefined) as Record<string, unknown> | undefined;
+  if (!saved) return out;
+  (Object.keys(out) as (keyof NotifPrefs)[]).forEach((key) => {
+    if (typeof saved[key] === "boolean") out[key] = saved[key] as boolean;
+  });
+  return out;
 }
 
 export function setNotifPrefs(prefs: NotifPrefs, userId = currentCollabUserId()) {
@@ -417,6 +526,99 @@ export function setNotifPrefs(prefs: NotifPrefs, userId = currentCollabUserId())
   updateCollab((s) => {
     s.prefsByUser = { ...s.prefsByUser, [userId]: { ...prefs } };
   });
+}
+
+/** Whether this user wants notifications of this category at all. */
+export function wantsNotification(userId: string, category: NotifCategory, state: CollabState = getCollabState()): boolean {
+  return notifPrefsFor(userId, state)[notifPrefKey(category)] !== false;
+}
+
+/** Notifications this user can see and hasn't muted or deleted, newest first. */
+export function visibleNotificationsFor(
+  userId: string,
+  role: string = roleOf(userId),
+  state: CollabState = getCollabState(),
+): AppNotification[] {
+  const prefs = notifPrefsFor(userId, state);
+  return state.notifications
+    .filter(
+      (n) =>
+        notificationVisibleForRole(n, role, userId) &&
+        !(n.hiddenFor ?? []).includes(userId) &&
+        prefs[notifPrefKey(n.category)] !== false,
+    )
+    .sort((a, b) => atMs(b.at) - atMs(a.at));
+}
+
+/** One row in the Notification Center: a notification, or several identical ones collapsed (×N). */
+export interface NotifFeedItem {
+  /** Id of the newest notification in the row. */
+  key: string;
+  head: AppNotification;
+  ids: string[];
+  count: number;
+  /** Every notification in the row has been read by this user. */
+  read: boolean;
+  /** Unread and still needs attention (what the badges count). */
+  unread: boolean;
+  /** The item it points at no longer needs this user (decided, closed, read elsewhere). */
+  done: boolean;
+}
+
+/** Same title + link within this window collapse into one row. */
+export const COLLAPSE_WINDOW_MS = 30 * 60_000;
+
+export type NotifDoneCheck = (n: AppNotification) => boolean;
+
+/** Done checks that only need collab data (approvals inbox, chat threads). */
+export function collabNotificationDone(n: AppNotification, userId: string, state: CollabState = getCollabState()): boolean {
+  const ref = n.ref;
+  if (!ref) return false;
+  if (ref.kind === "inbox") {
+    const task = state.inbox.find((t) => t.id === ref.id);
+    return !task || task.status !== "Pending";
+  }
+  if (ref.kind === "chat") {
+    const conv = state.conversations.find((c) => c.id === ref.id);
+    return !!conv && conversationUnreadCount(conv, userId) === 0;
+  }
+  return false;
+}
+
+/**
+ * The single source for the Notification Center list and every unread badge: visibility, preferences,
+ * deletions, duplicate collapsing and done items. Pass isDone to add checks against other stores.
+ */
+export function notificationFeedFor(
+  userId: string,
+  role: string = roleOf(userId),
+  isDone?: NotifDoneCheck,
+  state: CollabState = getCollabState(),
+): NotifFeedItem[] {
+  const items: NotifFeedItem[] = [];
+  const lastSeen = new Map<string, { item: NotifFeedItem; at: number }>();
+  for (const n of visibleNotificationsFor(userId, role, state)) {
+    const signature = `${n.title}\u0000${n.href ?? ""}`;
+    const at = atMs(n.at);
+    const unread = !n.readBy.includes(userId);
+    const open = lastSeen.get(signature);
+    if (open && open.at - at <= COLLAPSE_WINDOW_MS) {
+      open.item.ids.push(n.id);
+      open.item.count += 1;
+      open.item.unread ||= unread;
+      open.item.read &&= !unread;
+      open.at = at;
+      continue;
+    }
+    const item: NotifFeedItem = { key: n.id, head: n, ids: [n.id], count: 1, read: !unread, unread, done: false };
+    items.push(item);
+    lastSeen.set(signature, { item, at });
+  }
+  for (const item of items) {
+    item.done = collabNotificationDone(item.head, userId, state) || (isDone?.(item.head) ?? false);
+    if (item.done) item.unread = false;
+  }
+  return items;
 }
 
 /* ── HR requests ── */
@@ -530,27 +732,80 @@ export function countUnreadMessages(userId = currentCollabUserId(), role?: strin
   return list.reduce((sum, c) => sum + conversationUnreadCount(c, userId), 0);
 }
 
+/** Visible notifications (not deleted or muted), newest first. Kept for older callers. */
 export function listNotificationsForRole(role: string, userId = currentCollabUserId()): AppNotification[] {
-  return getCollabState().notifications.filter((n) => notificationVisibleForRole(n, role, userId));
-}
-
-/** Same visibility and preference filtering as the Notification Center list. */
-export function countUnreadNotifications(role?: string, userId = currentCollabUserId()): number {
-  if (!userId) return 0;
-  const state = getCollabState();
-  const { notifications } = state;
-  const prefs = notifPrefsFor(userId, state);
-  return notifications.filter(
-    (n) =>
-      (role ? notificationVisibleForRole(n, role, userId) : !n.recipientId || n.recipientId === userId) &&
-      prefs[notifPrefKey(n.category)] !== false &&
-      !n.readBy.includes(userId),
-  ).length;
+  if (!userId) return [];
+  return visibleNotificationsFor(userId, role);
 }
 
 /**
- * Simulated alert to the employee's direct manager when they block a task, ask for help
- * or submit for review. Without employeeId it falls back to the signed-in user.
+ * Unread rows as the Notification Center counts them, using collab data only. Badges that also have
+ * portal state should use countUnreadNotificationsFor (notificationFeed.ts) so leave / task / ticket
+ * items that are already handled don't count.
+ */
+export function countUnreadNotifications(role?: string, userId = currentCollabUserId()): number {
+  if (!userId) return 0;
+  return notificationFeedFor(userId, role ?? roleOf(userId)).filter((i) => i.unread).length;
+}
+
+let notifSeq = 0;
+function newNotificationId(): string {
+  notifSeq += 1;
+  return `nf-${Date.now().toString(36)}-${notifSeq}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+type NotificationDraft = {
+  title: string;
+  body: string;
+  audience: AppNotification["audience"];
+  recipientId?: string;
+  href?: string;
+  category?: NotifCategory;
+  actionLabel?: string;
+  ref?: NotifRef;
+};
+
+/**
+ * Adds a notification to a state draft. Skipped when the recipient has turned that category off
+ * in their preferences. Links to tasks are made specific (/tasks?task=TSK-…).
+ */
+function deliverInto(s: CollabState, draft: NotificationDraft): boolean {
+  const href = taskDeepLink(draft.title, draft.href);
+  const category = draft.category ?? inferNotifCategory(href, draft.title);
+  if (draft.recipientId && !wantsNotification(draft.recipientId, category, s)) return false;
+  s.notifications.unshift({
+    id: newNotificationId(),
+    category,
+    title: draft.title.trim(),
+    body: draft.body.trim(),
+    at: new Date().toISOString(),
+    readBy: [],
+    hiddenFor: [],
+    audience: draft.audience,
+    recipientId: draft.recipientId,
+    href,
+    actionLabel: draft.actionLabel ?? defaultNotifActionLabel(category),
+    ref: draft.ref ?? notifRefFromHref(href, draft.title),
+  });
+  if (s.notifications.length > MAX_STORED) s.notifications.length = MAX_STORED;
+  return true;
+}
+
+function deliver(draft: NotificationDraft) {
+  if (draft.recipientId) {
+    const href = taskDeepLink(draft.title, draft.href);
+    const category = draft.category ?? inferNotifCategory(href, draft.title);
+    // Check before writing so a muted category doesn't trigger a save and re-render.
+    if (!wantsNotification(draft.recipientId, category)) return;
+  }
+  updateCollab((s) => {
+    deliverInto(s, draft);
+  });
+}
+
+/**
+ * Alert to the employee's direct manager (task blocked, help or review requested, overdue).
+ * Without employeeId it falls back to the signed-in user.
  */
 export function pushManagerTaskAlert(input: {
   title: string;
@@ -561,39 +816,26 @@ export function pushManagerTaskAlert(input: {
   const employeeId = input.employeeId ?? currentCollabUserId();
   const manager = employeeId ? managementChain(employeeId)[0] : undefined;
   if (!manager) return;
-  updateCollab((s) => {
-    s.notifications.unshift({
-      id: `nf-task-${Date.now()}`,
-      category: "Team",
-      title: input.title,
-      body: input.body,
-      at: new Date().toISOString(),
-      readBy: [],
-      audience: "manager",
-      recipientId: manager.id,
-      href: input.href ?? "/tasks",
-      actionLabel: "Review",
-      actions: [{ id: "open", label: "Review", kind: "link", href: input.href ?? "/tasks" }],
-    });
+  deliver({
+    title: input.title,
+    body: input.body,
+    audience: "manager",
+    recipientId: manager.id,
+    href: input.href ?? "/tasks",
   });
 }
 
-/** Notification for one specific person (e.g. a task owner or someone CC'd). */
+/**
+ * Notification for one person (task owner, CC, ticket assignee, mail recipient, shift change, ...).
+ * The category comes from the link; it isn't delivered if the person turned that category off.
+ */
 export function pushPersonTaskAlert(input: { recipientId: string; title: string; body: string; href?: string }) {
-  updateCollab((s) => {
-    s.notifications.unshift({
-      id: `nf-task-${Date.now()}-${input.recipientId}`,
-      category: "Team",
-      title: input.title,
-      body: input.body,
-      at: new Date().toISOString(),
-      readBy: [],
-      audience: "employee",
-      recipientId: input.recipientId,
-      href: input.href ?? "/tasks",
-      actionLabel: "Open",
-      actions: [{ id: "open", label: "Open", kind: "link", href: input.href ?? "/tasks" }],
-    });
+  deliver({
+    title: input.title,
+    body: input.body,
+    audience: "employee",
+    recipientId: input.recipientId,
+    href: input.href ?? "/tasks",
   });
 }
 

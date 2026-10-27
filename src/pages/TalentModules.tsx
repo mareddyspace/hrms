@@ -38,11 +38,15 @@ import {
 } from "../data/talentData.ts";
 import {
   advanceCycle,
-  allowedStageMoves,
   approveOffer,
   averageTimeToHire,
   bandFor,
-  canActOnRequisition,
+  canRaiseRequisition,
+  myPipelineRequisitions,
+  raiseRequisition,
+  recruiterOptions,
+  stageMovesFor,
+  DEFAULT_RECRUITER_ID,
   canApproveOffer,
   isHiringManagerOf,
   isTaskOwner,
@@ -118,6 +122,7 @@ import {
 } from "../components/CertificateViewer.tsx";
 import { canManagePeople } from "../data/peoplePermissions.ts";
 import { FeedbackPanel, OneOnOnePanel } from "./PerformanceCheckIns.tsx";
+import { CandidatePipelineView, MyPipeline, PipelineByMonth, RequisitionTracker } from "./recruiting/CandidatePipeline.tsx";
 
 function useTalent() {
   return useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
@@ -180,7 +185,11 @@ export function RecruitingPage() {
   const { demoProfile } = usePortal();
   const actor = demoProfile;
   const { matchesRegion, t } = useLocale();
-  const [tab, setTab] = useState("reqs");
+  const [tab, setTab] = useState(() => (actor.role === "recruiter" ? "mine" : "reqs"));
+  const [openCand, setOpenCand] = useState<string | null>(null);
+  const [assignTo, setAssignTo] = useState(DEFAULT_RECRUITER_ID);
+  const [raiseOpen, setRaiseOpen] = useState(false);
+  const [raiseForm, setRaiseForm] = useState({ title: "", department: "", country: "", location: "", openings: "1" });
   const [q, setQ] = useState("");
   const [stageFilter, setStageFilter] = useState("");
   const [selectedCand, setSelectedCand] = useState(talent.candidates[0]?.id ?? "");
@@ -197,29 +206,43 @@ export function RecruitingPage() {
   const canOpen = canEdit || accountHasNavAccess(actor, "recruiting");
 
   const candAccess = candidateAccess(demoProfile, true);
-  const canSeeCandidates = candAccess !== "hidden";
   const maskCandidates = candAccess === "masked";
+  // A hiring manager always sees their own requisitions' candidates; the hiring_manager role sees only those.
+  const hmReqIds = useMemo(
+    () => new Set(talent.requisitions.filter((r) => isHiringManagerOf(actor, r)).map((r) => r.id)),
+    [talent.requisitions, actor],
+  );
+  const accessFor = (c: { requisitionId: string }) =>
+    hmReqIds.has(c.requisitionId) ? "full" : actor.role === "hiring_manager" ? "hidden" : candAccess;
+  const canSeeCandidates = candAccess !== "hidden" || hmReqIds.size > 0;
 
   const regionReqs = useMemo(
     () => talent.requisitions.filter((r) => matchesRegion(undefined, r.country)),
     [talent.requisitions, matchesRegion],
   );
+  // Position counts and the requisition list: HR and executives see all; recruiters their assigned ones; managers their own.
+  const scopeAll = isHrRole(actor.role) || ["executive", "founder", "cofounder"].includes(actor.role);
+  const scopeReqs = scopeAll ? regionReqs : myPipelineRequisitions(actor, regionReqs);
+  const showMine = isHrRole(actor.role) || myPipelineRequisitions(actor, talent.requisitions).length > 0;
 
   const candidates = useMemo(() => {
     if (!canSeeCandidates) return [];
     return talent.candidates.filter((c) => {
+      if (accessFor(c) === "hidden") return false;
       if (!matchesRegion(undefined, c.country)) return false;
       if (stageFilter && c.stage !== stageFilter) return false;
       if (q && !`${c.name} ${c.role} ${c.email}`.toLowerCase().includes(q.toLowerCase())) return false;
       return true;
     });
-  }, [talent.candidates, q, stageFilter, matchesRegion, canSeeCandidates]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [talent.candidates, q, stageFilter, matchesRegion, canSeeCandidates, hmReqIds, candAccess]);
 
   if (!canOpen) return <NotAuthorized module="Recruiting" />;
 
   const reqById = (id: string) => talent.requisitions.find((r) => r.id === id);
   const candidate = candidates.find((c) => c.id === selectedCand) ?? candidates[0];
-  const requisition = regionReqs.find((r) => r.id === selectedReq) ?? regionReqs[0];
+  const requisition = scopeReqs.find((r) => r.id === selectedReq) ?? scopeReqs[0];
+  const openCandidate = openCand ? talent.candidates.find((c) => c.id === openCand && accessFor(c) !== "hidden") : undefined;
   const reqMoves = requisition ? requisitionMoves(actor, requisition) : [];
   const feedbackInterviews = talent.interviews.filter(
     (i) => i.feedbackStatus === "Pending" && canSubmitInterviewFeedback(actor, i),
@@ -235,7 +258,14 @@ export function RecruitingPage() {
     value: candidates.filter((c) => c.stage === stage).length,
   }));
 
-  const openReqs = regionReqs.filter((r) => r.approvalStatus === "Approved" && r.stageSummary !== "Filled").length;
+  const approvedReqs = scopeReqs.filter((r) => r.approvalStatus === "Approved");
+  const totalPositions = approvedReqs.reduce((n, r) => n + r.openings, 0);
+  const filledPositions = approvedReqs.reduce(
+    (n, r) => n + Math.min(r.openings, talent.candidates.filter((c) => c.requisitionId === r.id && c.stage === "Hired").length),
+    0,
+  );
+  const awaitingReqs = scopeReqs.filter((r) => r.approvalStatus === "Pending approval");
+  const onHoldReqs = scopeReqs.filter((r) => r.approvalStatus === "On hold");
   const pendingFeedback = talent.interviews.filter((i) => i.feedbackStatus === "Pending").length;
   const offersOut = talent.offers.filter((o) => ["Preparing", "Pending approval", "Approved", "Sent"].includes(o.status)).length;
   const timeToHire = averageTimeToHire(talent);
@@ -272,7 +302,17 @@ export function RecruitingPage() {
       )}
       <Banner message={notice} />
       <MetricGrid>
-        <MetricCard label="Open approved reqs" value={openReqs} />
+        <MetricCard label="Total positions" value={totalPositions} hint={`${approvedReqs.length} approved req${approvedReqs.length === 1 ? "" : "s"}`} />
+        <MetricCard label="Open" value={totalPositions - filledPositions} />
+        <MetricCard label="Filled" value={filledPositions} />
+        <MetricCard
+          label="Awaiting HR approval"
+          value={awaitingReqs.length}
+          hint={`${awaitingReqs.reduce((n, r) => n + r.openings, 0)} positions`}
+        />
+        <MetricCard label="On hold" value={onHoldReqs.length} hint={`${onHoldReqs.reduce((n, r) => n + r.openings, 0)} positions`} />
+      </MetricGrid>
+      <MetricGrid>
         <MetricCard label="Candidates (region)" value={candidates.length} />
         <MetricCard label="Pending feedback" value={pendingFeedback} />
         <MetricCard label="Offers in flight" value={offersOut} />
@@ -297,8 +337,10 @@ export function RecruitingPage() {
 
       <Tabs
         tabs={[
+          ...(showMine ? [{ id: "mine", label: isHrRole(actor.role) ? "All pipelines" : "My pipeline" }] : []),
           { id: "reqs", label: "Requisitions" },
           { id: "pipeline", label: "Pipeline" },
+          { id: "month", label: "By month" },
           { id: "candidates", label: "Candidates" },
           { id: "interviews", label: "Interviews" },
           { id: "offers", label: "Offers" },
@@ -316,7 +358,7 @@ export function RecruitingPage() {
           <Card title="Job requisitions">
             <DataTable
               headers={["ID", "Title", "Dept", "Location", "Openings", "Approval", ""]}
-              rows={regionReqs.map((r) => [
+              rows={scopeReqs.map((r) => [
                 r.id,
                 r.title,
                 r.department,
@@ -332,14 +374,69 @@ export function RecruitingPage() {
                   Details
                 </button>,
               ])}
+              empty={<EmptyState title="No requisitions" description="None in your scope." />}
             />
+            {canRaiseRequisition(actor) && (
+              <div className="stack" style={{ marginTop: 12 }}>
+                {!raiseOpen ? (
+                  <div>
+                    <button type="button" className="btn btn-tiny" onClick={() => setRaiseOpen(true)}>
+                      Raise requisition
+                    </button>
+                  </div>
+                ) : (
+                  <div className="form-grid-2">
+                    <Field label="Job title">
+                      <input value={raiseForm.title} onChange={(e) => setRaiseForm((f) => ({ ...f, title: e.target.value }))} />
+                    </Field>
+                    <Field label="Department">
+                      <input value={raiseForm.department} onChange={(e) => setRaiseForm((f) => ({ ...f, department: e.target.value }))} />
+                    </Field>
+                    <Field label="Country">
+                      <select value={raiseForm.country} onChange={(e) => setRaiseForm((f) => ({ ...f, country: e.target.value }))}>
+                        <option value="">Select…</option>
+                        {TIMEZ_COUNTRIES.map((c) => (
+                          <option key={c.code} value={c.name}>{c.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Location">
+                      <input value={raiseForm.location} onChange={(e) => setRaiseForm((f) => ({ ...f, location: e.target.value }))} />
+                    </Field>
+                    <Field label="Openings">
+                      <input type="number" min={1} max={50} value={raiseForm.openings} onChange={(e) => setRaiseForm((f) => ({ ...f, openings: e.target.value }))} />
+                    </Field>
+                    <div className="row-gap">
+                      <button
+                        type="button"
+                        className="btn btn-tiny"
+                        onClick={() => {
+                          const error = raiseRequisition(actor, { ...raiseForm, openings: Number(raiseForm.openings) });
+                          setNotice(noticeFor(error, "Requisition raised. Sent to HR."));
+                          if (!error) {
+                            setRaiseOpen(false);
+                            setRaiseForm({ title: "", department: "", country: "", location: "", openings: "1" });
+                          }
+                        }}
+                      >
+                        Send to HR
+                      </button>
+                      <button type="button" className="btn-ghost btn-tiny" onClick={() => setRaiseOpen(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </Card>
           {requisition && (
             <Card title={`Requisition · ${requisition.id}`}>
+              <RequisitionTracker req={requisition} />
               <dl className="info-grid">
                 <div className="info-fact"><dt>Title</dt><dd>{requisition.title}</dd></div>
                 <div className="info-fact"><dt>Hiring manager</dt><dd>{requisition.hiringManager}</dd></div>
-                <div className="info-fact"><dt>Recruiter</dt><dd>{requisition.recruiter}</dd></div>
+                <div className="info-fact"><dt>Recruiter</dt><dd>{requisition.recruiter || "Not assigned"}</dd></div>
                 <div className="info-fact"><dt>Created</dt><dd>{requisition.created}</dd></div>
                 <div className="info-fact"><dt>Status</dt><dd>{requisition.stageSummary}</dd></div>
                 <div className="info-fact">
@@ -355,6 +452,15 @@ export function RecruitingPage() {
                   {reqMoves.some((m) => m !== "Pending approval") && (
                     <input value={reqNote} maxLength={200} onChange={(e) => setReqNote(e.target.value)} placeholder="Note (optional)" />
                   )}
+                  {reqMoves.includes("Approved") && !requisition.recruiterId && (
+                    <Field label="Assign recruiter">
+                      <select value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
+                        {recruiterOptions().map((a) => (
+                          <option key={a.id} value={a.id}>{a.fullName}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  )}
                   <div className="row-gap">
                     {reqMoves.map((next) => (
                       <button
@@ -362,11 +468,11 @@ export function RecruitingPage() {
                         type="button"
                         className={next === "Approved" || next === "Pending approval" ? "btn btn-tiny" : "btn-ghost btn-tiny"}
                         onClick={() => {
-                          setNotice(noticeFor(setRequisitionApproval(actor, requisition.id, next, reqNote), `${requisition.id}: ${next}.`));
+                          setNotice(noticeFor(setRequisitionApproval(actor, requisition.id, next, reqNote, assignTo), `${requisition.id}: ${next}.`));
                           setReqNote("");
                         }}
                       >
-                        {next === "Pending approval" ? "Submit for approval" : next === "On hold" ? "Put on hold" : next === "Approved" ? "Approve" : "Reject"}
+                        {next === "Pending approval" ? "Send to HR" : next === "On hold" ? "Put on hold" : next === "Approved" ? (requisition.recruiterId ? "Approve" : "Approve & assign") : "Reject"}
                       </button>
                     ))}
                   </div>
@@ -374,7 +480,7 @@ export function RecruitingPage() {
               ) : (
                 <p className="muted">
                   {requisition.approvalStatus === "Pending approval" || requisition.approvalStatus === "On hold"
-                    ? `Waiting for ${requisitionApprovers(requisition).map((a) => a.fullName).join(" or ") || "an approver"}.`
+                    ? `Waiting for HR (${requisitionApprovers(requisition).map((a) => a.fullName).join(" or ") || "no HR available"}).`
                     : requisition.approvalStatus === "Draft"
                       ? "Draft."
                       : ""}
@@ -411,9 +517,11 @@ export function RecruitingPage() {
                 headers={["Candidate", "Role", "Stage", "Advance"]}
                 rows={candidates.map((c) => {
                   const req = reqById(c.requisitionId);
-                  const moves = req && canActOnRequisition(actor, req) ? allowedStageMoves(c, talent.offers, req) : [];
+                  const moves = stageMovesFor(actor, c, talent.offers, req);
                   return [
-                    c.name,
+                    <button key={`${c.id}-n`} type="button" className="quiet-link" onClick={() => setOpenCand(c.id)}>
+                      {c.name}
+                    </button>,
                     c.role,
                     <StatusBadge key={c.id} status={c.stage} literal tone={c.stage === "Rejected" || c.stage === "Withdrawn" ? "warn" : "info"} />,
                     req && req.approvalStatus !== "Approved" && !CLOSED_STAGES.includes(c.stage) ? (
@@ -441,9 +549,25 @@ export function RecruitingPage() {
                 })}
               />
             )}
-            {canEdit && <p className="muted">One stage at a time, or Rejected / Withdrawn. Hired needs an accepted offer.</p>}
+            {canEdit && <p className="muted">Recruiter moves one stage at a time. Hiring manager decides at Final Review. Hired needs an accepted offer.</p>}
           </Card>
         </div>
+      )}
+
+      {tab === "mine" && showMine && (
+        <Card title={isHrRole(actor.role) ? "All pipelines" : "My pipeline"}>
+          <MyPipeline actor={actor} talent={talent} candidates={candidates} onOpen={setOpenCand} />
+        </Card>
+      )}
+
+      {tab === "month" && (
+        <Card title="Pipeline by month">
+          {canSeeCandidates ? (
+            <PipelineByMonth candidates={candidates} talent={talent} onOpen={setOpenCand} />
+          ) : (
+            <EmptyState title="Candidates restricted" description="Your role can't view candidates." />
+          )}
+        </Card>
       )}
 
       {tab === "candidates" && (
@@ -456,9 +580,14 @@ export function RecruitingPage() {
                 c.role,
                 c.country,
                 c.stage,
-                <button key={`${c.id}-o`} type="button" className="quiet-link" onClick={() => setSelectedCand(c.id)}>
-                  Profile
-                </button>,
+                <span key={`${c.id}-o`} className="row-gap">
+                  <button type="button" className="quiet-link" onClick={() => setSelectedCand(c.id)}>
+                    Profile
+                  </button>
+                  <button type="button" className="quiet-link" onClick={() => setOpenCand(c.id)}>
+                    Pipeline
+                  </button>
+                </span>,
               ])}
               empty={<EmptyState title="No matches" description="Try clearing search or stage filter." />}
             />
@@ -468,18 +597,18 @@ export function RecruitingPage() {
               <dl className="info-grid">
                 <div className="info-fact">
                   <dt>Email</dt>
-                  <dd>{maskCandidates ? maskEmail(candidate.email) : candidate.email}</dd>
+                  <dd>{accessFor(candidate) === "masked" ? maskEmail(candidate.email) : candidate.email}</dd>
                 </div>
                 <div className="info-fact">
                   <dt>Phone</dt>
-                  <dd>{maskCandidates ? "••••••••" : candidate.phone}</dd>
+                  <dd>{accessFor(candidate) === "masked" ? "••••••••" : candidate.phone}</dd>
                 </div>
                 <div className="info-fact"><dt>Requisition</dt><dd>{candidate.requisitionId}</dd></div>
                 <div className="info-fact"><dt>Source</dt><dd>{candidate.source}</dd></div>
                 <div className="info-fact"><dt>Experience</dt><dd>{candidate.experienceYears} years</dd></div>
                 <div className="info-fact"><dt>Skills</dt><dd>{candidate.skills.join(", ")}</dd></div>
               </dl>
-              <p className="note">{maskCandidates ? "Resume details limited for this role." : candidate.resumeNote}</p>
+              <p className="note">{accessFor(candidate) === "masked" ? "Resume details limited for this role." : candidate.resumeNote}</p>
             </Card>
           )}
           {!canSeeCandidates && <EmptyState title="Candidates restricted" description="Your role can't view candidate profiles." />}
@@ -551,13 +680,13 @@ export function RecruitingPage() {
                   <OfferActions key={`${o.id}-a`} offer={o} req={req} actor={actor} onResult={setNotice} />,
                 ];
               })}
-              empty={<EmptyState title="No offers" description="Create offers from Final Review candidates." />}
+              empty={<EmptyState title="No offers" description="Create offers once the hiring manager moves a candidate to Offer." />}
             />
           </Card>
           {canEdit && (
             <Card title="Prepare an offer">
               {offerCandidates.length === 0 ? (
-                <EmptyState title="No eligible candidates" description="Needs a Final Review or Offer candidate." />
+                <EmptyState title="No eligible candidates" description="Needs a candidate the hiring manager moved to Offer." />
               ) : (
                 <div className="form-grid-2">
                   <Field label="Candidate">
@@ -622,6 +751,18 @@ export function RecruitingPage() {
           </ul>
         </Card>
       )}
+
+      {openCandidate && (
+        <Dialog open title={`${openCandidate.name} · ${openCandidate.role}`} onClose={() => setOpenCand(null)} wide>
+          <Banner message={notice} />
+          <CandidatePipelineView
+            candidate={openCandidate}
+            talent={talent}
+            actor={actor}
+            onResult={(error, okText) => setNotice(noticeFor(error, okText))}
+          />
+        </Dialog>
+      )}
     </Page>
   );
 }
@@ -678,13 +819,13 @@ function OfferActions({
   const buttons = moves.filter((m) => m !== "Accepted" && m !== "Declined");
   const canRecord = moves.includes("Accepted");
   if (!canApprove && buttons.length === 0 && !canRecord) {
-    return <span className="muted">{step ? `Waiting for ${step === "Line" ? "line" : "Compensation"} approval` : "—"}</span>;
+    return <span className="muted">{step ? `Waiting for ${step === "Hiring manager" ? "hiring manager" : step} approval` : "—"}</span>;
   }
   return (
     <span className="row-gap">
       {canApprove && (
         <button type="button" className="btn btn-tiny" onClick={() => onResult(noticeFor(approveOffer(actor, offer.id), `Offer for ${offer.candidateName} approved.`))}>
-          Approve
+          {step === "Hiring manager" ? "Agree" : "Approve"}
         </button>
       )}
       {buttons.map((m) => (
