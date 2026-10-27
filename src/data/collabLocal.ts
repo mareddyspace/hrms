@@ -22,14 +22,17 @@ import {
 } from "./collabData.ts";
 import { DEMO_ACCOUNTS, managementChain } from "../demoAccounts.ts";
 
-const KEY = "timez.collab.state.v3";
+const KEY = "timez.collab.state.v5";
+/** Older saved state: notifications without recipients and one shared preference set. Migrated into v4 on first read. */
+const LEGACY_KEY = "timez.collab.state.v4";
 
 type CollabState = {
   inbox: InboxTask[];
   conversations: Conversation[];
   announcements: Announcement[];
   notifications: AppNotification[];
-  prefs: NotifPrefs;
+  /** Notification preferences per user id. Users without an entry get DEFAULT_NOTIF_PREFS. */
+  prefsByUser: Record<string, NotifPrefs>;
   hrRequests: HrRequest[];
 };
 
@@ -39,7 +42,7 @@ function defaults(): CollabState {
     conversations: structuredClone(CONVERSATIONS_SEED),
     announcements: structuredClone(ANNOUNCEMENTS_SEED),
     notifications: structuredClone(NOTIFICATIONS_SEED),
-    prefs: { ...DEFAULT_NOTIF_PREFS },
+    prefsByUser: {},
     hrRequests: structuredClone(HR_REQUESTS_SEED),
   };
 }
@@ -71,20 +74,47 @@ function migrate(state: CollabState): CollabState {
   return state;
 }
 
+/**
+ * v3 seeded notifications had no recipient, so personal items (e.g. Babu's WFH approval) showed to everyone.
+ * Replace each seeded row with the current seed (keeping who has read it) and drop decide actions.
+ */
+function fixLegacyNotifications(rows: AppNotification[]): AppNotification[] {
+  const seedById = new Map(NOTIFICATIONS_SEED.map((n) => [n.id, n]));
+  return rows.map((row) => {
+    const seed = seedById.get(row.id);
+    const fixed = seed ? { ...structuredClone(seed), readBy: Array.isArray(row.readBy) ? row.readBy : seed.readBy } : row;
+    if (fixed.actions) fixed.actions = fixed.actions.filter((a) => a.kind !== "approve" && a.kind !== "reject");
+    return fixed;
+  });
+}
+
 function read(): CollabState {
   const base = defaults();
   try {
-    const raw = localStorage.getItem(KEY);
+    let raw = localStorage.getItem(KEY);
+    let legacy = false;
+    if (!raw) {
+      raw = localStorage.getItem(LEGACY_KEY);
+      legacy = !!raw;
+    }
     if (!raw) return base;
     const parsed = JSON.parse(raw) as Partial<CollabState>;
-    return migrate({
+    const notifications = Array.isArray(parsed.notifications) ? parsed.notifications : base.notifications;
+    const state = migrate({
       inbox: Array.isArray(parsed.inbox) ? parsed.inbox : base.inbox,
       conversations: Array.isArray(parsed.conversations) ? parsed.conversations : base.conversations,
       announcements: Array.isArray(parsed.announcements) ? parsed.announcements : base.announcements,
-      notifications: Array.isArray(parsed.notifications) ? parsed.notifications : base.notifications,
-      prefs: parsed.prefs && typeof parsed.prefs === "object" ? { ...base.prefs, ...parsed.prefs } : base.prefs,
+      notifications: legacy ? fixLegacyNotifications(notifications) : notifications,
+      // A legacy shared preference set can't be attributed to one person, so everyone starts from the defaults.
+      prefsByUser:
+        !legacy && parsed.prefsByUser && typeof parsed.prefsByUser === "object" ? parsed.prefsByUser : base.prefsByUser,
       hrRequests: Array.isArray(parsed.hrRequests) ? parsed.hrRequests : base.hrRequests,
     });
+    if (legacy) {
+      localStorage.setItem(KEY, JSON.stringify(state));
+      localStorage.removeItem(LEGACY_KEY);
+    }
+    return state;
   } catch {
     return base;
   }
@@ -377,9 +407,15 @@ export function markAllNotificationsRead(role?: string, userId = currentCollabUs
   });
 }
 
-export function setNotifPrefs(prefs: NotifPrefs) {
+/** One user's notification preferences (defaults when they haven't changed any). */
+export function notifPrefsFor(userId: string | undefined, state: CollabState = getCollabState()): NotifPrefs {
+  return { ...DEFAULT_NOTIF_PREFS, ...(userId ? state.prefsByUser[userId] : undefined) };
+}
+
+export function setNotifPrefs(prefs: NotifPrefs, userId = currentCollabUserId()) {
+  if (!userId) return;
   updateCollab((s) => {
-    s.prefs = { ...prefs };
+    s.prefsByUser = { ...s.prefsByUser, [userId]: { ...prefs } };
   });
 }
 
@@ -417,7 +453,9 @@ export function hrRequestVisibleTo(r: HrRequest, userId: string, role: string): 
 
 /** Statuses the viewer may move this ticket to (excluding its current one). */
 export function allowedHrStatuses(r: HrRequest, userId: string, role: string): HrRequest["status"][] {
-  if (isHrRole(role)) {
+  // HR works other people's tickets. On a ticket they raised themselves they are the requester and another
+  // HR member has to resolve it.
+  if (isHrRole(role) && r.requesterId !== userId) {
     return (["In progress", "Waiting on you", "Resolved", "Closed"] as const).filter((s) => s !== r.status);
   }
   if (r.requesterId !== userId) return [];
@@ -438,7 +476,7 @@ export function addHrComment(
   if (!body) return "Comment cannot be empty.";
   const current = getCollabState().hrRequests.find((r) => r.id === id);
   if (!current || !hrRequestVisibleTo(current, actor.id, actor.role)) return "Request not found.";
-  const byHr = isHrRole(actor.role);
+  const byHr = isHrRole(actor.role) && current.requesterId !== actor.id;
   updateCollab((s) => {
     const row = s.hrRequests.find((r) => r.id === id);
     if (!row) return;
@@ -460,6 +498,9 @@ export function setHrRequestStatus(
   const current = getCollabState().hrRequests.find((r) => r.id === id);
   if (!current || !hrRequestVisibleTo(current, actor.id, actor.role)) return "Request not found.";
   if (!allowedHrStatuses(current, actor.id, actor.role).includes(status)) {
+    if (isHrRole(actor.role) && current.requesterId === actor.id) {
+      return "You raised this request, so another HR team member has to resolve it. You can close it once it's resolved.";
+    }
     return isHrRole(actor.role)
       ? "That status change is not allowed."
       : "Only HR can update this status. You can close a resolved request or reopen it.";
@@ -496,7 +537,9 @@ export function listNotificationsForRole(role: string, userId = currentCollabUse
 /** Same visibility and preference filtering as the Notification Center list. */
 export function countUnreadNotifications(role?: string, userId = currentCollabUserId()): number {
   if (!userId) return 0;
-  const { notifications, prefs } = getCollabState();
+  const state = getCollabState();
+  const { notifications } = state;
+  const prefs = notifPrefsFor(userId, state);
   return notifications.filter(
     (n) =>
       (role ? notificationVisibleForRole(n, role, userId) : !n.recipientId || n.recipientId === userId) &&

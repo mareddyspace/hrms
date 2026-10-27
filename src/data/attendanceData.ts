@@ -1,5 +1,8 @@
 import {
   attendanceOn,
+  holidaysForCountry,
+  holidaysForPerson,
+  type CountryCode,
   formatShortDate,
   parseISODate,
   toISO,
@@ -7,7 +10,6 @@ import {
   type Holiday,
   type LeaveRequest,
 } from "../model.ts";
-import { buildDefaultCountrySettings, countryByCode } from "../locale/countryConfig.ts";
 import { scheduleForEmployee } from "./workSchedule.ts";
 
 export type PunchPhase = "not_started" | "checked_in" | "on_break" | "checked_out";
@@ -22,7 +24,8 @@ export type AttendanceDayKind =
   | "missing_punch"
   | "pending_correction"
   | "not_checked_in"
-  | "upcoming";
+  | "upcoming"
+  | "no_record";
 
 export type CorrectionStatus = "Pending" | "Approved" | "Rejected";
 export type CorrectionKind = "missing_check_in" | "missing_check_out" | "wrong_time" | "other";
@@ -60,6 +63,8 @@ export interface AttendanceCorrection {
   status: CorrectionStatus;
   createdAt: string;
   decidedAt?: string;
+  decidedById?: string;
+  decidedByName?: string;
   decisionNote?: string;
 }
 
@@ -83,7 +88,7 @@ export const SAMPLE_SHIFT = {
   weeklyOffs: ["Saturday", "Sunday"] as const,
   lateGraceMinutes: 15,
   overtimeAfterMinutes: 30,
-  note: "Sample shift policy for UI demos only — not a contractual entitlement.",
+  note: "Standard shift policy.",
 };
 
 /** What makes a date a non-working day for one employee — shared by Home and Attendance. */
@@ -93,24 +98,19 @@ export interface AttendanceDayContext {
   weeklyOffDays: number[];
 }
 
-const COUNTRY_SETTINGS = buildDefaultCountrySettings();
 
 /** Company holidays plus the employee's country calendar (country wins on the same date). */
 export function employeeHolidayList(holidays: Holiday[], countryCode?: string): Holiday[] {
-  const home = countryByCode(countryCode || "IN", COUNTRY_SETTINGS);
-  const byDate = new Map<string, Holiday>();
-  for (const h of holidays) byDate.set(h.date, { id: h.id, date: h.date, name: h.name });
-  for (const h of home?.holidays ?? []) byDate.set(h.date, { id: `country-${h.date}`, date: h.date, name: h.name });
-  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return holidaysForCountry(holidays, (countryCode || "IN") as CountryCode);
 }
 
 export function attendanceContextFor(
-  employee: { shiftName?: string; shiftHours?: string; countryCode?: string },
+  employee: { id?: string; shiftName?: string; shiftHours?: string; countryCode?: string },
   holidays: Holiday[],
   leaveRequests: LeaveRequest[],
 ): AttendanceDayContext {
   return {
-    holidays: employeeHolidayList(holidays, employee.countryCode),
+    holidays: employee.id ? holidaysForPerson(holidays, employee.id) : employeeHolidayList(holidays, employee.countryCode),
     leaveRequests,
     weeklyOffDays: scheduleForEmployee({
       shiftName: employee.shiftName,
@@ -191,6 +191,7 @@ export function kindLabel(kind: AttendanceDayKind): string {
     pending_correction: "Correction pending",
     not_checked_in: "Not checked in",
     upcoming: "Upcoming",
+    no_record: "No record",
   };
   return map[kind];
 }
@@ -214,11 +215,25 @@ export function hmOf(isoOrHm: string): string {
 }
 
 /** Late / overtime minutes for a pair of punches against the sample shift. */
-function punchFlags(checkIn?: string, checkOut?: string) {
-  const late = checkIn ? Math.max(0, minutesBetween(SAMPLE_SHIFT.start, checkIn) - SAMPLE_SHIFT.lateGraceMinutes) : 0;
+type ShiftTimes = { start: string; end: string };
+
+/** "09:30 AM to 06:30 PM" → { start: "09:30", end: "18:30" }; falls back to the sample shift. */
+export function shiftTimesFrom(shiftHours?: string): ShiftTimes {
+  const match = shiftHours?.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*to\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!match) return { start: SAMPLE_SHIFT.start, end: SAMPLE_SHIFT.end };
+  const to24 = (h: string, m: string, ap: string) => {
+    let hour = Number(h) % 12;
+    if (ap.toUpperCase() === "PM") hour += 12;
+    return `${String(hour).padStart(2, "0")}:${m}`;
+  };
+  return { start: to24(match[1], match[2], match[3]), end: to24(match[4], match[5], match[6]) };
+}
+
+function punchFlags(checkIn?: string, checkOut?: string, shift: ShiftTimes = SAMPLE_SHIFT) {
+  const late = checkIn ? Math.max(0, minutesBetween(shift.start, checkIn) - SAMPLE_SHIFT.lateGraceMinutes) : 0;
   const overtime =
-    checkOut && minutesBetween(SAMPLE_SHIFT.end, checkOut) > SAMPLE_SHIFT.overtimeAfterMinutes
-      ? minutesBetween(SAMPLE_SHIFT.end, checkOut)
+    checkOut && minutesBetween(shift.end, checkOut) > SAMPLE_SHIFT.overtimeAfterMinutes
+      ? minutesBetween(shift.end, checkOut)
       : 0;
   return { lateMinutes: late, overtimeMinutes: overtime };
 }
@@ -226,7 +241,7 @@ function punchFlags(checkIn?: string, checkOut?: string) {
 type DayBase = { id: string; employeeId: string; employeeName: string; date: string };
 
 /** Day record from a real check-in session. Sessions still open from earlier days are missing a check-out. */
-function recordFromSession(base: DayBase, session: TodaySession, today: string): AttendanceDayRecord {
+function recordFromSession(base: DayBase, session: TodaySession, today: string, shift: ShiftTimes = SAMPLE_SHIFT): AttendanceDayRecord {
   const checkIn = session.checkIn ? hmOf(session.checkIn) : undefined;
   const checkOut = session.checkOut ? hmOf(session.checkOut) : undefined;
   const breaks = session.breaks.map((b) => ({ ...b }));
@@ -244,13 +259,13 @@ function recordFromSession(base: DayBase, session: TodaySession, today: string):
     checkOut,
     breaks,
     hoursWorked,
-    ...punchFlags(checkIn, checkOut),
+    ...punchFlags(checkIn, checkOut, shift),
     note: stale ? "Missing check-out" : open ? phaseLabel(session.phase) : undefined,
   };
 }
 
 /** Apply an approved correction's requested times on top of the day's record. */
-function applyCorrection(row: AttendanceDayRecord, correction: AttendanceCorrection): AttendanceDayRecord {
+function applyCorrection(row: AttendanceDayRecord, correction: AttendanceCorrection, shift: ShiftTimes = SAMPLE_SHIFT): AttendanceDayRecord {
   const checkIn = correction.requestedCheckIn || row.checkIn;
   const checkOut = correction.requestedCheckOut || row.checkOut;
   const complete = Boolean(checkIn && checkOut);
@@ -261,13 +276,16 @@ function applyCorrection(row: AttendanceDayRecord, correction: AttendanceCorrect
     checkIn,
     checkOut,
     hoursWorked: complete ? computeHoursWorked(checkIn, checkOut, row.breaks) : row.hoursWorked,
-    ...punchFlags(checkIn, checkOut),
+    ...punchFlags(checkIn, checkOut, shift),
     note: "Corrected (approved)",
   };
 }
 
-/** Working day used by the sample "forgot to check out" record and its seed correction. */
+/** Working day used by Babu's sample "forgot to check out" record and its seed correction. */
 const SAMPLE_MISSING_CHECKOUT_DATE = "2026-10-09";
+const SAMPLE_MISSING_CHECKOUT_PERSON = "emp-mahesh";
+/** Sample punches are only shown for this many days back; older days have no record. */
+const SAMPLE_HISTORY_DAYS = 60;
 
 /**
  * Build history for an employee from leave/holiday/absence, real check-in sessions and approved corrections.
@@ -291,6 +309,9 @@ export function buildAttendanceHistory(input: {
   const sessions = (input.sessions ?? []).filter((s) => s.employeeId === input.employeeId && s.phase !== "not_started");
   const sessionByDate = new Map(sessions.map((s) => [s.date, s]));
   const firstSessionDate = sessions.reduce<string | null>((min, s) => (!min || s.date < min ? s.date : min), null);
+  const shift = shiftTimesFrom(input.shiftHours);
+  const sampleFrom = toISO(new Date(parseISODate(today).getTime() - SAMPLE_HISTORY_DAYS * 86400000));
+  const sampleDay = (date: string) => date >= sampleFrom && (!firstSessionDate || date < firstSessionDate);
   const rows: AttendanceDayRecord[] = [];
   const start = parseISODate(input.from);
   const end = parseISODate(input.to);
@@ -317,19 +338,26 @@ export function buildAttendanceHistory(input: {
     if (cell.kind === "weekend" || cell.kind === "holiday" || cell.kind === "leave") {
       row = { ...base, ...empty, kind: cell.kind, note: cell.detail };
     } else if (session) {
-      row = recordFromSession(base, session, today);
-    } else if (cell.kind === "wfh") {
+      row = recordFromSession(base, session, today, shift);
+    } else if (cell.kind === "wfh" && date > today) {
+      // Approved WFH ahead: nothing has been worked yet.
+      row = { ...base, ...empty, kind: "upcoming", note: cell.detail };
+    } else if (cell.kind === "wfh" && date === today) {
+      row = { ...base, ...empty, kind: "not_checked_in", note: cell.detail };
+    } else if (cell.kind === "wfh" && sampleDay(date)) {
       row = {
         ...base,
         kind: "wfh",
-        checkIn: SAMPLE_SHIFT.start,
-        checkOut: SAMPLE_SHIFT.end,
+        checkIn: shift.start,
+        checkOut: shift.end,
         breaks: [{ start: "13:00", end: "13:30" }],
-        hoursWorked: SAMPLE_SHIFT.expectedHours,
+        hoursWorked: computeHoursWorked(shift.start, shift.end, [{ start: "13:00", end: "13:30" }]),
         lateMinutes: 0,
         overtimeMinutes: 0,
         note: cell.detail,
       };
+    } else if (cell.kind === "wfh") {
+      row = { ...base, ...empty, kind: "no_record", note: cell.detail };
     } else if (cell.kind === "absent") {
       row = { ...base, ...empty, kind: "absent", note: "Marked absent" };
     } else if (cell.kind === "upcoming" || date > today) {
@@ -339,14 +367,16 @@ export function buildAttendanceHistory(input: {
     } else if (firstSessionDate && date >= firstSessionDate) {
       // Real punches are recorded from this point on — a day without any is not "present".
       row = { ...base, ...empty, kind: "absent", note: "No punches recorded" };
+    } else if (!sampleDay(date)) {
+      row = { ...base, ...empty, kind: "no_record" };
     } else {
       // Sample punches for past seed dates, keyed by date for stability.
       const dayNum = Number(date.slice(-2));
-      const isMissingOut = date === SAMPLE_MISSING_CHECKOUT_DATE;
+      const isMissingOut = date === SAMPLE_MISSING_CHECKOUT_DATE && input.employeeId === SAMPLE_MISSING_CHECKOUT_PERSON;
       const isLate = dayNum % 7 === 3;
       const isOt = dayNum % 11 === 0;
-      const checkIn = isLate ? hmAdd(SAMPLE_SHIFT.start, 22) : hmAdd(SAMPLE_SHIFT.start, (dayNum % 5) - 2);
-      const checkOut = isMissingOut ? undefined : isOt ? hmAdd(SAMPLE_SHIFT.end, 45) : hmAdd(SAMPLE_SHIFT.end, (dayNum % 4) - 1);
+      const checkIn = isLate ? hmAdd(shift.start, 22) : hmAdd(shift.start, (dayNum % 5) - 2);
+      const checkOut = isMissingOut ? undefined : isOt ? hmAdd(shift.end, 45) : hmAdd(shift.end, (dayNum % 4) - 1);
       const breaks: AttendanceBreak[] = [{ start: "13:00", end: "13:40" }];
       row = {
         ...base,
@@ -355,12 +385,12 @@ export function buildAttendanceHistory(input: {
         checkOut,
         breaks,
         hoursWorked: computeHoursWorked(checkIn, checkOut, breaks),
-        ...punchFlags(checkIn, checkOut),
+        ...punchFlags(checkIn, checkOut, shift),
         note: isMissingOut ? "Forgot to check out" : undefined,
       };
     }
 
-    for (const correction of approved) row = applyCorrection(row, correction);
+    for (const correction of approved) row = applyCorrection(row, correction, shift);
     if (pending && row.kind !== "upcoming") row = { ...row, kind: "pending_correction" };
     rows.push(row);
   }

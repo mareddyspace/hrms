@@ -71,21 +71,24 @@ const PULSE_QUESTIONS: SurveyQuestion[] = [
   { id: "q4", kind: "text", prompt: "What one thing should we change?" },
 ];
 
+/** One row per person below the CEO: Ram's team of 5, Ram, and each other persona. Small groups leave text blank. */
 const PULSE_ROWS: [number, number, number, string, string, string, string[]][] = [
   [5, 4, 10, "More focus time on Fridays", "Engineering", "India", ["emp-ram", "demo-ceo"]],
   [4, 4, 9, "", "Engineering", "India", ["emp-ram", "demo-ceo"]],
   [3, 2, 6, "Clearer promotion criteria", "Engineering", "India", ["emp-ram", "demo-ceo"]],
   [4, 5, 9, "Keep the hybrid policy", "Engineering", "India", ["emp-ram", "demo-ceo"]],
   [2, 3, 5, "Laptops are slow to replace", "Engineering", "India", ["emp-ram", "demo-ceo"]],
-  [5, 5, 10, "", "Engineering", "India", ["emp-ram", "demo-ceo"]],
-  [4, 3, 8, "Fewer status meetings", "Engineering", "India", ["emp-ram", "demo-ceo"]],
-  [3, 4, 7, "", "People", "India", ["demo-hr-admin", "demo-ceo"]],
-  [4, 4, 9, "Better onboarding buddies", "People", "India", ["demo-hr-admin", "demo-ceo"]],
-  [5, 4, 10, "", "Product", "United States", ["demo-hiring-manager", "demo-ceo"]],
-  [2, 2, 3, "Roadmap changes too often", "Product", "United States", ["demo-hiring-manager", "demo-ceo"]],
-  [4, 5, 8, "", "Product", "United States", ["demo-hiring-manager", "demo-ceo"]],
-  [3, 3, 6, "More learning budget", "Talent Acquisition", "United States", ["demo-hr-admin", "demo-ceo"]],
-  [5, 4, 9, "", "IT", "United Kingdom", ["demo-ceo"]],
+  [4, 3, 8, "Fewer status meetings", "Engineering", "India", ["demo-ceo"]],
+  [3, 4, 7, "", "People", "India", ["demo-ceo"]],
+  [3, 3, 6, "", "Talent Acquisition", "United States", ["demo-hr-admin", "demo-ceo"]],
+  [4, 4, 8, "", "Total Rewards", "United States", ["demo-hr-admin", "demo-ceo"]],
+  [5, 4, 9, "", "Product", "United States", ["demo-ceo"]],
+  [4, 4, 8, "", "IT", "United Kingdom", ["demo-ceo"]],
+];
+
+const PULSE_RESPONDED = [
+  "emp-mahesh", "emp-priya", "emp-anu", "emp-kabir", "emp-diya", "emp-ram",
+  "demo-hr-admin", "demo-recruiter", "demo-compensation", "demo-hiring-manager", "demo-admin",
 ];
 
 function defaults(): SurveyState {
@@ -127,7 +130,7 @@ function defaults(): SurveyState {
   return {
     surveys: [open, closed],
     responses,
-    responded: { [closed.id]: ["emp-mahesh", "emp-ram", "demo-recruiter", "demo-hiring-manager"] },
+    responded: { [closed.id]: PULSE_RESPONDED },
   };
 }
 
@@ -142,7 +145,13 @@ function normalize(saved: unknown, base: SurveyState): SurveyState {
   };
 }
 
-const store = createLocalStore<SurveyState>("kastech.surveys.v1", defaults, normalize);
+// v2: seed matches real team sizes.
+try {
+  localStorage.removeItem("kastech.surveys.v1");
+} catch {
+  /* ignore */
+}
+const store = createLocalStore<SurveyState>("kastech.surveys.v2", defaults, normalize);
 
 export const subscribeSurveys = store.subscribe;
 export const getSurveysState = store.getState;
@@ -331,10 +340,16 @@ export type ResultsAccess =
   | { scope: "all"; responses: SurveyResponse[] }
   | { scope: "team"; responses: SurveyResponse[] }
   | { scope: "too-few"; count: number }
+  | { scope: "not-closed" }
   | { scope: "none" };
 
-/** HR sees everything; anyone else sees only their reporting line, and only at or above the anonymity threshold. */
+/**
+ * Results show only after the survey closes. HR sees everything; anyone else sees only their
+ * reporting line, and only at or above the anonymity threshold.
+ */
 export function resultsFor(actor: PlusActor, surveyId: string): ResultsAccess {
+  const survey = getSurveysState().surveys.find((s) => s.id === surveyId);
+  if (!survey || surveyPhase(survey) !== "Closed") return { scope: "not-closed" };
   const all = getSurveysState().responses.filter((r) => r.surveyId === surveyId);
   if (isHr(actor.role)) return { scope: "all", responses: all };
   const team = all.filter((r) => r.lineIds.includes(actor.id));

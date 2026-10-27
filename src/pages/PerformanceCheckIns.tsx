@@ -31,7 +31,7 @@ type FeedbackKind = FeedbackItem["kind"];
 const KIND_HELP: Record<FeedbackKind, string> = {
   Praise: "Public — shows on the praise wall for everyone.",
   Feedback: "Private — only the recipient sees it.",
-  Request: "Ask a colleague to share feedback about your work.",
+  Request: "Ask a colleague for feedback.",
 };
 
 export function FeedbackPanel({
@@ -39,7 +39,7 @@ export function FeedbackPanel({
   people,
   feedback,
 }: {
-  me: Person;
+  me: TalentActor;
   people: Person[];
   feedback: FeedbackItem[];
 }) {
@@ -147,7 +147,7 @@ export function FeedbackPanel({
         <Card title={`Waiting for your feedback (${requestsForMe.length})`}>
           <ul className="feedback-list">
             {requestsForMe.map((r) => (
-              <RequestRow key={r.id} request={r} />
+              <RequestRow key={r.id} request={r} me={me} />
             ))}
           </ul>
         </Card>
@@ -178,7 +178,7 @@ export function FeedbackPanel({
         <div className="stack">
           <Card title="Private feedback for you">
             {receivedPrivate.length === 0 ? (
-              <EmptyState title="Nothing yet" description="Feedback sent privately to you shows up here." />
+              <EmptyState title="Nothing yet" />
             ) : (
               <ul className="feedback-list">
                 {receivedPrivate.map((f) => (
@@ -193,7 +193,7 @@ export function FeedbackPanel({
           </Card>
           <Card title="Your requests">
             {myRequests.length === 0 ? (
-              <EmptyState title="No requests" description="Use “Request feedback” to ask a colleague." />
+              <EmptyState title="No requests" />
             ) : (
               <ul className="feedback-list">
                 {myRequests.map((r) => (
@@ -214,8 +214,9 @@ export function FeedbackPanel({
   );
 }
 
-function RequestRow({ request }: { request: FeedbackItem }) {
+function RequestRow({ request, me }: { request: FeedbackItem; me: TalentActor }) {
   const [reply, setReply] = useState("");
+  const [error, setError] = useState("");
   return (
     <li className="feedback-item">
       <strong>{request.fromName} asks:</strong>
@@ -231,11 +232,12 @@ function RequestRow({ request }: { request: FeedbackItem }) {
           type="button"
           className="btn btn-tiny"
           disabled={reply.trim().length < 10}
-          onClick={() => answerFeedbackRequest(request.id, reply.trim())}
+          onClick={() => setError(answerFeedbackRequest(me, request.id, reply) ?? "")}
         >
           Send
         </button>
       </div>
+      {error && <Banner message={{ tone: "err", text: error }} />}
     </li>
   );
 }
@@ -318,7 +320,7 @@ export function OneOnOnePanel({
         </Card>
         <Card title="Your 1:1s">
           {mine.length === 0 ? (
-            <EmptyState title="No 1:1s yet" description="Schedule one to start a shared agenda." />
+            <EmptyState title="No 1:1s yet" />
           ) : (
             <ul className="checkin-list">
               {mine.map((m) => {
@@ -349,18 +351,18 @@ export function OneOnOnePanel({
       </div>
 
       {selected ? (
-        <MeetingDetail key={selected.id} meeting={selected} meId={me.id} />
+        <MeetingDetail key={selected.id} meeting={selected} me={me} />
       ) : (
         <Card>
-          <EmptyState title="Pick a 1:1" description="Select a meeting to see its agenda and action items." />
+          <EmptyState title="Pick a 1:1" />
         </Card>
       )}
     </div>
   );
 }
 
-function MeetingDetail({ meeting, meId }: { meeting: OneOnOne; meId: string }) {
-  const other = meeting.managerId === meId ? meeting.employeeName : meeting.managerName;
+function MeetingDetail({ meeting, me }: { meeting: OneOnOne; me: TalentActor }) {
+  const other = meeting.managerId === me.id ? meeting.employeeName : meeting.managerName;
   const [notes, setNotes] = useState(meeting.notes);
   const [error, setError] = useState("");
   const notStarted = isMeetingInFuture(meeting);
@@ -369,24 +371,23 @@ function MeetingDetail({ meeting, meId }: { meeting: OneOnOne; meId: string }) {
       <div className="stack">
         <ChecklistSection
           title="Agenda"
-          hint="Either of you can add talking points before the meeting."
+          hint="Either of you can add points."
           items={meeting.agenda}
-          onAdd={(text) => addCheckInItem(meeting.id, "agenda", text)}
-          onToggle={(id) => toggleCheckInItem(meeting.id, "agenda", id)}
+          onAdd={(text) => setError(addCheckInItem(me, meeting.id, "agenda", text) ?? "")}
+          onToggle={(id) => setError(toggleCheckInItem(me, meeting.id, "agenda", id) ?? "")}
         />
         <ChecklistSection
           title="Action items"
-          hint="Follow-ups agreed in the meeting carry over until they are ticked off."
           items={meeting.actionItems}
-          onAdd={(text) => addCheckInItem(meeting.id, "actionItems", text)}
-          onToggle={(id) => toggleCheckInItem(meeting.id, "actionItems", id)}
+          onAdd={(text) => setError(addCheckInItem(me, meeting.id, "actionItems", text) ?? "")}
+          onToggle={(id) => setError(toggleCheckInItem(me, meeting.id, "actionItems", id) ?? "")}
         />
         <Field label="Shared notes" wide>
           <textarea
             rows={4}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            onBlur={() => notes !== meeting.notes && updateOneOnOne(meeting.id, (m) => void (m.notes = notes))}
+            onBlur={() => notes !== meeting.notes && setError(updateOneOnOne(me, meeting.id, (m) => void (m.notes = notes)) ?? "")}
             placeholder="Key points, decisions, how they are feeling…"
           />
         </Field>
@@ -397,7 +398,7 @@ function MeetingDetail({ meeting, meId }: { meeting: OneOnOne; meId: string }) {
               className="btn"
               disabled={notStarted}
               title={notStarted ? "Available once the meeting has started" : undefined}
-              onClick={() => setError(setOneOnOneStatus(meeting.id, "Completed", notes) ?? "")}
+              onClick={() => setError(setOneOnOneStatus(me, meeting.id, "Completed", notes) ?? "")}
             >
               Mark as completed
             </button>
@@ -405,7 +406,7 @@ function MeetingDetail({ meeting, meId }: { meeting: OneOnOne; meId: string }) {
             <button
               type="button"
               className="btn-ghost"
-              onClick={() => setError(setOneOnOneStatus(meeting.id, "Upcoming") ?? "")}
+              onClick={() => setError(setOneOnOneStatus(me, meeting.id, "Upcoming") ?? "")}
             >
               Reopen
             </button>
@@ -426,7 +427,7 @@ function ChecklistSection({
   onToggle,
 }: {
   title: string;
-  hint: string;
+  hint?: string;
   items: CheckInItem[];
   onAdd: (text: string) => void;
   onToggle: (id: string) => void;
@@ -441,7 +442,7 @@ function ChecklistSection({
   return (
     <section>
       <h3 className="checkin-heading">{title}</h3>
-      <p className="muted">{hint}</p>
+      {hint && <p className="muted">{hint}</p>}
       <ul className="checklist">
         {items.map((item) => (
           <li key={item.id}>

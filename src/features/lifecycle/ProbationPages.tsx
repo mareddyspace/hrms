@@ -19,6 +19,7 @@ import { PROBATION_POLICY, isHrRole, probationLabel } from "./lifecycleShared.ts
 import {
   DUE_WINDOW_DAYS,
   MAX_EXTENSIONS,
+  canFinaliseProbation,
   canReview,
   finaliseProbation,
   getProbationState,
@@ -155,7 +156,7 @@ function ReviewForm({ view, onDone }: { view: ProbationView; onDone: (m: Message
       comments,
     });
     if (result) setError(result);
-    else onDone({ tone: "ok", text: `Review for ${view.person.fullName} sent to HR.` });
+    else onDone({ tone: "ok", text: `Review for ${view.person.fullName} sent for a decision.` });
   }
 
   return (
@@ -229,7 +230,7 @@ function FinaliseForm({ view, onDone }: { view: ProbationView; onDone: (m: Messa
     else if (decision === "return") onDone({ tone: "ok", text: "Review returned to the manager." });
     else if (review!.recommendation === "Confirm") onDone({ tone: "ok", text: `${view.person.fullName} confirmed. Confirmation letter requested.` });
     else if (review!.recommendation === "Extend") onDone({ tone: "ok", text: `Probation extended by ${review!.extendMonths} month(s).` });
-    else onDone({ tone: "ok", text: `${view.person.fullName} marked not confirmed.` });
+    else onDone({ tone: "ok", text: `${view.person.fullName} marked not confirmed. Exit started.` });
   }
 
   return (
@@ -272,7 +273,7 @@ function FinaliseForm({ view, onDone }: { view: ProbationView; onDone: (m: Messa
           Approve {review.recommendation.toLowerCase()}
         </button>
         <button className="btn-ghost" type="button" onClick={() => decide("return")}>
-          Return to manager
+          Return to reviewer
         </button>
       </div>
     </div>
@@ -305,7 +306,7 @@ export function ProbationReviewsPage() {
       <MetricGrid>
         <MetricCard label={`Due in ${DUE_WINDOW_DAYS} days`} value={due.length} />
         <MetricCard label="Overdue" value={overdue.length} />
-        <MetricCard label="Awaiting HR" value={pending.length} />
+        <MetricCard label="Awaiting decision" value={pending.length} />
         <MetricCard label="Tracked" value={views.length} />
       </MetricGrid>
       <Card>
@@ -313,7 +314,7 @@ export function ProbationReviewsPage() {
           <Tabs
             tabs={[
               { id: "due", label: `Due (${due.length})` },
-              { id: "pending", label: `Awaiting HR (${pending.length})` },
+              { id: "pending", label: `Awaiting decision (${pending.length})` },
               { id: "all", label: "All" },
             ]}
             value={tab}
@@ -323,7 +324,7 @@ export function ProbationReviewsPage() {
             headers={["Employee", "Joined", "Ends", "Left", "Extensions", "Status", ""]}
             rows={rows.map((v) => {
               const reviewable = v.status === "In probation" && v.due && canReview(actor, v.person.id);
-              const finalisable = hr && v.status === "Review pending HR" && v.pendingReview?.submittedById !== actor.id;
+              const finalisable = canFinaliseProbation(actor, v);
               return [
                 <div>
                   <strong>{v.person.fullName}</strong>
@@ -349,7 +350,7 @@ export function ProbationReviewsPage() {
                 ),
               ];
             })}
-            empty={<EmptyState title="Nothing here" description="No probations in this view." />}
+            empty={<EmptyState title="No probations" />}
           />
         </div>
       </Card>

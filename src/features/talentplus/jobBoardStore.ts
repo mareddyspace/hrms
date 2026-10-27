@@ -64,8 +64,8 @@ function defaults(): JobBoardState {
       { id: "ia-seed-1", postingId: "JOB-218", employeeId: "demo-compensation", employeeName: "Helen Brooks", note: "Keen to move into an HRBP role.", status: "Screening", submittedOn: "2026-10-02", updatedOn: "2026-10-06" },
     ],
     referrals: [
-      { id: "rf-seed-1", postingId: "JOB-221", referrerId: "emp-mahesh", referrerName: "Babu Menon", name: "Arjun Pillai", email: "arjun.pillai@mail.example", phone: "", relationship: "Former colleague", linkedIn: "https://www.linkedin.com/in/arjun-pillai", note: "Worked together on the payments UI.", status: "Hired", submittedOn: "2026-08-20", updatedOn: "2026-09-22", hiredOn: "2026-09-22" },
-      { id: "rf-seed-2", postingId: "JOB-221", referrerId: "emp-mahesh", referrerName: "Babu Menon", name: "Neha Varghese", email: "neha.v@mail.example", phone: "+91 98450 11223", relationship: "Classmate", linkedIn: "", note: "", status: "Interview", submittedOn: "2026-09-28", updatedOn: "2026-10-09" },
+      { id: "rf-seed-1", postingId: "JOB-221", referrerId: "emp-mahesh", referrerName: "Babu Menon", name: "Riya Kapoor", email: "riya.kapoor@example.com", phone: "", relationship: "Former colleague", linkedIn: "", note: "Worked together on the payments UI.", status: "Hired", submittedOn: "2026-08-20", updatedOn: "2026-09-22", hiredOn: "2026-09-22" },
+      { id: "rf-seed-2", postingId: "JOB-221", referrerId: "emp-mahesh", referrerName: "Babu Menon", name: "Neha Varghese", email: "neha.v@mail.example", phone: "+91 98450 11223", relationship: "Classmate", linkedIn: "", note: "", status: "Submitted", submittedOn: "2026-09-28", updatedOn: "2026-10-09" },
       { id: "rf-seed-3", postingId: "JOB-218", referrerId: "emp-ram", referrerName: "Ram Krishnan", name: "Tom Hughes", email: "tom.hughes@mail.example", phone: "", relationship: "Professional network", linkedIn: "", note: "", status: "Submitted", submittedOn: "2026-10-14", updatedOn: "2026-10-14" },
     ],
   };
@@ -76,7 +76,13 @@ function normalize(saved: unknown, base: JobBoardState): JobBoardState {
   return { applications: arrayOr(s.applications, base.applications), referrals: arrayOr(s.referrals, base.referrals) };
 }
 
-const store = createLocalStore<JobBoardState>("kastech.jobboard.v1", defaults, normalize);
+// v2: referral seed matches the recruiting pipeline.
+try {
+  localStorage.removeItem("kastech.jobboard.v1");
+} catch {
+  /* ignore */
+}
+const store = createLocalStore<JobBoardState>("kastech.jobboard.v2", defaults, normalize);
 
 export const subscribeJobBoard = store.subscribe;
 export const getJobBoardState = store.getState;
@@ -98,10 +104,10 @@ export function postingById(id: string): Requisition | undefined {
   return getTalentState().requisitions.find((r) => r.id === id);
 }
 
-/** Requisitions carry no grade, so derive a band from the title. */
+/** Requisitions carry no grade, so derive one of the real grade bands (L4–L6, M1) from the title. */
 export function gradeFor(req: Requisition): string {
   const t = req.title.toLowerCase();
-  if (/(director|head|vp|chief)/.test(t)) return "L7";
+  if (/(director|head|vp|chief)/.test(t)) return "M1";
   if (/(manager|principal|lead|partner)/.test(t)) return "L6";
   if (/(senior|sr\.?)\b/.test(t)) return "L5";
   return "L4";

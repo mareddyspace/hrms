@@ -62,8 +62,8 @@ function defaults(): BgvState {
         subjectKind: "joiner",
         subjectId: "ob-1",
         subjectName: "Riya Kapoor",
-        role: "Software Engineer",
-        consent: { givenOn: "2026-09-08", recordedById: "demo-recruiter", at: "2026-09-08T10:00:00.000Z" },
+        role: "Senior React Engineer",
+        consent: { givenOn: "2026-09-08", recordedById: "ob-1", at: "2026-09-08T10:00:00.000Z" },
         createdOn: "2026-09-08",
         checks: [
           check("Identity", "Clear", "AuthBridge", "2026-09-09", "2026-09-11"),
@@ -80,7 +80,7 @@ function defaults(): BgvState {
         subjectId: "ob-2",
         subjectName: "Noah Garcia",
         role: "Designer",
-        consent: { givenOn: "2026-09-20", recordedById: "demo-recruiter", at: "2026-09-20T15:30:00.000Z" },
+        consent: { givenOn: "2026-09-20", recordedById: "ob-2", at: "2026-09-20T15:30:00.000Z" },
         createdOn: "2026-09-20",
         checks: [
           check("Identity", "Clear", "HireRight", "2026-09-21", "2026-09-23"),
@@ -148,6 +148,19 @@ export function canReadAllBgv(role: UserRole): boolean {
   return canManageBgv(role) || role === "hiring_manager";
 }
 
+/** Hiring managers only see the outcome, never the individual checks. */
+export function seesOutcomeOnly(role: UserRole): boolean {
+  return role === "hiring_manager";
+}
+
+/** The outcome a hiring manager sees: Clear, Not clear, or Pending while checks are still running. */
+export function outcomeLabel(record: BgvRecord): "Clear" | "Not clear" | "Pending" {
+  const overall = overallResult(record);
+  if (overall === "Clear") return "Clear";
+  if (overall === "Needs review" || overall === "Incomplete") return "Not clear";
+  return "Pending";
+}
+
 /** The person the record is about (employee by id; joiner by name, as joiners have no account yet). */
 export function isSubject(actor: ComplianceActor, record: BgvRecord): boolean {
   return record.subjectKind === "employee" ? record.subjectId === actor.id : sameName(record.subjectName, actor.fullName);
@@ -188,7 +201,7 @@ export function recordConsent(actor: ComplianceActor, id: string, givenOn: strin
   return store.guarded((s) => {
     const row = s.records.find((r) => r.id === id);
     if (!row) return "Verification not found.";
-    if (!canEditRecord(actor, row) && !isSubject(actor, row)) return "Only the candidate, HR or recruiting can record consent.";
+    if (!isSubject(actor, row)) return "Only the person being verified can give consent.";
     if (row.consent) return "Consent is already on record.";
     if (!isISODate(givenOn)) return "Enter the date consent was given.";
     if (givenOn > todayISO()) return "Consent date cannot be in the future.";

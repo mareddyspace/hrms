@@ -96,7 +96,7 @@ export function ImmigrationPage() {
       {tab === "mine" && (
         <Card title="My documents">
           {mine.length === 0 ? (
-            <EmptyState title="No documents yet" description="Add your passport, visa or residence ID to get expiry reminders." />
+            <EmptyState title="No documents yet" />
           ) : (
             <ul className="cmp-list">
               {mine.map((doc) => (
@@ -319,7 +319,7 @@ function AllDocuments({
           </div>
           <DataTable
             headers={["Employee", "Country", "Document", "Number", "Expiry", "Status", "Verification", ""]}
-            empty={<EmptyState title="No matching documents" description="Try a different filter." />}
+            empty={<EmptyState title="No matching documents" />}
             rows={rows.map(({ d, person, s }) => [
               <span key="p">
                 {person?.fullName ?? "Unknown"}
@@ -366,7 +366,7 @@ function VerificationQueue({ docs, actor, onResult }: { docs: IdDocument[]; acto
   if (docs.length === 0) {
     return (
       <Card title="Verification queue">
-        <EmptyState title="Nothing to verify" description="New and updated documents appear here." />
+        <EmptyState title="Nothing to verify" />
       </Card>
     );
   }

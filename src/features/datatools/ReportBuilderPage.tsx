@@ -33,7 +33,7 @@ import {
   type ReportSchedule,
   type SavedReport,
 } from "./reportStore.ts";
-import { downloadCsv, downloadXlsx, fileSlug, isHrOrAdmin, reportingLineIds, type DataToolsActor } from "./shared.ts";
+import { downloadCsv, downloadXlsx, fileSlug, hasOrgWideReports, isHrOrAdmin, isInternalEmail, reportingLineIds, type DataToolsActor } from "./shared.ts";
 import "./datatools.css";
 
 type Message = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -54,7 +54,7 @@ function stamp(): string {
 /** null = everyone (HR/admin); otherwise the set of people ids the owner may report on. */
 function scopeFor(ownerId: string, people: readonly PersonRecord[]): Set<string> | null {
   const owner = DEMO_ACCOUNTS.find((a) => a.id === ownerId);
-  if (owner && isHrOrAdmin(owner.role)) return null;
+  if (owner && hasOrgWideReports(owner.role)) return null;
   return reportingLineIds(ownerId, people);
 }
 
@@ -68,7 +68,7 @@ export function ReportBuilderPage() {
   const [message, setMessage] = useState<Message>(null);
 
   const actor: DataToolsActor = { id: demoProfile.id, fullName: demoProfile.fullName, role: demoProfile.role };
-  const fullAccess = isHrOrAdmin(demoProfile.role);
+  const fullAccess = hasOrgWideReports(demoProfile.role);
   const managerAccess = !fullAccess && (isManager || MANAGER_ROLES.includes(demoProfile.role));
 
   const myScope = useMemo<Set<string> | null>(() => {
@@ -82,14 +82,14 @@ export function ReportBuilderPage() {
   if (!fullAccess && !managerAccess) {
     return (
       <Page title="Report builder">
-        <EmptyState title="No access" description="Reports are available to HR, admins and people managers." />
+        <EmptyState title="No access" />
       </Page>
     );
   }
 
   const mine = reports.reports.filter((r) => r.ownerId === actor.id);
   const visibleSchedules = reports.schedules.filter((s) => canManageSchedule(actor, s));
-  const visibleRuns = reports.runs.filter((r) => fullAccess || r.actorId === actor.id || reports.reports.some((rep) => rep.id === r.reportId && rep.ownerId === actor.id));
+  const visibleRuns = reports.runs.filter((r) => isHrOrAdmin(demoProfile.role) || r.actorId === actor.id || reports.reports.some((rep) => rep.id === r.reportId && rep.ownerId === actor.id));
 
   function rowsFor(def: ReportDefinition, scope: Set<string> | null) {
     return runReport(def, buildRows(def.source, state, people), scope);
@@ -116,7 +116,8 @@ export function ReportBuilderPage() {
     const sheets = exportSheets(report.definition, result);
     if (schedule.format === "xlsx") downloadXlsx(fileName, sheets);
     else downloadCsv(fileName, sheets[0].rows);
-    setMessage({ tone: "ok", text: `Generated ${fileName} (${result.rows.length} rows) and queued it for ${schedule.recipients.length} recipient${schedule.recipients.length === 1 ? "" : "s"}.` });
+    const internal = schedule.recipients.filter(isInternalEmail).length;
+    setMessage({ tone: "ok", text: `Downloaded ${fileName} (${result.rows.length} rows). Scheduled for ${internal} recipient${internal === 1 ? "" : "s"}.` });
   }
 
   return (
@@ -163,7 +164,7 @@ export function ReportBuilderPage() {
               r.fileName,
               r.recipients.length ? r.recipients.join(", ") : "—",
             ])}
-            empty={<EmptyState title="No runs yet" description="Exports of saved reports and schedule runs appear here." />}
+            empty={<EmptyState title="No runs yet" />}
           />
         </Card>
       )}
@@ -446,7 +447,7 @@ function SavedPanel({
             </div>,
           ];
         })}
-        empty={<EmptyState title="No saved reports" description="Build a report and save it to reuse or schedule it." />}
+        empty={<EmptyState title="No saved reports" />}
       />
       <Dialog
         open={!!deleting}
@@ -551,7 +552,7 @@ function SchedulesPanel({
           <span className="dt-nowrap">{formatWhen(nextRun(s, now))}</span>,
           s.format === "xlsx" ? "Excel" : "CSV",
           <ul className="dt-chip-list">
-            {s.recipients.map((e) => (
+            {s.recipients.filter(isInternalEmail).map((e) => (
               <li key={e}>{e}</li>
             ))}
           </ul>,
@@ -568,7 +569,7 @@ function SchedulesPanel({
             </button>
           </div>,
         ])}
-        empty={<EmptyState title="No schedules" description={myReports.length ? "Attach a schedule to one of your saved reports." : "Save a report first, then schedule it."} />}
+        empty={<EmptyState title="No schedules" description={myReports.length ? undefined : "Save a report first."} />}
       />
 
       <Dialog
@@ -635,7 +636,7 @@ function SchedulesPanel({
                   <option value="csv">CSV</option>
                 </select>
               </Field>
-              <Field label={`Recipients (up to ${MAX_RECIPIENTS}, comma separated)`} wide>
+              <Field label={`Recipients (@infotech.com only, up to ${MAX_RECIPIENTS})`} wide>
                 <textarea value={draft.recipientsText} onChange={(e) => setDraft({ ...draft, recipientsText: e.target.value })} maxLength={1500} placeholder="name@infotech.com, team@infotech.com" />
               </Field>
             </div>

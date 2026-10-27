@@ -9,12 +9,14 @@ import {
   type CopilotAnswer,
 } from "../data/platformData.ts";
 import { usePortal } from "../store.tsx";
+import { useCopilotContext } from "../features/copilot/copilotContext.ts";
 
 type Turn = { id: string; role: "user" | "assistant"; text: string; answer?: CopilotAnswer };
 
 /** Floating AI button + popup chat — shown for every signed-in role. */
 export function CopilotPopup() {
   const { employee, demoProfile } = usePortal();
+  const buildContext = useCopilotContext();
   const persona = copilotPersonaFromRole(demoProfile.role);
   const suggestions = COPILOT_SUGGESTIONS[persona].slice(0, 3);
   const [open, setOpen] = useState(false);
@@ -37,7 +39,7 @@ export function CopilotPopup() {
   function ask(question: string) {
     const q = question.trim();
     if (!q) return;
-    const answer = answerCopilot(q, demoProfile);
+    const answer = answerCopilot(q, buildContext());
     const stamp = Date.now();
     setHistory((prev) => [
       ...prev,
@@ -45,7 +47,7 @@ export function CopilotPopup() {
       {
         id: `a-${stamp}`,
         role: "assistant",
-        text: answer.summary?.trim() || "Here is what I found in the demo data.",
+        text: answer.summary?.trim() || "Here is what I found.",
         answer,
       },
     ]);
@@ -70,7 +72,7 @@ export function CopilotPopup() {
               </span>
               <div>
                 <strong>{PRODUCT_NAME} Copilot</strong>
-                <small>Demo assistant · {demoProfile.personaLabel}</small>
+                <small>Assistant · {demoProfile.personaLabel}</small>
               </div>
             </div>
             <div className="copilot-fab-actions">

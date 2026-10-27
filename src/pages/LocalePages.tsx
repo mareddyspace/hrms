@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  Banner,
   Card,
   DataTable,
   EmptyState,
@@ -13,14 +12,17 @@ import {
   StatusBadge,
   Tabs,
 } from "../components/ui.tsx";
-import { type AppLanguage, type CountrySettings } from "../locale/countryConfig.ts";
+import { type AppLanguage } from "../locale/countryConfig.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
-import type { CountryCode } from "../model.ts";
+import { formatShortDate, holidaysForCountry, type CountryCode } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
+/** HR and platform admins may open the country reference page. */
+const COUNTRY_REFERENCE_ROLES = ["hr", "hr_admin", "hrbp", "admin", "super_admin", "it_admin"];
+
 export function LocaleSettingsPage() {
-  const { employee, demoProfile } = usePortal();
+  const { employee, demoProfile, state } = usePortal();
   const {
     regionCode,
     setRegionCode,
@@ -32,22 +34,23 @@ export function LocaleSettingsPage() {
     languageLabels,
     formatMoney,
     formatDateTime,
-    sampleSalary,
+    userTimeZone,
   } = useLocale();
+  const holidays = holidaysForCountry(state.holidays, activeCountry.code);
+  const canSeeCountryReference = COUNTRY_REFERENCE_ROLES.includes(demoProfile.role);
 
   return (
-    <Page title={t("nav.settings")} subtitle="Region, language, currency and time zone">
-      <Banner message={{ tone: "ok", text: t("locale.disclaimer") }} />
+    <Page title={t("nav.settings")}>
 
       <MetricGrid>
-        <MetricCard label="Signed-in identity" value={employee.fullName} hint={demoProfile.personaLabel} />
-        <MetricCard label="Home country (profile)" value={employee.countryName ?? "—"} hint={employee.legalEntity} />
+        <MetricCard label="Signed in as" value={employee.fullName} hint={demoProfile.personaLabel} />
+        <MetricCard label="Home country" value={employee.countryName ?? "—"} hint={employee.legalEntity} />
         <MetricCard label={t("locale.region")} value={regionCode === "ALL" ? t("country.all") : activeCountry.name} />
-        <MetricCard label={t("locale.language")} value={languageLabels[language]} />
+        <MetricCard label={t("locale.timezone")} value={userTimeZone} />
       </MetricGrid>
 
       <div className="mgr-home-grid">
-        <Card title="User context selectors">
+        <Card title="Your settings">
           <Field label={t("locale.region")}>
             <select
               value={regionCode}
@@ -70,38 +73,24 @@ export function LocaleSettingsPage() {
               ))}
             </select>
           </Field>
-          <p className="note">
-            Some screens are available in English only.
-          </p>
         </Card>
 
-        <Card title="Active region snapshot">
+        <Card title={`${activeCountry.name} at a glance`}>
           <dl className="info-grid">
             <div className="info-fact"><dt>Legal entity</dt><dd>{activeCountry.legalEntity}</dd></div>
             <div className="info-fact"><dt>{t("locale.currency")}</dt><dd>{activeCountry.currency}</dd></div>
-            <div className="info-fact"><dt>{t("locale.timezone")}</dt><dd>{activeCountry.timeZone}</dd></div>
-            <div className="info-fact"><dt>Sample demo salary</dt><dd>{sampleSalary}</dd></div>
-            <div className="info-fact"><dt>Format check</dt><dd>{formatMoney(123456)}</dd></div>
-            <div className="info-fact"><dt>Local now</dt><dd>{formatDateTime(new Date().toISOString())}</dd></div>
+            <div className="info-fact"><dt>Office time zone</dt><dd>{activeCountry.timeZone}</dd></div>
+            <div className="info-fact"><dt>Number format</dt><dd>{formatMoney(123456)}</dd></div>
+            <div className="info-fact"><dt>Your time now</dt><dd>{formatDateTime(new Date().toISOString())}</dd></div>
           </dl>
         </Card>
 
         <Card title={t("holidays.title")}>
           <DataTable
             headers={["Date", "Holiday"]}
-            rows={activeCountry.holidays.map((h) => [h.date, h.name])}
+            rows={holidays.map((h) => [formatShortDate(h.date), h.name])}
+            empty={<p className="note">No holidays listed.</p>}
           />
-        </Card>
-
-        <Card title={t("leave.policy")}>
-          <p>
-            <strong>{activeCountry.leavePolicy.name}</strong>
-          </p>
-          <p>
-            Annual days (sample): {activeCountry.leavePolicy.annualDays} · Carry-forward (sample):{" "}
-            {activeCountry.leavePolicy.carryForwardDays}
-          </p>
-          {activeCountry.leavePolicy.note && <p className="note">{activeCountry.leavePolicy.note}</p>}
         </Card>
 
         <Card title={t("working.time")}>
@@ -112,12 +101,13 @@ export function LocaleSettingsPage() {
           {activeCountry.workingTime.note && <p className="note">{activeCountry.workingTime.note}</p>}
         </Card>
 
-        <Card title="Related country config">
+        <Card title="Related">
           <div className="auth-shortcut-row">
             <Link className="auth-shortcut" to="/benefits/country">{t("benefits.country")}</Link>
             <Link className="auth-shortcut" to="/documents/country">{t("documents.country")}</Link>
-            <Link className="auth-shortcut" to="/admin/countries">{t("admin.countries")}</Link>
-            <Link className="auth-shortcut" to="/organization">Organization</Link>
+            {canSeeCountryReference && (
+              <Link className="auth-shortcut" to="/admin/countries">{t("admin.countries")}</Link>
+            )}
             <Link className="auth-shortcut" to="/holidays">Holidays</Link>
           </div>
         </Card>
@@ -135,7 +125,7 @@ export function CountryBenefitsConfigPage() {
         <DataTable
           headers={["Plan", "Category", "Summary"]}
           rows={activeCountry.benefits.map((b) => [b.name, b.category, b.summary])}
-          empty={<EmptyState title="No sample plans" description="Edit via Administration → Countries." />}
+          empty={<EmptyState title="No plans listed" description="Ask HR for details." />}
         />
       </Card>
     </Page>
@@ -145,7 +135,7 @@ export function CountryBenefitsConfigPage() {
 export function CountryDocumentsConfigPage() {
   const { activeCountry, t } = useLocale();
   return (
-    <Page title={t("documents.country")} subtitle={`${activeCountry.name} · document checklist`}>
+    <Page title={t("documents.country")} subtitle={activeCountry.name}>
       <RegionalFilter />
       <Card title={activeCountry.name}>
         <DataTable
@@ -161,120 +151,27 @@ export function CountryDocumentsConfigPage() {
   );
 }
 
-/** Intl.supportedValuesOf is ES2022 — feature-detect so older engines fall back gracefully. */
-function supportedValues(key: "currency" | "timeZone"): string[] | null {
-  const fn = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
-  try {
-    return typeof fn === "function" ? fn(key) : null;
-  } catch {
-    return null;
-  }
-}
-
-function currencyError(value: string): string {
-  const code = value.trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(code)) return "Currency must be a 3-letter ISO 4217 code (e.g. INR, USD).";
-  const list = supportedValues("currency");
-  if (list && !list.includes(code)) return `${code} is not a recognised ISO currency code.`;
-  return "";
-}
-
-function timeZoneError(value: string): string {
-  const zone = value.trim();
-  if (!zone) return "Time zone is required.";
-  const list = supportedValues("timeZone");
-  if (list) return list.includes(zone) || zone === "UTC" ? "" : `${zone} is not a recognised IANA time zone.`;
-  try {
-    new Intl.DateTimeFormat("en", { timeZone: zone });
-    return "";
-  } catch {
-    return `${zone} is not a recognised IANA time zone.`;
-  }
-}
-
-/** Parses a day count; null when it is not a whole number >= 0. */
-function parseDays(value: string): number | null {
-  if (value.trim() === "") return null;
-  const n = Number(value);
-  return Number.isInteger(n) && n >= 0 ? n : null;
-}
-
+/**
+ * Country reference. These settings are not wired into leave balances, holidays or pay elsewhere in
+ * the app, so the page is read-only rather than pretending edits take effect.
+ */
 export function CountryAdminPage() {
-  const { countries, updateCountrySettings, resetCountrySettings, t, formatMoney } = useLocale();
+  const { countries, t } = useLocale();
   const { demoProfile } = usePortal();
   const [code, setCode] = useState<CountryCode>(countries[0]?.code ?? "IN");
   const [tab, setTab] = useState("overview");
   const selected = countries.find((c) => c.code === code) ?? countries[0];
-  // Currency / zone / day fields are edited as drafts and only saved once valid.
-  const [currencyDraft, setCurrencyDraft] = useState("");
-  const [zoneDraft, setZoneDraft] = useState("");
-  const [annualDraft, setAnnualDraft] = useState("");
-  const [carryDraft, setCarryDraft] = useState("");
 
-  useEffect(() => {
-    if (!selected) return;
-    setCurrencyDraft(selected.currency);
-    setZoneDraft(selected.timeZone);
-    setAnnualDraft(String(selected.leavePolicy.annualDays));
-    setCarryDraft(String(selected.leavePolicy.carryForwardDays));
-  }, [
-    selected?.code,
-    selected?.currency,
-    selected?.timeZone,
-    selected?.leavePolicy.annualDays,
-    selected?.leavePolicy.carryForwardDays,
-  ]);
-
-  const currencyMsg = currencyError(currencyDraft);
-  const zoneMsg = timeZoneError(zoneDraft);
-  const annualOk = parseDays(annualDraft) !== null;
-  const carryOk = parseDays(carryDraft) !== null;
-
-  const canEdit =
-    demoProfile.role === "super_admin" ||
-    demoProfile.role === "hr_admin" ||
-    demoProfile.role === "it_admin" ||
-    demoProfile.role === "admin";
-
-  if (!canEdit) {
+  if (!COUNTRY_REFERENCE_ROLES.includes(demoProfile.role)) {
     return (
       <Page title={t("admin.countries")}>
-        <EmptyState
-          title="Not authorized"
-          description="Only HR or Admin can edit country settings."
-        />
-        <Card title="Read-only snapshot">
-          <DataTable
-            headers={["Country", "Entity", "Currency", "Time zone"]}
-            rows={countries.map((c) => [c.name, c.legalEntity, c.currency, c.timeZone])}
-          />
-        </Card>
+        <EmptyState title="Not authorized" description="HR and admins only." />
       </Page>
     );
   }
 
-  function patch(partial: Partial<CountrySettings>) {
-    if (!selected) return;
-    updateCountrySettings(selected.code, partial);
-  }
-
   return (
-    <Page
-      title={t("admin.countries")}
-      action={
-        <button
-          type="button"
-          className="btn-ghost"
-          onClick={() => {
-            if (window.confirm("Reset all country settings to their defaults? Your edits will be lost.")) {
-              resetCountrySettings();
-            }
-          }}
-        >
-          Reset defaults
-        </button>
-      }
-    >
+    <Page title={`${t("admin.countries")} · Reference`} subtitle="Read-only">
       <FilterBar>
         <label className="filter-label">
           Country
@@ -295,7 +192,6 @@ export function CountryAdminPage() {
           <Tabs
             tabs={[
               { id: "overview", label: "Overview" },
-              { id: "holidays", label: "Holidays" },
               { id: "leave", label: "Leave & time" },
               { id: "benefits", label: "Benefits" },
               { id: "docs", label: "Documents" },
@@ -306,118 +202,27 @@ export function CountryAdminPage() {
 
           {tab === "overview" && (
             <Card title={`${selected.name} (${selected.code})`}>
-              <div className="form-grid-2">
-                <Field label="Legal entity">
-                  <input
-                    value={selected.legalEntity}
-                    onChange={(e) => patch({ legalEntity: e.target.value })}
-                  />
-                </Field>
-                <Field label="Currency code">
-                  <input
-                    value={currencyDraft}
-                    maxLength={3}
-                    aria-invalid={!!currencyMsg}
-                    onChange={(e) => {
-                      const next = e.target.value.toUpperCase();
-                      setCurrencyDraft(next);
-                      if (!currencyError(next)) patch({ currency: next.trim() });
-                    }}
-                  />
-                  {currencyMsg && <span className="note err">{currencyMsg}</span>}
-                </Field>
-                <Field label="Currency locale">
-                  <input
-                    value={selected.currencyLocale}
-                    onChange={(e) => patch({ currencyLocale: e.target.value })}
-                  />
-                </Field>
-                <Field label="IANA time zone">
-                  <input
-                    value={zoneDraft}
-                    aria-invalid={!!zoneMsg}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      setZoneDraft(next);
-                      if (!timeZoneError(next)) patch({ timeZone: next.trim() });
-                    }}
-                  />
-                  {zoneMsg && <span className="note err">{zoneMsg}</span>}
-                </Field>
-              </div>
-              <p className="note">Format preview: {formatMoney(250000)}</p>
-            </Card>
-          )}
-
-          {tab === "holidays" && (
-            <Card title={t("holidays.title")}>
-              <DataTable
-                headers={["Date", "Name"]}
-                rows={selected.holidays.map((h) => [h.date, h.name])}
-              />
+              <dl className="info-grid">
+                <div className="info-fact"><dt>Legal entity</dt><dd>{selected.legalEntity}</dd></div>
+                <div className="info-fact"><dt>Currency</dt><dd>{selected.currency}</dd></div>
+                <div className="info-fact"><dt>Office time zone</dt><dd>{selected.timeZone}</dd></div>
+              </dl>
             </Card>
           )}
 
           {tab === "leave" && (
             <div className="mgr-home-grid">
               <Card title={t("leave.policy")}>
-                <Field label="Policy name">
-                  <input
-                    value={selected.leavePolicy.name}
-                    onChange={(e) =>
-                      patch({ leavePolicy: { ...selected.leavePolicy, name: e.target.value } })
-                    }
-                  />
-                </Field>
-                <Field label="Annual days (sample)">
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={annualDraft}
-                    aria-invalid={!annualOk}
-                    onChange={(e) => {
-                      setAnnualDraft(e.target.value);
-                      const days = parseDays(e.target.value);
-                      if (days !== null) patch({ leavePolicy: { ...selected.leavePolicy, annualDays: days } });
-                    }}
-                  />
-                  {!annualOk && <span className="note err">Enter a whole number of days, 0 or more.</span>}
-                </Field>
-                <Field label="Carry-forward (sample)">
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={carryDraft}
-                    aria-invalid={!carryOk}
-                    onChange={(e) => {
-                      setCarryDraft(e.target.value);
-                      const days = parseDays(e.target.value);
-                      if (days !== null) patch({ leavePolicy: { ...selected.leavePolicy, carryForwardDays: days } });
-                    }}
-                  />
-                  {!carryOk && <span className="note err">Enter a whole number of days, 0 or more.</span>}
-                </Field>
-                <StatusBadge status="Sample only" tone="warn" />
+                <p><strong>{selected.leavePolicy.name}</strong></p>
+                <p>
+                  Annual days: {selected.leavePolicy.annualDays} · Carry-forward: {selected.leavePolicy.carryForwardDays}
+                </p>
+                {selected.leavePolicy.note && <p className="note">{selected.leavePolicy.note}</p>}
+                <StatusBadge status="Reference" tone="info" literal />
               </Card>
               <Card title={t("working.time")}>
-                <Field label="Standard hours">
-                  <input
-                    value={selected.workingTime.standardHours}
-                    onChange={(e) =>
-                      patch({ workingTime: { ...selected.workingTime, standardHours: e.target.value } })
-                    }
-                  />
-                </Field>
-                <Field label="Work days">
-                  <input
-                    value={selected.workingTime.workDays}
-                    onChange={(e) =>
-                      patch({ workingTime: { ...selected.workingTime, workDays: e.target.value } })
-                    }
-                  />
-                </Field>
+                <p>{selected.workingTime.workDays} · {selected.workingTime.standardHours}</p>
+                <p>Week starts: {selected.workingTime.weekStart}</p>
               </Card>
             </div>
           )}
@@ -425,8 +230,8 @@ export function CountryAdminPage() {
           {tab === "benefits" && (
             <Card title={t("benefits.country")}>
               <DataTable
-                headers={["ID", "Name", "Category", "Summary"]}
-                rows={selected.benefits.map((b) => [b.id, b.name, b.category, b.summary])}
+                headers={["Name", "Category", "Summary"]}
+                rows={selected.benefits.map((b) => [b.name, b.category, b.summary])}
               />
             </Card>
           )}
@@ -434,8 +239,8 @@ export function CountryAdminPage() {
           {tab === "docs" && (
             <Card title={t("documents.country")}>
               <DataTable
-                headers={["ID", "Name", "Required", "Note"]}
-                rows={selected.documents.map((d) => [d.id, d.name, d.required ? "Yes" : "No", d.note])}
+                headers={["Name", "Required", "Note"]}
+                rows={selected.documents.map((d) => [d.name, d.required ? "Yes" : "No", d.note])}
               />
             </Card>
           )}

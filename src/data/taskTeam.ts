@@ -23,14 +23,14 @@ const FICTIONAL_TEAM: TaskTeamPerson[] = [
     shortName: "Priya",
     fullName: "Priya Nair",
     department: "Engineering",
-    role: "L&D Lead",
+    role: "Senior Engineer",
   },
   {
     id: "emp-anu",
     shortName: "Anu",
     fullName: "Anu Rao",
     department: "Engineering",
-    role: "Performance Mgr",
+    role: "Software Engineer",
   },
   {
     id: "emp-kabir",

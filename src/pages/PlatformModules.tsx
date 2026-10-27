@@ -18,36 +18,54 @@ import {
 } from "../components/ui.tsx";
 import { OrgChart } from "../components/OrgChart.tsx";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
-import { TZ_TEAM } from "../data/dashboardMock.ts";
+import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
+import { TASK_TEAM } from "../data/taskTeam.ts";
+import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
+import { getAttendanceState, subscribeAttendance } from "../data/attendanceLocal.ts";
+import { getRewardState, subscribeReward } from "../data/rewardLocal.ts";
+import {
+  attendanceAnalytics,
+  compReviewStatus,
+  criticalSkillGaps,
+  currentCycle,
+  learningCompletion,
+  learningDetail,
+  leaveTrend,
+  pipelineFunnel,
+  reviewStatusFor,
+  skillCoverage,
+} from "../data/homeInsights.ts";
+import {
+  dayStatus,
+  personName,
+  rangeLabel,
+  teamBelow,
+  upcomingHolidays,
+  waitingItems,
+  workforceStats,
+  type DayStatus,
+} from "../data/workforceStats.ts";
+import { countWaitingOnMe } from "./ApprovalsCenter.tsx";
+import { useCopilotContext } from "../features/copilot/copilotContext.ts";
 import { getCompensationAccess, hasModuleAccess } from "../data/peoplePermissions.ts";
-import { canViewReport, getReportScopes } from "../data/rbac.ts";
+import { canViewReport } from "../data/rbac.ts";
 import {
   ADMIN_LOCATIONS,
   ADMIN_ORG_SETTINGS,
   AI_AGENTS,
-  ANALYTICS_DEPARTMENTS,
   ANALYTICS_RANGES,
-  COMP_REVIEW_STATUS,
   COPILOT_SUGGESTIONS,
-  LEARNING_METRICS,
+  PAYROLL_PROVIDERS,
   PAYROLL_STATUS,
-  PERFORMANCE_CYCLE,
-  PIPELINE_BY_COUNTRY,
   ROLE_PERMISSION_CATALOG,
-  SKILLS_CAPACITY,
   answerCopilot,
-  attendanceSeries,
   copilotPersonaFromRole,
-  leaveSeries,
-  overtimeSeries,
   type AnalyticsRange,
   type CopilotAnswer,
-  workforceMetrics,
 } from "../data/platformData.ts";
-import { ProgressBar } from "./dashboards/widgets.tsx";
 import {
   canEditRolePermissions,
-  effectiveNavIds,
+  effectiveCatalogIds,
   getPlatformVersion,
   listAuditLog,
   listIntegrations,
@@ -59,7 +77,7 @@ import {
 } from "../data/platformLocal.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
-import type { CountryCode } from "../model.ts";
+import { formatShortDate, todayISO, type CountryCode } from "../model.ts";
 import { roleLabel } from "../nav.ts";
 import { usePortal } from "../store.tsx";
 
@@ -94,284 +112,269 @@ function BarRows({
 
 /* ───────────────── Analytics ───────────────── */
 
+const DAY_TONE: Record<DayStatus, "ok" | "info" | "warn" | "neutral"> = {
+  Working: "ok",
+  WFH: "info",
+  "On leave": "warn",
+  Holiday: "neutral",
+  "Weekly off": "neutral",
+};
+
+/** People below the signed-in user in the reporting line, from the live directory. */
+function useMyTeam() {
+  const { employee, canDecideFor } = usePortal();
+  const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
+  const team = useMemo(
+    () => teamBelow(employee.id, people, canDecideFor, TASK_TEAM.map((p) => p.id)),
+    [employee.id, people, canDecideFor],
+  );
+  return { team, people };
+}
+
 export function AnalyticsPage() {
-  const { demoProfile, employee, state, canDecideFor } = usePortal();
-  const { regionCode, activeCountry, t, formatMoney } = useLocale();
+  usePlatformTick();
+  const { demoProfile, employee, state, canDecideFor, canVerifyProofs } = usePortal();
+  const { regionCode, activeCountry, t } = useLocale();
+  const { team, people } = useMyTeam();
+  const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
   const [range, setRange] = useState<AnalyticsRange>("30d");
   const [dept, setDept] = useState<string>("All departments");
   const [tab, setTab] = useState("team");
+  const today = todayISO();
 
   const countryFilter: CountryCode | "ALL" = regionCode === "ALL" ? "ALL" : (regionCode as CountryCode);
-  const metrics = useMemo(() => workforceMetrics(range, countryFilter, dept), [range, countryFilter, dept]);
-  const pipeline = PIPELINE_BY_COUNTRY[countryFilter] ?? PIPELINE_BY_COUNTRY.ALL;
-  const att = attendanceSeries(range);
-  const leave = leaveSeries(range);
-  const ot = overtimeSeries(range);
-  const reportScopes = getReportScopes(demoProfile);
-  const teamOnly = canViewReport(demoProfile, "team") && !canViewReport(demoProfile, "company") && !canViewReport(demoProfile, "hr");
+  const stats = useMemo(
+    () => workforceStats(people, { country: countryFilter, department: dept, range, today }),
+    [people, countryFilter, dept, range, today],
+  );
+  const attState = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
+  const reward = useSyncExternalStore(subscribeReward, getRewardState, getRewardState);
+  const scopeName = countryFilter === "ALL" ? undefined : activeCountry.name;
+  // Everyone in the selected country and department (active only).
+  const scopePeople = useMemo(
+    () =>
+      people.filter(
+        (p) =>
+          p.employmentStatus !== "Terminated" &&
+          (countryFilter === "ALL" || p.countryCode === countryFilter) &&
+          (dept === "All departments" || p.department === dept),
+      ),
+    [people, countryFilter, dept],
+  );
+  const scopeIds = useMemo(() => new Set(scopePeople.map((p) => p.id)), [scopePeople]);
+  const pipeline = pipelineFunnel(talent.candidates, scopeName);
+  const needsAttendance = tab === "attendance";
+  const weeks = range === "7d" ? 1 : range === "30d" ? 5 : 13;
+  const attendance = useMemo(
+    () => (needsAttendance ? attendanceAnalytics(scopePeople, state, attState, today, weeks) : { trend: [], overtime: [] }),
+    // state slices used: holidays, leaveRequests, absences
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [needsAttendance, scopePeople, state.holidays, state.leaveRequests, state.absences, attState, today, weeks],
+  );
+  const leave = useMemo(
+    () =>
+      leaveTrend(
+        state.leaveRequests.filter((r) => scopeIds.has(r.employeeId)),
+        state.holidays,
+        (id) => String(people.find((p) => p.id === id)?.countryCode ?? "IN"),
+        "ALL",
+        today,
+        range === "ytd" ? Number(today.slice(5, 7)) : 3,
+      ),
+    [state.leaveRequests, state.holidays, scopeIds, people, today, range],
+  );
+  const cycle = currentCycle(talent);
+  const reviews = reviewStatusFor(talent.reviews, scopeIds, cycle.id);
+  const learning = learningCompletion(talent.enrollments, scopeIds, today);
+  const learningMore = learningDetail(talent.enrollments, talent.certifications, scopeIds, today);
+  const skillMembers = useMemo(() => scopePeople.map((p) => ({ id: p.id, countryCode: String(p.countryCode) })), [scopePeople]);
+  const skillGaps = useMemo(() => criticalSkillGaps(talent, skillMembers), [talent, skillMembers]);
+  const skillTop = useMemo(() => skillCoverage(talent, skillMembers).top, [talent, skillMembers]);
+  const comp = compReviewStatus(reward.reviews, countryFilter === "ALL" && dept === "All departments" ? undefined : scopeIds);
   const canCompany = canViewReport(demoProfile, "company") || canViewReport(demoProfile, "hr");
-  const canTeam = canViewReport(demoProfile, "team");
+  const canTeam = team.length > 0;
   const canRecruiting = canViewReport(demoProfile, "recruiting") || canViewReport(demoProfile, "hiring") || canCompany;
   const canCompReport = canViewReport(demoProfile, "compensation");
   const canSystem = canViewReport(demoProfile, "system");
   const compAccess = getCompensationAccess(demoProfile);
   const canCompTab = canCompReport && compAccess.othersAmounts !== "hidden";
 
-  // Only items this viewer decides (people below them in the reporting line).
-  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && canDecideFor(item.employeeId));
-  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted" && canDecideFor(item.personId));
-  const expensePending = state.expenses.filter((item) => item.status === "submitted" && canDecideFor(item.employeeId));
-  const pendingApprovals = leavePending.length + timesheetPending.length + expensePending.length;
+  const waiting = waitingItems(state, employee.id, canDecideFor, canVerifyProofs);
+  const pendingApprovals = countWaitingOnMe(state, employee.id, canDecideFor, canVerifyProofs);
+  const teamIds = new Set(team.map((m) => m.id));
+  const teamNames = new Set([employee.fullName, ...team.map((m) => m.name)]);
+  const openReqs = talent.requisitions.filter((r) => r.approvalStatus === "Approved" && r.stageSummary !== "Hired" && r.stageSummary !== "Filled");
+  const teamOpenings = openReqs.filter((r) => teamNames.has(r.hiringManager)).reduce((n, r) => n + r.openings, 0);
+  const statuses = team.map((m) => ({ member: m, status: dayStatus(state, m.id, m.countryCode, today) }));
+  const workingToday = statuses.filter((s) => s.status === "Working" || s.status === "WFH").length;
+  const onLeaveToday = statuses.filter((s) => s.status === "On leave").length;
+  const upcomingTeamLeave = state.leaveRequests
+    .filter((r) => teamIds.has(r.employeeId) && (r.status === "approved" || r.status === "pending") && r.to >= today)
+    .sort((a, b) => a.from.localeCompare(b.from))
+    .slice(0, 6);
+  const myHolidays = upcomingHolidays(state.holidays, employee.countryCode, today, 4);
+  const byKind = [...waiting.reduce((m, w) => m.set(w.kind, (m.get(w.kind) ?? 0) + 1), new Map<string, number>())];
 
   if (!hasModuleAccess(demoProfile, "analytics") && !canSystem) {
     return (
       <Page title="Analytics" subtitle="Workforce intelligence">
-        <EmptyState title="Not authorized" description="Switch to a persona with Analytics access." />
+        <EmptyState title="Not authorized" description="You don't have access to Analytics." />
       </Page>
     );
   }
 
-  // Managers (team-only) stay on My team — company-wide tabs are for HR / exec / company scopes.
   const analyticsTabs = [
     ...(canTeam ? [{ id: "team", label: "My team" }] : []),
-    ...(!teamOnly && (canCompany || canViewReport(demoProfile, "hr")) ? [{ id: "workforce", label: "Workforce" }] : []),
+    ...(canCompany ? [{ id: "workforce", label: "Workforce" }] : []),
     ...(canRecruiting ? [{ id: "recruiting", label: "Recruiting" }] : []),
-    ...(!teamOnly && (canCompany || canViewReport(demoProfile, "hr")) ? [{ id: "attendance", label: "Attendance & leave" }] : []),
-    ...(!teamOnly && (canCompany || canViewReport(demoProfile, "hr")) ? [{ id: "talent", label: "Performance & learning" }] : []),
-    ...(!teamOnly && (canCompany || canViewReport(demoProfile, "hr")) ? [{ id: "skills", label: "Skills & capacity" }] : []),
+    ...(canCompany ? [{ id: "attendance", label: "Attendance & leave" }] : []),
+    ...(canCompany ? [{ id: "talent", label: "Performance & learning" }] : []),
+    ...(canCompany ? [{ id: "skills", label: "Skills & capacity" }] : []),
     ...(canCompTab ? [{ id: "comp", label: "Compensation" }] : []),
     ...(canSystem ? [{ id: "system", label: "System status" }] : []),
   ];
 
-  const activeTab = analyticsTabs.some((item) => item.id === tab) ? tab : analyticsTabs[0]?.id ?? "team";
+  if (!analyticsTabs.length) {
+    return (
+      <Page title="Analytics" subtitle="Workforce intelligence">
+        <EmptyState title="Nothing to show" description="No reports available." />
+      </Page>
+    );
+  }
+
+  const activeTab = analyticsTabs.some((item) => item.id === tab) ? tab : analyticsTabs[0].id;
+  const showFilters = canCompany && activeTab !== "team" && activeTab !== "system";
+  const integrations = listIntegrations();
+  const audit = listAuditLog();
 
   return (
     <Page
       title="Analytics"
       subtitle={
-        teamOnly
-          ? `My team · ${employee.fullName.split(" ")[0]}'s reports · ${range.toUpperCase()}`
-          : `Report scopes: ${reportScopes.join(", ")} · ${range.toUpperCase()} · ${countryFilter === "ALL" ? "All countries" : activeCountry.name}`
+        activeTab === "team"
+          ? `My team · ${team.length}`
+          : `${rangeLabel(range)} · ${countryFilter === "ALL" ? t("country.all") : activeCountry.name}`
       }
     >
-      <FilterBar>
-        {!teamOnly && <RegionalFilter label={t("locale.region")} />}
-        {!teamOnly && (
-          <label className="field">
-            <span className="sr-only">Department</span>
-            <select value={dept} onChange={(e) => setDept(e.target.value)} aria-label="Department">
-              {ANALYTICS_DEPARTMENTS.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <label className="field">
-          <span className="sr-only">Date range</span>
-          <select value={range} onChange={(e) => setRange(e.target.value as AnalyticsRange)} aria-label="Date range">
-            {ANALYTICS_RANGES.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </FilterBar>
+      {activeTab !== "system" && (
+        <FilterBar>
+          {showFilters && <RegionalFilter label={t("locale.region")} />}
+          {showFilters && (
+            <label className="field">
+              <span className="sr-only">Department</span>
+              <select value={dept} onChange={(e) => setDept(e.target.value)} aria-label="Department">
+                {["All departments", ...stats.departments].map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {activeTab !== "team" && (
+            <label className="field">
+              <span className="sr-only">Date range</span>
+              <select value={range} onChange={(e) => setRange(e.target.value as AnalyticsRange)} aria-label="Date range">
+                {ANALYTICS_RANGES.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </FilterBar>
+      )}
 
-      {canTeam && (teamOnly || activeTab === "team") && (
+      {activeTab === "team" && (
         <MetricGrid>
-          <MetricCard label="Team size" value={TZ_TEAM.managerTeamSize} hint="Direct reports" />
-          <MetricCard
-            label="In today"
-            value={`${TZ_TEAM.attendancePct}%`}
-            hint={`${TZ_TEAM.presentToday} office · ${TZ_TEAM.wfhToday} WFH · ${TZ_TEAM.onLeaveToday} leave`}
-          />
-          <MetricCard label="Approvals due" value={pendingApprovals} hint="Leave · timesheet · expense" />
-          <MetricCard label="Utilization" value={`${TZ_TEAM.utilizationPct}%`} hint={`${TZ_TEAM.openRoles} open roles · ${TZ_TEAM.attritionRiskCount} attrition watch`} />
+          <MetricCard label="Team size" value={team.length} hint={`${team.filter((m) => m.direct).length} direct reports`} />
+          <MetricCard label="Working today" value={workingToday} hint={`${onLeaveToday} on leave`} />
+          <MetricCard label="Approvals due" value={pendingApprovals} hint="Waiting on you" />
+          <MetricCard label="Open positions" value={teamOpenings} hint="Approved openings in your team" />
         </MetricGrid>
       )}
 
-      {!teamOnly && canCompany && activeTab !== "team" && (
+      {canCompany && activeTab !== "team" && activeTab !== "system" && (
         <MetricGrid>
-          <MetricCard label="Headcount" value={metrics.headcount} hint="Filtered mock workforce" />
-          <MetricCard label="Hiring" value={metrics.hiring} hint="Scaled to date range" />
-          <MetricCard label="Exits" value={metrics.exits} hint="Scaled to date range" />
-          <MetricCard label="Attrition" value={`${metrics.attritionPct}%`} hint="Annualized sample" />
+          <MetricCard label="Headcount" value={stats.headcount} hint="Active people" />
+          <MetricCard label="Joiners" value={stats.joiners} hint={rangeLabel(range)} />
+          <MetricCard label="Exits" value={stats.exits} hint={rangeLabel(range)} />
+          <MetricCard label="Attrition" value={`${stats.attritionPct}%`} hint={rangeLabel(range)} />
         </MetricGrid>
       )}
 
       {analyticsTabs.length > 1 && <Tabs tabs={analyticsTabs} value={activeTab} onChange={setTab} />}
 
-      {activeTab === "team" && canTeam && (
+      {activeTab === "team" && (
         <div className="stack">
           <div className="grid-2">
             <Card title="Who's in today">
               <DataTable
-                headers={["Name", "Code", "Role", "Status"]}
-                rows={TZ_TEAM.directReports.map((r) => [
-                  r.name,
-                  r.code,
-                  r.role,
-                  <StatusBadge key={r.code} status={r.status} tone={r.status === "Leave" ? "warn" : r.status === "WFH" ? "info" : "ok"} />,
+                headers={["Name", "Role", "Status"]}
+                rows={statuses.slice(0, 15).map(({ member, status }) => [
+                  member.name,
+                  member.designation,
+                  <StatusBadge key={member.id} status={status} tone={DAY_TONE[status]} literal />,
                 ])}
               />
+              {team.length > 15 && <p className="note">Showing 15 of {team.length}. Direct reports first.</p>}
               <p className="note" style={{ marginTop: 8 }}>
                 <Link to="/team">Team overview</Link> · <Link to="/org-chart">Org chart</Link>
               </p>
             </Card>
 
-            <Card title="Action queue · clear these first">
-              <MetricGrid>
-                <MetricCard label="Leave" value={leavePending.length} />
-                <MetricCard label="Timesheets" value={timesheetPending.length} />
-                <MetricCard label="Expenses" value={expensePending.length} />
-                <MetricCard label="1:1s due" value={TZ_TEAM.oneOnOnesDue} hint="This week" />
-              </MetricGrid>
-              <ul className="todo" style={{ marginTop: 12 }}>
-                <li>
-                  <Link to="/approvals">Approvals inbox</Link> — leave, timesheet, expense
-                </li>
-                <li>
-                  <Link to="/leave">Leave calendar</Link> — coverage before holidays
-                </li>
-                <li>
-                  <Link to="/timesheet">Timesheets</Link> — {TZ_TEAM.timesheetCompliancePct}% team compliance
-                </li>
-              </ul>
-            </Card>
-          </div>
-
-          <div className="grid-2">
-            <Card title="Upcoming leave & coverage">
-              <DataTable
-                headers={["Employee", "Type", "Dates", "Coverage"]}
-                rows={TZ_TEAM.upcomingLeave.map((row) => [row.name, row.type, `${row.from} → ${row.to}`, row.coverage])}
-              />
+            <Card title="Waiting on you">
+              {byKind.length ? (
+                <MetricGrid>
+                  {byKind.map(([kind, n]) => (
+                    <MetricCard key={kind} label={kind} value={n} />
+                  ))}
+                </MetricGrid>
+              ) : (
+                <p className="note">Nothing waiting on you.</p>
+              )}
               <p className="note" style={{ marginTop: 8 }}>
-                Pending approvals:{" "}
-                {leavePending.length > 0
-                  ? leavePending
-                      .slice(0, 3)
-                      .map((req) => `${req.employeeId} (${req.code.toUpperCase()})`)
-                      .join(" · ")
-                  : "None waiting on you"}
+                <Link to="/approvals">Open Approvals</Link>
               </p>
-            </Card>
-
-            <Card title="Capacity & overtime risk">
-              <MetricGrid>
-                <MetricCard label="OT hours" value={TZ_TEAM.overtimeHours} hint={range.toUpperCase()} />
-                <MetricCard label="Timesheet OK" value={`${TZ_TEAM.timesheetCompliancePct}%`} />
-                <MetricCard label="Engagement" value={TZ_TEAM.engagementScore} hint="/ 10 pulse" />
-                <MetricCard label="Open roles" value={TZ_TEAM.openRoles} />
-              </MetricGrid>
-              <BarRows items={TZ_TEAM.capacityByWeek.map((r) => ({ label: r.label, value: r.pct }))} max={100} format={(n) => `${n}%`} />
-              <DataTable
-                headers={["Name", "OT hrs", "Note"]}
-                rows={TZ_TEAM.overtimeRisk.map((r) => [r.name, String(r.hours), r.note])}
-              />
             </Card>
           </div>
 
           <div className="grid-2">
-            <Card title="Goals & delivery">
-              {TZ_TEAM.goals.map((g) => (
-                <ProgressBar key={g.name} value={g.progress} label={g.name} />
-              ))}
-              <p className="note" style={{ marginTop: 8 }}>
-                <Link to="/evaluations">Performance / evaluations</Link>
-              </p>
-            </Card>
-
-            <Card title="Reviews & 1:1 cadence">
+            <Card title="Upcoming team leave">
               <DataTable
-                headers={["Person", "Item", "Due", "Status"]}
-                rows={TZ_TEAM.reviewDeadlines.map((r) => [
-                  r.name,
-                  r.item,
-                  r.due,
-                  <StatusBadge
-                    key={`${r.name}-${r.item}`}
-                    status={r.status}
-                    tone={r.status === "Due soon" ? "warn" : r.status === "On track" ? "ok" : "info"}
-                  />,
+                headers={["Person", "Type", "Dates", "Status"]}
+                rows={upcomingTeamLeave.map((r) => [
+                  personName(r.employeeId, people),
+                  r.code.toUpperCase(),
+                  `${formatShortDate(r.from)} → ${formatShortDate(r.to)}`,
+                  <StatusBadge key={r.id} status={r.status === "approved" ? "Approved" : "Pending"} tone={r.status === "approved" ? "ok" : "warn"} literal />,
                 ])}
-              />
-              <h3 className="card-title" style={{ fontSize: 14, margin: "14px 0 8px" }}>
-                1:1 schedule
-              </h3>
-              <DataTable
-                headers={["Person", "Last", "Next", "Status"]}
-                rows={TZ_TEAM.oneOnOnes.map((r) => [
-                  r.name,
-                  r.last,
-                  r.next,
-                  <StatusBadge key={r.name} status={r.status} tone={r.status === "Needs slot" ? "warn" : "ok"} />,
-                ])}
+                empty={<p className="note">No upcoming leave in your team.</p>}
               />
             </Card>
-          </div>
 
-          <div className="grid-2">
-            <Card title="Skills & hiring for your team">
+            <Card title={`Upcoming holidays · ${employee.countryName ?? ""}`}>
               <DataTable
-                headers={["Skill", "Covered", "Gap"]}
-                rows={TZ_TEAM.skills.map((s) => [s.name, String(s.cover), s.gap])}
+                headers={["Date", "Holiday"]}
+                rows={myHolidays.map((h) => [formatShortDate(h.date), h.name])}
+                empty={<p className="note">No more holidays this year.</p>}
               />
-              <h3 className="card-title" style={{ fontSize: 14, margin: "14px 0 8px" }}>
-                Joiners & open roles
-              </h3>
-              <ul className="todo">
-                {TZ_TEAM.newJoiners.map((j) => (
-                  <li key={j.name}>
-                    New · {j.name} · {j.role} · {j.start}
-                  </li>
-                ))}
-                <li>Open · Senior Frontend Engineer · 1 seat</li>
-                <li>Open · QA Analyst · 1 seat</li>
-              </ul>
-              <p className="note">
-                <Link to="/skills">Skills</Link> · <Link to="/jobs">Jobs</Link> · <Link to="/recruiting">Recruiting</Link>
-              </p>
-            </Card>
-
-            <Card title="Risks & alerts">
-              <ul className="todo">
-                {TZ_TEAM.attritionSignals.map((a) => (
-                  <li key={a.name}>
-                    <StatusBadge status={a.risk} tone="warn" /> {a.name} — {a.signal}
-                  </li>
-                ))}
-                <li>
-                  <StatusBadge status="warn" tone="warn" /> {TZ_TEAM.onLeaveToday} on leave today — confirm coverage
-                </li>
-                <li>
-                  <StatusBadge status="info" tone="info" /> {timesheetPending.length} timesheet(s) waiting on you
-                </li>
-                <li>
-                  <StatusBadge status="warn" tone="warn" /> QA automation stretch — hire or upskill
-                </li>
-                <li>
-                  <StatusBadge status="info" tone="info" /> Dussehra (20 Oct) — protect sprint capacity
-                </li>
-                <li>
-                  <StatusBadge status="ok" tone="ok" /> No critical policy acknowledgements overdue
-                </li>
-              </ul>
             </Card>
           </div>
         </div>
       )}
 
-      {activeTab === "workforce" && !teamOnly && (
+      {activeTab === "workforce" && canCompany && (
         <div className="grid-2">
           <Card title="Country distribution">
-            <BarRows items={metrics.countries.map((c) => ({ label: c.name, value: c.headcount }))} />
+            <BarRows items={stats.byCountry.map((c) => ({ label: c.name, value: c.count }))} />
           </Card>
           <Card title="Department distribution">
-            <BarRows items={metrics.departments.map((d) => ({ label: d.name, value: d.headcount }))} />
+            <BarRows items={stats.byDepartment.map((d) => ({ label: d.name, value: d.count }))} />
+          </Card>
+          <Card title="Business units">
+            <BarRows items={stats.byBusinessUnit.map((b) => ({ label: b.name, value: b.count }))} />
           </Card>
         </div>
       )}
@@ -381,11 +384,11 @@ export function AnalyticsPage() {
           <Card title="Recruitment pipeline">
             <BarRows items={pipeline.map((s) => ({ label: s.stage, value: s.count }))} />
           </Card>
-          <Card title="Time-to-hire">
+          <Card title="Requisitions">
             <MetricGrid>
-              <MetricCard label="Avg days" value={34} hint="Shared recruiting mock" />
-              <MetricCard label="Offers out" value={8} />
-              <MetricCard label="Open reqs" value={24} />
+              <MetricCard label="Open requisitions" value={openReqs.length} />
+              <MetricCard label="Openings" value={openReqs.reduce((n, r) => n + r.openings, 0)} />
+              <MetricCard label="Awaiting approval" value={talent.requisitions.filter((r) => r.approvalStatus === "Pending approval").length} />
             </MetricGrid>
           </Card>
         </div>
@@ -393,74 +396,128 @@ export function AnalyticsPage() {
 
       {activeTab === "attendance" && (
         <div className="grid-2">
-          <Card title="Attendance trend">
-            <BarRows items={att.map((r) => ({ label: r.label, value: r.pct }))} max={100} format={(n) => `${n}%`} />
+          <Card title="Attendance · weekly">
+            {attendance.trend.length ? (
+              <BarRows items={attendance.trend.map((r) => ({ label: r.label, value: r.pct }))} max={100} format={(n) => `${n}%`} />
+            ) : (
+              <p className="note">No attendance records.</p>
+            )}
           </Card>
-          <Card title="Leave days">
+          <Card title="Leave days · approved">
             <BarRows items={leave.map((r) => ({ label: r.label, value: r.days }))} />
           </Card>
-          <Card title="Overtime by department (sample hours)">
-            <BarRows items={ot.map((r) => ({ label: r.label, value: r.hours }))} />
+          <Card title="Overtime by department (hours)">
+            {attendance.overtime.length ? (
+              <BarRows items={attendance.overtime.map((r) => ({ label: r.label, value: r.hours }))} />
+            ) : (
+              <p className="note">No overtime recorded.</p>
+            )}
           </Card>
         </div>
       )}
 
       {activeTab === "talent" && (
         <div className="grid-2">
-          <Card title={`Performance · ${PERFORMANCE_CYCLE.name}`}>
+          <Card title={`Performance · ${cycle.name}`}>
             <p>
-              Cycle completion: <strong>{PERFORMANCE_CYCLE.completionPct}%</strong> · due {PERFORMANCE_CYCLE.due}
+              {cycle.status} · completion <strong>{reviews.completionPct}%</strong> · ends {formatShortDate(cycle.end)}
             </p>
-            <BarRows items={PERFORMANCE_CYCLE.byStage.map((s) => ({ label: s.stage, value: s.pct }))} max={100} format={(n) => `${n}%`} />
+            {reviews.total ? (
+              <BarRows
+                items={[
+                  { label: "Self review", value: Math.round((reviews.selfDone / reviews.total) * 100) },
+                  { label: "Manager review", value: Math.round((reviews.managerDone / reviews.total) * 100) },
+                  { label: "Rated", value: Math.round((reviews.calibrated / reviews.total) * 100) },
+                  { label: "Released", value: Math.round((reviews.released / reviews.total) * 100) },
+                ]}
+                max={100}
+                format={(n) => `${n}%`}
+              />
+            ) : (
+              <p className="note">No reviews in scope.</p>
+            )}
           </Card>
           <Card title="Learning & certifications">
             <MetricGrid>
-              <MetricCard label="Completion" value={`${LEARNING_METRICS.completionPct}%`} />
-              <MetricCard label="Certifications YTD" value={LEARNING_METRICS.certificationsYtd} />
-              <MetricCard label="Mandatory pending" value={LEARNING_METRICS.mandatoryPending} />
+              <MetricCard label="Completion" value={`${learning.pct}%`} hint={`${learning.completed} of ${learning.total}`} />
+              <MetricCard label="Certifications YTD" value={learningMore.certificationsYtd} />
+              <MetricCard label="Mandatory pending" value={learningMore.mandatoryPending} />
             </MetricGrid>
-            <BarRows
-              items={LEARNING_METRICS.topCourses.map((c) => ({ label: c.name, value: c.completionPct }))}
-              max={100}
-              format={(n) => `${n}%`}
-            />
+            <BarRows items={learningMore.topCourses.map((c) => ({ label: c.name, value: c.completionPct }))} max={100} format={(n) => `${n}%`} />
           </Card>
         </div>
       )}
 
       {activeTab === "skills" && (
         <div className="grid-2">
-          <Card title="Workforce capacity">
-            <MetricGrid>
-              <MetricCard label="Utilized" value={`${SKILLS_CAPACITY.utilizedPct}%`} />
-              <MetricCard label="Bench" value={`${SKILLS_CAPACITY.benchPct}%`} />
-              <MetricCard label="Hiring pressure" value={SKILLS_CAPACITY.hiringPressure} />
-            </MetricGrid>
-            <BarRows items={SKILLS_CAPACITY.benchByCountry.map((b) => ({ label: b.country, value: b.bench }))} />
+          <Card title="Skill coverage">
+            <BarRows items={skillTop.map((s) => ({ label: s.name, value: s.people }))} />
           </Card>
           <Card title="Critical skill gaps">
             <DataTable
-              headers={["Skill", "Gap", "Countries"]}
-              rows={SKILLS_CAPACITY.skills.map((s) => [s.skill, s.gap, s.countries])}
+              headers={["Skill", "Gap", "Below target", "Countries"]}
+              rows={skillGaps.map((s) => [s.skill, s.gap, String(s.people), s.countries])}
+              empty={<p className="note">No skill gaps.</p>}
             />
           </Card>
         </div>
       )}
 
       {activeTab === "comp" && canCompTab && (
-        <Card title="Compensation review status">
-          <Banner message={{ tone: "warn", text: COMP_REVIEW_STATUS.note }} />
-          <MetricGrid>
-            <MetricCard label="Submitted" value={`${COMP_REVIEW_STATUS.submittedPct}%`} />
-            <MetricCard label="Pending managers" value={COMP_REVIEW_STATUS.pendingManagers} />
-            <MetricCard label="Budget used" value={`${COMP_REVIEW_STATUS.budgetUsedPct}%`} />
-            <MetricCard label="Sample award" value={formatMoney(12500)} hint={activeCountry.currency} />
-          </MetricGrid>
-          <p className="note">{COMP_REVIEW_STATUS.cycle}</p>
+        <Card title={comp ? `${comp.cycle} · ${comp.status}` : "Compensation review"}>
+          {comp && comp.total ? (
+            <MetricGrid>
+              <MetricCard label="Submitted" value={`${comp.submittedPct}%`} hint={`${comp.total} proposals`} />
+              <MetricCard label="Managers pending" value={comp.pendingManagers} />
+              <MetricCard label="Awaiting approval" value={comp.awaiting} />
+              <MetricCard label="Avg increase" value={`${comp.avgIncreasePct}%`} hint={`${comp.approved} approved`} />
+            </MetricGrid>
+          ) : (
+            <p className="note">No proposals in scope.</p>
+          )}
         </Card>
+      )}
+
+      {activeTab === "system" && canSystem && (
+        <div className="stack">
+          <MetricGrid>
+            <MetricCard label="Connectors" value={integrations.length} />
+            <MetricCard label="Connected" value={integrations.filter((i) => i.status === "Connected").length} />
+            <MetricCard label="Need attention" value={integrations.filter((i) => i.status === "Degraded" || i.status === "Disconnected").length} />
+            <MetricCard label="Errors" value={integrations.reduce((n, i) => n + i.errorCount, 0)} />
+          </MetricGrid>
+          <div className="grid-2">
+            <Card title="Integration health">
+              <DataTable
+                headers={["Connector", "Status", "Last sync"]}
+                rows={integrations.map((i) => [
+                  i.name,
+                  <StatusBadge key={i.id} status={i.status} tone={integrationTone(i.status)} literal />,
+                  i.lastSync,
+                ])}
+              />
+              <p className="note">
+                <Link to="/integrations">Integration Center</Link>
+              </p>
+            </Card>
+            <Card title="Recent audit events">
+              <DataTable
+                headers={["When", "Who", "Action"]}
+                rows={audit.slice(0, 6).map((r) => [r.at, r.actor, `${r.action} · ${r.target}`])}
+              />
+              <p className="note">
+                <Link to="/admin">Administration</Link>
+              </p>
+            </Card>
+          </div>
+        </div>
       )}
     </Page>
   );
+}
+
+function integrationTone(status: string): "ok" | "warn" | "danger" | "neutral" {
+  return status === "Connected" ? "ok" : status === "Degraded" ? "warn" : status === "Disconnected" ? "danger" : "neutral";
 }
 
 /* ───────────────── AI Copilot ───────────────── */
@@ -469,6 +526,7 @@ type ChatTurn = { id: string; role: "user" | "assistant"; text: string; answer?:
 
 export function AiCopilotPage() {
   const { employee, demoProfile } = usePortal();
+  const buildContext = useCopilotContext();
   const persona = copilotPersonaFromRole(demoProfile.role);
   const suggestions = COPILOT_SUGGESTIONS[persona];
   const [prompt, setPrompt] = useState("");
@@ -478,15 +536,10 @@ export function AiCopilotPage() {
   function ask(question: string) {
     const q = question.trim();
     if (!q) return;
-    const answer = answerCopilot(q, demoProfile);
+    const answer = answerCopilot(q, buildContext());
     const stamp = Date.now();
     const userTurn: ChatTurn = { id: `u-${stamp}`, role: "user", text: q };
-    const botTurn: ChatTurn = {
-      id: `a-${stamp}`,
-      role: "assistant",
-      text: answer.summary?.trim() || "Here is what I found in the demo data.",
-      answer,
-    };
+    const botTurn: ChatTurn = { id: `a-${stamp}`, role: "assistant", text: answer.summary, answer };
     setHistory((prev) => [...prev, userTurn, botTurn]);
     setActiveId(botTurn.id);
     setPrompt("");
@@ -507,7 +560,7 @@ export function AiCopilotPage() {
   }, [history]);
 
   return (
-    <Page title="AI Copilot" subtitle={`${PRODUCT_NAME} contextual assistant · ${demoProfile.personaLabel}`}>
+    <Page title="AI Copilot">
       <div className="copilot-layout">
         <aside className="copilot-history card">
           <h2 className="card-title">Conversation history</h2>
@@ -530,7 +583,7 @@ export function AiCopilotPage() {
         </aside>
 
         <div className="copilot-main stack">
-          <Card title={`Suggested for ${demoProfile.personaLabel}`}>
+          <Card title="Suggested">
             <div className="chip-row">
               {suggestions.map((s) => (
                 <button key={s} type="button" className="chip-btn" onClick={() => ask(s)}>
@@ -544,7 +597,7 @@ export function AiCopilotPage() {
             <div className="copilot-thread" aria-live="polite">
               {history.length === 0 && (
                 <p className="note">
-                  Hi {employee.fullName.split(" ")[0]} — ask about leave, policy, approvals, team skills, or workforce trends.
+                  Hi {employee.fullName.split(" ")[0]} — ask about your leave, holidays, approvals or working hours.
                 </p>
               )}
               {history.map((turn) => (
@@ -561,7 +614,7 @@ export function AiCopilotPage() {
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   rows={2}
-                  placeholder="e.g. How do I apply for leave? Summarize attrition…"
+                  placeholder="e.g. What is my leave balance?"
                 />
               </Field>
               <button className="btn" type="submit">
@@ -614,7 +667,7 @@ export function AiAgentsPage() {
   if (!hasModuleAccess(demoProfile, "agents")) {
     return (
       <Page title="AI Agents" subtitle="Autonomous assistants">
-        <EmptyState title="Not authorized" description="Switch to a persona with AI Agents access." />
+        <EmptyState title="Not authorized" description="You don't have access to AI Agents." />
       </Page>
     );
   }
@@ -632,11 +685,12 @@ export function AiAgentsPage() {
                 <dd>{agent.availability}</dd>
               </div>
               <div className="info-fact">
-                <dt>Demo status</dt>
+                <dt>Status</dt>
                 <dd>
                   <StatusBadge
-                    status={agent.demoStatus}
+                    status={agent.demoStatus === "Demo ready" ? "Ready" : agent.demoStatus === "Demo beta" ? "Beta" : "Planned"}
                     tone={agent.demoStatus === "Demo ready" ? "ok" : agent.demoStatus === "Demo beta" ? "warn" : "info"}
+                    literal
                   />
                 </dd>
               </div>
@@ -657,14 +711,14 @@ export function IntegrationsPage() {
   const [selected, setSelected] = useState(integrations[0]?.id ?? "sso");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pendingRetry, setPendingRetry] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   const active = integrations.find((i) => i.id === selected) ?? integrations[0];
 
   if (!hasModuleAccess(demoProfile, "integrations") && !hasModuleAccess(demoProfile, "*")) {
     return (
       <Page title="Integration Center" subtitle="Connectors and sync status">
-        <EmptyState title="Not authorized" description="Switch to the Admin demo persona to manage integrations." />
+        <EmptyState title="Not authorized" description="Only admins manage integrations." />
       </Page>
     );
   }
@@ -676,15 +730,17 @@ export function IntegrationsPage() {
 
   function confirmRetry() {
     if (!pendingRetry) return;
-    const result = retryIntegration(pendingRetry);
+    const result = retryIntegration(pendingRetry, employee.fullName);
     setReviewOpen(false);
     setPendingRetry(null);
-    setToast(result ? `Retry simulated for ${result.name}. Last sync updated locally.` : "Integration not found.");
+    if (!result) setToast({ tone: "err", text: "This connector can't be retried." });
+    else if (result.ok) setToast({ tone: "ok", text: `${result.item.name} synced.` });
+    else setToast({ tone: "err", text: `${result.item.name} retry failed. Check the logs.` });
   }
 
   return (
-    <Page title="Integration Center" subtitle="SSO, collaboration, workforce and payroll connectors">
-      {toast && <Banner message={{ tone: "ok", text: toast }} />}
+    <Page title="Integration Center">
+      {toast && <Banner message={toast} />}
       <div className="grid-2">
         {integrations.map((item) => (
           <button
@@ -750,7 +806,7 @@ export function IntegrationsPage() {
 
       <Dialog
         open={reviewOpen}
-        title="Authorized review required"
+        title="Retry sync"
         onClose={() => { setReviewOpen(false); setPendingRetry(null); }}
         actions={
           <>
@@ -758,13 +814,13 @@ export function IntegrationsPage() {
               Cancel
             </button>
             <button className="btn" type="button" onClick={confirmRetry}>
-              Confirm retry as {employee.fullName.split(" ")[0]}
+              Retry now
             </button>
           </>
         }
       >
         <p>
-          Retrying a connector updates mock last-sync and logs in localStorage only. No external system is contacted.
+          Retry the last sync for this connector?
         </p>
       </Dialog>
     </Page>
@@ -775,68 +831,57 @@ export function IntegrationsPage() {
 
 export function PayrollPage() {
   const { demoProfile } = usePortal();
-  const { activeCountry, regionCode } = useLocale();
+  const { countries, regionCode, matchesRegion } = useLocale();
   usePlatformTick();
-  const payrollConn = listIntegrations().find((i) => i.id === "payroll");
 
   if (!hasModuleAccess(demoProfile, "payroll") && !hasModuleAccess(demoProfile, "*")) {
     return (
-      <Page title="Payroll" subtitle="External payroll integration">
-        <EmptyState title="Not authorized" description="Switch to Compensation or Admin to view Payroll." />
+      <Page title="Payroll" subtitle="Payroll providers">
+        <EmptyState title="Not authorized" description="You don't have access to Payroll." />
       </Page>
     );
   }
 
+  const rows = PAYROLL_PROVIDERS.filter((p) => regionCode === "ALL" || matchesRegion(p.country));
+
   return (
-    <Page title="Payroll" subtitle="Integration status">
-      <Banner
-        message={{
-          tone: "err",
-          text: "Payroll processing, tax calculation, payslip generation, and payment processing are not implemented in Infotech. This screen shows external-provider integration placeholders only.",
-        }}
-      />
+    <Page title="Payroll" subtitle="Provider handoff by country">
+      <Banner message={{ tone: "warn", text: "Payroll is run by external providers." }} />
+      <FilterBar>
+        <RegionalFilter />
+      </FilterBar>
       <MetricGrid>
-        <MetricCard label="Provider" value="External adapter" hint={PAYROLL_STATUS.provider} />
-        <MetricCard
-          label="Country"
-          value={regionCode === "ALL" ? "Multi" : activeCountry.name}
-          hint={activeCountry.code}
-        />
-        <MetricCard label="Legal entity" value={activeCountry.legalEntity} />
-        <MetricCard label="Period" value={PAYROLL_STATUS.period} />
+        <MetricCard label="Providers" value={rows.length} />
+        <MetricCard label="Connected" value={rows.filter((r) => r.status === "Connected").length} />
+        <MetricCard label="Need attention" value={rows.filter((r) => r.status === "Degraded" || r.status === "Disconnected").length} />
+        <MetricCard label="Not set up" value={rows.filter((r) => r.status === "Not configured").length} />
       </MetricGrid>
-      <div className="grid-2">
-        <Card title="Integration status">
-          <dl className="info-grid">
-            <div className="info-fact">
-              <dt>Status</dt>
-              <dd>
-                <StatusBadge status={payrollConn?.status ?? PAYROLL_STATUS.integrationStatus} tone="ok" />
-              </dd>
-            </div>
-            <div className="info-fact">
-              <dt>Last sync</dt>
-              <dd>{payrollConn?.lastSync ?? PAYROLL_STATUS.lastSync}</dd>
-            </div>
-            <div className="info-fact">
-              <dt>Records</dt>
-              <dd>{payrollConn?.recordsProcessed ?? 500}</dd>
-            </div>
-          </dl>
-          <p className="note">
-            Manage connector retries in <Link to="/integrations">Integration Center</Link>.
-          </p>
-        </Card>
-        <Card title="Not in this product scope">
-          <ul className="stack">
-            {PAYROLL_STATUS.notImplemented.map((item) => (
-              <li key={item}>
-                <StatusBadge status="Not implemented" tone="neutral" /> {item}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      </div>
+      <Card title="Providers by legal entity">
+        <DataTable
+          headers={["Country", "Legal entity", "Provider", "Status", "Last handoff", "Note"]}
+          rows={rows.map((r) => {
+            const c = countries.find((x) => x.code === r.country);
+            return [
+              c?.name ?? r.country,
+              c?.legalEntity ?? "—",
+              r.provider,
+              <StatusBadge key={r.country} status={r.status} tone={integrationTone(r.status)} literal />,
+              r.lastHandoff,
+              r.note,
+            ];
+          })}
+        />
+        <p className="note">
+          Connector retries: <Link to="/integrations">Integration Center</Link>
+        </p>
+      </Card>
+      <Card title="Not done in this app">
+        <ul className="stack">
+          {PAYROLL_STATUS.notImplemented.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      </Card>
     </Page>
   );
 }
@@ -859,7 +904,7 @@ export function AdminPage() {
   if (!hasModuleAccess(demoProfile, "administration") && !hasModuleAccess(demoProfile, "*")) {
     return (
       <Page title="Administration" subtitle="Platform configuration">
-        <EmptyState title="Not authorized" description="Switch to the Admin or HR demo persona." />
+        <EmptyState title="Not authorized" description="You don't have access to Administration." />
       </Page>
     );
   }
@@ -871,7 +916,7 @@ export function AdminPage() {
     if (!acc) return;
     setSaveError("");
     setEditId(accountId);
-    setDraftPerms(effectiveNavIds(accountId, acc.navAccess.filter((x) => x !== "*") as string[]));
+    setDraftPerms(effectiveCatalogIds(acc));
   }
 
   const editingSelf = editId === employee.id;
@@ -889,7 +934,14 @@ export function AdminPage() {
 
   function confirmSave() {
     if (!editId) return;
-    const error = saveRoleEdit(editId, draftPerms, { id: employee.id, email: employee.email, role: demoProfile.role });
+    const target = DEMO_ACCOUNTS.find((a) => a.id === editId);
+    if (!target) return;
+    const error = saveRoleEdit(target, draftPerms, {
+      id: employee.id,
+      fullName: employee.fullName,
+      role: demoProfile.role,
+      navAccess: demoProfile.navAccess,
+    });
     setReviewOpen(false);
     if (error) {
       setSaveError(error);
@@ -900,7 +952,7 @@ export function AdminPage() {
   }
 
   return (
-    <Page title="Administration" subtitle="Users, roles, countries, org settings, audit & notifications">
+    <Page title="Administration">
       <Tabs
         tabs={[
           { id: "users", label: "Users" },
@@ -926,18 +978,18 @@ export function AdminPage() {
           action={
             editing && editable ? (
               <button className="btn" type="button" onClick={requestSave}>
-                Save with review…
+                Save changes
               </button>
             ) : undefined
           }
         >
           <FilterBar>
             <select
-              aria-label="Select demo user"
+              aria-label="Select user"
               value={editId ?? ""}
               onChange={(e) => (e.target.value ? openEditor(e.target.value) : setEditId(null))}
             >
-              <option value="">Select demo user…</option>
+              <option value="">Select a user…</option>
               {DEMO_ACCOUNTS.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.personaLabel} — {a.fullName}
@@ -946,7 +998,7 @@ export function AdminPage() {
             </select>
           </FilterBar>
           {!canEdit && (
-            <Banner message={{ tone: "err", text: "Read-only: only Admin or Super Admin can change role permissions." }} />
+            <Banner message={{ tone: "err", text: "Read-only: only Admin can change permissions." }} />
           )}
           {canEdit && editingSelf && (
             <Banner message={{ tone: "err", text: "You cannot change permissions on your own account." }} />
@@ -955,13 +1007,13 @@ export function AdminPage() {
           {!editing && (
             <EmptyState
               title="Select a user"
-              description={canEdit ? "Edit a subset of module permissions for demo overlays." : "View module permissions for demo users."}
+              description={canEdit ? "Grant or remove module access." : "View module access."}
             />
           )}
           {editing && (
             <>
               <p>
-                Editing <strong>{editing.personaLabel}</strong> ({editing.email}) · baseline role {roleLabel(editing.role)}
+                Editing <strong>{editing.fullName}</strong> · role {roleLabel(editing.role)}. Pay access can only be granted by someone who holds it.
               </p>
               <ul className="perm-grid">
                 {ROLE_PERMISSION_CATALOG.map((p) => (
@@ -989,8 +1041,8 @@ export function AdminPage() {
       {tab === "country" && (
         <Card title="Country & legal entity configuration">
           <p>
-            Full mock holiday, leave, working-time, benefits, and document settings live under{" "}
-            <Link to="/admin/countries">Country configuration</Link>. Locale / demo region:{" "}
+            Holiday, leave, working-time, benefits and document reference:{" "}
+            <Link to="/admin/countries">Country configuration</Link>. Region and language:{" "}
             <Link to="/settings/locale">Locale settings</Link>.
           </p>
           <DataTable
@@ -1052,7 +1104,7 @@ export function AdminPage() {
               r.actor,
               r.action,
               r.target,
-              <StatusBadge key={r.id} status={r.outcome} tone={r.outcome === "Simulated" ? "warn" : "ok"} />,
+              <StatusBadge key={r.id} status={r.outcome} tone={r.outcome === "Failed" ? "danger" : "ok"} literal />,
             ])}
           />
         </Card>
@@ -1065,9 +1117,9 @@ export function AdminPage() {
             rows={prefs.map((p) => [
               p.channel,
               p.description,
-              <PrefToggle key={`${p.id}-e`} disabled={!canEdit} checked={p.email} onChange={(v) => updateNotificationPref(p.id, { email: v })} />,
-              <PrefToggle key={`${p.id}-i`} disabled={!canEdit} checked={p.inApp} onChange={(v) => updateNotificationPref(p.id, { inApp: v })} />,
-              <PrefToggle key={`${p.id}-d`} disabled={!canEdit} checked={p.digests} onChange={(v) => updateNotificationPref(p.id, { digests: v })} />,
+              <PrefToggle key={`${p.id}-e`} disabled={!canEdit} checked={p.email} onChange={(v) => updateNotificationPref(p.id, { email: v }, employee.fullName)} />,
+              <PrefToggle key={`${p.id}-i`} disabled={!canEdit} checked={p.inApp} onChange={(v) => updateNotificationPref(p.id, { inApp: v }, employee.fullName)} />,
+              <PrefToggle key={`${p.id}-d`} disabled={!canEdit} checked={p.digests} onChange={(v) => updateNotificationPref(p.id, { digests: v }, employee.fullName)} />,
             ])}
           />
         </Card>
@@ -1075,7 +1127,7 @@ export function AdminPage() {
 
       <Dialog
         open={reviewOpen}
-        title="Authorized review required"
+        title="Confirm permission change"
         onClose={() => setReviewOpen(false)}
         actions={
           <>
@@ -1089,8 +1141,7 @@ export function AdminPage() {
         }
       >
         <p>
-          You are about to save a demo permission overlay for <strong>{editing?.fullName}</strong>. This does not call a backend and
-          does not elevate the currently signed-in session automatically.
+          Save the new module access for <strong>{editing?.fullName}</strong>?
         </p>
       </Dialog>
     </Page>

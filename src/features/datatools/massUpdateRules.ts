@@ -1,6 +1,25 @@
 import { FILTER_OPTIONS, type EmploymentStatus, type PersonRecord } from "../../data/peopleData.ts";
 import type { LocalPersonRecord } from "../../data/peopleLocal.ts";
-import { cleanText, isValidISODate, looksLikeFormula, type DataToolsActor } from "./shared.ts";
+import { DEMO_ACCOUNTS, managementChain } from "../../demoAccounts.ts";
+import { HR_ROLES, cleanText, looksLikeFormula, type DataToolsActor } from "./shared.ts";
+
+/** Mass update is an HR tool: platform admins and line managers cannot use it. */
+export function canMassUpdate(role: DataToolsActor["role"]): boolean {
+  return HR_ROLES.includes(role);
+}
+
+/** Everyone above the actor (directory manager chain plus the persona chain). */
+function actorChain(actorId: string, people: readonly PersonRecord[]): Set<string> {
+  const byId = new Map(people.map((p) => [p.id, p]));
+  const chain = new Set<string>();
+  let cursor = byId.get(actorId)?.managerId;
+  while (cursor && !chain.has(cursor) && cursor !== actorId) {
+    chain.add(cursor);
+    cursor = byId.get(cursor)?.managerId;
+  }
+  for (const manager of managementChain(actorId, DEMO_ACCOUNTS)) chain.add(manager.id);
+  return chain;
+}
 
 export const MAX_MASS_UPDATE = 1000;
 
@@ -8,17 +27,12 @@ export type MassChange =
   | { kind: "manager"; managerId: string }
   | { kind: "department"; department: string }
   | { kind: "location"; location: string }
-  | { kind: "status"; status: EmploymentStatus; exitDate?: string; exitReason?: string };
+  | { kind: "status"; status: EmploymentStatus };
 
 export interface MassPlan {
   error: string | null;
   changes: { before: LocalPersonRecord; after: LocalPersonRecord }[];
   skipped: { person: PersonRecord; reason: string }[];
-}
-
-function addDays(iso: string, days: number): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
 
 export function describeChange(change: MassChange, people: readonly PersonRecord[]): string {
@@ -30,7 +44,7 @@ export function describeChange(change: MassChange, people: readonly PersonRecord
     case "location":
       return `Location → ${change.location}`;
     case "status":
-      return `Status → ${change.status}${change.status === "Terminated" && change.exitDate ? ` (exit ${change.exitDate})` : ""}`;
+      return `Status → ${change.status}`;
   }
 }
 
@@ -42,8 +56,10 @@ export function planMassUpdate(
   people: readonly PersonRecord[],
   today: string,
 ): MassPlan {
+  void today;
   const plan: MassPlan = { error: null, changes: [], skipped: [] };
   const fail = (error: string) => ({ ...plan, error });
+  if (!canMassUpdate(actor.role)) return fail("Only HR can make mass updates.");
   const unique = [...new Set(ids)];
   if (!unique.length) return fail("Select at least one person.");
   if (unique.length > MAX_MASS_UPDATE) return fail(`Select at most ${MAX_MASS_UPDATE} people at a time.`);
@@ -51,7 +67,6 @@ export function planMassUpdate(
 
   let manager: PersonRecord | undefined;
   let location = "";
-  let exitReason = "";
   if (change.kind === "manager") {
     manager = byId.get(change.managerId);
     if (!manager) return fail("Choose a new manager from the directory.");
@@ -64,16 +79,9 @@ export function planMassUpdate(
     if (looksLikeFormula(location) || !/^[\p{L}][\p{L}\p{M}0-9 .,'()-]*$/u.test(location)) return fail("Location contains characters that are not allowed.");
   } else {
     if (!FILTER_OPTIONS.employmentStatuses.includes(change.status)) return fail("Choose an employment status from the list.");
-    if (change.status === "Terminated") {
-      if (!change.exitDate) return fail("Exit date is required to terminate.");
-      if (!isValidISODate(change.exitDate)) return fail("Exit date must be a real date in YYYY-MM-DD format.");
-      if (change.exitDate > addDays(today, 90)) return fail("Exit date can be at most 90 days from today.");
-      exitReason = cleanText(change.exitReason);
-      if (exitReason.length < 3) return fail("Exit reason is required (at least 3 characters).");
-      if (exitReason.length > 200) return fail("Exit reason must be 200 characters or fewer.");
-      if (looksLikeFormula(exitReason)) return fail("Exit reason cannot start with =, +, - or @.");
-    }
+    if (change.status === "Terminated") return fail("Terminations go through the exit workflow, not mass update.");
   }
+  const aboveActor = actorChain(actor.id, people);
 
   // Manager chain for loop checks: walking up from the new manager must never reach the person.
   const chainOf = (id: string): Set<string> => {
@@ -91,6 +99,14 @@ export function planMassUpdate(
     const person = byId.get(id);
     if (!person) continue;
     const skip = (reason: string) => plan.skipped.push({ person, reason });
+    if (person.id === actor.id) {
+      skip("You cannot change your own record.");
+      continue;
+    }
+    if (aboveActor.has(person.id)) {
+      skip("Above you in your reporting line.");
+      continue;
+    }
     switch (change.kind) {
       case "manager": {
         if (person.id === manager!.id) skip("Would become their own manager.");
@@ -112,13 +128,8 @@ export function planMassUpdate(
       }
       case "status": {
         if (person.employmentStatus === change.status) skip(`Already ${change.status}.`);
-        else if (change.status === "Terminated" && person.id === actor.id) skip("You cannot terminate yourself.");
-        else if (change.status === "Terminated" && change.exitDate! < person.dateOfJoining) skip(`Exit date is before their joining date (${person.dateOfJoining}).`);
-        else if (change.status === "Terminated") {
-          plan.changes.push({ before: person, after: { ...person, employmentStatus: "Terminated", exitDate: change.exitDate, exitReason } });
-        } else {
-          plan.changes.push({ before: person, after: { ...person, employmentStatus: change.status, exitDate: undefined, exitReason: undefined } });
-        }
+        else if (person.employmentStatus === "Terminated") skip("Terminated — reactivate through the exit workflow.");
+        else plan.changes.push({ before: person, after: { ...person, employmentStatus: change.status, exitDate: undefined, exitReason: undefined } });
         break;
       }
     }

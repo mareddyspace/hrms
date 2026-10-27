@@ -3,20 +3,32 @@ import type { FormEvent } from "react";
 import type { Employee } from "../model.ts";
 import { maskMobile } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { profileExtrasFor, saveProfileExtras } from "../data/profileExtras.ts";
+import type { ProfileExtras } from "../data/profileExtras.ts";
 import { Banner, Field } from "./ui.tsx";
 
 type ProfileDraft = Pick<Employee, "fullName" | "designation" | "mobile" | "email" | "address" | "shiftName" | "shiftHours">;
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Problems with the employee-editable fields, or null when they are fine. */
-function validateDraft(draft: ProfileDraft): string | null {
-  if (!draft.fullName.trim()) return "Enter a name.";
-  if (!EMAIL_PATTERN.test(draft.email.trim())) return "Enter a valid email address (name@company.com).";
-  const mobile = draft.mobile.trim();
-  const digits = mobile.replace(/\D/g, "").length;
-  if (!/^\+?[\d ]+$/.test(mobile) || digits < 8 || digits > 15) {
+function validPhone(value: string): boolean {
+  const phone = value.trim();
+  const digits = phone.replace(/\D/g, "").length;
+  return /^\+?[\d ]+$/.test(phone) && digits >= 8 && digits <= 15;
+}
+
+/** Problems with the employee-editable fields, or null when they are fine. Name and work email are HR-owned. */
+function validateDraft(draft: ProfileDraft, extras: ProfileExtras): string | null {
+  if (!validPhone(draft.mobile)) {
     return "Enter a valid mobile number: 8–15 digits, optionally starting with + (spaces allowed).";
+  }
+  if (extras.personalEmail.trim() && !EMAIL_PATTERN.test(extras.personalEmail.trim())) {
+    return "Enter a valid personal email address.";
+  }
+  const hasEmergency = extras.emergencyName.trim() || extras.emergencyPhone.trim() || extras.emergencyRelation.trim();
+  if (hasEmergency) {
+    if (!extras.emergencyName.trim()) return "Enter the emergency contact's name.";
+    if (!validPhone(extras.emergencyPhone)) return "Enter a valid emergency contact phone: 8–15 digits.";
   }
   return null;
 }
@@ -44,6 +56,7 @@ export function ProfileEditForm({
   const [otpSent, setOtpSent] = useState(false);
   const [demoHint, setDemoHint] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [extras, setExtras] = useState<ProfileExtras>(() => profileExtrasFor(employee.id));
 
   function sendOtp() {
     const code = requestProfileOtp();
@@ -62,15 +75,17 @@ export function ProfileEditForm({
       setMessage({ tone: "err", text: "Send a verification code before saving." });
       return;
     }
-    const invalid = validateDraft(draft);
+    const invalid = validateDraft(draft, extras);
     if (invalid) {
       setMessage({ tone: "err", text: invalid });
       return;
     }
-    // Designation and shift are HR-owned: always send the current values, never the draft's.
+    // Legal name, work email, designation and shift are HR-owned: always send the current values, never the draft's.
     const error = updateProfileWithOtp(
       {
         ...draft,
+        fullName: employee.fullName,
+        email: employee.email,
         designation: employee.designation,
         shiftName: employee.shiftName,
         shiftHours: employee.shiftHours,
@@ -82,6 +97,7 @@ export function ProfileEditForm({
       setMessage({ tone: "err", text: error });
       return;
     }
+    saveProfileExtras(employee.id, extras);
     setMessage({ tone: "ok", text: "Profile updated." });
     setOtp("");
     setOtpSent(false);
@@ -100,8 +116,20 @@ export function ProfileEditForm({
           />
           {photoError ? <span className="note err">{photoError}</span> : <span className="note">JPEG, PNG or WebP, up to 5 MB.</span>}
         </Field>
-        <Field label="Name">
-          <input value={draft.fullName} onChange={(event) => setDraft({ ...draft, fullName: event.target.value })} />
+        <Field label="Legal name">
+          <input value={employee.fullName} readOnly disabled />
+          <span className="note">Ask HR to change.</span>
+        </Field>
+        <Field label="Preferred name">
+          <input
+            value={extras.preferredName}
+            maxLength={40}
+            onChange={(event) => setExtras({ ...extras, preferredName: event.target.value })}
+          />
+        </Field>
+        <Field label="Work email">
+          <input type="email" value={employee.email} readOnly disabled />
+          <span className="note">Ask HR to change.</span>
         </Field>
         <Field label="Mobile">
           <input
@@ -111,11 +139,36 @@ export function ProfileEditForm({
             onChange={(event) => setDraft({ ...draft, mobile: event.target.value })}
           />
         </Field>
-        <Field label="Email">
-          <input type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
+        <Field label="Personal email">
+          <input
+            type="email"
+            value={extras.personalEmail}
+            onChange={(event) => setExtras({ ...extras, personalEmail: event.target.value })}
+          />
         </Field>
         <Field label="Address" wide>
           <input value={draft.address} onChange={(event) => setDraft({ ...draft, address: event.target.value })} />
+        </Field>
+      </div>
+
+      <h3 className="card-title" style={{ marginTop: 16 }}>Emergency contact</h3>
+      <div className="form-grid">
+        <Field label="Name">
+          <input value={extras.emergencyName} onChange={(event) => setExtras({ ...extras, emergencyName: event.target.value })} />
+        </Field>
+        <Field label="Relationship">
+          <input
+            value={extras.emergencyRelation}
+            onChange={(event) => setExtras({ ...extras, emergencyRelation: event.target.value })}
+          />
+        </Field>
+        <Field label="Phone">
+          <input
+            type="tel"
+            inputMode="tel"
+            value={extras.emergencyPhone}
+            onChange={(event) => setExtras({ ...extras, emergencyPhone: event.target.value })}
+          />
         </Field>
       </div>
 
@@ -134,12 +187,11 @@ export function ProfileEditForm({
             <dd>{employee.shiftHours || "—"}</dd>
           </div>
         </dl>
-        <p className="note">Managed by HR — ask HR to change these.</p>
+        <p className="note">Managed by HR.</p>
       </section>
 
       <div className="otp-box">
         <p className="otp-title">Verify before save</p>
-        <p className="note">Changes to personal details need a one-time code sent to your registered mobile.</p>
         <div className="form-actions" style={{ marginTop: 10 }}>
           <button className="btn-ghost" type="button" onClick={sendOtp}>
             {otpSent ? "Resend code" : "Send OTP"}
@@ -158,7 +210,7 @@ export function ProfileEditForm({
             </Field>
           </div>
         )}
-        {demoHint && <p className="note">Demo OTP: <strong>{demoHint}</strong></p>}
+        {demoHint && <p className="note">Code: <strong>{demoHint}</strong></p>}
       </div>
 
       <div className="form-actions">

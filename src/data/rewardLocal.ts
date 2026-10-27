@@ -1,18 +1,21 @@
-import type { DemoAccount } from "../demoAccounts.ts";
+import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../demoAccounts.ts";
 import { todayISO } from "../model.ts";
 import { canManagePeople } from "./peoplePermissions.ts";
-import { canApproveCompReviews, canManageLetters } from "./rbac.ts";
+import { canManageLetters } from "./rbac.ts";
 import {
   BENEFIT_ENROLLMENTS,
   BENEFIT_PLANS,
   BONUSES,
   COMP_CYCLES,
+  COMP_HISTORY,
   COMP_REVIEWS,
   DOC_LIBRARY_SEED,
   LETTER_REQUESTS,
   SENSITIVE_LETTER_TYPES,
+  type BenefitChangeRequest,
   type BenefitEnrollment,
   type BonusRecord,
+  type CompHistoryRow,
   type CompReviewItem,
   type DocLibraryItem,
   type LetterRequest,
@@ -20,13 +23,16 @@ import {
   type LetterType,
 } from "./rewardData.ts";
 
-// v2: letters gained "Rejected" + requestedById, plans gained `mandatory`
-const KEY = "timez.reward.state.v2";
+// v3: seed rows re-keyed to real people, comp history and benefit change requests stored — older data is replaced.
+const KEY = "timez.reward.state.v3";
+const OLD_KEYS = ["timez.reward.state.v1", "timez.reward.state.v2"];
 
 type RewardState = {
   reviews: CompReviewItem[];
+  history: CompHistoryRow[];
   bonuses: BonusRecord[];
   enrollments: BenefitEnrollment[];
+  changeRequests: BenefitChangeRequest[];
   letters: LetterRequest[];
   library: DocLibraryItem[];
 };
@@ -37,28 +43,56 @@ export type RewardResult = string | null;
 function defaults(): RewardState {
   return {
     reviews: structuredClone(COMP_REVIEWS),
+    history: structuredClone(COMP_HISTORY),
     bonuses: structuredClone(BONUSES),
     enrollments: structuredClone(BENEFIT_ENROLLMENTS),
+    changeRequests: [],
     letters: structuredClone(LETTER_REQUESTS),
     library: structuredClone(DOC_LIBRARY_SEED),
   };
 }
 
+/** Plans everyone in a country is enrolled in automatically (India PF, UK pension). */
+function withAutoEnrollments(state: RewardState): RewardState {
+  for (const person of DEMO_ACCOUNTS) {
+    for (const plan of BENEFIT_PLANS) {
+      if (!plan.autoEnrolled || plan.country !== person.countryName) continue;
+      if (state.enrollments.some((e) => e.employeeId === person.id && e.planId === plan.id)) continue;
+      state.enrollments.push({
+        id: `be-auto-${person.id}-${plan.id}`,
+        employeeId: person.id,
+        employeeName: person.fullName,
+        planId: plan.id,
+        planName: plan.name,
+        country: plan.country,
+        status: "Enrolled",
+        effective: "2026-01-01",
+      });
+    }
+  }
+  return state;
+}
+
 function read(): RewardState {
   const base = defaults();
   try {
+    OLD_KEYS.forEach((k) => localStorage.removeItem(k));
     const raw = localStorage.getItem(KEY);
-    if (!raw) return base;
+    if (!raw) return withAutoEnrollments(base);
     const parsed = JSON.parse(raw) as Partial<RewardState>;
-    return {
-      reviews: Array.isArray(parsed.reviews) ? parsed.reviews : base.reviews,
-      bonuses: Array.isArray(parsed.bonuses) ? parsed.bonuses : base.bonuses,
-      enrollments: Array.isArray(parsed.enrollments) ? parsed.enrollments : base.enrollments,
-      letters: Array.isArray(parsed.letters) ? parsed.letters : base.letters,
-      library: Array.isArray(parsed.library) ? parsed.library : base.library,
-    };
+    const list = <K extends keyof RewardState>(key: K): RewardState[K] =>
+      (Array.isArray(parsed[key]) ? parsed[key] : base[key]) as RewardState[K];
+    return withAutoEnrollments({
+      reviews: list("reviews"),
+      history: list("history"),
+      bonuses: list("bonuses"),
+      enrollments: list("enrollments"),
+      changeRequests: list("changeRequests"),
+      letters: list("letters"),
+      library: list("library"),
+    });
   } catch {
-    return base;
+    return withAutoEnrollments(base);
   }
 }
 
@@ -70,7 +104,7 @@ function write(state: RewardState): RewardResult {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch {
     // Usually the storage quota — keep the previous cache so UI and storage agree.
-    return "Could not save — browser storage is full. Remove large uploads and try again.";
+    return "Could not save — storage is full. Remove large uploads and try again.";
   }
   cache = state;
   listeners.forEach((fn) => fn());
@@ -100,34 +134,110 @@ export function updateReward(mutator: (state: RewardState) => RewardResult | voi
 
 /* ───────────── Compensation reviews ───────────── */
 
-export function setReviewStatus(
-  actor: DemoAccount,
-  id: string,
-  status: "Approved" | "Rejected",
-): RewardResult {
-  if (!canApproveCompReviews(actor)) return "You are not allowed to approve compensation reviews.";
+type Actor = Pick<DemoAccount, "id" | "fullName" | "role">;
+
+function chainIds(employeeId: string): string[] {
+  return managementChain(employeeId, DEMO_ACCOUNTS).map((m) => m.id);
+}
+
+/** True when `actorId` sits above `employeeId` in the reporting line. */
+export function isAboveInLine(actorId: string, employeeId: string): boolean {
+  return actorId !== employeeId && chainIds(employeeId).includes(actorId);
+}
+
+/** Someone above the employee who isn't the proposer, so the line step can happen at all. */
+function hasLineApprover(row: CompReviewItem): boolean {
+  return chainIds(row.employeeId).some((id) => id !== row.managerId);
+}
+
+/** Who may decide the row now: line step = above the employee, never the proposer; final step = Compensation. */
+export function canDecideCompReview(actor: Actor, row: CompReviewItem): boolean {
+  if (actor.id === row.employeeId || actor.id === row.managerId) return false;
+  if (COMP_CYCLES.find((c) => c.id === row.cycleId)?.status === "Closed") return false;
+  if (row.status === "Pending approval") return isAboveInLine(actor.id, row.employeeId);
+  if (row.status === "Pending final approval") return actor.role === "compensation_admin" && row.lineApprover !== actor.fullName;
+  return false;
+}
+
+/** The proposer sends a draft for approval. */
+export function submitCompReview(actor: Actor, id: string): RewardResult {
   return updateReward((s) => {
     const row = s.reviews.find((r) => r.id === id);
-    if (!row) return "Review not found.";
-    if (row.employeeId === actor.id) return "You cannot approve your own compensation review.";
-    if (COMP_CYCLES.find((c) => c.id === row.cycleId)?.status === "Closed") {
-      return "This review cycle is closed.";
+    if (!row) return "Proposal not found.";
+    if (row.managerId !== actor.id) return "Only the person who proposed this can submit it.";
+    if (row.status !== "Draft") return "Only drafts can be submitted.";
+    if (COMP_CYCLES.find((c) => c.id === row.cycleId)?.status === "Closed") return "This review cycle is closed.";
+    // With no one above the proposer in the line (e.g. the CEO's own reports), it goes straight to Compensation.
+    row.status = hasLineApprover(row) ? "Pending approval" : "Pending final approval";
+  });
+}
+
+export function decideCompReview(actor: Actor, id: string, decision: "Approved" | "Rejected"): RewardResult {
+  return updateReward((s) => {
+    const row = s.reviews.find((r) => r.id === id);
+    if (!row) return "Proposal not found.";
+    if (row.employeeId === actor.id) return "You cannot decide your own compensation.";
+    if (row.managerId === actor.id) return "You cannot approve your own proposal.";
+    if (!canDecideCompReview(actor, row)) {
+      return row.status === "Pending final approval"
+        ? "Compensation makes the final decision."
+        : "Only someone above the employee in their reporting line can approve this.";
     }
-    if (row.status !== "Pending approval") return "Only pending proposals can be decided.";
-    row.status = status;
+    const today = todayISO();
+    if (decision === "Rejected") {
+      row.status = "Rejected";
+      row.approver = actor.fullName;
+      row.decidedOn = today;
+      return;
+    }
+    if (row.status === "Pending approval") {
+      row.status = "Pending final approval";
+      row.lineApprover = actor.fullName;
+      row.lineApprovedOn = today;
+      return;
+    }
+    row.status = "Approved";
     row.approver = actor.fullName;
-    row.decidedOn = todayISO();
+    row.decidedOn = today;
+    const cycle = COMP_CYCLES.find((c) => c.id === row.cycleId);
+    s.history.unshift({
+      id: `ch-${row.id}`,
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      effective: today,
+      event: cycle?.name ?? "Compensation review",
+      grade: row.proposedGrade,
+      base: row.proposedBase,
+      currency: row.currency,
+      managerId: row.managerId,
+    });
+    if (row.bonusProposal) {
+      s.bonuses.unshift({
+        id: `bn-${row.id}`,
+        employeeId: row.employeeId,
+        employeeName: row.employeeName,
+        type: "Annual incentive",
+        period: cycle?.name.split(" ")[0] ?? today.slice(0, 4),
+        amount: row.bonusProposal,
+        currency: row.currency,
+        status: "Accrued",
+      });
+    }
   });
 }
 
 /* ───────────── Benefits ───────────── */
 
-export function canAdminBenefits(actor: DemoAccount): boolean {
-  return canManagePeople(actor.role);
+export function canAdminBenefits(actor: Pick<DemoAccount, "role">): boolean {
+  return canManagePeople(actor.role) || actor.role === "compensation_admin";
 }
 
 export function isMandatoryPlan(planId: string): boolean {
   return !!BENEFIT_PLANS.find((p) => p.id === planId)?.mandatory;
+}
+
+export function isAutoPlan(planId: string): boolean {
+  return !!BENEFIT_PLANS.find((p) => p.id === planId)?.autoEnrolled;
 }
 
 /** Employee asks to join a plan in their own country (creates a Pending row). */
@@ -135,6 +245,7 @@ export function requestEnrollment(actor: DemoAccount, planId: string): RewardRes
   const plan = BENEFIT_PLANS.find((p) => p.id === planId);
   if (!plan) return "Plan not found.";
   if (plan.country !== actor.countryName) return "You can only enroll in plans for your own country.";
+  if (plan.mandatory) return "You are enrolled in this plan automatically.";
   return updateReward((s) => {
     const existing = s.enrollments.find((e) => e.employeeId === actor.id && e.planId === planId);
     if (existing) {
@@ -156,16 +267,43 @@ export function requestEnrollment(actor: DemoAccount, planId: string): RewardRes
   });
 }
 
-/** Employee asks HR to change an existing enrollment of their own. */
-export function requestEnrollmentChange(actor: DemoAccount, enrollmentId: string): RewardResult {
+export function pendingChangeFor(state: Pick<RewardState, "changeRequests">, enrollmentId: string): BenefitChangeRequest | undefined {
+  return state.changeRequests.find((c) => c.enrollmentId === enrollmentId && c.status === "Pending");
+}
+
+/** Employee asks HR to change an enrolled plan. The enrollment stays active until HR acts. */
+export function requestEnrollmentChange(actor: DemoAccount, enrollmentId: string, note: string): RewardResult {
   return updateReward((s) => {
     const row = s.enrollments.find((e) => e.id === enrollmentId);
     if (!row || row.employeeId !== actor.id) return "You can only change your own enrollments.";
-    if (row.status === "Pending") return "A request for this plan is already pending.";
-    if (row.status === "Enrolled" && isMandatoryPlan(row.planId)) {
-      return "This is a statutory plan and cannot be changed.";
-    }
-    row.status = "Pending";
+    if (row.status !== "Enrolled") return "Only active enrollments can be changed.";
+    if (isMandatoryPlan(row.planId)) return "This is a statutory plan and cannot be changed.";
+    if (pendingChangeFor(s, row.id)) return "A change request for this plan is already with HR.";
+    const text = note.trim();
+    if (text.length < 5) return "Say what you want to change.";
+    s.changeRequests.unshift({
+      id: `bcr-${Date.now()}`,
+      enrollmentId: row.id,
+      employeeId: actor.id,
+      employeeName: actor.fullName,
+      planName: row.planName,
+      note: text.slice(0, 200),
+      status: "Pending",
+      requestedOn: todayISO(),
+    });
+  });
+}
+
+export function decideChangeRequest(actor: DemoAccount, id: string, status: "Done" | "Declined"): RewardResult {
+  if (!canAdminBenefits(actor)) return "Only HR or Compensation can handle change requests.";
+  return updateReward((s) => {
+    const row = s.changeRequests.find((c) => c.id === id);
+    if (!row) return "Request not found.";
+    if (row.employeeId === actor.id) return "Someone else must handle your own request.";
+    if (row.status !== "Pending") return "This request is already closed.";
+    row.status = status;
+    row.decidedBy = actor.fullName;
+    row.decidedOn = todayISO();
   });
 }
 
@@ -175,11 +313,11 @@ export function decideEnrollment(
   enrollmentId: string,
   status: "Enrolled" | "Waived",
 ): RewardResult {
-  if (!canAdminBenefits(actor)) return "Only HR can decide enrollment requests.";
+  if (!canAdminBenefits(actor)) return "Only HR or Compensation can decide enrollment requests.";
   return updateReward((s) => {
     const row = s.enrollments.find((e) => e.id === enrollmentId);
     if (!row) return "Enrollment not found.";
-    if (row.employeeId === actor.id) return "Another HR approver must decide your own request.";
+    if (row.employeeId === actor.id) return "Someone else must decide your own request.";
     if (row.status !== "Pending") return "Only pending requests can be decided.";
     if (status === "Waived" && isMandatoryPlan(row.planId)) return "Statutory plans cannot be waived.";
     row.status = status;

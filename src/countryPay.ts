@@ -61,12 +61,13 @@ export const COUNTRY_PAY: Record<CountryCode, CountryPayRules> = {
     declarations: [
       { code: "80C", label: "80C — PPF, ELSS, life insurance", cap: 150000 },
       { code: "80CCD(1B)", label: "80CCD(1B) — NPS", cap: 50000 },
-      { code: "80D", label: "80D — health insurance", cap: 50000 },
+      { code: "80D", label: "80D — health insurance (self, spouse, children)", cap: 25000 },
+      { code: "80D-parents", label: "80D — health insurance for senior-citizen parents", cap: 50000 },
       { code: "80E", label: "80E — education loan interest" },
       { code: "24(b)", label: "24(b) — home loan interest", cap: 200000 },
       { code: "HRA", label: "HRA — rent receipts" },
     ],
-    declarationNote: "Old tax regime only. Proofs are verified by Finance before they reduce your TDS.",
+    declarationNote: "Proofs are verified by Finance before they reduce your TDS.",
   },
   US: {
     code: "US",
@@ -88,9 +89,9 @@ export const COUNTRY_PAY: Record<CountryCode, CountryPayRules> = {
     taxYearStart: { month: 1, day: 1 },
     taxYearLabel: (y) => `Tax year ${y}`,
     declarations: [
-      { code: "401(k)", label: "401(k) — extra pre-tax contribution", cap: 23500 },
-      { code: "HSA", label: "HSA — health savings account", cap: 4300 },
-      { code: "DCFSA", label: "Dependent care FSA", cap: 5000 },
+      { code: "401(k)", label: "401(k) — extra pre-tax contribution", cap: 24500 },
+      { code: "HSA", label: "HSA — health savings account", cap: 4400 },
+      { code: "DCFSA", label: "Dependent care FSA", cap: 7500 },
       { code: "W-4", label: "W-4 — extra withholding or credits" },
     ],
     declarationNote: "Pre-tax elections and W-4 changes apply from the next payroll run.",
@@ -180,7 +181,7 @@ export const COUNTRY_PAY: Record<CountryCode, CountryPayRules> = {
     taxYearStart: { month: 1, day: 1 },
     taxYearLabel: (y) => `${y}`,
     declarations: [],
-    declarationNote: "There's no personal income tax in the UAE, so there's nothing to declare.",
+    declarationNote: "No personal income tax in the UAE.",
   },
   SA: {
     code: "SA",
@@ -197,7 +198,7 @@ export const COUNTRY_PAY: Record<CountryCode, CountryPayRules> = {
     taxYearStart: { month: 1, day: 1 },
     taxYearLabel: (y) => `${y}`,
     declarations: [],
-    declarationNote: "There's no personal income tax in Saudi Arabia, so there's nothing to declare.",
+    declarationNote: "No personal income tax in Saudi Arabia.",
   },
   DE: {
     code: "DE",
@@ -230,6 +231,45 @@ export function payRulesFor(country: CountryCode | undefined): CountryPayRules {
   return COUNTRY_PAY[country ?? "IN"] ?? COUNTRY_PAY.IN;
 }
 
+/** Per-country caps on a single expense / reimbursement claim and on a cash advance, in local currency. */
+const CLAIM_LIMITS: Record<CountryCode, { maxClaim: number; maxCashAdvance: number; receiptAbove: number }> = {
+  IN: { maxClaim: 200000, maxCashAdvance: 100000, receiptAbove: 500 },
+  US: { maxClaim: 2500, maxCashAdvance: 1500, receiptAbove: 25 },
+  GB: { maxClaim: 2000, maxCashAdvance: 1200, receiptAbove: 20 },
+  AU: { maxClaim: 3500, maxCashAdvance: 2000, receiptAbove: 40 },
+  CA: { maxClaim: 3000, maxCashAdvance: 1800, receiptAbove: 30 },
+  AE: { maxClaim: 9000, maxCashAdvance: 5000, receiptAbove: 100 },
+  SA: { maxClaim: 9000, maxCashAdvance: 5000, receiptAbove: 100 },
+  DE: { maxClaim: 2200, maxCashAdvance: 1300, receiptAbove: 25 },
+};
+
+/** Largest single claim and cash advance an employee in `country` can raise without Finance. */
+export function claimLimitsFor(country: CountryCode | undefined): { maxClaim: number; maxCashAdvance: number } {
+  const limits = CLAIM_LIMITS[country ?? "IN"] ?? CLAIM_LIMITS.IN;
+  return { maxClaim: limits.maxClaim, maxCashAdvance: limits.maxCashAdvance };
+}
+
+/** Claims above this amount (local currency) need a receipt attached. */
+export function receiptThresholdFor(country: CountryCode | undefined): number {
+  return (CLAIM_LIMITS[country ?? "IN"] ?? CLAIM_LIMITS.IN).receiptAbove;
+}
+
+const LEGAL_ENTITY: Record<CountryCode, string> = {
+  IN: "Infotech India Pvt Ltd",
+  US: "Infotech Inc",
+  GB: "Infotech UK Ltd",
+  AU: "Infotech Australia Pty",
+  CA: "Infotech Canada Inc",
+  AE: "Infotech Middle East FZ",
+  SA: "Infotech Saudi LLC",
+  DE: "Infotech Germany GmbH",
+};
+
+/** The employing legal entity in a country — used when the employee record doesn't carry one. */
+export function legalEntityFor(country: CountryCode | undefined): string {
+  return LEGAL_ENTITY[country ?? "IN"] ?? LEGAL_ENTITY.IN;
+}
+
 /** Formats an amount in a country's currency with no decimals, e.g. "$7,000" or "₹38,000". */
 export function money(amount: number, currency = "INR"): string {
   const rules = Object.values(COUNTRY_PAY).find((item) => item.currency === currency);
@@ -238,6 +278,23 @@ export function money(amount: number, currency = "INR"): string {
     currency,
     maximumFractionDigits: 0,
   }).format(amount);
+}
+
+/** Currency saved on a claim / advance record; older records without one were raised in INR. */
+export function itemCurrency(item: object, fallback = "INR"): string {
+  const value = (item as { currency?: unknown }).currency;
+  return typeof value === "string" && value ? value : fallback;
+}
+
+/** Totals amounts per currency, e.g. "₹12,000 + $40". Items without a currency count as `fallback`. */
+export function moneyTotals(items: { amount: number; currency?: string }[], fallback = "INR"): string {
+  const totals = new Map<string, number>();
+  for (const item of items) {
+    const currency = item.currency ?? fallback;
+    totals.set(currency, (totals.get(currency) ?? 0) + item.amount);
+  }
+  if (totals.size === 0) return money(0, fallback);
+  return [...totals].map(([currency, amount]) => money(amount, currency)).join(" + ");
 }
 
 /** First year of the tax year that contains `iso`. */

@@ -1,4 +1,4 @@
-import { isHrOrAdmin, isValidEmail, newId, cleanText, looksLikeFormula, type DataToolsActor, type DataToolsResult } from "./shared.ts";
+import { isHrOrAdmin, isInternalEmail, isValidEmail, newId, cleanText, looksLikeFormula, type DataToolsActor, type DataToolsResult } from "./shared.ts";
 import { sanitizeDefinition, validateDefinition, type ReportDefinition } from "./reportSources.ts";
 
 const KEY = "kastech.reports.v1";
@@ -101,7 +101,7 @@ function write(state: ReportState): DataToolsResult {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch {
-    return "Browser storage is full, so this change was not saved.";
+    return "This change was not saved. Please try again.";
   }
   cache = state;
   listeners.forEach((fn) => fn());
@@ -182,6 +182,8 @@ export function parseRecipients(text: string): { emails: string[] } | { error: s
   if (!parts.length) return { error: "Add at least one recipient email." };
   const bad = parts.filter((p) => !isValidEmail(p));
   if (bad.length) return { error: `Not a valid email: ${bad.slice(0, 3).join(", ")}${bad.length > 3 ? "…" : ""}` };
+  const external = parts.filter((p) => !isInternalEmail(p));
+  if (external.length) return { error: `Only @infotech.com addresses can receive reports: ${external.slice(0, 3).join(", ")}${external.length > 3 ? "…" : ""}` };
   const emails = [...new Set(parts)];
   if (emails.length > MAX_RECIPIENTS) return { error: `Up to ${MAX_RECIPIENTS} recipients per schedule.` };
   return { emails };

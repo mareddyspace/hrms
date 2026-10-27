@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { holidaysForPerson } from "../model.ts";
 import { OptionalHolidaysCard } from "../features/workforce/OptionalHolidaysPage.tsx";
 import { Card, Page, ProjectFacts } from "../components/ui.tsx";
 import {
@@ -69,7 +70,7 @@ export function ProjectsPage() {
   const [selectedId, setSelectedId] = useState(currentProjects[0]?.id ?? "");
   const selected = list.find((project) => project.id === selectedId) ?? list[0];
   return (
-    <Page title="My projects" subtitle={`${currentProjects.length} current and ${previousProjects.length} previous. Hours come from your timesheets.`}>
+    <Page title="My projects" subtitle={`${currentProjects.length} current · ${previousProjects.length} previous`}>
       <Card>
         <div className="form-actions" style={{ marginTop: 0 }}>
           <button className={mode === "current" ? "btn" : "btn-ghost"} type="button" onClick={() => setMode("current")}>
@@ -102,7 +103,7 @@ export function ProjectsPage() {
 export function HolidaysPage() {
   const today = todayISO();
   const { state, employee } = usePortal();
-  const { holidays } = state;
+  const holidays = useMemo(() => holidaysForPerson(state.holidays, employee.id), [state.holidays, employee.id]);
   const initial = new Date();
   const [cursor, setCursor] = useState({ year: initial.getFullYear(), month: initial.getMonth() });
   const cells = monthCells(cursor.year, cursor.month);
@@ -123,7 +124,7 @@ export function HolidaysPage() {
   }
 
   return (
-    <Page title="Company holiday calendar" subtitle="Plan leave around office closures.">
+    <Page title="Company holiday calendar">
       <Card>
         <div className="row-between" style={{ marginBottom: 12 }}>
           <h2 className="card-title" style={{ margin: 0 }}>
@@ -170,16 +171,17 @@ export function HolidaysPage() {
 }
 
 export function HighlightsPage() {
-  const { state, leaveTable, counts } = usePortal();
-  const { holidays } = state;
+  const { state, employee, leaveTable, counts } = usePortal();
+  // Only the holidays that apply to this person (their country / location), not every office's list.
+  const holidays = useMemo(() => holidaysForPerson(state.holidays, employee.id), [state.holidays, employee.id]);
   const today = todayISO();
   const next = holidays.find((holiday) => holiday.date >= today);
   return (
-    <Page title="Highlights" subtitle="Leave, holidays, and pending actions at a glance.">
+    <Page title="Highlights">
       <div className="stat-grid">
         <div className="stat">
           <span>Next holiday</span>
-          <strong style={{ fontSize: 18 }}>{next ? next.name : "None left in 2026"}</strong>
+          <strong style={{ fontSize: 18 }}>{next ? next.name : `None left in ${today.slice(0, 4)}`}</strong>
           <span>{next ? formatLongDate(next.date) : "The published list is complete."}</span>
         </div>
         {leaveTable.map((row) => (

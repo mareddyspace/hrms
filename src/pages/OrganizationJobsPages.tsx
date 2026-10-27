@@ -14,21 +14,43 @@ import {
 import {
   JOB_FAMILIES,
   JOB_PROFILES,
-  ORG_CHANGE_HISTORY,
-  POSITIONS,
   buildOrgTree,
+  buildPositions,
   type OrgNode,
   type PositionRecord,
 } from "../data/peopleData.ts";
+import { getLifecycleHistory, isScheduled, subscribeLifecycleHistory } from "../data/lifecycleHistory.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { hasModuleAccess } from "../data/peoplePermissions.ts";
-import { TZ_HEADCOUNT } from "../data/dashboardMock.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import { usePortal } from "../store.tsx";
 
 function usePeople() {
   return useSyncExternalStore(subscribePeople, listPeople, listPeople);
+}
+
+const TYPE_LABEL: Record<OrgNode["type"], string> = {
+  company: "Company",
+  country: "Country",
+  legalEntity: "Legal entity",
+  businessUnit: "Business unit",
+  division: "Division",
+  department: "Department",
+  costCenter: "Cost center",
+  location: "Location",
+  jobFamily: "Job family",
+  jobProfile: "Job profile",
+  position: "Position",
+  grade: "Grade",
+  supervisoryOrg: "Supervisory org",
+  employee: "Employee",
+};
+
+function countNodes(node: OrgNode, type: OrgNode["type"], names = new Set<string>()): Set<string> {
+  if (node.type === type) names.add(node.name);
+  node.children?.forEach((child) => countNodes(child, type, names));
+  return names;
 }
 
 function OrgTreeNode({
@@ -55,12 +77,19 @@ function OrgTreeNode({
           <span className="org-tree-spacer" />
         )}
         <div>
-          <strong>{node.name}</strong>
+          {node.personId ? (
+            <Link to={`/people/${node.personId}`}>
+              <strong>{node.name}</strong>
+            </Link>
+          ) : (
+            <strong>{node.name}</strong>
+          )}
           <span className="muted">
             {" "}
-            · {node.type}
-            {typeof node.headcount === "number" ? ` · ${node.headcount}` : ""}
-            {node.managerName ? ` · Mgr: ${node.managerName}` : ""}
+            · {TYPE_LABEL[node.type]}
+            {node.code ? ` · ${node.code}` : ""}
+            {typeof node.headcount === "number" && node.type !== "employee" ? ` · ${node.headcount}` : ""}
+            {node.managerName && node.type !== "supervisoryOrg" ? ` · Head: ${node.managerName}` : ""}
           </span>
         </div>
       </div>
@@ -77,26 +106,17 @@ function OrgTreeNode({
 
 export function OrganizationPage() {
   const { demoProfile } = usePortal();
-  const { activeCountry, t, matchesRegion } = useLocale();
+  const { t, matchesRegion } = useLocale();
   const people = usePeople();
+  const history = useSyncExternalStore(subscribeLifecycleHistory, getLifecycleHistory, getLifecycleHistory);
   const scopedPeople = useMemo(
     () => people.filter((p) => matchesRegion(String(p.countryCode), p.countryName)),
     [people, matchesRegion],
   );
   const tree = useMemo(() => buildOrgTree(scopedPeople.length ? scopedPeople : people), [scopedPeople, people]);
-  const [expanded, setExpanded] = useState<Set<string>>(
-    () => new Set(["company-timez", "country-IN", "country-US"]),
-  );
-  const [tab, setTab] = useState("chart");
-  const [countryFilter, setCountryFilter] = useState("");
-
-  const relationships = useMemo(() => {
-    return scopedPeople
-      .filter((p) => p.employmentStatus === "Active")
-      .filter((p) => !countryFilter || p.countryName === countryFilter)
-      .slice(0, 40)
-      .map((p) => [p.fullName, p.employeeCode, p.designation, p.managerName, p.department, p.location]);
-  }, [scopedPeople, countryFilter]);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["company-timez"]));
+  const [tab, setTab] = useState("structure");
+  const countries = (tree.children ?? []).filter((c) => (c.headcount ?? 0) > 0);
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -110,45 +130,33 @@ export function OrganizationPage() {
   if (!hasModuleAccess(demoProfile, "organization") && !hasModuleAccess(demoProfile, "*")) {
     return (
       <Page title="Organization">
-        <EmptyState title="Not authorized" description="Organization module is outside this persona's navAccess." />
+        <EmptyState title="Not available" description="No access." />
       </Page>
     );
   }
 
   return (
-    <Page
-      title="Organization"
-      subtitle={`${activeCountry.legalEntity} · ${activeCountry.name}`}
-    >
+    <Page title="Organization">
       <FilterBar>
         <RegionalFilter label={t("locale.region")} />
       </FilterBar>
-      <Card title="Country & legal entity (active demo region)">
-        <dl className="info-grid">
-          <div className="info-fact"><dt>Country</dt><dd>{activeCountry.name} ({activeCountry.code})</dd></div>
-          <div className="info-fact"><dt>Legal entity</dt><dd>{activeCountry.legalEntity}</dd></div>
-          <div className="info-fact"><dt>Currency</dt><dd>{activeCountry.currency}</dd></div>
-          <div className="info-fact"><dt>Time zone</dt><dd>{activeCountry.timeZone}</dd></div>
-        </dl>
-      </Card>
       <MetricGrid>
-        <MetricCard label="Global headcount" value={tree.headcount ?? TZ_HEADCOUNT.global} />
-        <MetricCard label="Countries" value={TZ_HEADCOUNT.byCountry.length} />
-        <MetricCard label="Business units" value={TZ_HEADCOUNT.byBusinessUnit.length} />
-        <MetricCard label="Departments" value={TZ_HEADCOUNT.byDepartment.length} />
+        <MetricCard label="Headcount" value={tree.headcount ?? 0} />
+        <MetricCard label="Countries" value={countries.length} />
+        <MetricCard label="Divisions" value={countNodes(tree, "division").size} />
+        <MetricCard label="Departments" value={countNodes(tree, "department").size} />
       </MetricGrid>
 
       <Tabs
         tabs={[
-          { id: "chart", label: "Org chart" },
-          { id: "relations", label: "Reporting relationships" },
+          { id: "structure", label: "Structure" },
           { id: "history", label: "Change history" },
         ]}
         value={tab}
         onChange={setTab}
       />
 
-      {tab === "chart" && (
+      {tab === "structure" && (
         <Card
           title="Hierarchy"
           action={
@@ -156,14 +164,7 @@ export function OrganizationPage() {
               <button
                 type="button"
                 className="btn-ghost"
-                onClick={() =>
-                  setExpanded(
-                    new Set([
-                      "company-timez",
-                      ...(tree.children ?? []).map((c) => c.id),
-                    ]),
-                  )
-                }
+                onClick={() => setExpanded(new Set(["company-timez", ...countries.map((c) => c.id)]))}
               >
                 Expand countries
               </button>
@@ -176,40 +177,31 @@ export function OrganizationPage() {
           <ul className="org-tree-list">
             <OrgTreeNode node={tree} expanded={expanded} toggle={toggle} />
           </ul>
-        </Card>
-      )}
-
-      {tab === "relations" && (
-        <Card title="Employee → manager">
-          <FilterBar>
-            <label className="filter-label">
-              Country
-              <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}>
-                <option value="">All</option>
-                {TZ_HEADCOUNT.byCountry.map((c) => (
-                  <option key={c.code} value={c.name}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </FilterBar>
-          <DataTable
-            headers={["Employee", "ID", "Title", "Manager", "Department", "Location"]}
-            rows={relationships}
-            empty={<EmptyState title="No rows" description="No active employees for this filter." />}
-          />
           <Link to="/directory" className="quiet-link">
-            See everyone in Directory
+            See everyone in People
           </Link>
         </Card>
       )}
 
       {tab === "history" && (
-        <Card title="Demo organization-change history">
+        <Card title="Change history">
           <DataTable
-            headers={["Date", "Type", "Summary", "Actor"]}
-            rows={ORG_CHANGE_HISTORY.map((e) => [e.date, e.type, e.summary, e.actor])}
+            headers={["Effective", "Status", "Person", "Change", "From", "To", "Recorded", "By"]}
+            rows={history.map((e) => [
+              e.effectiveDate,
+              isScheduled(e) ? (
+                <StatusBadge key={`s-${e.id}`} status="Scheduled" tone="info" literal />
+              ) : (
+                <StatusBadge key={`s-${e.id}`} status="In effect" tone="ok" literal />
+              ),
+              <Link key={e.id} to={`/people/${e.personId}`}>{e.personName}</Link>,
+              e.type,
+              e.before,
+              e.after,
+              e.recordedOn,
+              e.by,
+            ])}
+            empty={<EmptyState title="No changes yet" />}
           />
         </Card>
       )}
@@ -220,11 +212,12 @@ export function OrganizationPage() {
 export function JobsPage() {
   const { demoProfile } = usePortal();
   const people = usePeople();
+  const allPositions = useMemo(() => buildPositions(people), [people]);
   const [tab, setTab] = useState("families");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [family, setFamily] = useState("");
-  const [selectedId, setSelectedId] = useState(POSITIONS[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState("pos-221");
   const { id } = useParams();
 
   const profiles = useMemo(() => {
@@ -236,29 +229,29 @@ export function JobsPage() {
   }, [q, family]);
 
   const positions = useMemo(() => {
-    return POSITIONS.filter((p) => {
+    return allPositions.filter((p) => {
       if (status && p.status !== status) return false;
       if (family && p.jobFamily !== family) return false;
       if (q && !`${p.title} ${p.code} ${p.location}`.toLowerCase().includes(q.toLowerCase())) return false;
       return true;
     });
-  }, [q, status, family]);
+  }, [allPositions, q, status, family]);
 
   const selected: PositionRecord | undefined =
-    POSITIONS.find((p) => p.id === (id || selectedId) || p.code === id) ??
-    POSITIONS.find((p) => p.id === selectedId) ??
+    allPositions.find((p) => p.id === (id || selectedId) || p.code === id) ??
+    allPositions.find((p) => p.id === selectedId) ??
     positions[0];
 
   if (!hasModuleAccess(demoProfile, "jobs") && !hasModuleAccess(demoProfile, "*")) {
     return (
       <Page title="Jobs & Positions">
-        <EmptyState title="Not authorized" description="Jobs & Positions is outside this persona's navAccess." />
+        <EmptyState title="Not available" description="No access." />
       </Page>
     );
   }
 
   return (
-    <Page title="Jobs & Positions" subtitle="Job families, profiles, and position inventory">
+    <Page title="Jobs & Positions">
       <FilterBar>
         <label className="filter-label">
           Search
@@ -300,7 +293,7 @@ export function JobsPage() {
       {tab === "families" && (
         <Card title="Job families">
           <DataTable
-            headers={["Family", "Profiles", "Active people (approx)"]}
+            headers={["Family", "Profiles", "People"]}
             rows={JOB_FAMILIES.map((f) => [
               f.name,
               String(f.profiles),
@@ -313,7 +306,7 @@ export function JobsPage() {
       {tab === "profiles" && (
         <Card title="Job profiles">
           {profiles.length === 0 ? (
-            <EmptyState title="No profiles" description="No job profiles match the current filters." />
+            <EmptyState title="No profiles" description="Try other filters." />
           ) : (
             <DataTable
               headers={["ID", "Title", "Family", "Grade band", "Description"]}
@@ -326,11 +319,11 @@ export function JobsPage() {
       {tab === "positions" && (
         <Card title="Positions">
           {positions.length === 0 ? (
-            <EmptyState title="No positions" description="No positions match the current filters." />
+            <EmptyState title="No positions" description="Try other filters." />
           ) : (
             <DataTable
               headers={["Code", "Title", "Grade", "Country", "Location", "Manager", "Status", ""]}
-              rows={positions.map((p) => [
+              rows={positions.slice(0, 200).map((p) => [
                 p.code,
                 p.title,
                 p.grade,
@@ -356,6 +349,7 @@ export function JobsPage() {
               ])}
             />
           )}
+          {positions.length > 200 && <p className="muted">Showing 200 of {positions.length}.</p>}
         </Card>
       )}
 
@@ -409,25 +403,29 @@ export function JobsPage() {
                 <div className="info-fact">
                   <dt>Incumbent</dt>
                   <dd>
-                    <Link to={`/directory/${selected.incumbentId}`}>{selected.incumbentName}</Link>
+                    <Link to={`/people/${selected.incumbentId}`}>{selected.incumbentName}</Link>
                   </dd>
                 </div>
               )}
             </dl>
           </Card>
           <Card title="Job requirements">
-            <ul className="todo">
-              {selected.requirements.map((r) => (
-                <li key={r}>{r}</li>
-              ))}
-            </ul>
+            {selected.requirements.length ? (
+              <ul className="todo">
+                {selected.requirements.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">See the job profile {selected.jobProfileId}.</p>
+            )}
             <Link to="/recruiting" className="btn" style={{ marginTop: 8, display: "inline-flex" }}>
               Open recruiting
             </Link>
           </Card>
-          <Card title="Other positions">
+          <Card title="Open positions">
             <ul className="todo">
-              {POSITIONS.filter((p) => p.id !== selected.id).map((p) => (
+              {allPositions.filter((p) => p.id !== selected.id && p.status !== "Filled").map((p) => (
                 <li key={p.id}>
                   <button
                     type="button"

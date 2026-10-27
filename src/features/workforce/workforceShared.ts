@@ -9,7 +9,7 @@ export type WorkforceActor = Pick<DemoAccount, "id" | "fullName" | "role">;
 /** null when the change was applied, otherwise the reason it was refused. */
 export type WorkforceResult = string | null;
 
-export const SAVE_FAILED = "Could not save — browser storage is full or blocked.";
+export const SAVE_FAILED = "Could not save. Please try again.";
 
 export function isHrRole(role: UserRole): boolean {
   return role === "hr" || role === "hr_admin" || role === "hrbp" || role === "super_admin";
@@ -19,10 +19,9 @@ export function isHrOrAdmin(role: UserRole): boolean {
   return isHrRole(role) || role === "admin";
 }
 
-/** Reporting line (anyone above the person) or HR — never the person themselves. */
+/** Only someone above the person in their reporting line decides — never the person themselves. */
 export function canDecideFor(actor: WorkforceActor, personId: string): boolean {
   if (actor.id === personId) return false;
-  if (isHrRole(actor.role)) return true;
   return managementChain(personId).some((m) => m.id === actor.id);
 }
 

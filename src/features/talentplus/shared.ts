@@ -1,5 +1,6 @@
 import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../../demoAccounts.ts";
 import { getPerson } from "../../data/peopleLocal.ts";
+import { TASK_TEAM } from "../../data/taskTeam.ts";
 import type { UserRole } from "../../model.ts";
 
 /** The signed-in persona performing an action. */
@@ -22,16 +23,27 @@ export function isExecutive(role: UserRole): boolean {
   return EXEC_ROLES.includes(role);
 }
 
-/** Ids of everyone above `personId`, nearest first (demo chain, then people record manager). */
+/**
+ * Ids of everyone above `personId`, nearest first. Uses the real reporting line (sign-in personas and
+ * their teammates) so every module shows the same teams; other directory records have no line here.
+ */
 export function chainIdsOf(personId: string): string[] {
-  const chain = managementChain(personId, DEMO_ACCOUNTS).map((m) => m.id);
-  if (chain.length) return chain;
-  const person = getPerson(personId);
-  if (!person?.managerId || person.managerId === personId) return [];
-  const upper = managementChain(person.managerId, DEMO_ACCOUNTS)
-    .map((m) => m.id)
-    .filter((id) => id !== personId);
-  return [person.managerId, ...upper];
+  return managementChain(personId, DEMO_ACCOUNTS).map((m) => m.id);
+}
+
+/** True for the top of the organisation: a sign-in persona with no one above them (the CEO). */
+export function isTopOfOrg(personId: string): boolean {
+  return DEMO_ACCOUNTS.some((a) => a.id === personId) && chainIdsOf(personId).length === 0;
+}
+
+export type OrgPerson = { id: string; fullName: string; designation: string; employmentStatus: string };
+
+/** A person from the directory, or one of the engineering teammates who are not in it. */
+export function lookupPerson(id: string): OrgPerson | undefined {
+  const p = getPerson(id);
+  if (p) return { id: p.id, fullName: p.fullName, designation: p.designation, employmentStatus: p.employmentStatus };
+  const t = TASK_TEAM.find((x) => x.id === id);
+  return t ? { id: t.id, fullName: t.fullName, designation: t.role, employmentStatus: "Active" } : undefined;
 }
 
 /** True when `actorId` sits above `personId` in the reporting line. */
@@ -45,7 +57,7 @@ export function directManagerId(personId: string): string | undefined {
 }
 
 export function personName(id: string): string {
-  return getPerson(id)?.fullName ?? DEMO_ACCOUNTS.find((a) => a.id === id)?.fullName ?? id;
+  return lookupPerson(id)?.fullName ?? DEMO_ACCOUNTS.find((a) => a.id === id)?.fullName ?? id;
 }
 
 export function addDays(iso: string, days: number): string {

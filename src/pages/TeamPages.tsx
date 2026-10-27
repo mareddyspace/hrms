@@ -4,4 +4,5 @@ export { ApprovalsPage, ChatPage, InboxApprovalsPage, MessagingPage } from "./Co
 
 export { TasksPage } from "./TasksModule.tsx";
 
-export { EvaluationsPage, ProgramsPage, PerformancePage, LearningPage } from "./TalentModules.tsx";
+/** Route names used by App (/evaluations, /programs). */
+export { PerformancePage as EvaluationsPage, LearningPage as ProgramsPage, PerformancePage, LearningPage } from "./TalentModules.tsx";

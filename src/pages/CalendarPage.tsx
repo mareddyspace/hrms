@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { holidaysForPerson } from "../model.ts";
 import {
   Banner,
   Card,
@@ -20,7 +21,6 @@ import {
   type CalendarEvent,
   type CalendarEventKind,
 } from "../data/calendarData.ts";
-import { buildDefaultCountrySettings, countryByCode } from "../locale/countryConfig.ts";
 import {
   isPrimaryWeeklyOffLabel,
   isWeeklyOffDate,
@@ -30,7 +30,6 @@ import {
 import { formatLongDate, monthCells, monthLabel, parseISODate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
-const COUNTRY_SETTINGS = buildDefaultCountrySettings();
 
 const FILTERS: Array<{ id: "all" | CalendarEventKind; label: string }> = [
   { id: "all", label: "All" },
@@ -108,12 +107,8 @@ export function CalendarPage() {
   );
 
   const holidaySource = useMemo(() => {
-    const home = countryByCode(employee.countryCode || "IN", COUNTRY_SETTINGS);
-    const byDate = new Map<string, { date: string; name: string }>();
-    for (const h of state.holidays) byDate.set(h.date, { date: h.date, name: h.name });
-    for (const h of home?.holidays ?? []) byDate.set(h.date, { date: h.date, name: h.name });
-    return Array.from(byDate.values());
-  }, [state.holidays, employee.countryCode]);
+    return holidaysForPerson(state.holidays, employee.id).map((h) => ({ date: h.date, name: h.name }));
+  }, [state.holidays, employee.id]);
 
   const leaveEvents = useMemo((): CalendarEvent[] => {
     return state.leaveRequests
@@ -124,7 +119,6 @@ export function CalendarPage() {
         endDate: r.to,
         kind: (r.code === "wfh" || r.code === "emergency_wfh" ? "wfh" : "leave") as CalendarEventKind,
         title: r.code === "wfh" || r.code === "emergency_wfh" ? "WFH (approved)" : `Leave · ${r.code}`,
-        description: "Approved leave from your requests.",
         audienceIds: [employee.id],
       }));
   }, [state.leaveRequests, employee.id]);
@@ -225,12 +219,6 @@ export function CalendarPage() {
       title="My calendar"
       subtitle={`${employee.fullName} · ${schedule.workDaysLabel} · holidays for ${employee.countryName || "your country"}`}
     >
-      <Banner
-        message={{
-          tone: "ok",
-          text: "Weekly offs follow your assigned schedule; holiday names use your country calendar.",
-        }}
-      />
       {notice && <Banner message={notice} />}
 
       <FilterBar>
@@ -327,17 +315,17 @@ export function CalendarPage() {
             })}
           </div>
           <p className="note" style={{ marginTop: 10 }}>
-            Shift: {schedule.shiftName} · {schedule.hoursLabel}. Weekly offs from schedule ({schedule.workDaysLabel}).
+            Shift: {schedule.shiftName} · {schedule.hoursLabel}
           </p>
         </Card>
 
         <div className="stack">
           <Card title={formatLongDate(selected)}>
             {selectedIsOff && dayEvents.length === 0 ? (
-              <p className="note">Weekly Off per your assigned schedule ({schedule.weeklyOffLabels.join(", ")}).</p>
+              <p className="note">Weekly Off ({schedule.weeklyOffLabels.join(", ")})</p>
             ) : null}
             {dayEvents.length === 0 && !selectedIsOff ? (
-              <EmptyState title="Nothing scheduled" description="No meetings, leave, or holidays on this date for your filters." />
+              <EmptyState title="Nothing scheduled" />
             ) : dayEvents.length === 0 ? null : (
               <ul className="calendar-agenda">
                 {dayEvents.map((e) => (
@@ -402,7 +390,7 @@ export function CalendarPage() {
 
       <Card title="Upcoming">
         {upcoming.length === 0 ? (
-          <EmptyState title="No upcoming items" description="Try another filter or add a personal reminder." />
+          <EmptyState title="No upcoming items" />
         ) : (
           <ul className="calendar-upcoming">
             {upcoming.map((e) => (

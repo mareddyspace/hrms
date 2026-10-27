@@ -1,7 +1,7 @@
 import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../../demoAccounts.ts";
 import { canManagePeople } from "../../data/peoplePermissions.ts";
 import { getBasePeople, type PersonRecord } from "../../data/peopleData.ts";
-import { getPerson } from "../../data/peopleLocal.ts";
+import { getPerson, managerChainIds } from "../../data/peopleLocal.ts";
 import { addDaysISO, parseISODate, toISO, type UserRole } from "../../model.ts";
 
 /** Who is acting — the signed-in persona. */
@@ -13,29 +13,30 @@ export function isHrRole(role: UserRole): boolean {
   return canManagePeople(role);
 }
 
-/** Everyone above this person in the reporting line (directory manager first, then the persona chain). */
+/** Everyone above this person in the reporting line, nearest first (directory first, then the persona chain). */
 export function reportingLineIds(employeeId: string): string[] {
   const ids: string[] = [];
   const push = (id: string | undefined) => {
     if (id && id !== employeeId && !ids.includes(id)) ids.push(id);
   };
+  for (const id of managerChainIds(employeeId)) push(id);
   for (const manager of managementChain(employeeId)) push(manager.id);
-  const directManager = getPerson(employeeId)?.managerId;
-  if (directManager) {
-    push(directManager);
-    for (const manager of managementChain(directManager)) push(manager.id);
-  }
   return ids;
+}
+
+/** The first person above someone — the one who decides their requests. Undefined at the top (the CEO). */
+export function lineManagerId(employeeId: string): string | undefined {
+  return reportingLineIds(employeeId)[0];
 }
 
 export function isAboveInLine(actorId: string, employeeId: string): boolean {
   return actorId !== employeeId && reportingLineIds(employeeId).includes(actorId);
 }
 
-/** Reporting line or HR — never the person themselves. */
+/** Only someone above the person in their reporting line — never the person themselves, and not HR by role. */
 export function canActForEmployee(actor: LifecycleActor, employeeId: string): boolean {
   if (actor.id === employeeId) return false;
-  return isHrRole(actor.role) || isAboveInLine(actor.id, employeeId);
+  return isAboveInLine(actor.id, employeeId);
 }
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -129,17 +130,22 @@ export function joiningForProbationEnd(endISO: string, countryCode: string): str
 
 /* ───────────── Seed helpers ───────────── */
 
-/** Stable list of non-persona directory employees reporting to Ram — used only for seed data. */
+/** Stable list of generated employees in Ram's part of the reporting line — used only for seed data. */
 export function seedCandidates(): PersonRecord[] {
-  const personaIds = new Set(DEMO_ACCOUNTS.map((a) => a.id));
-  return getBasePeople()
-    .filter(
-      (p) =>
-        p.managerId === "emp-ram" &&
-        p.employmentStatus === "Active" &&
-        !personaIds.has(p.id) &&
-        !/contract/i.test(p.employmentType),
-    )
+  const base = getBasePeople();
+  const byId = new Map(base.map((p) => [p.id, p]));
+  const underRam = (p: PersonRecord) => {
+    const seen = new Set<string>();
+    let current = p.managerId;
+    while (current && !seen.has(current)) {
+      if (current === "emp-ram") return true;
+      seen.add(current);
+      current = byId.get(current)?.managerId ?? "";
+    }
+    return false;
+  };
+  return base
+    .filter((p) => p.id.startsWith("wf-") && p.employmentStatus === "Active" && !/contract/i.test(p.employmentType) && underRam(p))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 

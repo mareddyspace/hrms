@@ -135,6 +135,7 @@ export const navGroups: readonly NavGroup[] = [
       { id: "integrations", label: "Integrations", to: "/integrations" },
       { id: "payroll", label: "Payroll", to: "/payroll" },
       { id: "bulkdata", label: "Bulk data", to: "/data-tools/bulk" },
+      { id: "auditlog", label: "Audit log", to: "/admin/audit" },
       { id: "administration", label: "Console", to: "/admin" },
     ],
   },
@@ -149,7 +150,6 @@ export const localeLinks = [
 export const aboutLinks = [
   { id: "help", label: "Help", to: "/help" },
   { id: "terms", label: "Terms", to: "/terms" },
-  { id: "version", label: "Version", to: "/version" },
 ] as const;
 
 export function roleLabel(role: UserRole): string {

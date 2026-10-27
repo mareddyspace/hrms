@@ -331,7 +331,7 @@ export function AttendancePage() {
   }
 
   function decide(row: AttendanceCorrection, status: "Approved" | "Rejected") {
-    const error = decideCorrection(row.id, { id: employee.id, role: demoProfile.role }, status, decideNotes[row.id]);
+    const error = decideCorrection(row.id, { id: employee.id, role: demoProfile.role, fullName: employee.fullName }, status, decideNotes[row.id]);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `Correction ${status.toLowerCase()}.` });
     if (!error) setDecideNotes((prev) => ({ ...prev, [row.id]: "" }));
   }
@@ -362,9 +362,9 @@ export function AttendancePage() {
     ];
     downloadText(
       `attendance-${employee.employeeCode}-${range.from}_${range.to}.csv`,
-      `${lines.join("\n")}\n\n# Sample export only — not an official payroll file.\n`,
+      `${lines.join("\n")}\n`,
     );
-    setMessage({ tone: "ok", text: "Attendance CSV downloaded (frontend demo)." });
+    setMessage({ tone: "ok", text: "Attendance CSV downloaded." });
   }
 
   const regionHolidays = employeeHolidays.filter((h) => h.date >= range.from && h.date <= range.to);
@@ -372,7 +372,6 @@ export function AttendancePage() {
   return (
     <Page
       title="Time & Attendance"
-      subtitle="Your check-in workspace, calendar, and correction requests"
       action={
         <button type="button" className="btn-ghost" onClick={downloadReport}>
           Download report
@@ -463,7 +462,7 @@ export function AttendancePage() {
                     </button>
                   )}
                   {session.phase === "checked_out" && (
-                    <p className="note">Day closed. Use Corrections if a punch needs fixing.</p>
+                    <p className="note">Day closed.</p>
                   )}
                 </div>
               </Card>
@@ -513,7 +512,7 @@ export function AttendancePage() {
               </FilterBar>
 
               <p className="note">
-                Summary for {formatShortDate(range.from)} – {formatShortDate(range.to)} (your records only).
+                {formatShortDate(range.from)} – {formatShortDate(range.to)}
               </p>
 
               <MetricGrid>
@@ -648,7 +647,7 @@ export function AttendancePage() {
                           <p className="note">
                             {selectedRecord.lateMinutes > 0 ? `Late by ${selectedRecord.lateMinutes} min. ` : ""}
                             {selectedRecord.overtimeMinutes > 0
-                              ? `Overtime ${selectedRecord.overtimeMinutes} min (sample rule).`
+                              ? `Overtime ${selectedRecord.overtimeMinutes} min.`
                               : ""}
                           </p>
                         )}
@@ -676,7 +675,7 @@ export function AttendancePage() {
 
                   <Card title={`Holidays · ${employee.countryName || activeCountry.name}`}>
                     {regionHolidays.length === 0 ? (
-                      <p className="muted">No holidays in this range for your country calendar.</p>
+                      <p className="muted">No holidays in this range.</p>
                     ) : (
                       <ul className="todo">
                         {regionHolidays.map((h) => (
@@ -727,7 +726,7 @@ export function AttendancePage() {
                 </label>
               </FilterBar>
               {filteredHistory.length === 0 ? (
-                <EmptyState title="No records" description="Nothing matches this filter in the selected range." />
+                <EmptyState title="No records" />
               ) : (
                 <div className="table-scroll">
                   <table className="data">
@@ -776,7 +775,7 @@ export function AttendancePage() {
             <div className="att-corr-grid">
               <Card title="Request a correction">
                 <p className="note">
-                  Submit for your own punches only, within the last 30 days.{" "}
+                  Own punches only, within the last 30 days.{" "}
                   {approver ? `Reviewed by ${approver.fullName}.` : "No manager in your reporting line — contact HR."}
                 </p>
                 <div className="form-grid-2">
@@ -824,7 +823,7 @@ export function AttendancePage() {
 
               <Card title="My correction requests">
                 {myCorrections.length === 0 ? (
-                  <EmptyState title="No requests" description="Corrections you submit will appear here." />
+                  <EmptyState title="No requests" />
                 ) : (
                   <ul className="att-corr-list">
                     {myCorrections.map((c) => (
@@ -837,7 +836,7 @@ export function AttendancePage() {
               {(isManager || teamCorrections.length > 0) && (
                 <Card title="Team correction queue" className="att-corr-span">
                   {teamCorrections.length === 0 ? (
-                    <EmptyState title="No team requests" description="Corrections from people in your reporting line show here." />
+                    <EmptyState title="No team requests" />
                   ) : (
                     <ul className="att-corr-list">
                       {teamCorrections.map((c) => (
@@ -902,7 +901,7 @@ export function AttendancePage() {
                   <MetricCard
                     label="Variance"
                     value={`${(monthRecordedHours - monthExpectedHours).toFixed(1)}h`}
-                    hint={monthRecordedHours >= monthExpectedHours ? "On / above sample target" : "Below sample target"}
+                    hint={monthRecordedHours >= monthExpectedHours ? "On / above target" : "Below target"}
                   />
                 </MetricGrid>
                 <p className="note">

@@ -175,7 +175,21 @@ export function formatLoginStamp(iso: string, timeZone: string): { date: string;
 export interface LeavePolicy {
   code: LeaveCode;
   name: string;
+  /** Days a year. */
   quota: number;
+  /** "monthly": the yearly quota builds up month by month instead of all on 1 January. */
+  accrual?: "monthly";
+  /** Unused days that roll over into the next year, at most. */
+  carryForwardMax?: number;
+}
+
+/** Days of a monthly-accruing quota earned by `today` in `year` (whole year for past years). */
+export function accruedQuota(quota: number, year: number, today: string = todayISO()): number {
+  const thisYear = Number(today.slice(0, 4));
+  if (year < thisYear) return quota;
+  if (year > thisYear) return Math.floor((quota / 12) * 2) / 2;
+  const month = Number(today.slice(5, 7));
+  return Math.floor(((quota * month) / 12) * 2) / 2;
 }
 
 export interface LeaveRequest extends DecisionInfo {
@@ -222,6 +236,34 @@ export interface Holiday {
   id: string;
   date: string;
   name: string;
+  /** Country the holiday applies to; untagged entries are treated as India (older saved data). */
+  countryCode?: CountryCode;
+}
+
+let personCountry: (employeeId: string) => CountryCode | undefined = () => undefined;
+let personExtraHolidays: (employeeId: string) => Holiday[] = () => [];
+
+/** Wires up who works where, and personal extra days off (optional holidays they picked). */
+export function setHolidayContext(
+  countryOf: (employeeId: string) => CountryCode | undefined,
+  extra: (employeeId: string) => Holiday[],
+): void {
+  personCountry = countryOf;
+  personExtraHolidays = extra;
+}
+
+/** The holidays that apply to one person: their country's list plus optional holidays they picked. */
+export function holidaysForPerson(holidays: Holiday[], employeeId: string): Holiday[] {
+  const country = personCountry(employeeId) ?? "IN";
+  const byDate = new Map<string, Holiday>();
+  for (const h of holidays) if ((h.countryCode ?? "IN") === country) byDate.set(h.date, h);
+  for (const h of personExtraHolidays(employeeId)) if (!byDate.has(h.date)) byDate.set(h.date, h);
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Holidays for everyone in one country (no personal picks). */
+export function holidaysForCountry(holidays: Holiday[], country: CountryCode | undefined): Holiday[] {
+  return holidays.filter((h) => (h.countryCode ?? "IN") === (country ?? "IN")).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export interface Project {
@@ -308,6 +350,8 @@ export interface Expense extends DecisionInfo {
   date: string;
   category: string;
   amount: number;
+  /** ISO currency of the amount; INR when missing (older saved data). */
+  currency?: string;
   description: string;
   projectId: string;
   status: "submitted" | "approved" | "rejected" | "withdrawn";
@@ -531,6 +575,8 @@ export interface CashAdvance extends DecisionInfo {
   id: string;
   employeeId: string;
   amount: number;
+  /** ISO currency of the amount; INR when missing (older saved data). */
+  currency?: string;
   category: string;
   purpose: string;
   requiredBy: string;
@@ -598,6 +644,8 @@ export interface Reimbursement extends DecisionInfo {
   date: string;
   category: string;
   amount: number;
+  /** ISO currency of the amount; INR when missing (older saved data). */
+  currency?: string;
   description: string;
   status: "submitted" | "approved" | "rejected" | "withdrawn";
 }
@@ -677,6 +725,8 @@ export interface LeaveRow {
   code: LeaveCode;
   name: string;
   quota: number;
+  /** Days brought over from last year (included in quota). */
+  carriedOver?: number;
   utilized: number;
   pending: number;
   balance: number;
@@ -894,8 +944,14 @@ export function leaveRows(
   weeklyOffDays: number[] = [0, 6],
   /** Leave year to count; quotas reset each calendar year. Omit to count every year. */
   year?: number,
+  /** Internal: whether to add last year's carried-over days (off when computing last year itself). */
+  withCarryOver = true,
 ): LeaveRow[] {
-  const dates = holidaySet(holidays);
+  const dates = holidaySet(holidaysForPerson(holidays, employeeId));
+  const lastYear =
+    year != null && withCarryOver && policies.some((p) => p.carryForwardMax)
+      ? leaveRows(policies, requests, encashments, holidays, employeeId, weeklyOffDays, year - 1, false)
+      : [];
   const inYear = (iso: string) => year == null || iso.startsWith(String(year));
   return policies.map((policy) => {
     const mine = requests.filter(
@@ -916,12 +972,17 @@ export function leaveRows(
           .filter((request) => request.status === "pending")
           .map((request) => workingDays(request.from, request.to, dates, weeklyOffDays)),
       ) + sum(encashed.filter((item) => item.status === "pending").map((item) => item.days));
-    const quota = policy.quota + (year == null ? 0 : earnedLeave(employeeId, policy.code, year));
+    const yearly = year != null && policy.accrual === "monthly" ? accruedQuota(policy.quota, year) : policy.quota;
+    const carried = policy.carryForwardMax
+      ? Math.min(policy.carryForwardMax, Math.max(0, lastYear.find((row) => row.code === policy.code)?.balance ?? 0))
+      : 0;
+    const quota = yearly + carried + (year == null ? 0 : earnedLeave(employeeId, policy.code, year));
     const balance = quota - utilized;
     return {
       code: policy.code,
       name: policy.name,
       quota,
+      carriedOver: carried,
       utilized,
       pending,
       balance,
@@ -1001,7 +1062,7 @@ export function validateLeave(
       .find(([date, hours]) => hours > 0 && input.from <= date && date <= input.to);
     if (worked) return `You logged work on ${formatLongDate(worked[0])}. Remove those hours before applying leave.`;
   }
-  const days = workingDays(input.from, input.to, holidaySet(state.holidays), weeklyOffDays);
+  const days = workingDays(input.from, input.to, holidaySet(holidaysForPerson(state.holidays, employeeId)), weeklyOffDays);
   if (days <= 0) return "That range has no working days (weekly offs and holidays are skipped).";
   const row = leaveRows(
     state.leavePolicies,
@@ -1026,14 +1087,26 @@ export function validateLeave(
   return null;
 }
 
-export function validateEncashment(state: PortalState, employeeId: string, code: LeaveCode, days: number): string | null {
-  if (code !== "pto") return "Only PTO can be encashed.";
+export function validateEncashment(
+  state: PortalState,
+  employeeId: string,
+  code: LeaveCode,
+  days: number,
+  weeklyOffDays: number[] = [0, 6],
+): string | null {
+  if (code !== "pto") return "Only privilege leave can be encashed.";
   if (!Number.isInteger(days) || days <= 0) return "Enter whole days greater than zero.";
-  const row = leaveRows(state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, employeeId).find(
-    (item) => item.code === code,
-  );
-  if (!row) return "PTO is not available.";
-  if (days > row.available) return `Only ${row.available} PTO day(s) can be encashed.`;
+  const row = leaveRows(
+    state.leavePolicies,
+    state.leaveRequests,
+    state.encashments,
+    state.holidays,
+    employeeId,
+    weeklyOffDays,
+    Number(todayISO().slice(0, 4)),
+  ).find((item) => item.code === code);
+  if (!row) return "Privilege leave is not available.";
+  if (days > row.available) return `Only ${row.available} privilege leave day(s) can be encashed.`;
   return null;
 }
 
@@ -1058,7 +1131,7 @@ export function validateTimesheet(
   hours: Record<string, number>,
   weeklyOffDays: number[] = [0, 6],
 ): string | null {
-  const dates = holidaySet(state.holidays);
+  const dates = holidaySet(holidaysForPerson(state.holidays, employeeId));
   const today = todayISO();
   let total = 0;
   for (const [date, value] of Object.entries(hours)) {
@@ -1087,12 +1160,17 @@ export function validateTimesheet(
   return null;
 }
 
-export function validateExpense(input: {
-  date: string;
-  category: string;
-  amount: number;
-  description: string;
-}): string | null {
+export function validateExpense(
+  input: {
+    date: string;
+    category: string;
+    amount: number;
+    description: string;
+  },
+  /** Largest single claim in the claimant's own currency. */
+  maxClaim: number = MAX_CLAIM_AMOUNT,
+  currency = "INR",
+): string | null {
   if (!input.date) return "Choose a date.";
   const today = todayISO();
   if (input.date > today) return "The expense date can't be in the future.";
@@ -1102,7 +1180,10 @@ export function validateExpense(input: {
   if (!input.category) return "Choose a category.";
   if (!input.description.trim()) return "Enter a description.";
   if (!Number.isFinite(input.amount) || input.amount <= 0) return "Enter an amount greater than zero.";
-  if (input.amount > MAX_CLAIM_AMOUNT) return `A single claim can't be more than ${MAX_CLAIM_AMOUNT.toLocaleString("en-IN")}. Split it or contact Finance.`;
+  if (input.amount > maxClaim) {
+    const limit = new Intl.NumberFormat("en", { style: "currency", currency, maximumFractionDigits: 0 }).format(maxClaim);
+    return `A single claim can't be more than ${limit}. Split it or contact Finance.`;
+  }
   return null;
 }
 
@@ -1140,7 +1221,7 @@ export function attendanceOn(
   /** JS weekday indexes that are weekly offs; defaults to Sat/Sun when omitted. */
   weeklyOffDays: number[] = [0, 6],
 ): AttendanceCell {
-  const holiday = holidays.find((item) => item.date === date);
+  const holiday = holidaysForPerson(holidays, employeeId).find((item) => item.date === date);
   if (holiday) return { date, kind: "holiday", detail: holiday.name };
   const leave = requests.find(
     (request) => request.employeeId === employeeId && request.status === "approved" && request.from <= date && date <= request.to,

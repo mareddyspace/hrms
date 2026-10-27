@@ -23,7 +23,11 @@ export type ConsentEvent = { id: string; personId: string; key: ConsentKey; gran
 
 export const REQUEST_TYPES = ["Access", "Correction", "Deletion"] as const;
 export type RequestType = (typeof REQUEST_TYPES)[number];
-export type RequestStatus = "Open" | "In progress" | "Completed" | "Rejected" | "Withdrawn";
+/**
+ * "Closed (manual)": a correction or deletion that HR carried out by hand outside this app —
+ * closing it here does not change any data itself.
+ */
+export type RequestStatus = "Open" | "In progress" | "Completed" | "Closed (manual)" | "Rejected" | "Withdrawn";
 
 export const REQUEST_DUE_DAYS = 30;
 
@@ -81,7 +85,7 @@ function defaults(): PrivacyState {
         details: "Remove my old home address from the directory.",
         createdOn: relDay(-60),
         dueOn: relDay(-30),
-        status: "Completed",
+        status: "Closed (manual)",
         handledById: "demo-hr-admin",
         closedOn: relDay(-45),
         outcome: "Old address removed from all records.",
@@ -131,7 +135,12 @@ export function setConsent(actor: ComplianceActor, key: ConsentKey, granted: boo
 
 /* ───────────── Data requests ───────────── */
 
-const CLOSED: RequestStatus[] = ["Completed", "Rejected", "Withdrawn"];
+const CLOSED: RequestStatus[] = ["Completed", "Closed (manual)", "Rejected", "Withdrawn"];
+
+/** Access requests are fulfilled by the data export; corrections and deletions are done by hand. */
+export function closesManually(type: RequestType): boolean {
+  return type !== "Access";
+}
 
 export function isRequestOpen(req: DataRequest): boolean {
   return !CLOSED.includes(req.status);
@@ -196,7 +205,10 @@ export function moveRequest(actor: ComplianceActor, id: string, next: "In progre
       return "Start the request before closing it.";
     }
     if (next === "Rejected" && outcome.trim().length < 5) return "Give a reason for rejecting the request.";
-    row.status = next;
+    if (next === "Completed" && closesManually(row.type) && outcome.trim().length < 5) {
+      return "Say what was changed, and where.";
+    }
+    row.status = next === "Completed" && closesManually(row.type) ? "Closed (manual)" : next;
     row.handledById = actor.id;
     if (next !== "In progress") {
       row.closedOn = todayISO();

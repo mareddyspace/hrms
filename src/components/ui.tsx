@@ -376,7 +376,10 @@ export function LeaveTable({ rows, showPending = false }: { rows: LeaveRow[]; sh
         {rows.map((row) => (
           <tr key={row.code}>
             <td>{row.name}</td>
-            <td>{row.quota}</td>
+            <td>
+              {row.quota}
+              {row.carriedOver ? <span className="muted"> (incl. {row.carriedOver} carried over)</span> : null}
+            </td>
             <td>{row.utilized}</td>
             {showPending && <td>{row.pending}</td>}
             <td>{row.balance}</td>

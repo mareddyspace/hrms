@@ -32,7 +32,7 @@ export function ScopeBanner({
 }) {
   return (
     <div className="scope-banner" role="status">
-      <strong>Authorized scope:</strong> {scope}
+      <strong>Scope:</strong> {scope}
       {note ? <span className="muted"> — {note}</span> : null}
     </div>
   );
@@ -50,7 +50,7 @@ export function AuthShortcuts({
   );
   if (!links.length) {
     return (
-      <p className="note">No module shortcuts authorized for this persona.</p>
+      <p className="note">No shortcuts available.</p>
     );
   }
   return (

@@ -127,7 +127,7 @@ export function createLocalStore<T extends Record<string, unknown>>(key: string,
     const state = structuredClone(getState());
     const error = apply(state);
     if (error) return error;
-    return write(state) ? null : "Could not save — browser storage is full or blocked.";
+    return write(state) ? null : "Could not save. Please try again.";
   }
 
   function reset() {

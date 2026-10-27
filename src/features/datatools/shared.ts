@@ -16,6 +16,18 @@ export function isHrOrAdmin(role: UserRole): boolean {
   return HR_ROLES.includes(role) || ADMIN_ROLES.includes(role);
 }
 
+/** Roles whose report builder covers the whole organisation (compensation columns are always stripped). */
+export function hasOrgWideReports(role: UserRole): boolean {
+  return isHrOrAdmin(role) || role === "executive" || role === "compensation_admin";
+}
+
+/** Scheduled report files may only go to company mailboxes. */
+export const INTERNAL_EMAIL_DOMAIN = "@infotech.com";
+
+export function isInternalEmail(value: string): boolean {
+  return value.toLowerCase().endsWith(INTERNAL_EMAIL_DOMAIN);
+}
+
 export const EMAIL_PATTERN = /^[^\s@<>()[\]\\,;:"']+@[^\s@<>()[\]\\,;:"']+\.[A-Za-z]{2,}$/;
 
 export function isValidEmail(value: string): boolean {

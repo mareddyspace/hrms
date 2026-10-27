@@ -6,7 +6,7 @@ import { todayISO } from "../../model.ts";
 import { usePortal } from "../../store.tsx";
 import { commitImport, commitMassUpdate, getBulkState, subscribeBulk, undoableEntry, undoLast } from "./bulkStore.ts";
 import { MAX_IMPORT_ROWS, parseImportFile, templateSheets, validateImport, type ImportAction, type RawImportRow } from "./importRules.ts";
-import { MAX_MASS_UPDATE, describeChange, orphanedReports, planMassUpdate, type MassChange } from "./massUpdateRules.ts";
+import { MAX_MASS_UPDATE, canMassUpdate, describeChange, orphanedReports, planMassUpdate, type MassChange } from "./massUpdateRules.ts";
 import { downloadCsv, downloadXlsx, isHrOrAdmin, type DataToolsActor } from "./shared.ts";
 import "./datatools.css";
 
@@ -48,14 +48,14 @@ export function BulkDataPage() {
       <Tabs
         tabs={[
           { id: "import", label: "Import employees" },
-          { id: "mass", label: "Mass update" },
+          ...(canMassUpdate(demoProfile.role) ? [{ id: "mass", label: "Mass update" }] : []),
           { id: "history", label: "History" },
         ]}
         value={tab}
         onChange={setTab}
       />
       {tab === "import" && <ImportPanel actor={actor} onDone={() => setTab("history")} />}
-      {tab === "mass" && <MassUpdatePanel actor={actor} onDone={() => setTab("history")} />}
+      {tab === "mass" && canMassUpdate(demoProfile.role) && <MassUpdatePanel actor={actor} onDone={() => setTab("history")} />}
       {tab === "history" && <HistoryPanel actor={actor} />}
     </Page>
   );
@@ -310,7 +310,7 @@ function ImportPanel({ actor, onDone }: { actor: DataToolsActor; onDone: () => v
             <strong>{counts.unchanged + counts.error}</strong> skipped
           </span>
         </div>
-        <p className="note">From {fileName}. You can undo this import from History until another bulk change is made.</p>
+        <p className="note">From {fileName}. Undo from History until another bulk change is made.</p>
       </Dialog>
     </>
   );
@@ -334,8 +334,6 @@ function MassUpdatePanel({ actor, onDone }: { actor: DataToolsActor; onDone: () 
   const [newDepartment, setNewDepartment] = useState("");
   const [location, setLocation] = useState("");
   const [newStatus, setNewStatus] = useState<EmploymentStatus | "">("");
-  const [exitDate, setExitDate] = useState("");
-  const [exitReason, setExitReason] = useState("");
   const [message, setMessage] = useState<Message>(null);
   const [confirming, setConfirming] = useState(false);
 
@@ -372,7 +370,7 @@ function MassUpdatePanel({ actor, onDone }: { actor: DataToolsActor; onDone: () 
             ? { kind, location }
             : null
           : newStatus
-            ? { kind: "status", status: newStatus, exitDate, exitReason }
+            ? { kind: "status", status: newStatus }
             : null;
 
   const selectedIds = useMemo(() => [...selected].filter((id) => people.some((p) => p.id === id)), [selected, people]);
@@ -547,21 +545,14 @@ function MassUpdatePanel({ actor, onDone }: { actor: DataToolsActor; onDone: () 
               <Field label="New status">
                 <select value={newStatus} onChange={(e) => setNewStatus(e.target.value as EmploymentStatus | "")}>
                   <option value="">Choose a status</option>
-                  {FILTER_OPTIONS.employmentStatuses.map((s) => (
-                    <option key={s}>{s}</option>
-                  ))}
+                  {FILTER_OPTIONS.employmentStatuses
+                    .filter((s) => s !== "Terminated")
+                    .map((s) => (
+                      <option key={s}>{s}</option>
+                    ))}
                 </select>
               </Field>
-              {newStatus === "Terminated" && (
-                <>
-                  <Field label="Exit date">
-                    <input type="date" value={exitDate} onChange={(e) => setExitDate(e.target.value)} required />
-                  </Field>
-                  <Field label="Exit reason" wide>
-                    <input value={exitReason} onChange={(e) => setExitReason(e.target.value)} maxLength={200} placeholder="For example, resignation" required />
-                  </Field>
-                </>
-              )}
+              <p className="note">To end someone's employment, use the exit workflow.</p>
             </>
           )}
         </div>
@@ -619,7 +610,7 @@ function MassUpdatePanel({ actor, onDone }: { actor: DataToolsActor; onDone: () 
       >
         <p className="note">
           {change ? describeChange(change, people) : ""} for {peopleLabel(plan?.changes.length ?? 0)}.{" "}
-          {plan?.skipped.length ? `${plan.skipped.length} skipped. ` : ""}You can undo this from History until another bulk change is made.
+          {plan?.skipped.length ? `${plan.skipped.length} skipped. ` : ""}Undo from History until another bulk change is made.
         </p>
       </Dialog>
     </>
@@ -671,7 +662,7 @@ function HistoryPanel({ actor }: { actor: DataToolsActor }) {
               <StatusBadge status="Applied" tone="ok" literal />
             ),
           ])}
-          empty={<EmptyState title="No bulk changes yet" description="Imports and mass updates will be listed here." />}
+          empty={<EmptyState title="No bulk changes yet" />}
         />
       </Card>
       <Dialog

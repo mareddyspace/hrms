@@ -2,7 +2,7 @@ import {
   CANDIDATES,
   CERTIFICATIONS,
   CLOSED_STAGES,
-  DEFAULT_EMPLOYEE_SKILLS,
+  COURSES,
   ENROLLMENTS,
   EXIT_STAGES,
   FEEDBACK_ITEMS,
@@ -12,21 +12,29 @@ import {
   ONBOARDING_JOINERS,
   ONE_ON_ONES,
   ONBOARDING_TASKS,
+  ONBOARDING_TEMPLATE,
+  PERF_CYCLES,
   PERF_GOALS,
   PERF_REVIEWS,
   PIPELINE_STAGES,
+  RATINGS,
   REQUISITIONS,
+  starterSkillsFor,
   type ApprovalStatus,
   type Candidate,
   type Certification,
+  type Course,
   type EmployeeSkill,
   type Enrollment,
   type FeedbackItem,
   type Interview,
+  type OfferApproval,
   type OfferRecord,
+  type OfferStatus,
   type OnboardingJoiner,
   type OnboardingTask,
   type OneOnOne,
+  type PerfCycle,
   type PerfGoal,
   type PerfReview,
   type PipelineStage,
@@ -34,9 +42,15 @@ import {
   type SkillProfile,
 } from "./talentData.ts";
 import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../demoAccounts.ts";
-import { todayISO, type UserRole } from "../model.ts";
+import { TIMEZ_COUNTRIES, todayISO, type UserRole } from "../model.ts";
+import { legalEntityFor } from "../countryPay.ts";
+import { TASK_TEAM } from "./taskTeam.ts";
+import { GRADE_BANDS, type GradeBand } from "./rewardData.ts";
+import { upsertPerson, type LocalPersonRecord } from "./peopleLocal.ts";
 
-const KEY = "timez.talent.state.v1";
+// v3: recruiting seed made consistent (approval trails, structured offers, joiners linked to hires).
+const KEY = "timez.talent.state.v3";
+const OLD_KEYS = ["timez.talent.state.v1", "timez.talent.state.v2"];
 
 type TalentState = {
   requisitions: Requisition[];
@@ -52,6 +66,8 @@ type TalentState = {
   feedback: FeedbackItem[];
   oneOnOnes: OneOnOne[];
   skillProfiles: SkillProfile[];
+  /** Cycle status changes made by HR (cycle id → status). */
+  cycleStatus: Record<string, PerfCycle["status"]>;
 };
 
 /** Who is performing a talent action — the signed-in persona. */
@@ -74,22 +90,33 @@ function defaults(): TalentState {
     feedback: structuredClone(FEEDBACK_ITEMS),
     oneOnOnes: structuredClone(ONE_ON_ONES),
     skillProfiles: [],
+    cycleStatus: {},
   };
+}
+
+/** Drops data that should never exist: reviews for people with no one above them (the CEO). */
+function clean(state: TalentState): TalentState {
+  state.reviews = state.reviews.filter((r) => managementChain(r.employeeId, DEMO_ACCOUNTS).length > 0);
+  return deriveJoiners(state);
 }
 
 function read(): TalentState {
   try {
+    OLD_KEYS.forEach((k) => localStorage.removeItem(k));
     const raw = localStorage.getItem(KEY);
-    if (!raw) return deriveJoiners(defaults());
+    if (!raw) return clean(defaults());
     const saved = JSON.parse(raw) as Partial<Record<keyof TalentState, unknown>>;
     const base = defaults();
-    // Keep only saved lists that are still lists; anything damaged or from an older version falls back to defaults.
+    // Keep only saved lists that are still lists; anything damaged falls back to defaults.
     for (const key of Object.keys(base) as (keyof TalentState)[]) {
+      if (key === "cycleStatus") continue;
       if (Array.isArray(saved?.[key])) (base as Record<keyof TalentState, unknown>)[key] = saved[key];
     }
-    return deriveJoiners(base);
+    const status = saved?.cycleStatus;
+    if (status && typeof status === "object" && !Array.isArray(status)) base.cycleStatus = status as TalentState["cycleStatus"];
+    return clean(base);
   } catch {
-    return deriveJoiners(defaults());
+    return clean(defaults());
   }
 }
 
@@ -147,14 +174,14 @@ export function isAboveInChain(actorId: string, employeeId: string): boolean {
   return managementChain(employeeId, DEMO_ACCOUNTS).some((m) => m.id === actorId);
 }
 
-/** Manager chain or HR — never the employee themselves. */
+/** Decisions about a person: only someone above them in the reporting line — never HR by role, never themselves. */
 export function canManageEmployee(actor: TalentActor, employeeId: string): boolean {
-  if (employeeId === actor.id) return false;
-  return isHrRole(actor.role) || isAboveInChain(actor.id, employeeId);
+  return employeeId !== actor.id && isAboveInChain(actor.id, employeeId);
 }
 
+/** Viewing: yourself, your reporting line, or HR. */
 export function canViewEmployeeTalent(actor: TalentActor, employeeId: string): boolean {
-  return actor.id === employeeId || canManageEmployee(actor, employeeId);
+  return actor.id === employeeId || isHrRole(actor.role) || isAboveInChain(actor.id, employeeId);
 }
 
 function sameName(a: string | undefined, b: string | undefined): boolean {
@@ -163,9 +190,42 @@ function sameName(a: string | undefined, b: string | undefined): boolean {
 
 /* ───────────── Recruiting ───────────── */
 
-/** Next stage forward, or exit to Rejected / Withdrawn. Hired only once the offer is accepted. */
-export function allowedStageMoves(candidate: Candidate, offers: OfferRecord[]): PipelineStage[] {
+function accountId(name: string): string | undefined {
+  return DEMO_ACCOUNTS.find((a) => sameName(a.fullName, name))?.id;
+}
+
+function hiringManagerIdOf(req: Requisition): string | undefined {
+  return req.hiringManagerId || accountId(req.hiringManager);
+}
+
+/** True when the actor is the requisition's hiring manager. */
+export function isHiringManagerOf(actor: TalentActor, req: Requisition): boolean {
+  return hiringManagerIdOf(req) === actor.id;
+}
+
+/** Recruiters and HR run hiring for every requisition; a hiring manager only for their own. */
+export function canActOnRequisition(actor: TalentActor, req: Requisition): boolean {
+  return actor.role === "recruiter" || isHrRole(actor.role) || isHiringManagerOf(actor, req);
+}
+
+/** People above the hiring manager in the reporting line: they decide the requisition and approve offers. */
+export function requisitionApprovers(req: Requisition): DemoAccount[] {
+  const hm = hiringManagerIdOf(req);
+  return hm ? managementChain(hm, DEMO_ACCOUNTS) : [];
+}
+
+function isReqApprover(actor: TalentActor, req: Requisition): boolean {
+  return !isHiringManagerOf(actor, req) && requisitionApprovers(req).some((a) => a.id === actor.id);
+}
+
+function reqFor(s: TalentState, id: string): Requisition | undefined {
+  return s.requisitions.find((r) => r.id === id);
+}
+
+/** Next stage forward (blueprint order), or exit to Rejected / Withdrawn. Hired only once the offer is accepted. */
+export function allowedStageMoves(candidate: Candidate, offers: OfferRecord[], req?: Requisition): PipelineStage[] {
   if (CLOSED_STAGES.includes(candidate.stage)) return [];
+  if (req && req.approvalStatus !== "Approved") return [];
   const next = PIPELINE_STAGES[PIPELINE_STAGES.indexOf(candidate.stage) + 1];
   const moves: PipelineStage[] = [];
   if (next && !EXIT_STAGES.includes(next)) {
@@ -180,17 +240,21 @@ function hasAcceptedOffer(candidateId: string, offers: OfferRecord[]): boolean {
 
 export function setCandidateStage(actor: TalentActor, id: string, stage: PipelineStage): TalentResult {
   return guarded((s) => {
-    if (!canEditRecruiting(actor.role)) return "Only recruiters, HR and hiring managers can move candidates.";
     const row = s.candidates.find((c) => c.id === id);
     if (!row) return "Candidate not found.";
+    const req = reqFor(s, row.requisitionId);
+    if (!req) return "Requisition not found.";
+    if (!canActOnRequisition(actor, req)) return "Only recruiting, HR or this role's hiring manager can move candidates.";
     if (stage === row.stage) return null;
+    if (req.approvalStatus !== "Approved") return `${req.id} is ${req.approvalStatus.toLowerCase()}. Candidates can't move until it is approved.`;
     if (stage === "Hired" && !hasAcceptedOffer(id, s.offers)) return "A candidate can only be hired after accepting an offer.";
-    if (!allowedStageMoves(row, s.offers).includes(stage)) {
+    if (!allowedStageMoves(row, s.offers, req).includes(stage)) {
       return CLOSED_STAGES.includes(row.stage)
         ? `${row.name} is already ${row.stage}.`
         : "Candidates move forward one stage at a time (or to Rejected / Withdrawn).";
     }
     row.stage = stage;
+    if (stage === "Hired") createJoiner(s, row, req);
     return null;
   });
 }
@@ -198,97 +262,213 @@ export function setCandidateStage(actor: TalentActor, id: string, stage: Pipelin
 const REQ_TRANSITIONS: Record<ApprovalStatus, ApprovalStatus[]> = {
   Draft: ["Pending approval"],
   "Pending approval": ["Approved", "Rejected", "On hold"],
-  // On hold is a parked decision: HR can still approve or reject it.
+  // On hold is a parked decision: the approver can still approve or reject it.
   "On hold": ["Approved", "Rejected"],
   Approved: [],
   Rejected: [],
 };
 
-/** Statuses this actor may move the requisition to. Decisions are HR-only and never by the req's own hiring manager. */
+/** Submit: recruiting or the hiring manager. Decide: someone above the hiring manager — never the hiring manager, and not HR by role. */
 export function requisitionMoves(actor: TalentActor, req: Requisition): ApprovalStatus[] {
   return REQ_TRANSITIONS[req.approvalStatus].filter((next) =>
-    next === "Pending approval"
-      ? canEditRecruiting(actor.role)
-      : isHrRole(actor.role) && !sameName(req.hiringManager, actor.fullName),
+    next === "Pending approval" ? canActOnRequisition(actor, req) : isReqApprover(actor, req),
   );
 }
 
-export function setRequisitionApproval(actor: TalentActor, id: string, approvalStatus: ApprovalStatus): TalentResult {
+const REQ_ACTION: Record<ApprovalStatus, string> = {
+  Draft: "Saved as draft",
+  "Pending approval": "Submitted for approval",
+  Approved: "Approved",
+  Rejected: "Rejected",
+  "On hold": "Put on hold",
+};
+
+export function setRequisitionApproval(actor: TalentActor, id: string, approvalStatus: ApprovalStatus, note = ""): TalentResult {
   return guarded((s) => {
-    const row = s.requisitions.find((r) => r.id === id);
+    const row = reqFor(s, id);
     if (!row) return "Requisition not found.";
     if (row.approvalStatus === approvalStatus) return null;
     if (!REQ_TRANSITIONS[row.approvalStatus].includes(approvalStatus)) {
       return `A requisition cannot move from ${row.approvalStatus} to ${approvalStatus}.`;
     }
-    if (approvalStatus !== "Pending approval" && sameName(row.hiringManager, actor.fullName)) {
-      return "The hiring manager cannot approve their own requisition.";
+    if (approvalStatus !== "Pending approval" && isHiringManagerOf(actor, row)) {
+      return "The hiring manager cannot decide their own requisition.";
     }
     if (!requisitionMoves(actor, row).includes(approvalStatus)) {
       return approvalStatus === "Pending approval"
-        ? "Only recruiting staff can submit a requisition for approval."
-        : "Only HR can decide on a requisition.";
+        ? "Only recruiting or the hiring manager can submit this requisition."
+        : "Only someone above the hiring manager can decide this requisition.";
     }
+    const today = todayISO();
     row.approvalStatus = approvalStatus;
+    if (approvalStatus === "Pending approval") row.stageSummary = "Awaiting approval";
+    else {
+      row.approver = actor.fullName;
+      row.decidedOn = today;
+      row.stageSummary = approvalStatus === "Approved" ? "Sourcing" : approvalStatus === "On hold" ? "On hold" : "Closed";
+    }
+    row.history = [...(row.history ?? []), { on: today, by: actor.fullName, byId: actor.id, action: REQ_ACTION[approvalStatus], ...(note.trim() ? { note: note.trim() } : {}) }];
     return null;
   });
 }
 
-const OFFER_TRANSITIONS: Record<OfferRecord["status"], OfferRecord["status"][]> = {
-  Preparing: ["Sent", "Withdrawn"],
+/* ───────────── Offers ───────────── */
+
+const OFFER_TRANSITIONS: Record<OfferStatus, OfferStatus[]> = {
+  Preparing: ["Pending approval", "Withdrawn"],
+  "Pending approval": ["Approved", "Preparing", "Withdrawn"],
+  Approved: ["Sent", "Withdrawn"],
   Sent: ["Accepted", "Declined", "Withdrawn"],
   Accepted: [],
   Declined: [],
   Withdrawn: [],
 };
 
-export function offerMoves(offer: OfferRecord): OfferRecord["status"][] {
-  return OFFER_TRANSITIONS[offer.status];
+function parseAmount(text: string): number {
+  return Number(text.replace(/[^0-9.]/g, "")) || 0;
+}
+
+/** The salary band for the offer's grade and country, if one exists. */
+export function bandFor(offer: Pick<OfferRecord, "grade">, req: Pick<Requisition, "country" | "department"> | undefined): GradeBand | undefined {
+  if (!req) return undefined;
+  const bands = GRADE_BANDS.filter((b) => b.grade === offer.grade && b.country === req.country);
+  return bands.find((b) => b.family === req.department) ?? bands[0];
+}
+
+/** Above the band's maximum, or no band for this grade and country: Compensation must approve too. */
+export function needsCompApproval(offer: Pick<OfferRecord, "grade" | "baseSalary">, req: Pick<Requisition, "country" | "department"> | undefined): boolean {
+  const band = bandFor(offer, req);
+  return !band || offer.baseSalary > parseAmount(band.max);
+}
+
+/** Approval still missing on a pending offer: "Line" (above the hiring manager), "Compensation", or null when done. */
+export function offerApprovalNeeded(offer: OfferRecord, req: Requisition | undefined): OfferApproval["role"] | null {
+  if (!offer.approvals.some((a) => a.role === "Line")) return "Line";
+  if (needsCompApproval(offer, req) && !offer.approvals.some((a) => a.role === "Compensation")) return "Compensation";
+  return null;
+}
+
+export function canApproveOffer(actor: TalentActor, offer: OfferRecord, req: Requisition | undefined): boolean {
+  if (offer.status !== "Pending approval" || !req) return false;
+  if (offer.createdById === actor.id || isHiringManagerOf(actor, req)) return false;
+  if (offer.approvals.some((a) => a.byId === actor.id)) return false;
+  const step = offerApprovalNeeded(offer, req);
+  if (step === "Line") return requisitionApprovers(req).some((a) => a.id === actor.id);
+  if (step === "Compensation") return actor.role === "compensation_admin";
+  return false;
+}
+
+/** Status moves this actor may make (approval itself goes through approveOffer). */
+export function offerMoves(actor: TalentActor, offer: OfferRecord, req: Requisition | undefined): OfferStatus[] {
+  if (!req) return [];
+  const staff = canActOnRequisition(actor, req);
+  return OFFER_TRANSITIONS[offer.status].filter((next) => {
+    if (next === "Approved") return false;
+    if (next === "Preparing") return canApproveOffer(actor, offer, req); // send back
+    return staff;
+  });
 }
 
 function hasOpenOffer(candidateId: string, offers: OfferRecord[]): boolean {
   return offers.some((o) => o.candidateId === candidateId && o.status !== "Declined" && o.status !== "Withdrawn");
 }
 
-/** Candidates at Final Review / Offer without an open offer. */
-export function offerEligibleCandidates(state: Pick<TalentState, "candidates" | "offers">): Candidate[] {
-  return state.candidates.filter(
-    (c) => OFFER_ELIGIBLE_STAGES.includes(c.stage) && !hasOpenOffer(c.id, state.offers),
-  );
+/** Candidates at Final Review / Offer without an open offer, on requisitions this actor works on. */
+export function offerEligibleCandidates(state: Pick<TalentState, "candidates" | "offers" | "requisitions">, actor?: TalentActor): Candidate[] {
+  return state.candidates.filter((c) => {
+    if (!OFFER_ELIGIBLE_STAGES.includes(c.stage) || hasOpenOffer(c.id, state.offers)) return false;
+    const req = state.requisitions.find((r) => r.id === c.requisitionId);
+    return !!req && req.approvalStatus === "Approved" && (!actor || canActOnRequisition(actor, req));
+  });
 }
 
-export function createOffer(actor: TalentActor, candidateId: string, packageNote: string): TalentResult {
+export type OfferInput = { candidateId: string; grade: string; baseSalary: number; startDate: string; packageNote: string };
+
+export function createOffer(actor: TalentActor, input: OfferInput): TalentResult {
   return guarded((s) => {
-    if (!canEditRecruiting(actor.role)) return "Only recruiters, HR and hiring managers can prepare offers.";
-    const candidate = s.candidates.find((c) => c.id === candidateId);
+    const candidate = s.candidates.find((c) => c.id === input.candidateId);
     if (!candidate) return "Candidate not found.";
+    const req = reqFor(s, candidate.requisitionId);
+    if (!req || !canActOnRequisition(actor, req)) return "Only recruiting, HR or this role's hiring manager can prepare offers.";
+    if (req.approvalStatus !== "Approved") return "The requisition is not approved.";
     if (!OFFER_ELIGIBLE_STAGES.includes(candidate.stage)) return "Offers can only be prepared at Final Review or Offer stage.";
-    if (hasOpenOffer(candidateId, s.offers)) return `${candidate.name} already has an open offer.`;
-    if (!packageNote.trim()) return "Add a package note.";
+    if (hasOpenOffer(candidate.id, s.offers)) return `${candidate.name} already has an open offer.`;
+    if (!input.grade) return "Choose a grade.";
+    if (!Number.isFinite(input.baseSalary) || input.baseSalary <= 0) return "Enter the annual base salary.";
+    if (!input.startDate || input.startDate <= todayISO()) return "Choose a start date in the future.";
+    const country = TIMEZ_COUNTRIES.find((c) => c.name === req.country);
     s.offers.push({
       id: newId("off"),
-      candidateId,
+      candidateId: candidate.id,
       candidateName: candidate.name,
+      requisitionId: req.id,
       role: candidate.role,
       status: "Preparing",
-      packageNote: packageNote.trim(),
+      grade: input.grade,
+      baseSalary: Math.round(input.baseSalary),
+      currency: country?.currency ?? "USD",
+      startDate: input.startDate,
+      packageNote: input.packageNote.trim(),
+      createdBy: actor.fullName,
+      createdById: actor.id,
+      approvals: [],
     });
     if (candidate.stage === "Final Review") candidate.stage = "Offer";
     return null;
   });
 }
 
-export function setOfferStatus(actor: TalentActor, id: string, status: OfferRecord["status"]): TalentResult {
+export function approveOffer(actor: TalentActor, id: string): TalentResult {
   return guarded((s) => {
-    if (!canEditRecruiting(actor.role)) return "Only recruiters, HR and hiring managers can update offers.";
     const row = s.offers.find((o) => o.id === id);
     if (!row) return "Offer not found.";
+    const req = reqFor(s, row.requisitionId);
+    if (row.createdById === actor.id) return "You can't approve an offer you created.";
+    if (!canApproveOffer(actor, row, req)) {
+      return offerApprovalNeeded(row, req) === "Compensation"
+        ? "This offer is outside the band and needs Compensation approval."
+        : "Only someone above the hiring manager can approve this offer.";
+    }
+    const step = offerApprovalNeeded(row, req)!;
+    row.approvals.push({ role: step, by: actor.fullName, byId: actor.id, on: todayISO() });
+    if (!offerApprovalNeeded(row, req)) row.status = "Approved";
+    return null;
+  });
+}
+
+/** Moves an offer. Accepted / Declined record the candidate's answer and need a note on how it was received. */
+export function setOfferStatus(actor: TalentActor, id: string, status: OfferStatus, note = ""): TalentResult {
+  return guarded((s) => {
+    const row = s.offers.find((o) => o.id === id);
+    if (!row) return "Offer not found.";
+    const req = reqFor(s, row.requisitionId);
     if (row.status === status) return null;
     if (!OFFER_TRANSITIONS[row.status].includes(status)) return `An offer cannot move from ${row.status} to ${status}.`;
+    if (status === "Approved") return "Use Approve.";
+    if (!offerMoves(actor, row, req).includes(status)) return "You can't make this change to the offer.";
+    if (status === "Accepted" || status === "Declined") {
+      if (note.trim().length < 5) return "Say how the candidate's answer was received.";
+      row.responseNote = note.trim();
+      row.responseRecordedBy = actor.fullName;
+      row.respondedOn = todayISO();
+    }
+    if (status === "Preparing") row.approvals = [];
     row.status = status;
     if (status === "Sent" && !row.sentOn) row.sentOn = todayISO();
     return null;
   });
+}
+
+/** Average days from requisition approval to offer acceptance, or null with no hires yet. */
+export function averageTimeToHire(state: Pick<TalentState, "offers" | "requisitions">): number | null {
+  const days = state.offers
+    .filter((o) => o.status === "Accepted" && o.respondedOn)
+    .map((o) => {
+      const approved = state.requisitions.find((r) => r.id === o.requisitionId)?.history?.find((h) => h.action === "Approved")?.on;
+      return approved ? (Date.parse(o.respondedOn!) - Date.parse(approved)) / 86_400_000 : null;
+    })
+    .filter((d): d is number => d !== null && d >= 0);
+  return days.length ? Math.round(days.reduce((a, b) => a + b, 0) / days.length) : null;
 }
 
 export function canSubmitInterviewFeedback(actor: TalentActor, interview: Interview): boolean {
@@ -317,17 +497,22 @@ export function canEditOnboarding(role: UserRole): boolean {
   return role === "recruiter" || isHrRole(role);
 }
 
-/** HR / recruiter, or whoever the task is assigned to (the joiner, their manager, IT). */
-export function canEditOnboardingTask(actor: TalentActor, task: OnboardingTask, joiner: OnboardingJoiner | undefined): boolean {
-  if (canEditOnboarding(actor.role)) return true;
-  if (task.owner === "IT") return actor.role === "it_admin";
-  if (task.owner === "Manager") return sameName(joiner?.manager, actor.fullName);
-  if (task.owner === "Employee") return sameName(joiner?.name, actor.fullName);
-  return false;
+/** Whoever owns the task: HR, IT (platform admin), the joiner's manager, or the joiner. */
+export function isTaskOwner(actor: TalentActor, task: OnboardingTask, joiner: OnboardingJoiner | undefined): boolean {
+  if (task.owner === "HR") return isHrRole(actor.role);
+  if (task.owner === "IT") return actor.role === "it_admin" || actor.role === "admin";
+  if (task.owner === "Manager") return !!joiner && (joiner.managerId === actor.id || sameName(joiner.manager, actor.fullName));
+  return !!joiner && (joiner.personId === actor.id || sameName(joiner.name, actor.fullName));
 }
 
+/** The owner updates a task; HR may update someone else's task only with a recorded reason. */
+export function canEditOnboardingTask(actor: TalentActor, task: OnboardingTask, joiner: OnboardingJoiner | undefined): boolean {
+  return isTaskOwner(actor, task, joiner) || isHrRole(actor.role);
+}
+
+/** Only the joiner acknowledges policies. */
 export function canAcknowledgePolicies(actor: TalentActor, joiner: OnboardingJoiner): boolean {
-  return isHrRole(actor.role) || sameName(joiner.name, actor.fullName);
+  return joiner.personId === actor.id || sameName(joiner.name, actor.fullName);
 }
 
 /** Progress and overall status come from the checklist, not from stored numbers. */
@@ -345,13 +530,98 @@ function deriveJoiners(state: TalentState): TalentState {
   return state;
 }
 
-export function setOnboardingTaskStatus(actor: TalentActor, id: string, status: OnboardingTask["status"]): TalentResult {
+function addDaysTo(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return localISO(new Date(y, m - 1, d + days));
+}
+
+/** A hire becomes a joiner with the standard checklist. */
+function createJoiner(s: TalentState, candidate: Candidate, req: Requisition) {
+  if (s.joiners.some((j) => j.candidateId === candidate.id)) return;
+  const offer = s.offers.find((o) => o.candidateId === candidate.id && o.status === "Accepted");
+  const id = newId("ob");
+  const startDate = offer?.startDate ?? addDaysTo(todayISO(), 14);
+  s.joiners.push({
+    id,
+    name: candidate.name,
+    role: req.title,
+    startDate,
+    country: req.country,
+    manager: req.hiringManager,
+    managerId: hiringManagerIdOf(req) ?? "",
+    candidateId: candidate.id,
+    requisitionId: req.id,
+    preboardingPct: 0,
+    docsStatus: "Not started",
+    policyAck: "Pending",
+    overallStatus: "Pre-boarding",
+  });
+  ONBOARDING_TEMPLATE.forEach((t, i) =>
+    s.tasks.push({ id: `${id}-t${i + 1}`, joinerId: id, title: t.title, owner: t.owner, category: t.category, status: "Pending", due: addDaysTo(startDate, t.dueOffset) }),
+  );
+  const hired = s.candidates.filter((c) => c.requisitionId === req.id && c.stage === "Hired").length;
+  if (hired >= req.openings) req.stageSummary = "Filled";
+}
+
+/** When onboarding completes, the joiner becomes an employee in the directory (probation runs from the joining date). */
+function addToDirectory(s: TalentState, joiner: OnboardingJoiner) {
+  if (joiner.personId || joiner.overallStatus !== "Completed") return;
+  const candidate = s.candidates.find((c) => c.id === joiner.candidateId);
+  const req = s.requisitions.find((r) => r.id === joiner.requisitionId);
+  const offer = s.offers.find((o) => o.candidateId === joiner.candidateId && o.status === "Accepted");
+  const country = TIMEZ_COUNTRIES.find((c) => c.name === joiner.country) ?? TIMEZ_COUNTRIES[0];
+  const department = req?.department ?? "Operations";
+  const location = req?.location ?? country.name;
+  const [first, ...rest] = joiner.name.toLowerCase().split(/\s+/);
+  const person: LocalPersonRecord = {
+    id: joiner.id,
+    employeeCode: `NJ${joiner.id.replace(/\D/g, "").slice(-4).padStart(4, "0")}`,
+    fullName: joiner.name,
+    email: `${first}.${rest.join("") || "joiner"}@infotech.com`,
+    personalEmail: candidate?.email ?? "",
+    mobile: candidate?.phone ?? "",
+    photo: "/profile.svg",
+    gender: "",
+    dateOfJoining: joiner.startDate,
+    employmentType: "Full Time",
+    employmentStatus: "Active",
+    designation: joiner.role,
+    jobFamily: department,
+    jobProfileId: "",
+    positionId: req ? `POS-${req.id}` : "",
+    grade: offer?.grade ?? "",
+    department,
+    division: `${department} Delivery`,
+    businessUnit: `Infotech ${country.name}`,
+    costCenter: `CC-${country.code}-1`,
+    location,
+    countryCode: country.code,
+    countryName: country.name,
+    legalEntity: legalEntityFor(country.code),
+    managerId: joiner.managerId,
+    managerName: joiner.manager,
+    availability: "In Office",
+    timeZone: country.timeZone,
+    currency: country.currency,
+    address: `${location}, ${country.name}`,
+  };
+  upsertPerson(person);
+  joiner.personId = person.id;
+}
+
+export function setOnboardingTaskStatus(actor: TalentActor, id: string, status: OnboardingTask["status"], reason = ""): TalentResult {
   return guarded((s) => {
     const row = s.tasks.find((t) => t.id === id);
     if (!row) return "Task not found.";
     const joiner = s.joiners.find((j) => j.id === row.joinerId);
-    if (!canEditOnboardingTask(actor, row, joiner)) return `Only HR, recruiting or the task owner (${row.owner}) can update this task.`;
+    if (!isTaskOwner(actor, row, joiner)) {
+      if (!isHrRole(actor.role)) return `Only the task owner (${row.owner}) can update this task.`;
+      if (reason.trim().length < 5) return "Give a reason for updating someone else's task.";
+      row.overrideNote = `${actor.fullName}, ${todayISO()}: ${reason.trim()}`;
+    }
     row.status = status;
+    deriveJoiners(s);
+    if (joiner) addToDirectory(s, joiner);
     return null;
   });
 }
@@ -360,21 +630,212 @@ export function setJoinerPolicyAck(actor: TalentActor, id: string, policyAck: On
   return guarded((s) => {
     const row = s.joiners.find((j) => j.id === id);
     if (!row) return "Joiner not found.";
-    if (!canAcknowledgePolicies(actor, row)) return "Only the new joiner (or HR on their behalf) can acknowledge policies.";
+    if (!canAcknowledgePolicies(actor, row)) return "Only the new joiner can acknowledge policies.";
     row.policyAck = policyAck;
     if (policyAck === "Complete") {
       s.tasks.forEach((t) => {
         if (t.joinerId === id && t.category === "Policy") t.status = "Done";
       });
     }
+    deriveJoiners(s);
+    addToDirectory(s, row);
     return null;
   });
 }
 
 /* ───────────── Performance ───────────── */
 
-export function canEditGoal(actor: TalentActor, goal: PerfGoal): boolean {
+/** The CEO (or anyone with no one above them) is not put through a review. */
+export function inReviewCycle(employeeId: string): boolean {
+  return managementChain(employeeId, DEMO_ACCOUNTS).length > 0;
+}
+
+export function cycleStatusOf(state: Pick<TalentState, "cycleStatus">, cycleId: string): PerfCycle["status"] {
+  return state.cycleStatus[cycleId] ?? PERF_CYCLES.find((c) => c.id === cycleId)?.status ?? "Planning";
+}
+
+const CYCLE_NEXT: Record<PerfCycle["status"], PerfCycle["status"] | null> = {
+  Planning: "Active",
+  Active: "Calibration",
+  Calibration: "Closed",
+  Closed: null,
+};
+
+export function nextCycleStatus(status: PerfCycle["status"]): PerfCycle["status"] | null {
+  return CYCLE_NEXT[status];
+}
+
+/** HR moves a cycle forward one step. */
+export function advanceCycle(actor: TalentActor, cycleId: string): TalentResult {
+  return guarded((s) => {
+    if (!isHrRole(actor.role)) return "Only HR can change the cycle status.";
+    const next = CYCLE_NEXT[cycleStatusOf(s, cycleId)];
+    if (!next) return "This cycle is closed.";
+    s.cycleStatus[cycleId] = next;
+    return null;
+  });
+}
+
+/** Share of self and manager assessments submitted in the cycle. */
+export function cycleCompletion(state: Pick<TalentState, "reviews">, cycleId: string): number {
+  const rows = state.reviews.filter((r) => r.cycleId === cycleId);
+  if (!rows.length) return 0;
+  const done = rows.reduce((n, r) => n + Number(r.selfStatus === "Submitted") + Number(r.managerStatus === "Submitted"), 0);
+  return Math.round((done / (rows.length * 2)) * 100);
+}
+
+/** Yourself, anyone below you, or everyone for HR. */
+export function canViewReview(actor: TalentActor, employeeId: string): boolean {
+  return canViewEmployeeTalent(actor, employeeId);
+}
+
+/** Only people above the employee in the reporting line write the manager assessment and rating. */
+export function canWriteManagerReview(actor: TalentActor, employeeId: string): boolean {
+  return isAboveInChain(actor.id, employeeId);
+}
+
+/** What this viewer may see of the rating: the employee only once it is released. */
+export function visibleRating(actor: TalentActor, review: PerfReview): string | undefined {
+  if (review.employeeId === actor.id) return review.released ? review.rating : undefined;
+  return canViewReview(actor, review.employeeId) ? review.rating : undefined;
+}
+
+function reviewFor(s: TalentState, id: string): PerfReview | string {
+  const row = s.reviews.find((r) => r.id === id);
+  if (!row) return "Review not found.";
+  if (!inReviewCycle(row.employeeId)) return `${row.employeeName} is not in the review cycle.`;
+  return row;
+}
+
+export function saveSelfAssessment(actor: TalentActor, id: string, text: string, submit: boolean): TalentResult {
+  return guarded((s) => {
+    const row = reviewFor(s, id);
+    if (typeof row === "string") return row;
+    if (row.employeeId !== actor.id) return "Only the employee can write their self-assessment.";
+    if (cycleStatusOf(s, row.cycleId) !== "Active") return "Self-assessments are only open while the cycle is active.";
+    if (row.selfStatus === "Submitted") return "Your self-assessment is already submitted.";
+    const clean = text.trim();
+    if (submit && clean.length < 10) return "Write at least 10 characters before submitting.";
+    row.selfText = clean;
+    row.selfStatus = submit ? "Submitted" : clean ? "Draft" : "Not started";
+    return null;
+  });
+}
+
+export function saveManagerAssessment(actor: TalentActor, id: string, text: string, submit: boolean): TalentResult {
+  return guarded((s) => {
+    const row = reviewFor(s, id);
+    if (typeof row === "string") return row;
+    if (!canWriteManagerReview(actor, row.employeeId)) return "Only someone above the employee in their reporting line can do this.";
+    if (cycleStatusOf(s, row.cycleId) !== "Active") return "Manager assessments are only open while the cycle is active.";
+    if (row.managerStatus === "Submitted") return "The manager assessment is already submitted.";
+    const clean = text.trim();
+    if (submit && clean.length < 10) return "Write at least 10 characters before submitting.";
+    row.managerText = clean;
+    row.managerStatus = submit ? "Submitted" : clean ? "Draft" : "Not started";
+    return null;
+  });
+}
+
+export function set360Status(actor: TalentActor, id: string, status: PerfReview["feedback360Status"]): TalentResult {
+  return guarded((s) => {
+    const row = reviewFor(s, id);
+    if (typeof row === "string") return row;
+    if (!canWriteManagerReview(actor, row.employeeId)) return "Only someone above the employee in their reporting line can do this.";
+    if (cycleStatusOf(s, row.cycleId) !== "Active") return "360 feedback is only open while the cycle is active.";
+    row.feedback360Status = status;
+    return null;
+  });
+}
+
+export function setRating(actor: TalentActor, id: string, rating: string | undefined): TalentResult {
+  return guarded((s) => {
+    const row = reviewFor(s, id);
+    if (typeof row === "string") return row;
+    if (!canWriteManagerReview(actor, row.employeeId)) return "Only someone above the employee in their reporting line can rate.";
+    const status = cycleStatusOf(s, row.cycleId);
+    if (status !== "Active" && status !== "Calibration") return status === "Closed" ? "This cycle is closed." : "Ratings open once the cycle starts.";
+    if (row.released) return "This rating is already released.";
+    if (rating && !(RATINGS as readonly string[]).includes(rating)) return "Choose a rating.";
+    if (rating && row.selfStatus !== "Submitted") return "The employee must submit their self-assessment first.";
+    if (rating && row.managerStatus !== "Submitted") return "Submit the manager assessment first.";
+    row.rating = rating || undefined;
+    return null;
+  });
+}
+
+export function setDevelopmentPlan(actor: TalentActor, id: string, plan: string): TalentResult {
+  return guarded((s) => {
+    const row = reviewFor(s, id);
+    if (typeof row === "string") return row;
+    if (!canWriteManagerReview(actor, row.employeeId)) return "Only someone above the employee in their reporting line can edit the plan.";
+    if (cycleStatusOf(s, row.cycleId) === "Closed") return "This cycle is closed.";
+    row.developmentPlan = plan.slice(0, 300);
+    return null;
+  });
+}
+
+/** HR shares the calibrated rating with the employee. */
+export function releaseRating(actor: TalentActor, id: string): TalentResult {
+  return guarded((s) => {
+    const row = reviewFor(s, id);
+    if (typeof row === "string") return row;
+    if (!isHrRole(actor.role)) return "Only HR can release ratings.";
+    if (row.employeeId === actor.id) return "Another HR person must release your own rating.";
+    if (cycleStatusOf(s, row.cycleId) !== "Calibration") return "Ratings are released during calibration.";
+    if (!row.rating) return "There is no rating to release yet.";
+    if (row.released) return "Already released.";
+    row.released = true;
+    row.releasedBy = actor.fullName;
+    row.releasedOn = todayISO();
+    return null;
+  });
+}
+
+/* ───────────── Goals ───────────── */
+
+export function canEditGoal(actor: TalentActor, goal: Pick<PerfGoal, "ownerId">): boolean {
   return goal.ownerId === actor.id || isAboveInChain(actor.id, goal.ownerId);
+}
+
+export function goalWeightTotal(goals: PerfGoal[], ownerId: string, cycleId: string, skipId?: string): number {
+  return goals
+    .filter((g) => g.ownerId === ownerId && g.cycleId === cycleId && g.id !== skipId)
+    .reduce((sum, g) => sum + (Number(g.weight) || 0), 0);
+}
+
+/** People whose goals this actor may set: themselves and everyone below them. */
+export function goalOwnerOptions(actor: TalentActor): { id: string; name: string }[] {
+  const below = TASK_TEAM.filter((p) => p.id !== actor.id && isAboveInChain(actor.id, p.id)).map((p) => ({ id: p.id, name: p.fullName }));
+  return [{ id: actor.id, name: actor.fullName }, ...below];
+}
+
+export type GoalInput = Pick<PerfGoal, "ownerId" | "type" | "title" | "target" | "weight" | "period" | "cycleId"> & { id?: string };
+
+export function saveGoal(actor: TalentActor, input: GoalInput): TalentResult {
+  return guarded((s) => {
+    const owner = goalOwnerOptions(actor).find((o) => o.id === input.ownerId);
+    if (!owner) return "You can only set goals for yourself or people below you.";
+    if (cycleStatusOf(s, input.cycleId) === "Closed") return "This cycle is closed.";
+    const title = input.title.trim();
+    if (!title) return "Enter a goal title.";
+    if (!input.target.trim()) return "Enter a target.";
+    if (!input.period.trim()) return "Enter the period.";
+    const weight = Math.round(Number(input.weight));
+    if (!Number.isFinite(weight) || weight < 1 || weight > 100) return "Weight must be between 1 and 100.";
+    const total = goalWeightTotal(s.goals, input.ownerId, input.cycleId, input.id) + weight;
+    if (total > 100) return `Weights would total ${total}%. Keep ${owner.name}'s goals at 100%.`;
+    const fields = { ownerId: owner.id, ownerName: owner.name, type: input.type, title, target: input.target.trim(), weight, period: input.period.trim(), cycleId: input.cycleId };
+    if (input.id) {
+      const row = s.goals.find((g) => g.id === input.id);
+      if (!row) return "Goal not found.";
+      if (!canEditGoal(actor, row)) return "Only the goal owner or their managers can edit this goal.";
+      Object.assign(row, fields);
+    } else {
+      s.goals.push({ id: newId("g"), progress: 0, ...fields });
+    }
+    return null;
+  });
 }
 
 export function updateGoalProgress(actor: TalentActor, id: string, progress: number): TalentResult {
@@ -382,26 +843,8 @@ export function updateGoalProgress(actor: TalentActor, id: string, progress: num
     const row = s.goals.find((g) => g.id === id);
     if (!row) return "Goal not found.";
     if (!canEditGoal(actor, row)) return "Only the goal owner or their managers can update progress.";
+    if (cycleStatusOf(s, row.cycleId) === "Closed") return "This cycle is closed.";
     row.progress = Math.max(0, Math.min(100, Math.round(progress)));
-    return null;
-  });
-}
-
-type ReviewPatch = Partial<Pick<PerfReview, "selfStatus" | "managerStatus" | "feedback360Status" | "rating" | "developmentPlan">>;
-
-export function updateReview(actor: TalentActor, id: string, patch: ReviewPatch): TalentResult {
-  return guarded((s) => {
-    const row = s.reviews.find((r) => r.id === id);
-    if (!row) return "Review not found.";
-    const { selfStatus, ...managerFields } = patch;
-    if (selfStatus !== undefined && actor.id !== row.employeeId) return "Only the employee can update their self-assessment.";
-    if (Object.keys(managerFields).length > 0 && !canManageEmployee(actor, row.employeeId)) {
-      return "Only the employee's manager chain or HR can update this.";
-    }
-    const managerStatus = patch.managerStatus ?? row.managerStatus;
-    if (patch.rating && managerStatus !== "Submitted") return "Submit the manager assessment before setting a rating.";
-    Object.assign(row, patch);
-    if (row.managerStatus !== "Submitted") row.rating = undefined;
     return null;
   });
 }
@@ -410,6 +853,46 @@ export function updateReview(actor: TalentActor, id: string, patch: ReviewPatch)
 
 /** Self-reported progress stops here; the final assessment is confirmed by HR. */
 export const SELF_PROGRESS_CAP = 90;
+export const PASS_MARK = 70;
+
+type Learner = Pick<DemoAccount, "id" | "fullName" | "role"> & { department?: string };
+
+function hasReports(id: string): boolean {
+  return DEMO_ACCOUNTS.some((a) => a.reportsToId === id);
+}
+
+/** Audience rules: manager courses for people with reports, hiring courses for people who interview. */
+export function courseOpenTo(course: Course, learner: Learner): boolean {
+  switch (course.audience) {
+    case "All":
+      return true;
+    case "Managers":
+      return hasReports(learner.id);
+    case "Hiring":
+      return hasReports(learner.id) || learner.role === "recruiter" || learner.role === "hiring_manager" || isHrRole(learner.role);
+    case "Engineering":
+      return learner.department === "Engineering" || learner.department === "IT";
+  }
+}
+
+export function enrollInCourse(learner: Learner, courseId: string): TalentResult {
+  return guarded((s) => {
+    const course = COURSES.find((c) => c.id === courseId);
+    if (!course) return "Course not found.";
+    if (!courseOpenTo(course, learner)) return `${course.title} is for ${course.audience.toLowerCase()} only.`;
+    if (s.enrollments.some((e) => e.courseId === courseId && e.employeeId === learner.id)) return "You are already enrolled.";
+    s.enrollments.push({
+      id: newId("en"),
+      courseId,
+      employeeId: learner.id,
+      employeeName: learner.fullName,
+      status: "Assigned",
+      progress: 0,
+      due: isoDaysFromToday(ENROLLMENT_DUE_DAYS),
+    });
+    return null;
+  });
+}
 
 export function updateEnrollmentProgress(actor: TalentActor, id: string, progress: number): TalentResult {
   return guarded((s) => {
@@ -424,30 +907,29 @@ export function updateEnrollmentProgress(actor: TalentActor, id: string, progres
   });
 }
 
-export function completeEnrollment(actor: TalentActor, id: string): TalentResult {
+/** A certificate is issued only for a real completion: 90%+ progress or a passed assessment. */
+export function earnedCertificate(e: Enrollment): boolean {
+  return e.status === "Completed" && (e.progress >= SELF_PROGRESS_CAP || (e.assessmentScore ?? -1) >= PASS_MARK);
+}
+
+/** HR confirms completion at 90%+ progress, or with a passing assessment score. */
+export function completeEnrollment(actor: TalentActor, id: string, score?: number): TalentResult {
   return guarded((s) => {
     const row = s.enrollments.find((e) => e.id === id);
     if (!row) return "Enrollment not found.";
     if (!isHrRole(actor.role) || row.employeeId === actor.id) return "Only HR can confirm completion for someone else.";
+    if (row.status === "Completed") return "Already completed.";
+    if (score !== undefined) {
+      if (!Number.isInteger(score) || score < 0 || score > 100) return "Score must be a whole number from 0 to 100.";
+      row.assessmentScore = score;
+      if (score < PASS_MARK) return `Below the pass mark of ${PASS_MARK}.`;
+    } else if (row.progress < SELF_PROGRESS_CAP) {
+      return `Needs ${SELF_PROGRESS_CAP}% progress or an assessment score.`;
+    }
     row.progress = 100;
     row.status = "Completed";
     row.completedOn = todayISO();
     return null;
-  });
-}
-
-export function enrollInCourse(courseId: string, employeeId: string, employeeName: string) {
-  updateTalent((s) => {
-    if (s.enrollments.some((e) => e.courseId === courseId && e.employeeId === employeeId)) return;
-    s.enrollments.push({
-      id: `en-local-${Date.now()}`,
-      courseId,
-      employeeId,
-      employeeName,
-      status: "Assigned",
-      progress: 0,
-      due: isoDaysFromToday(ENROLLMENT_DUE_DAYS),
-    });
   });
 }
 
@@ -471,6 +953,10 @@ function addYears(iso: string, years: number): string {
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+}
+
+export function isCertExpired(c: Pick<Certification, "expiresOn">, today = todayISO()): boolean {
+  return !!c.expiresOn && c.expiresOn < today;
 }
 
 /** The employee records a renewal; it stays pending until HR verifies it. */
@@ -505,6 +991,23 @@ export function verifyCertificationRenewal(actor: TalentActor, id: string): Tale
     delete row.renewalStatus;
     delete row.renewalRequestedOn;
     delete row.renewalExpiresOn;
+    row.verifiedBy = actor.fullName;
+    row.verifiedOn = todayISO();
+    return null;
+  });
+}
+
+/** HR confirms a certification with the issuer and records its credential number. */
+export function verifyCertification(actor: TalentActor, id: string, credentialId: string): TalentResult {
+  return guarded((s) => {
+    const row = s.certifications.find((c) => c.id === id);
+    if (!row) return "Certification not found.";
+    if (!isHrRole(actor.role) || row.employeeId === actor.id) return "Only HR can verify someone else's certification.";
+    if (row.verifiedBy) return "Already verified.";
+    if (isCertExpired(row)) return "This certification has expired.";
+    row.verifiedBy = actor.fullName;
+    row.verifiedOn = todayISO();
+    if (credentialId.trim()) row.credentialId = credentialId.trim().slice(0, 40);
     return null;
   });
 }
@@ -541,11 +1044,15 @@ export function addFeedback(item: Omit<FeedbackItem, "id" | "createdOn" | "creat
   });
 }
 
-/** Answer an open feedback request: the reply is sent privately to the person who asked. */
-export function answerFeedbackRequest(requestId: string, message: string) {
-  updateTalent((s) => {
+/** Answer an open feedback request addressed to you: the reply goes privately to the person who asked. */
+export function answerFeedbackRequest(actor: TalentActor, requestId: string, message: string): TalentResult {
+  return guarded((s) => {
     const request = s.feedback.find((f) => f.id === requestId && f.kind === "Request");
-    if (!request) return;
+    if (!request) return "Request not found.";
+    if (request.toId !== actor.id) return "Only the person asked can answer this request.";
+    if (request.status === "Answered") return "This request is already answered.";
+    const text = message.trim();
+    if (text.length < 10) return "Write at least 10 characters.";
     request.status = "Answered";
     s.feedback.unshift({
       id: newId("fb"),
@@ -554,10 +1061,11 @@ export function answerFeedbackRequest(requestId: string, message: string) {
       fromName: request.toName,
       toId: request.fromId,
       toName: request.fromName,
-      message,
+      message: text,
       createdOn: todayISO(),
       createdAt: new Date().toISOString(),
     });
+    return null;
   });
 }
 
@@ -569,6 +1077,10 @@ function meetingStart(meeting: Pick<OneOnOne, "date" | "time">): number {
 
 export function isMeetingInFuture(meeting: Pick<OneOnOne, "date" | "time">): boolean {
   return meetingStart(meeting) > Date.now();
+}
+
+function isParticipant(actor: TalentActor, meeting: OneOnOne): boolean {
+  return actor.id === meeting.managerId || actor.id === meeting.employeeId;
 }
 
 export function scheduleOneOnOne(
@@ -597,10 +1109,11 @@ export function scheduleOneOnOne(
   return error ? { error } : { id };
 }
 
-export function setOneOnOneStatus(id: string, status: OneOnOne["status"], notes?: string): TalentResult {
+export function setOneOnOneStatus(actor: TalentActor, id: string, status: OneOnOne["status"], notes?: string): TalentResult {
   return guarded((s) => {
     const row = s.oneOnOnes.find((m) => m.id === id);
     if (!row) return "Meeting not found.";
+    if (!isParticipant(actor, row)) return "Only the two people in this 1:1 can change it.";
     if (status === "Completed" && isMeetingInFuture(row)) return "A 1:1 can only be completed once it has started.";
     if (notes !== undefined) row.notes = notes;
     row.status = status;
@@ -608,21 +1121,24 @@ export function setOneOnOneStatus(id: string, status: OneOnOne["status"], notes?
   });
 }
 
-export function updateOneOnOne(id: string, mutator: (meeting: OneOnOne) => void) {
-  updateTalent((s) => {
+export function updateOneOnOne(actor: TalentActor, id: string, mutator: (meeting: OneOnOne) => void): TalentResult {
+  return guarded((s) => {
     const row = s.oneOnOnes.find((m) => m.id === id);
-    if (row) mutator(row);
+    if (!row) return "Meeting not found.";
+    if (!isParticipant(actor, row)) return "Only the two people in this 1:1 can change it.";
+    mutator(row);
+    return null;
   });
 }
 
-export function addCheckInItem(meetingId: string, list: "agenda" | "actionItems", text: string) {
-  updateOneOnOne(meetingId, (m) => {
+export function addCheckInItem(actor: TalentActor, meetingId: string, list: "agenda" | "actionItems", text: string): TalentResult {
+  return updateOneOnOne(actor, meetingId, (m) => {
     m[list].push({ id: newId("ci"), text, done: false });
   });
 }
 
-export function toggleCheckInItem(meetingId: string, list: "agenda" | "actionItems", itemId: string) {
-  updateOneOnOne(meetingId, (m) => {
+export function toggleCheckInItem(actor: TalentActor, meetingId: string, list: "agenda" | "actionItems", itemId: string): TalentResult {
+  return updateOneOnOne(actor, meetingId, (m) => {
     const item = m[list].find((i) => i.id === itemId);
     if (item) item.done = !item.done;
   });
@@ -630,9 +1146,9 @@ export function toggleCheckInItem(meetingId: string, list: "agenda" | "actionIte
 
 /* ───────────── Skills ───────────── */
 
-/** The employee's saved skills profile, or the starter profile until they change it. */
+/** The employee's saved skills profile, or their starter profile until they change it. */
 export function skillProfileFor(state: Pick<TalentState, "skillProfiles">, employeeId: string): EmployeeSkill[] {
-  return state.skillProfiles.find((p) => p.employeeId === employeeId)?.skills ?? DEFAULT_EMPLOYEE_SKILLS;
+  return state.skillProfiles.find((p) => p.employeeId === employeeId)?.skills ?? starterSkillsFor(employeeId).skills;
 }
 
 export function updateEmployeeSkill(
@@ -645,7 +1161,7 @@ export function updateEmployeeSkill(
     if (actor.id !== employeeId) return "You can only edit your own skills profile.";
     let profile = s.skillProfiles.find((p) => p.employeeId === employeeId);
     if (!profile) {
-      profile = { employeeId, skills: structuredClone(DEFAULT_EMPLOYEE_SKILLS) };
+      profile = { employeeId, skills: structuredClone(starterSkillsFor(employeeId).skills) };
       s.skillProfiles.push(profile);
     }
     const skill = profile.skills.find((k) => k.skillId === skillId);

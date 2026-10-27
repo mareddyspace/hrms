@@ -12,6 +12,7 @@ import {
   getPrivacyState,
   isRequestOpen,
   isRequestOverdue,
+  closesManually,
   moveRequest,
   raiseRequest,
   removeRetentionRule,
@@ -114,7 +115,7 @@ function ConsentsTab({ actor, onResult }: { actor: ComplianceActor; onResult: (e
       <Card title="History">
         <DataTable
           headers={["When", "Consent", "Choice"]}
-          empty={<EmptyState title="No changes yet" description="Every change you make is recorded here." />}
+          empty={<EmptyState title="No changes yet" />}
           rows={history.map((h) => [
             formatStamp(h.at),
             labelOf(h.key),
@@ -144,7 +145,7 @@ function MyDataTab({ actor, onResult }: { actor: ComplianceActor; onResult: (msg
   return (
     <Card title="Download my data">
       <div className="stack">
-        <p className="muted">A JSON file with the records this app holds about you. Other people's records and passwords are never included.</p>
+        <p className="muted">A JSON file of your own records.</p>
         <div>
           <button className="btn" type="button" onClick={download}>
             Download my data
@@ -230,7 +231,7 @@ function MyRequestsTab({ actor, requests, onResult }: { actor: ComplianceActor; 
       </Card>
       <Card title="My requests">
         {requests.length === 0 ? (
-          <EmptyState title="No requests" description="Requests you raise appear here." />
+          <EmptyState title="No requests" />
         ) : (
           <ul className="cmp-list">
             {requests.map((r) => (
@@ -281,7 +282,7 @@ function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; r
         }
       >
         {shown.length === 0 ? (
-          <EmptyState title="Nothing here" description="No requests match this filter." />
+          <EmptyState title="No matching requests" />
         ) : (
           <ul className="cmp-list">
             {shown.map((r) => (
@@ -304,7 +305,7 @@ function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; r
                             setError("");
                           }}
                         >
-                          Complete
+                          {closesManually(r.type) ? "Close (manual)" : "Complete"}
                         </button>
                         <button
                           className="btn-ghost btn-tiny"
@@ -328,7 +329,7 @@ function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; r
       </Card>
       <Dialog
         open={!!closing}
-        title={closing?.next === "Rejected" ? "Reject request" : "Complete request"}
+        title={closing?.next === "Rejected" ? "Reject request" : closing && closesManually(closing.req.type) ? "Close request (manual)" : "Complete request"}
         onClose={() => setClosing(null)}
         actions={
           <>
@@ -342,18 +343,32 @@ function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; r
                 if (!closing) return;
                 const err = moveRequest(actor, closing.req.id, closing.next, outcome);
                 if (err) return setError(err);
-                onResult(null, closing.next === "Rejected" ? "Request rejected." : "Request completed.");
+                onResult(
+                  null,
+                  closing.next === "Rejected" ? "Request rejected." : closesManually(closing.req.type) ? "Request closed (manual)." : "Request completed.",
+                );
                 setClosing(null);
               }}
             >
-              {closing?.next === "Rejected" ? "Reject" : "Complete"}
+              {closing?.next === "Rejected" ? "Reject" : closing && closesManually(closing.req.type) ? "Close" : "Complete"}
             </button>
           </>
         }
       >
         <div className="stack">
           {error && <p className="note err">{error}</p>}
-          <Field label={closing?.next === "Rejected" ? "Reason" : "Outcome (optional)"}>
+          {closing && closing.next === "Completed" && closesManually(closing.req.type) && (
+            <p className="muted">Make the change in the employee's record first. Closing here does not change any data.</p>
+          )}
+          <Field
+            label={
+              closing?.next === "Rejected"
+                ? "Reason"
+                : closing && closesManually(closing.req.type)
+                  ? "What was changed, and where"
+                  : "Outcome (optional)"
+            }
+          >
             <textarea value={outcome} onChange={(e) => setOutcome(e.target.value)} />
           </Field>
         </div>
@@ -425,7 +440,7 @@ function RetentionTab({ actor, rules, onResult }: { actor: ComplianceActor; rule
       <Card title="Retention policy">
         <DataTable
           headers={["Data category", "Retention", "Legal basis", "Updated", ""]}
-          empty={<EmptyState title="No rules" description="Add a retention rule for each data category." />}
+          empty={<EmptyState title="No rules" description="Add one per data category." />}
           rows={rules.map((r) => [
             r.category,
             `${r.period} ${r.period === 1 ? r.unit.slice(0, -1) : r.unit}`,

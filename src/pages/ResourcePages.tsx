@@ -69,8 +69,7 @@ export function LegacyEssDocumentsPage() {
 
   return (
     <Page
-      title="My documents"
-      subtitle="Files are grouped so you can find them quickly. Sharing marks a document for HR."
+      title="My documents"
       action={
         <button className="btn" type="button" onClick={openAdd}>
           Add document
@@ -241,7 +240,7 @@ export function LegacyEssDocumentsPage() {
 export function FormsPage() {
   const { state } = usePortal();
   return (
-    <Page title="Sample Forms" subtitle="Download uses the template text stored on each form.">
+    <Page title="Forms">
       <Card>
         <table className="data">
           <thead>
@@ -273,7 +272,7 @@ export function FormsPage() {
 export function FilesPage() {
   const { state } = usePortal();
   return (
-    <Page title="File storage" subtitle="Shared company files. Your own uploads stay under Documents.">
+    <Page title="File storage">
       <Card>
         <table className="data doc-table">
           <thead>
@@ -604,7 +603,7 @@ export function ConvertPage() {
   const preview = rows.slice(0, 6);
 
   return (
-    <Page title="File conversion" subtitle="Turn a spreadsheet into CSV, Excel, or a simple QBO transaction file. This stays in your browser.">
+    <Page title="File conversion" subtitle="Convert to CSV, Excel or QBO">
       <Card>
         <div className="convert">
           <button
@@ -736,7 +735,7 @@ export function SignPage() {
   }
 
   return (
-    <Page title="Digital Sign" subtitle="The signature image is kept with the document name you enter.">
+    <Page title="Digital Sign">
       <Card title="Sign a document">
         <Field label="Document name">
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Example: September timesheet" />
@@ -763,7 +762,7 @@ export function SignPage() {
             onClick={() => {
               const canvas = canvasRef.current;
               const error = addSignature(name, dirty && canvas ? canvas.toDataURL("image/png") : "");
-              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Signature saved on this browser." });
+              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Signature saved." });
               if (!error) {
                 setName("");
                 clearPad();

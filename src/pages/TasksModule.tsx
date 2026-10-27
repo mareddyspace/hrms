@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   Banner,
   Card,
@@ -84,8 +83,8 @@ export function TasksPage() {
     taskAction,
     toggleTaskSubtask,
     addTaskComment,
-    colleagueName,
     canApproveLeaveFor,
+    canDecideFor,
   } = usePortal();
   const today = todayISO();
   // Own tasks plus tasks of people below you in the reporting line (or anyone, for HR).
@@ -336,15 +335,15 @@ export function TasksPage() {
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [scopeTasks, today]);
 
+  // History can be viewed for yourself or for people below you in the reporting line — never anyone else.
+  const historyPeople = DEMO_ACCOUNTS.filter((account) => account.id === employee.id || canDecideFor(account.id));
+
   const historyTasks = scopeTasks
-    .filter((task) => (isManager ? task.employeeId === historyPerson : true))
+    .filter((task) =>
+      isManager ? task.employeeId === historyPerson && historyPeople.some((person) => person.id === historyPerson) : true,
+    )
     .slice()
     .sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : -1));
-
-  const historyChats = state.chatThreads.filter((thread) => {
-    if (!isManager) return thread.employeeId === employee.id;
-    return thread.employeeId === historyPerson || thread.colleagueId === historyPerson || thread.memberIds?.includes(historyPerson);
-  });
 
   const tabs: Array<[TaskTab, string]> = isManager
     ? [
@@ -413,11 +412,6 @@ export function TasksPage() {
   return (
     <Page
       title={isManager ? "Task command center" : "My tasks"}
-      subtitle={
-        isManager
-          ? "Assign work, track deadlines, and review team progress."
-          : "Focus on what is due today, clear blockers, and complete work on time."
-      }
       action={
         isManager ? (
           <button type="button" className="btn" onClick={() => setShowCreate((v) => !v)}>
@@ -892,7 +886,7 @@ export function TasksPage() {
                 action={<span className="muted">{filtered.length} shown</span>}
               >
                 {filtered.length === 0 ? (
-                  <EmptyState title="No tasks match" description="Adjust filters or switch tabs to find work." />
+                  <EmptyState title="No tasks match" description="Try adjusting filters." />
                 ) : (
                   <ul className="task-list">
                     {filtered.map((task) => {
@@ -939,7 +933,6 @@ export function TasksPage() {
                   <Card>
                     <EmptyState
                       title="Select a task"
-                      description="Choose a row to see description, checklist, and the next action."
                     />
                   </Card>
                 ) : (
@@ -1361,10 +1354,7 @@ export function TasksPage() {
                           </button>
                         )}
                         {selected.status === "scheduled" && !isManager && (
-                          <p className="note">Scheduled — your manager will release this when ready.</p>
-                        )}
-                        {selected.status === "done" && (
-                          <p className="note">Completed — kept in Closed / History for reference.</p>
+                          <p className="note">Scheduled. Your manager will release it.</p>
                         )}
                       </div>
 
@@ -1474,8 +1464,7 @@ export function TasksPage() {
               </div>
               {selected && (
                 <p className="note">
-                  Selected <strong>{selected.code}</strong> — switch to List view for the full detail panel, or use
-                  actions after opening List.
+                  Selected <strong>{selected.code}</strong>.
                   <button type="button" className="btn-ghost" style={{ marginLeft: 8 }} onClick={() => setView("list")}>
                     Open in list
                   </button>
@@ -1643,7 +1632,7 @@ export function TasksPage() {
             action={
               isManager ? (
                 <select value={historyPerson} onChange={(event) => setHistoryPerson(event.target.value)} aria-label="Person">
-                  {DEMO_ACCOUNTS.filter((a) => a.role === "employee" || a.id === employee.id).map((account) => (
+                  {historyPeople.map((account) => (
                     <option key={account.id} value={account.id}>
                       {account.fullName}
                     </option>
@@ -1680,31 +1669,6 @@ export function TasksPage() {
             </div>
           </Card>
 
-          <Card title="Chat history">
-            {historyChats.length === 0 ? (
-              <p className="empty">No chat threads for this person in the demo.</p>
-            ) : (
-              historyChats.map((thread) => (
-                <details key={thread.id} className="history-chat">
-                  <summary>
-                    {thread.kind === "group" ? thread.title || "Group" : colleagueName(thread.colleagueId)} ·{" "}
-                    {thread.messages.length} messages
-                  </summary>
-                  <div className="bubbles">
-                    {thread.messages.map((item) => (
-                      <div key={item.id} className={item.from === "me" ? "bubble me" : "bubble"}>
-                        {item.text}
-                        <small>{formatStamp(item.at)}</small>
-                      </div>
-                    ))}
-                  </div>
-                  <Link to="/chat" className="quiet-link">
-                    Open in Messages
-                  </Link>
-                </details>
-              ))
-            )}
-          </Card>
         </div>
       )}
     </Page>

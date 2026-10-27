@@ -83,7 +83,7 @@ export function GrievancePage() {
       {tab === "mine" && (
         <Card title="My cases">
           {mine.length === 0 ? (
-            <EmptyState title="No cases" description="Cases you raise appear here." />
+            <EmptyState title="No cases" />
           ) : (
             <ul className="cmp-list">
               {mine.map((c) => (
@@ -113,7 +113,7 @@ export function GrievancePage() {
             <p>
               <strong className="cmp-code">{newCode}</strong>
             </p>
-            <p className="muted">Use this code under “Find by code” to follow your case and add comments. Keep it private.</p>
+            <p className="muted">Use this code under “Find by code” to follow your case. Keep it private.</p>
           </div>
         </Dialog>
       )}
@@ -277,7 +277,7 @@ function ManageList({ actor, cases, onOpen }: { actor: ComplianceActor; cases: C
               </label>
             </div>
             {shown.length === 0 ? (
-              <EmptyState title="No cases" description="No cases match these filters." />
+              <EmptyState title="No cases match these filters" />
             ) : (
               <ul className="cmp-list">
                 {shown.map((c) => (

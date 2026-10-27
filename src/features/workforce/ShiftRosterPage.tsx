@@ -115,7 +115,7 @@ function MyShifts({ actor }: { actor: WorkforceActor }) {
         <DataTable
           headers={["Date", "Shift", "Hours", ""]}
           rows={upcoming.map(row)}
-          empty={<EmptyState title="No published shifts" description="Your manager hasn't published a roster for you yet." />}
+          empty={<EmptyState title="No published shifts" />}
         />
       </Card>
       {recent.length > 0 && (
@@ -349,7 +349,7 @@ function CompOff({ actor }: { actor: WorkforceActor }) {
             fmt(c.expiresOn),
             isCreditExpired(c, today) ? <StatusBadge key="s" status="Expired" tone="danger" literal /> : <StatusBadge key="s" status="Available" tone="ok" literal />,
           ])}
-          empty={<EmptyState title="No comp-off credits" description="Work a rostered weekly off or holiday to earn one." />}
+          empty={<EmptyState title="No comp-off credits" description="Earned by working an off day." />}
         />
       </Card>
       {teamCredits.length > 0 && (

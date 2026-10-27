@@ -1,12 +1,10 @@
 import { canApproveTeam, todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
-import { DEMO_ACCOUNTS, findDemoById } from "../../demoAccounts.ts";
+import { DEMO_ACCOUNTS, findDemoById, managementChain } from "../../demoAccounts.ts";
 import {
   createStore,
   daysBetween,
   fmt,
-  hrPersonaIds,
   isHrOrAdmin,
-  isHrRole,
   isISODate,
   keepArrays,
   newId,
@@ -97,9 +95,20 @@ export function canManageVendors(role: WorkforceActor["role"]): boolean {
   return isHrOrAdmin(role);
 }
 
-/** People who can own contractors: anyone with team approval rights. */
+/** People who can own contractors: line managers (not HR or platform admins). */
 export function assignableManagers() {
-  return DEMO_ACCOUNTS.filter((a) => canApproveTeam(a.role));
+  return DEMO_ACCOUNTS.filter((a) => canApproveTeam(a.role) && !isHrOrAdmin(a.role));
+}
+
+/** Who approves an extension: the line manager of the contractor's manager. Undefined at the top (the CEO). */
+export function extensionApproverId(managerId: string): string | undefined {
+  return managementChain(managerId)[0]?.id;
+}
+
+export function canDecideExtension(actor: WorkforceActor, ext: ExtensionRequest, state: ContractorState = getContractorState()): boolean {
+  if (ext.status !== "pending" || ext.requestedById === actor.id) return false;
+  const c = state.contractors.find((x) => x.id === ext.contractorId);
+  return Boolean(c && extensionApproverId(c.managerId) === actor.id);
 }
 
 export const CURRENCIES: string[] = [...new Set(TIMEZ_COUNTRIES.map((c) => c.currency as string))];
@@ -179,7 +188,7 @@ export function saveContractor(actor: WorkforceActor, input: ContractorInput): W
   if (name.length < 2) return "Enter the contractor's name.";
   if (project.length < 2) return "Enter the project.";
   const manager = findDemoById(input.managerId);
-  if (!manager || !canApproveTeam(manager.role)) return "Pick a manager.";
+  if (!manager || !canApproveTeam(manager.role) || isHrOrAdmin(manager.role)) return "Pick a line manager.";
   if (!isISODate(input.startDate) || !isISODate(input.endDate)) return "Enter start and end dates.";
   if (input.endDate <= input.startDate) return "End date must be after the start date.";
   if (!Number.isFinite(input.dailyRate) || input.dailyRate <= 0) return "Daily rate must be more than 0.";
@@ -228,13 +237,14 @@ export function requestExtension(actor: WorkforceActor, contractorId: string, ne
     const c = s.contractors.find((x) => x.id === contractorId);
     if (!c) return "That contractor no longer exists.";
     if (c.managerId !== actor.id) return "Only the contractor's manager can request an extension.";
-    if (contractorStatus(c) === "Ended") return "This contract has ended — ask HR to set up a new one.";
+    if (contractorStatus(c) === "Ended") return "This contract has ended. Ask HR to set up a new one.";
     if (newEnd <= c.endDate) return `New end must be after the current end (${fmt(c.endDate)}).`;
     const vendor = s.vendors.find((v) => v.id === c.vendorId);
     if (!vendor) return "The vendor for this contractor no longer exists.";
     if (newEnd > vendor.contractEnd) return `New end can't go past ${vendor.name}'s contract end (${fmt(vendor.contractEnd)}).`;
     if (s.extensions.some((e) => e.contractorId === c.id && e.status === "pending")) return "There's already a pending extension for this contractor.";
-    s.extensions.unshift({
+    const approverId = extensionApproverId(actor.id);
+    const ext: ExtensionRequest = {
       id: newId("ext"),
       contractorId: c.id,
       requestedById: actor.id,
@@ -244,10 +254,17 @@ export function requestExtension(actor: WorkforceActor, contractorId: string, ne
       reason: why,
       status: "pending",
       requestedOn: todayISO(),
-    });
-    for (const hrId of hrPersonaIds()) {
-      if (hrId !== actor.id) notify(hrId, "Contract extension request", `${actor.fullName} asks to extend ${c.name} to ${fmt(newEnd)}.`, ROUTE);
+    };
+    if (!approverId) {
+      // No one above the requester (the CEO): the extension applies straight away.
+      ext.status = "approved";
+      ext.decidedByName = actor.fullName;
+      ext.decidedOn = todayISO();
+      c.endDate = newEnd;
+    } else {
+      notify(approverId, "Contract extension request", `${actor.fullName} asks to extend ${c.name} to ${fmt(newEnd)}.`, ROUTE);
     }
+    s.extensions.unshift(ext);
     return null;
   });
 }
@@ -265,12 +282,12 @@ export function cancelExtension(actor: WorkforceActor, id: string): WorkforceRes
 }
 
 export function decideExtension(actor: WorkforceActor, id: string, approve: boolean, note = ""): WorkforceResult {
-  if (!isHrRole(actor.role)) return "Only HR can decide extensions.";
   return store.mutate((s) => {
     const ext = s.extensions.find((e) => e.id === id);
     if (!ext) return "That request no longer exists.";
     if (ext.status !== "pending") return "This request is already closed.";
     if (ext.requestedById === actor.id) return "You can't approve your own request.";
+    if (!canDecideExtension(actor, ext, s)) return "Only the requester's line manager can decide this extension.";
     if (!approve && note.trim().length < 3) return "Add a reason for rejecting.";
     const c = s.contractors.find((x) => x.id === ext.contractorId);
     if (!c) return "That contractor no longer exists.";
