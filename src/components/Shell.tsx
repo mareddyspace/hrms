@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, Suspense } from "react";
+import { DEMO_MODE } from "../demoMode.ts";
+import { countUnreadNotificationsFor } from "../data/notificationFeed.ts";
 import type { FormEvent, ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -47,7 +49,6 @@ import {
 } from "../nav.ts";
 import {
   countUnreadMessages,
-  countUnreadNotifications,
   subscribeCollab,
 } from "../data/collabLocal.ts";
 import { useLocale } from "../locale/LocaleContext.tsx";
@@ -339,7 +340,7 @@ export function Shell() {
       "/approvals": countWaitingOnMe(state, employee.id, canDecideFor, canVerifyProofs),
       "/chat": countUnreadMessages(employee.id, demoProfile.role),
       "/mail": countUnreadMail(employee.id, mail),
-      "/notifications": countUnreadNotifications(demoProfile.role),
+      "/notifications": countUnreadNotificationsFor(employee.id, state, demoProfile.role),
     } as Record<string, number>;
   }, [counts, employee.id, state, collabTick, demoProfile.role, talent, mail, tickets, canDecideFor, canVerifyProofs]);
 
@@ -613,7 +614,7 @@ export function Shell() {
                 { id: "help", label: "Help", to: "/help" },
                 ...aboutLinks.filter((item) => item.to !== "/help").map((item) => ({ id: item.id, label: item.label, to: item.to })),
                 // Switching persona skips the password, so it only exists while developing (npm run dev).
-                ...(import.meta.env.DEV
+                ...(DEMO_MODE
                   ? [
                       {
                         id: "switcher-label",
@@ -621,7 +622,7 @@ export function Shell() {
                       },
                     ]
                   : []),
-                ...(import.meta.env.DEV ? demoAccounts : []).map((account) => ({
+                ...(DEMO_MODE ? demoAccounts : []).map((account) => ({
                   id: `switch-${account.id}`,
                   label: `${account.personaLabel}${account.id === demoProfile.id ? " ✓" : ""}`,
                   onSelect: () => {
@@ -683,7 +684,9 @@ export function Shell() {
         <main className="main">
           {/* Keyed by path so a crashed page recovers as soon as you navigate elsewhere. */}
           <ErrorBoundary key={location.pathname}>
-            <Outlet />
+            <Suspense fallback={<div className="page-loading" aria-busy="true">Loading…</div>}>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
 

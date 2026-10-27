@@ -215,7 +215,12 @@ export interface LeaveRequest extends DecisionInfo {
   reason: string;
   status: RequestStatus;
   appliedOn: string;
+  /** Half-day leave (only when from === to): counts as 0.5 day. */
+  half?: LeaveHalf;
 }
+
+/** Which half of the day a half-day leave covers. */
+export type LeaveHalf = "first" | "second";
 
 /**
  * Permission to apply for leave on past dates. Raised by the employee, decided by someone above them
@@ -770,6 +775,8 @@ export interface LeaveInput {
   from: string;
   to: string;
   reason: string;
+  /** Half-day leave; only valid for a single day and not for WFH types. */
+  half?: LeaveHalf;
 }
 
 export const EXPENSE_CATEGORIES = ["Travel", "Food", "Lodging", "Supplies", "Other"] as const;
@@ -889,8 +896,14 @@ export function workingDays(
   holidayDates: Set<string>,
   /** JS getDay() indexes that are weekly offs; defaults to Sat/Sun. */
   weeklyOffDays: number[] = [0, 6],
+  /** Half-day leave: a single working day counts as 0.5. */
+  half?: LeaveHalf,
 ): number {
   if (!from || !to || to < from) return 0;
+  if (half && from === to) {
+    const day = parseISODate(from).getDay();
+    return weeklyOffDays.includes(day) || holidayDates.has(from) ? 0 : 0.5;
+  }
   const cursor = parseISODate(from);
   const end = parseISODate(to);
   let count = 0;
@@ -991,13 +1004,13 @@ export function leaveRows(
       sum(
         mine
           .filter((request) => request.status === "approved")
-          .map((request) => workingDays(request.from, request.to, dates, weeklyOffDays)),
+          .map((request) => workingDays(request.from, request.to, dates, weeklyOffDays, request.half)),
       ) + sum(encashed.filter((item) => item.status === "approved").map((item) => item.days));
     const pending =
       sum(
         mine
           .filter((request) => request.status === "pending")
-          .map((request) => workingDays(request.from, request.to, dates, weeklyOffDays)),
+          .map((request) => workingDays(request.from, request.to, dates, weeklyOffDays, request.half)),
       ) + sum(encashed.filter((item) => item.status === "pending").map((item) => item.days));
     const yearly = year != null && policy.accrual === "monthly" ? accruedQuota(policy.quota, year) : policy.quota;
     const carried = policy.carryForwardMax
@@ -1044,6 +1057,8 @@ export function backdatedPermissionFor(
 export const BACKDATED_PERMISSION_VALID_DAYS = 30;
 /** Sick leave may be applied this many days after the fact without separate permission. */
 export const SICK_LEAVE_GRACE_DAYS = 7;
+/** Most hours that can be logged on a day with a half-day leave. */
+export const HALF_DAY_MAX_HOURS = 4.5;
 /** Leave types that do not block logging work (you still work, just from elsewhere). */
 const WORKING_LEAVE: LeaveCode[] = ["wfh", "emergency_wfh"];
 
@@ -1074,6 +1089,11 @@ export function validateLeave(
   if (input.from.slice(0, 4) !== input.to.slice(0, 4)) {
     return "Leave can't cross into the next year — split it into two requests.";
   }
+  if (input.half) {
+    if (input.half !== "first" && input.half !== "second") return "Choose first half or second half.";
+    if (input.from !== input.to) return "A half day must start and end on the same date.";
+    if (WORKING_LEAVE.includes(input.code)) return "Work from home can't be taken as a half day.";
+  }
   if (input.code === "sick" && input.from > today) return "Sick leave can't be booked in advance.";
   if (
     options.needsApprover !== false &&
@@ -1088,10 +1108,23 @@ export function validateLeave(
     const worked = state.timesheets
       .filter((sheet) => sheet.employeeId === employeeId)
       .flatMap((sheet) => Object.entries(sheet.hours))
-      .find(([date, hours]) => hours > 0 && input.from <= date && date <= input.to);
-    if (worked) return `You logged work on ${formatLongDate(worked[0])}. Remove those hours before applying leave.`;
+      .reduce((byDate, [date, hours]) => byDate.set(date, (byDate.get(date) ?? 0) + hours), new Map<string, number>());
+    // A half day still leaves half the daily limit for work.
+    const allowed = input.half ? HALF_DAY_MAX_HOURS : 0;
+    const clash = [...worked].find(([date, hours]) => hours > allowed && input.from <= date && date <= input.to);
+    if (clash) {
+      return input.half
+        ? `You logged ${clash[1]} hours on ${formatLongDate(clash[0])} — a half day allows at most ${HALF_DAY_MAX_HOURS}.`
+        : `You logged work on ${formatLongDate(clash[0])}. Remove those hours before applying leave.`;
+    }
   }
-  const days = workingDays(input.from, input.to, holidaySet(holidaysForPerson(state.holidays, employeeId)), weeklyOffDays);
+  const days = workingDays(
+    input.from,
+    input.to,
+    holidaySet(holidaysForPerson(state.holidays, employeeId)),
+    weeklyOffDays,
+    input.half,
+  );
   if (days <= 0) return "That range has no working days (weekly offs and holidays are skipped).";
   const row = leaveRows(
     state.leavePolicies,
@@ -1110,7 +1143,9 @@ export function validateLeave(
       request.status !== "rejected" &&
       request.status !== "withdrawn" &&
       request.from <= input.to &&
-      input.from <= request.to,
+      input.from <= request.to &&
+      // Two different halves of the same day don't clash.
+      !(request.half && input.half && request.half !== input.half && request.from === request.to && input.from === input.to),
   );
   if (overlap) return "Those dates overlap an existing leave request.";
   return null;

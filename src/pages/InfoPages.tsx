@@ -1,19 +1,20 @@
 export { HelpPage } from "./CollabModules.tsx";
 import { useEffect, useMemo, useState } from "react";
+import { DEMO_MODE } from "../demoMode.ts";
 import type { FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { COMPANY_NAME, PRODUCT_TAGLINE } from "../brand.ts";
 import { HeadsetIcon, LifeRingIcon, SearchIcon } from "../components/icons.tsx";
 import { Banner, Card, Field, Page } from "../components/ui.tsx";
-import type { DemoAccount } from "../demoAccounts.ts";
+import { groupDemoAccounts, type DemoAccount } from "../demoAccounts.ts";
 import { maskEmail, maskMobile } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
 type ResetChannel = "email" | "mobile";
 
 /** Demo persona panel and on-screen OTP codes are local-development aids only. */
-const SHOW_DEV_ACCOUNTS = import.meta.env.DEV;
+const SHOW_DEV_ACCOUNTS = DEMO_MODE;
 
 export function LoginPage() {
   const {
@@ -223,9 +224,15 @@ export function LoginPage() {
           <aside className="login-demo-panel" aria-label="Development accounts">
             <div className="login-demo-head">
               <h2>Development accounts</h2>
+              <p>{demoAccounts.length} sign-in accounts</p>
             </div>
+            {groupDemoAccounts(demoAccounts).map(({ group, accounts }) => (
+            <section key={group} aria-label={group} style={{ marginBottom: 14 }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--muted)" }}>
+              {group} · {accounts.length}
+            </h3>
             <div className="login-demo-grid">
-              {demoAccounts.map((account) => (
+              {accounts.map((account) => (
                 <article key={account.id} className="login-demo-card">
                   <div>
                     <strong>{account.personaLabel}</strong>
@@ -249,6 +256,8 @@ export function LoginPage() {
                 </article>
               ))}
             </div>
+            </section>
+            ))}
           </aside>
           )}
         </div>

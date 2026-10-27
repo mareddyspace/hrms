@@ -329,35 +329,55 @@ export function decideEnrollment(
 
 const OPEN_LETTER_STATUSES: LetterStatus[] = ["Draft", "Pending approval", "Approved"];
 
-function isRequester(actor: DemoAccount, row: LetterRequest): boolean {
+type LetterActor = Pick<DemoAccount, "id" | "fullName" | "role">;
+
+const isLetterHr = (actor: Pick<DemoAccount, "role">) => canManageLetters(actor as DemoAccount);
+
+function isRequester(actor: LetterActor, row: LetterRequest): boolean {
   return row.requestedById ? row.requestedById === actor.id : row.requestedBy === actor.fullName;
+}
+
+/**
+ * Who may approve a letter: any HR sign-in account other than the subject. When the subject is the
+ * only HR account (HR's own letter), the subject's line manager approves instead — never the subject.
+ */
+export function letterApprovers(row: Pick<LetterRequest, "employeeId">): { id: string; fullName: string }[] {
+  const hr = DEMO_ACCOUNTS.filter((a) => isLetterHr(a) && a.id !== row.employeeId);
+  if (hr.length) return hr.map((a) => ({ id: a.id, fullName: a.fullName }));
+  const manager = managementChain(row.employeeId).find((m) => m.id !== row.employeeId);
+  return manager ? [{ id: manager.id, fullName: manager.fullName }] : [];
+}
+
+export function canApproveLetter(actor: LetterActor, row: LetterRequest): boolean {
+  if (actor.id === row.employeeId) return false;
+  return letterApprovers(row).some((a) => a.id === actor.id);
 }
 
 /** Salary revision / promotion letters stay hidden from their subject until issued. */
 export function canViewLetter(actor: DemoAccount, row: LetterRequest): boolean {
-  if (canManageLetters(actor)) return true;
   if (row.employeeId === actor.id) {
     return row.status === "Issued" || !SENSITIVE_LETTER_TYPES.includes(row.type);
   }
-  return isRequester(actor, row);
+  if (isLetterHr(actor)) return true;
+  return isRequester(actor, row) || canApproveLetter(actor, row);
 }
 
-/** Valid next statuses for this actor — the UI only offers these. */
+/** Valid next statuses for this actor. Approval itself goes through approveLetter (it generates the document). */
 export function nextLetterStatuses(actor: DemoAccount, row: LetterRequest): LetterStatus[] {
-  const hr = canManageLetters(actor);
   switch (row.status) {
     case "Draft":
       return isRequester(actor, row) ? ["Pending approval"] : [];
     case "Pending approval":
-      return hr && !isRequester(actor, row) && row.employeeId !== actor.id ? ["Approved", "Rejected"] : [];
     case "Approved":
-      return hr ? ["Issued"] : [];
+      return canApproveLetter(actor, row) ? ["Approved", "Rejected"] : [];
     default:
       return [];
   }
 }
 
+/** Submit a draft or reject a request. Approving is done by approveLetter in letterService. */
 export function setLetterStatus(actor: DemoAccount, id: string, status: LetterStatus): RewardResult {
+  if (status === "Approved" || status === "Issued") return "Approve the letter to generate it.";
   return updateReward((s) => {
     const row = s.letters.find((l) => l.id === id);
     if (!row) return "Letter request not found.";
@@ -365,18 +385,20 @@ export function setLetterStatus(actor: DemoAccount, id: string, status: LetterSt
       return `You cannot move this letter from ${row.status} to ${status}.`;
     }
     row.status = status;
-    if (status === "Approved" || status === "Rejected") {
+    if (status === "Rejected") {
       row.approver = actor.fullName;
+      row.approverId = actor.id;
       row.decidedOn = todayISO();
     }
   });
 }
 
+/** Raw request — also used by exit and probation flows. Checks on who may request what live in letterService. */
 export function addLetterRequest(
-  actor: DemoAccount,
-  input: { employeeId: string; employeeName: string; type: LetterType; note: string },
+  actor: LetterActor,
+  input: { employeeId: string; employeeName: string; type: LetterType; note: string; details?: string; effectiveDate?: string },
 ): RewardResult {
-  if (input.employeeId !== actor.id && !canManageLetters(actor)) {
+  if (input.employeeId !== actor.id && !isLetterHr(actor)) {
     return "You can only request letters for yourself.";
   }
   return updateReward((s) => {
@@ -385,7 +407,7 @@ export function addLetterRequest(
     );
     if (open) return `There is already an open ${input.type} letter request for ${input.employeeName}.`;
     s.letters.unshift({
-      id: `ltr-local-${Date.now()}`,
+      id: `ltr-local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       employeeId: input.employeeId,
       employeeName: input.employeeName,
       type: input.type,
@@ -394,7 +416,9 @@ export function addLetterRequest(
       requestedById: actor.id,
       requestedOn: todayISO(),
       note: input.note,
-      previewBody: `[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\n${input.type} letter for ${input.employeeName}.\nThe issued letter is provided by HR once approved.`,
+      details: input.details?.trim() || undefined,
+      effectiveDate: input.effectiveDate || undefined,
+      previewBody: `${input.type} letter for ${input.employeeName}. Generated once approved.`,
     });
   });
 }

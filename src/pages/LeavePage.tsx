@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Banner, Card, Field, LeaveTable, Page, StatusBadge, StatusPill } from "../components/ui.tsx";
 import { managementChain } from "../demoAccounts.ts";
-import type { BackdatedLeavePermission, LeaveCode } from "../model.ts";
+import type { BackdatedLeavePermission, LeaveCode, LeaveHalf } from "../model.ts";
 import {
   backdatedPermissionFor,
   formatShortDate,
@@ -27,6 +27,10 @@ const PERMISSION_LABEL: Record<BackdatedLeavePermission["status"], { text: strin
   withdrawn: { text: "Withdrawn", tone: "neutral" },
   used: { text: "Leave applied", tone: "info" },
 };
+
+function halfLabel(half: LeaveHalf): string {
+  return half === "first" ? "First half" : "Second half";
+}
 
 export function LeavePage() {
   const portal = usePortal();
@@ -85,7 +89,13 @@ export function LeavePage() {
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   // Set when the form was filled from an approved permission: the permission only covers that leave type.
   const [lockedCode, setLockedCode] = useState<LeaveCode | null>(null);
-  const days = from && to ? workingDays(from, to, holidaySet(holidaysForPerson(state.holidays, employee.id)), activeOffs) : 0;
+  const [halfDay, setHalfDay] = useState(false);
+  const [halfPart, setHalfPart] = useState<LeaveHalf>("first");
+  // Half days: one date only, and not for work-from-home types (you're working either way).
+  const halfAllowed = Boolean(from) && from === to && code !== "wfh" && code !== "emergency_wfh";
+  const half: LeaveHalf | undefined = halfAllowed && halfDay ? halfPart : undefined;
+  const days =
+    from && to ? workingDays(from, to, holidaySet(holidaysForPerson(state.holidays, employee.id)), activeOffs, half) : 0;
   // Balances for the selected leave year (quotas reset every January).
   const yearRows = useMemo(
     () =>
@@ -118,6 +128,8 @@ export function LeavePage() {
     setFrom("");
     setTo("");
     setLockedCode(null);
+    setHalfDay(false);
+    setHalfPart("first");
   }
 
   async function onSubmit(event: FormEvent) {
@@ -139,7 +151,7 @@ export function LeavePage() {
       if (!error) resetForm();
       return;
     }
-    const error = await applyLeave({ code, from, to, reason });
+    const error = await applyLeave({ code, from, to, reason, half });
     setMessage(
       error
         ? { tone: "err", text: error }
@@ -177,7 +189,14 @@ export function LeavePage() {
   }
 
   return (
-    <Page title="Leave & Absence">
+    <Page
+      title="Leave & Absence"
+      action={
+        <Link className="btn-ghost" to="/leave/team-calendar">
+          Team calendar
+        </Link>
+      }
+    >
       <div className="year-bar" role="tablist" aria-label="Leave year">
         {years.map((item) => (
           <button
@@ -236,7 +255,8 @@ export function LeavePage() {
                     </div>
                     <span>
                       {leaveName(r.code)} · {formatShortDate(r.from)} – {formatShortDate(r.to)} ·{" "}
-                      {workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)))} day(s)
+                      {workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half)} day(s)
+                      {r.half ? ` · ${halfLabel(r.half)}` : ""}
                     </span>
                     <span className="muted">Reason: {r.reason}</span>
                     <div className="approval-actions">
@@ -326,12 +346,20 @@ export function LeavePage() {
                   )}
                   {requests.map((request) => {
                     const policy = leaveTable.find((row) => row.code === request.code);
-                    const count = workingDays(request.from, request.to, holidaySet(holidaysForPerson(state.holidays, employee.id)), activeOffs);
+                    const count = workingDays(
+                      request.from,
+                      request.to,
+                      holidaySet(holidaysForPerson(state.holidays, employee.id)),
+                      activeOffs,
+                      request.half,
+                    );
                     return (
                       <tr key={request.id}>
                         <td>{policy?.name ?? request.code}</td>
                         <td>
-                          {formatShortDate(request.from)} – {formatShortDate(request.to)}
+                          {request.half
+                            ? `${formatShortDate(request.from)} · ${halfLabel(request.half)}`
+                            : `${formatShortDate(request.from)} – ${formatShortDate(request.to)}`}
                         </td>
                         <td>{count}</td>
                         <td>{request.reason}</td>
@@ -399,6 +427,26 @@ export function LeavePage() {
               <Field label="To">
                 <input type="date" value={to} onChange={(event) => setTo(event.target.value)} required />
               </Field>
+              {halfAllowed && (
+                <Field label="Half day" wide>
+                  <div className="row-between" style={{ justifyContent: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <input type="checkbox" checked={halfDay} onChange={(event) => setHalfDay(event.target.checked)} />
+                      Half day
+                    </label>
+                    {halfDay && (
+                      <select
+                        value={halfPart}
+                        onChange={(event) => setHalfPart(event.target.value as LeaveHalf)}
+                        aria-label="Which half"
+                      >
+                        <option value="first">First half</option>
+                        <option value="second">Second half</option>
+                      </select>
+                    )}
+                  </div>
+                </Field>
+              )}
               <Field label="Reason" wide>
                 <textarea
                   ref={reasonRef}
@@ -408,7 +456,10 @@ export function LeavePage() {
                 />
               </Field>
             </div>
-            <p className="note">Working days: {days}.</p>
+            <p className="note">
+              Working days: {days}
+              {half ? ` (${halfLabel(half)})` : ""}.
+            </p>
             {needsPermission && (
               <p className="note warn">
                 These dates are in the past. {approver?.fullName ?? "Your manager"} must approve before you can apply.

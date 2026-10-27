@@ -72,6 +72,7 @@ import {
 import { canApproveTeam, holidaysForPerson, setEarnedLeaveSource, setHolidayContext } from "./model.ts";
 import { getOptionalHolidayState, subscribeOptionalHolidays } from "./features/workforce/optionalHolidaysStore.ts";
 import { getPerson, isAccountActive, managerChainIds } from "./data/peopleLocal.ts";
+import { delegatedAuthority, noteLeaves, type DelegationScope } from "./data/delegations.ts";
 import { cachedPayslips, generatePayslips } from "./data/payslipGenerator.ts";
 import { getTaxRegime } from "./data/taxRegime.ts";
 import { getExitState, subscribeExits } from "./features/lifecycle/exitStore.ts";
@@ -304,8 +305,11 @@ interface PortalApi {
   decideBackdatedPermission: (id: string, decision: "approved" | "rejected", note?: string) => string | null;
   /** Manager-or-HR visibility check (who may see and manage this person's records). */
   canApproveLeaveFor: (employeeId: string) => boolean;
-  /** Whether the signed-in user decides this person's requests — someone above them in the reporting line. */
-  canDecideFor: (employeeId: string) => boolean;
+  /**
+   * Whether the signed-in user decides this person's requests — someone above them in the reporting line.
+   * Pass a request type to also count an active approval delegation (§25) that covers it.
+   */
+  canDecideFor: (employeeId: string, scope?: DelegationScope) => boolean;
   /** False for people at the top of the organisation: their requests are approved automatically. */
   hasApprover: boolean;
   applyEncashment: (code: LeaveCode, days: number) => string | null;
@@ -606,14 +610,23 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       return null;
     }
 
-    /** Approvals follow the reporting line: only someone above the person decides their requests. */
-    function canDecideFor(employeeId: string): boolean {
+    /**
+     * Approvals follow the reporting line: only someone above the person decides their requests — or a colleague
+     * they delegated to (§25) while the delegation is active and covers this request type. Never one's own request.
+     * `scope` "any" (internal decision checks) accepts any active delegation; "none" ignores delegation.
+     */
+    function canDecideFor(employeeId: string, scope: DelegationScope | "any" | "none" = "any"): boolean {
       if (employeeId === active.id) return false;
       // Personas follow their own reporting line; everyone else follows the directory's manager chain.
-      return (
+      if (
         managementChain(employeeId, TIMEZ_DEMOS).some((manager) => manager.id === active.id) ||
         managerChainIds(employeeId).includes(active.id)
-      );
+      ) {
+        return true;
+      }
+      if (scope === "none") return false;
+      noteLeaves(state.leaveRequests);
+      return delegatedAuthority(active.id, employeeId, scope) !== null;
     }
 
     /** People at the top of the organisation have no one to approve their requests. */
@@ -882,10 +895,12 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       applyLeave: async (input) => {
         const error = validateLeave(state, active.id, input, activeOffs, todayISO(), { needsApprover: activeHasApprover });
         if (error) return error;
+        const { half, ...rest } = input;
         const request: LeaveRequest = {
           id: uid("lv"),
           employeeId: active.id,
-          ...input,
+          ...rest,
+          ...(half && input.from === input.to ? { half } : {}),
           reason: input.reason.trim(),
           status: "pending",
           appliedOn: todayISO(),
@@ -977,7 +992,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
       canApproveLeaveFor: (employeeId) => canApproveFor(employeeId),
-      canDecideFor: (employeeId) => canDecideFor(employeeId),
+      canDecideFor: (employeeId, scope) => canDecideFor(employeeId, scope ?? "none"),
       hasApprover: activeHasApprover,
       canVerifyProofs,
       setLeaveStatus: async (leaveId, status, note) => {
@@ -1002,15 +1017,29 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             Number(request.from.slice(0, 4)),
           );
           const row = ownerRows.find((item) => item.code === request.code);
-          const days = workingDays(request.from, request.to, holidaySet(holidaysForPerson(state.holidays, request.employeeId)), ownerOffs);
+          const days = workingDays(
+            request.from,
+            request.to,
+            holidaySet(holidaysForPerson(state.holidays, request.employeeId)),
+            ownerOffs,
+            request.half,
+          );
           if (!row || days > row.available) return "Approving this would go past that employee's quota.";
           // Hours logged while the request was waiting would clash with the leave days.
           if (request.code !== "wfh" && request.code !== "emergency_wfh") {
-            const worked = state.timesheets
-              .filter((sheet) => sheet.employeeId === request.employeeId)
-              .flatMap((sheet) => Object.entries(sheet.hours))
-              .find(([date, hours]) => hours > 0 && request.from <= date && date <= request.to);
-            if (worked) return `They logged work on ${formatLongDate(worked[0])}. Ask them to remove those hours first.`;
+            // A half day still leaves room for up to 4.5 hours of work that day.
+            const allowed = request.half ? 4.5 : 0;
+            const byDate = new Map<string, number>();
+            for (const sheet of state.timesheets) {
+              if (sheet.employeeId !== request.employeeId) continue;
+              for (const [date, hours] of Object.entries(sheet.hours)) byDate.set(date, (byDate.get(date) ?? 0) + hours);
+            }
+            const worked = [...byDate].find(([date, hours]) => hours > allowed && request.from <= date && date <= request.to);
+            if (worked) {
+              return request.half
+                ? `They logged ${worked[1]} hours on ${formatLongDate(worked[0])} — a half day allows at most ${allowed}.`
+                : `They logged work on ${formatLongDate(worked[0])}. Ask them to remove those hours first.`;
+            }
           }
         }
         setState((prev) => ({
