@@ -110,18 +110,6 @@ export function PersonalisationPage() {
             />
           </div>
           <div className="pref-row">
-            <strong>Menu</strong>
-            <Choices
-              label="Menu"
-              value={prefs.menuStyle}
-              onChange={(menuStyle) => set({ menuStyle })}
-              options={[
-                { value: "full", label: "Full menu" },
-                { value: "icons", label: "Icons only" },
-              ]}
-            />
-          </div>
-          <div className="pref-row">
             <strong>Animations</strong>
             <Choices
               label="Animations"

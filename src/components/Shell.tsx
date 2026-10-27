@@ -9,8 +9,6 @@ import {
   Building2,
   CalendarDays,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   CircleHelp,
   ClipboardList,
   Clock3,
@@ -298,7 +296,8 @@ export function Shell() {
   const prefs = useApplyPreferences(employee.id);
   // Task due/overdue reminders fire on any page, not only when Tasks is open.
   useTaskAutoReminders();
-  const collapsed = prefs.menuStyle === "icons";
+  // Icons-only sidebar; the chosen section's pages run as a horizontal bar above the page.
+  const collapsed = true;
   const theme = document.documentElement.dataset.theme === "night" ? "night" : "light";
   const [openGroups, setOpenGroups] = useState<string[]>(["Me", "Time & pay"]);
   const location = useLocation();
@@ -427,17 +426,6 @@ export function Shell() {
               <span>{PRODUCT_TAGLINE}</span>
             </div>
           </Link>
-
-          <button
-            type="button"
-            className="side-collapse"
-            onClick={() => updatePreferences(employee.id, { menuStyle: collapsed ? "full" : "icons" })}
-            aria-pressed={collapsed}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
-            <span>{collapsed ? "Expand" : "Collapse"}</span>
-          </button>
 
           <label className="side-search">
             <span className="sr-only">Filter menu</span>
