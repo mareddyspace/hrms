@@ -287,24 +287,6 @@ const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "
       { name: "Lily Blake", relation: "Child", dateOfBirth: "2011-10-03" },
     ],
   },
-  "demo-compensation": {
-    preferredName: "Helen",
-    dateOfBirth: "1986-01-27",
-    nationality: "American",
-    workArrangement: "Remote",
-    education: [
-      { degree: "BS Economics", institution: "Ohio State University", year: 2008 },
-      { degree: "Certified Compensation Professional", institution: "WorldatWork", year: 2013 },
-    ],
-    experience: [
-      { employer: "Harbor Health", title: "Compensation Analyst", from: "2008-07-14", to: "2012-05-31" },
-      { employer: "Summit Financial", title: "Senior Compensation Analyst", from: "2012-06-11", to: "2016-09-02" },
-    ],
-    dependents: [
-      { name: "Mark Brooks", relation: "Spouse", dateOfBirth: "1984-05-05" },
-      { name: "Ava Brooks", relation: "Child", dateOfBirth: "2018-07-21" },
-    ],
-  },
   "demo-admin": {
     preferredName: "Alex",
     dateOfBirth: "1991-10-08",

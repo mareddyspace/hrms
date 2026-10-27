@@ -27,6 +27,10 @@ export function LoginPage() {
     rememberedEmail,
   } = usePortal();
   const navigate = useNavigate();
+  // The main personas show first; the eight country managers stay folded away until asked for.
+  const [showCountryManagers, setShowCountryManagers] = useState(false);
+  const countryManagers = demoAccounts.filter((a) => a.personaLabel.startsWith("Country Manager"));
+  const mainAccounts = demoAccounts.filter((a) => !a.personaLabel.startsWith("Country Manager"));
   const [mode, setMode] = useState<"login" | "forgot">("login");
   const [email, setEmail] = useState(rememberedEmail ?? "");
   const [password, setPassword] = useState("");
@@ -224,9 +228,9 @@ export function LoginPage() {
           <aside className="login-demo-panel" aria-label="Development accounts">
             <div className="login-demo-head">
               <h2>Development accounts</h2>
-              <p>{demoAccounts.length} sign-in accounts</p>
+              <p>{mainAccounts.length} main accounts</p>
             </div>
-            {groupDemoAccounts(demoAccounts).map(({ group, accounts }) => (
+            {groupDemoAccounts(showCountryManagers ? demoAccounts : mainAccounts).map(({ group, accounts }) => (
             <section key={group} aria-label={group} style={{ marginBottom: 14 }}>
             <h3 style={{ margin: "0 0 8px", fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--muted)" }}>
               {group} · {accounts.length}
@@ -258,6 +262,11 @@ export function LoginPage() {
             </div>
             </section>
             ))}
+            {countryManagers.length > 0 && (
+              <button type="button" className="btn-ghost btn-tiny" onClick={() => setShowCountryManagers((v) => !v)}>
+                {showCountryManagers ? "Hide country managers" : `Show ${countryManagers.length} country managers`}
+              </button>
+            )}
           </aside>
           )}
         </div>

@@ -12,9 +12,9 @@ export interface ProfileAccess {
   personal: boolean;
   /** Attendance, leave, timesheets, goals, performance, learning, skills, career, lifecycle: self, line, HR. */
   work: boolean;
-  /** Compensation history and pay: the person and Compensation only. */
+  /** Compensation history and pay: the person and HR (compensation & benefits sit with HR). */
   compensation: boolean;
-  /** Benefit enrolments and covered dependents: the person, HR and Compensation. */
+  /** Benefit enrolments and covered dependents: the person and HR. */
   benefits: boolean;
   /** Documents on file: the person and HR. */
   documents: boolean;
@@ -33,15 +33,14 @@ export function profileAccessFor(viewer: DemoAccount, personId: string, selfId: 
     aboveInLine ||
     canViewSensitivePiiFor(viewer, { subjectId: personId, selfId, isDirectReport: aboveInLine, inHrScope: true });
   const work = isSelf || isHr || aboveInLine;
-  const isComp = viewer.role === "compensation_admin";
   return {
     isSelf,
     isHr,
     aboveInLine,
     personal,
     work,
-    compensation: isSelf || isComp,
-    benefits: isSelf || isHr || isComp,
+    compensation: isSelf || (isHr && viewer.rbacFlags?.hrCompAuthorized !== false),
+    benefits: isSelf || isHr,
     documents: isSelf || isHr,
     unreleasedRatings: !isSelf && (isHr || aboveInLine),
   };

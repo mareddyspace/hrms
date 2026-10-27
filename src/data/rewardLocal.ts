@@ -23,9 +23,9 @@ import {
   type LetterType,
 } from "./rewardData.ts";
 
-// v3: seed rows re-keyed to real people, comp history and benefit change requests stored — older data is replaced.
-const KEY = "timez.reward.state.v3";
-const OLD_KEYS = ["timez.reward.state.v1", "timez.reward.state.v2"];
+// v4: the Compensation persona was retired (HR owns compensation & benefits) — older data is replaced.
+const KEY = "timez.reward.state.v4";
+const OLD_KEYS = ["timez.reward.state.v1", "timez.reward.state.v2", "timez.reward.state.v3"];
 
 type RewardState = {
   reviews: CompReviewItem[];
@@ -150,12 +150,40 @@ function hasLineApprover(row: CompReviewItem): boolean {
   return chainIds(row.employeeId).some((id) => id !== row.managerId);
 }
 
-/** Who may decide the row now: line step = above the employee, never the proposer; final step = Compensation. */
+/** HR roles that own compensation & benefits decisions. */
+const PAY_HR_ROLES = new Set<string>(["hr", "hr_admin"]);
+
+export function isPayHr(actor: Pick<DemoAccount, "role">): boolean {
+  return PAY_HR_ROLES.has(actor.role);
+}
+
+/**
+ * Who decides a pay / benefits item about `subjectId`: any HR sign-in account other than the subject (and other
+ * than anyone in `skip`). When HR is the subject (HR's own pay), the subject's line manager decides instead —
+ * the nearest person above them who isn't skipped. Never the subject.
+ */
+export function payDecidersFor(
+  subjectId: string,
+  isDecider: (a: DemoAccount) => boolean = isPayHr,
+  skip: (a: Pick<DemoAccount, "id" | "fullName">) => boolean = () => false,
+): { id: string; fullName: string }[] {
+  const pool = DEMO_ACCOUNTS.filter((a) => isDecider(a) && a.id !== subjectId && !skip(a));
+  if (pool.length) return pool.map((a) => ({ id: a.id, fullName: a.fullName }));
+  const manager = managementChain(subjectId, DEMO_ACCOUNTS).find((m) => m.id !== subjectId && !skip(m));
+  return manager ? [{ id: manager.id, fullName: manager.fullName }] : [];
+}
+
+/** Who may decide the row now: line step = above the employee, never the proposer; final step = HR (or, for HR's own pay, their line manager). */
 export function canDecideCompReview(actor: Actor, row: CompReviewItem): boolean {
   if (actor.id === row.employeeId || actor.id === row.managerId) return false;
   if (COMP_CYCLES.find((c) => c.id === row.cycleId)?.status === "Closed") return false;
   if (row.status === "Pending approval") return isAboveInLine(actor.id, row.employeeId);
-  if (row.status === "Pending final approval") return actor.role === "compensation_admin" && row.lineApprover !== actor.fullName;
+  if (row.status === "Pending final approval") {
+    if (row.lineApprover === actor.fullName) return false;
+    return payDecidersFor(row.employeeId, isPayHr, (a) => a.id === row.managerId || a.fullName === row.lineApprover).some(
+      (a) => a.id === actor.id,
+    );
+  }
   return false;
 }
 
@@ -167,7 +195,7 @@ export function submitCompReview(actor: Actor, id: string): RewardResult {
     if (row.managerId !== actor.id) return "Only the person who proposed this can submit it.";
     if (row.status !== "Draft") return "Only drafts can be submitted.";
     if (COMP_CYCLES.find((c) => c.id === row.cycleId)?.status === "Closed") return "This review cycle is closed.";
-    // With no one above the proposer in the line (e.g. the CEO's own reports), it goes straight to Compensation.
+    // With no one above the proposer in the line (e.g. the CEO's own reports), it goes straight to HR for the final decision.
     row.status = hasLineApprover(row) ? "Pending approval" : "Pending final approval";
   });
 }
@@ -180,7 +208,7 @@ export function decideCompReview(actor: Actor, id: string, decision: "Approved" 
     if (row.managerId === actor.id) return "You cannot approve your own proposal.";
     if (!canDecideCompReview(actor, row)) {
       return row.status === "Pending final approval"
-        ? "Compensation makes the final decision."
+        ? "HR makes the final decision (for HR's own pay, their line manager)."
         : "Only someone above the employee in their reporting line can approve this.";
     }
     const today = todayISO();
@@ -229,7 +257,13 @@ export function decideCompReview(actor: Actor, id: string, decision: "Approved" 
 /* ───────────── Benefits ───────────── */
 
 export function canAdminBenefits(actor: Pick<DemoAccount, "role">): boolean {
-  return canManagePeople(actor.role) || actor.role === "compensation_admin";
+  return canManagePeople(actor.role);
+}
+
+/** Who may decide a benefits request for `employeeId`: HR (benefits admins), never the employee; HR's own requests go to their line manager. */
+export function canDecideBenefitFor(actor: Pick<DemoAccount, "id" | "role">, employeeId: string): boolean {
+  if (actor.id === employeeId) return false;
+  return payDecidersFor(employeeId, (a) => canAdminBenefits(a)).some((a) => a.id === actor.id);
 }
 
 export function isMandatoryPlan(planId: string): boolean {
@@ -295,11 +329,11 @@ export function requestEnrollmentChange(actor: DemoAccount, enrollmentId: string
 }
 
 export function decideChangeRequest(actor: DemoAccount, id: string, status: "Done" | "Declined"): RewardResult {
-  if (!canAdminBenefits(actor)) return "Only HR or Compensation can handle change requests.";
   return updateReward((s) => {
     const row = s.changeRequests.find((c) => c.id === id);
     if (!row) return "Request not found.";
     if (row.employeeId === actor.id) return "Someone else must handle your own request.";
+    if (!canDecideBenefitFor(actor, row.employeeId)) return "Only HR can handle change requests (HR's own go to their line manager).";
     if (row.status !== "Pending") return "This request is already closed.";
     row.status = status;
     row.decidedBy = actor.fullName;
@@ -313,11 +347,11 @@ export function decideEnrollment(
   enrollmentId: string,
   status: "Enrolled" | "Waived",
 ): RewardResult {
-  if (!canAdminBenefits(actor)) return "Only HR or Compensation can decide enrollment requests.";
   return updateReward((s) => {
     const row = s.enrollments.find((e) => e.id === enrollmentId);
     if (!row) return "Enrollment not found.";
     if (row.employeeId === actor.id) return "Someone else must decide your own request.";
+    if (!canDecideBenefitFor(actor, row.employeeId)) return "Only HR can decide enrollment requests (HR's own go to their line manager).";
     if (row.status !== "Pending") return "Only pending requests can be decided.";
     if (status === "Waived" && isMandatoryPlan(row.planId)) return "Statutory plans cannot be waived.";
     row.status = status;

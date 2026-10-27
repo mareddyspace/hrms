@@ -123,7 +123,7 @@ export function getCompensationAccess(viewer: DemoAccount): CompensationAccess {
     isDirectReport: true,
   });
 
-  if (role === "compensation_admin" || role === "finance") {
+  if (role === "finance") {
     return {
       module: true,
       structures: true,
@@ -131,8 +131,8 @@ export function getCompensationAccess(viewer: DemoAccount): CompensationAccess {
       ownAmounts: "full",
       othersAmounts: "full",
       peopleScope: "global",
-      canApprove: role === "compensation_admin",
-      canConfigure: role === "compensation_admin",
+      canApprove: false,
+      canConfigure: false,
     };
   }
 

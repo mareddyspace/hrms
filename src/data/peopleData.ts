@@ -274,7 +274,6 @@ const NAMED_PEOPLE: Record<string, { gender: string; dateOfJoining: string }> = 
   "demo-ceo": { gender: "Male", dateOfJoining: "2012-03-01" },
   "emp-ram": { gender: "Male", dateOfJoining: "2014-06-16" },
   "demo-hr-admin": { gender: "Male", dateOfJoining: "2015-01-12" },
-  "demo-compensation": { gender: "Female", dateOfJoining: "2016-09-19" },
   "demo-hiring-manager": { gender: "Male", dateOfJoining: "2017-08-07" },
   "demo-recruiter": { gender: "Female", dateOfJoining: "2018-02-05" },
   "emp-mahesh": { gender: "Male", dateOfJoining: "2019-05-13" },
@@ -289,7 +288,6 @@ function countryByCode(code: string) {
 const PERSONA_FIXED_MANAGER: Record<string, string> = {
   "emp-mahesh": "emp-ram",
   "demo-recruiter": "demo-hr-admin",
-  "demo-compensation": "demo-hr-admin",
 };
 const CEO_ID = "demo-ceo";
 

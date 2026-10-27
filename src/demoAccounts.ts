@@ -226,8 +226,8 @@ const COUNTRY_MANAGER_SEEDS: {
  *   │   ├── Ram Krishnan (Manager)
  *   │   │   └── Babu Menon (Employee)       ← Ram approves Babu's leave via reporting
  *   │   └── Farhan Ali (HR)
- *   │       ├── Sophie Clark (Recruiter)    ← candidate access = Recruiter role, not chart
- *   │       └── Helen Brooks (Compensation) ← pay access = Compensation role, not chart
+ *   │       └── Sophie Clark (Recruiter)    ← candidate access = Recruiter role, not chart
+ *   │           (HR also owns compensation & benefits: final pay approvals, benefits, pay preview)
  *   ├── William Sharma (Country Manager · United States)
  *   │   └── Daniel Ortiz (Hiring Manager)
  *   ├── Hans Schmidt (Country Manager · United Kingdom)
@@ -314,6 +314,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "bulkdata",
       "reportbuilder",
       "auditlog",
+      "payroll", // HR owns compensation & benefits: payroll status and pay preview
       "paypreview",
     ],
   }),
@@ -403,39 +404,6 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     ],
   }),
   account({
-    id: "demo-compensation",
-    employeeCode: "CMP6201",
-    fullName: "Helen Brooks",
-    personaLabel: "Compensation",
-    role: "compensation_admin",
-    designation: "Compensation & Benefits Manager",
-    email: "helen.brooks@infotech.com",
-    password: "Comp@6201",
-    mobile: "+1 646 555 0177",
-    address: "New York, USA",
-    timeZone: "America/New_York",
-    countryCode: "US",
-    countryName: "United States",
-    legalEntity: "Infotech Inc",
-    location: "New York",
-    department: "Total Rewards",
-    currency: "USD",
-    shiftHours: "09:00 AM to 06:00 PM",
-    /** Reports to HR; compensation access is from Compensation role, not chart position. */
-    reportsToId: "demo-hr-admin",
-    navAccess: [
-      ...ACCESS_EMPLOYEE,
-      "people",
-      "organization",
-      "analytics",
-      "compensation",
-      "payroll",
-      "payslips",
-      "reportbuilder",
-      "paypreview",
-    ],
-  }),
-  account({
     id: "demo-admin",
     employeeCode: "ADM8001",
     fullName: "Alex Morgan",
@@ -486,11 +454,27 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
 /** Ids of the Country Manager sign-in accounts (they hold the directory's generated country-head seats). */
 export const COUNTRY_MANAGER_IDS: ReadonlySet<string> = new Set(COUNTRY_MANAGER_SEEDS.map((cm) => cm.id));
 
+/**
+ * Sign-in accounts that were retired. Saved browser data that still mentions them is dropped on load.
+ * (The Compensation & Benefits persona was removed — HR now owns compensation & benefits.)
+ */
+export const RETIRED_ACCOUNT_IDS: ReadonlySet<string> = new Set(["demo-compensation"]);
+export const RETIRED_ACCOUNT_NAMES: ReadonlySet<string> = new Set(["Helen Brooks"]);
+
+/** True when a saved record (any shape) points at a retired account by id or name. */
+export function mentionsRetiredAccount(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const text = JSON.stringify(value);
+  for (const id of RETIRED_ACCOUNT_IDS) if (text.includes(`"${id}"`)) return true;
+  for (const name of RETIRED_ACCOUNT_NAMES) if (text.includes(name)) return true;
+  return false;
+}
+
 /** Sections of the development sign-in list, in display order. */
 export const DEMO_ACCOUNT_GROUPS = ["Leadership", "HR & Admin", "Managers", "Employees"] as const;
 export type DemoAccountGroup = (typeof DEMO_ACCOUNT_GROUPS)[number];
 
-const HR_ADMIN_ROLES: readonly string[] = ["hr", "hr_admin", "hrbp", "recruiter", "compensation_admin", "admin", "super_admin", "it_admin"];
+const HR_ADMIN_ROLES: readonly string[] = ["hr", "hr_admin", "hrbp", "recruiter", "admin", "super_admin", "it_admin"];
 
 export function demoAccountGroup(account: Pick<DemoAccount, "id" | "role">): DemoAccountGroup {
   if (account.role === "executive" || account.role === "founder" || account.role === "cofounder" || COUNTRY_MANAGER_IDS.has(account.id)) {
@@ -517,7 +501,7 @@ const ORG_CHILD_ORDER: Record<string, string[]> = {
   "demo-ceo": ["wf-TZ0001", "wf-TZ0194", "wf-TZ0290", "wf-TZ0349", "wf-TZ0389", "wf-TZ0424", "wf-TZ0449", "wf-TZ0469"],
   "wf-TZ0001": ["emp-ram", "demo-hr-admin"],
   "emp-ram": ["emp-mahesh"],
-  "demo-hr-admin": ["demo-recruiter", "demo-compensation"],
+  "demo-hr-admin": ["demo-recruiter"],
 };
 
 /** Build reporting tree for the sign-in accounts (Jordan at root). */

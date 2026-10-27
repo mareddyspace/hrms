@@ -185,7 +185,12 @@ export function ApprovalsCenterPage() {
         key: `lv-${r.id}`,
         kind: "Leave",
         employeeId: r.employeeId,
-        title: `${leaveName(r.code)} · ${formatShortDate(r.from)} – ${formatShortDate(r.to)} · ${workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)))} day(s)`,
+        title: (() => {
+          const halfDay = r.half && r.from === r.to;
+          const days = workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half);
+          const span = halfDay ? formatShortDate(r.from) : `${formatShortDate(r.from)} – ${formatShortDate(r.to)}`;
+          return `${leaveName(r.code)} · ${span} · ${halfDay ? `${days} day (${r.half} half)` : `${days} day(s)`}`;
+        })(),
         detail: r.reason,
         raisedOn: r.appliedOn,
         status: r.status,
@@ -392,7 +397,8 @@ export function ApprovalsCenterPage() {
     if (item.kind === "Tax-saving proof") return canVerifyProofs;
     if (item.key.startsWith("swt-")) return true; // already limited to the teammate asked
     if (item.kind === "Leave encashment" && managementChain(item.employeeId, demoAccounts).length === 0) {
-      return portal.demoProfile.role === "compensation_admin";
+      // The CEO has no one above them: HR (compensation & benefits) decides their encashment.
+      return portal.demoProfile.role === "hr" || portal.demoProfile.role === "hr_admin";
     }
     return canDecideFor(item.employeeId, scopeOf(item.kind));
   });
