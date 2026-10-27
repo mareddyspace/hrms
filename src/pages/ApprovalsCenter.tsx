@@ -185,7 +185,12 @@ export function ApprovalsCenterPage() {
         key: `lv-${r.id}`,
         kind: "Leave",
         employeeId: r.employeeId,
-        title: `${leaveName(r.code)} · ${formatShortDate(r.from)} – ${formatShortDate(r.to)} · ${workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)))} day(s)`,
+        title: (() => {
+          const halfDay = r.half && r.from === r.to;
+          const days = workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half);
+          const span = halfDay ? formatShortDate(r.from) : `${formatShortDate(r.from)} – ${formatShortDate(r.to)}`;
+          return `${leaveName(r.code)} · ${span} · ${halfDay ? `${days} day (${r.half} half)` : `${days} day(s)`}`;
+        })(),
         detail: r.reason,
         raisedOn: r.appliedOn,
         status: r.status,

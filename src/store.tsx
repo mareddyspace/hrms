@@ -685,6 +685,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     }
 
     function activateSession(account: DemoAccount, options?: { silent?: boolean; remember?: boolean }) {
+      // A fresh sign-in starts the idle clock again (an old stamp from an earlier visit must not sign them out).
+      localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()));
       const lastLoginKey = userKey(LAST_LOGIN_KEY, account.employeeCode);
       // Older versions kept one device-wide stamp; fall back to it once.
       const previousIso = localStorage.getItem(lastLoginKey) ?? localStorage.getItem(LAST_LOGIN_KEY);

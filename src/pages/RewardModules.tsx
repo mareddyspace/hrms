@@ -30,34 +30,28 @@ import {
   DEPENDENTS,
   GRADE_BANDS,
   LEGAL_DISCLAIMER,
-  LETTER_TEMPLATES,
-  type LetterStatus,
-  type LetterType,
 } from "../data/rewardData.ts";
 import {
   UPLOAD_EXTENSIONS,
-  addLetterRequest,
   addLibraryDoc,
   canAdminBenefits,
   canDecideCompReview,
-  canViewLetter,
   decideChangeRequest,
   decideCompReview,
   decideEnrollment,
   getRewardState,
   isAboveInLine,
   isMandatoryPlan,
-  nextLetterStatuses,
   pendingChangeFor,
   requestEnrollment,
   requestEnrollmentChange,
-  setLetterStatus,
   submitCompReview,
   subscribeReward,
   validateUpload,
 } from "../data/rewardLocal.ts";
 import type { DocumentGroup } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { LetterHistoryPanel, LetterRequestsPanel, LetterViewerDialog, MyLettersPanel, type OpenLetter } from "./LettersPanel.tsx";
 
 function useReward() {
   return useSyncExternalStore(subscribeReward, getRewardState, getRewardState);
@@ -568,16 +562,13 @@ export function DocumentsLettersPage() {
   const [tab, setTab] = useState("library");
   const [category, setCategory] = useState("");
   const [previewId, setPreviewId] = useState<string | null>(null);
-  const [letterType, setLetterType] = useState<LetterType>("Employment");
-  const [letterNote, setLetterNote] = useState("");
-  const [letterMsg, setLetterMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [openLetter, setOpenLetter] = useState<OpenLetter>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadName, setUploadName] = useState("");
   const [uploadCategory, setUploadCategory] = useState("Identity");
   const [uploadPreview, setUploadPreview] = useState("");
   const [uploadFileLabel, setUploadFileLabel] = useState("");
   const [uploadError, setUploadError] = useState("");
-  const [letterPreview, setLetterPreview] = useState<string | null>(null);
 
   const canLetters = canManageLetters(demoProfile);
   const portalDocs = state.documents.filter((d) => d.employeeId === employee.id);
@@ -586,8 +577,6 @@ export function DocumentsLettersPage() {
     if (canLetters) return !category || d.category === category;
     return d.employeeId === employee.id && (!category || d.category === category);
   });
-
-  const letters = reward.letters.filter((l) => canViewLetter(demoProfile, l));
 
   const previewDoc = library.find((d) => d.id === previewId) ?? null;
   const categories = [...new Set(reward.library.map((d) => d.category))];
@@ -660,19 +649,6 @@ export function DocumentsLettersPage() {
     resetUpload();
   }
 
-  function moveLetter(id: string, status: LetterStatus) {
-    const error = setLetterStatus(demoProfile, id, status);
-    setLetterMsg(error ? { tone: "err", text: error } : { tone: "ok", text: `Letter moved to ${status}.` });
-  }
-
-  const letterActionLabel: Record<LetterStatus, string> = {
-    Draft: "Draft",
-    "Pending approval": "Submit",
-    Approved: "Approve",
-    Rejected: "Reject",
-    Issued: "Issue",
-  };
-
   return (
     <Page
       title="Documents & Letters"
@@ -695,7 +671,7 @@ export function DocumentsLettersPage() {
           { id: "library", label: "Document library" },
           { id: "letters", label: "Letters & templates" },
           { id: "history", label: "Request & approval history" },
-          { id: "personal", label: "My ESS documents" },
+          { id: "personal", label: "My letters & documents" },
         ]}
         value={tab}
         onChange={setTab}
@@ -744,7 +720,17 @@ export function DocumentsLettersPage() {
             ) : (
               <pre className="doc-preview-pre">{previewDoc.preview}</pre>
             )}
-            {previewDoc && (
+            {previewDoc?.letterId && (
+              <button
+                type="button"
+                className="btn"
+                style={{ marginTop: 8, marginRight: 8 }}
+                onClick={() => setOpenLetter({ letterId: previewDoc.letterId!, docId: previewDoc.docId })}
+              >
+                Open letter
+              </button>
+            )}
+            {previewDoc && !previewDoc.letterId && (
               <button
                 type="button"
                 className="btn-ghost"
@@ -765,122 +751,24 @@ export function DocumentsLettersPage() {
         </div>
       )}
 
-      {tab === "letters" && (
-        <div className="mgr-home-grid">
-          <Card title="Letter templates">
-            <DataTable
-              headers={["Type", "Description"]}
-              rows={LETTER_TEMPLATES.map((t) => [t.type, t.description])}
-            />
-            <form
-              className="stack"
-              style={{ marginTop: 12 }}
-              onSubmit={(e) => {
-                e.preventDefault();
-                const error = addLetterRequest(demoProfile, {
-                  employeeId: employee.id,
-                  employeeName: employee.fullName,
-                  type: letterType,
-                  note: letterNote.trim() || "No reason given",
-                });
-                if (error) {
-                  setLetterMsg({ tone: "err", text: error });
-                  return;
-                }
-                setLetterMsg({ tone: "ok", text: `${letterType} letter requested — sent to HR for approval.` });
-                setLetterNote("");
-                setTab("history");
-              }}
-            >
-              <Field label="Request letter type">
-                <select value={letterType} onChange={(e) => setLetterType(e.target.value as LetterType)}>
-                  {LETTER_TEMPLATES.map((t) => (
-                    <option key={t.type} value={t.type}>{t.type}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Note" wide>
-                <input value={letterNote} onChange={(e) => setLetterNote(e.target.value)} placeholder="Reason for request" />
-              </Field>
-              <button type="submit" className="btn">
-                Request letter
-              </button>
-            </form>
-          </Card>
-          <Card title="Letter workflow statuses">
-            <Banner message={letterMsg} />
-            <DataTable
-              headers={["Employee", "Type", "Status", "Preview", "Action"]}
-              rows={letters.map((l) => {
-                const next = nextLetterStatuses(demoProfile, l);
-                return [
-                  l.employeeName,
-                  l.type,
-                  <StatusBadge key={l.id} status={l.status} />,
-                  <button
-                    key={`${l.id}-p`}
-                    type="button"
-                    className="quiet-link"
-                    onClick={() => setLetterPreview(l.previewBody)}
-                  >
-                    View letter
-                  </button>,
-                  next.length === 0 ? (
-                    <span key={`${l.id}-a`} className="muted">—</span>
-                  ) : (
-                    <span key={`${l.id}-a`} className="reward-actions">
-                      {next.map((s) => (
-                        <button
-                          key={s}
-                          type="button"
-                          className={s === "Rejected" ? "btn-ghost" : "btn"}
-                          onClick={() => moveLetter(l.id, s)}
-                        >
-                          {letterActionLabel[s]}
-                        </button>
-                      ))}
-                    </span>
-                  ),
-                ];
-              })}
-            />
-          </Card>
-        </div>
-      )}
+      {tab === "letters" && <LetterRequestsPanel actor={demoProfile} onOpen={setOpenLetter} />}
 
-      {tab === "history" && (
-        <Card title="Request and approval history">
-          <Banner message={letterMsg} />
-          <DataTable
-            headers={["Requested", "Employee", "Type", "By", "Status", "Approver", "Decided", "Note"]}
-            rows={letters.map((l) => [
-              l.requestedOn,
-              l.employeeName,
-              l.type,
-              l.requestedBy,
-              <StatusBadge key={l.id} status={l.status} />,
-              l.approver ?? "—",
-              l.decidedOn ?? "—",
-              l.note,
-            ])}
-            empty={<EmptyState title="No letter requests" />}
-          />
-        </Card>
-      )}
+      {tab === "history" && <LetterHistoryPanel actor={demoProfile} onOpen={setOpenLetter} />}
 
       {tab === "personal" && (
-        <Card title="My documents">
-          <DataTable
-            headers={["Name", "Category", "Type", "Expires"]}
-            rows={portalDocs.map((d) => [d.name, d.category, d.docType, d.expires || "None"])}
-            empty={<EmptyState title="No ESS documents" />}
-          />
-        </Card>
+        <>
+          <MyLettersPanel actor={demoProfile} onOpen={setOpenLetter} />
+          <Card title="My documents">
+            <DataTable
+              headers={["Name", "Category", "Type", "Expires"]}
+              rows={portalDocs.map((d) => [d.name, d.category, d.docType, d.expires || "None"])}
+              empty={<EmptyState title="No ESS documents" />}
+            />
+          </Card>
+        </>
       )}
 
-      <Dialog open={!!letterPreview} title="Letter preview" onClose={() => setLetterPreview(null)}>
-        <pre className="doc-preview-pre">{letterPreview}</pre>
-      </Dialog>
+      <LetterViewerDialog actor={demoProfile} open={openLetter} onClose={() => setOpenLetter(null)} />
 
       <Dialog open={uploadOpen} title="Upload document" onClose={() => setUploadOpen(false)}>
         <form className="stack" onSubmit={saveUpload}>

@@ -1174,14 +1174,28 @@ export function validateEncashment(
   return null;
 }
 
+/** True when approved leave covers the whole day (a half day still leaves the other half for work). */
 export function blockingLeave(requests: LeaveRequest[], employeeId: string, date: string): boolean {
   return requests.some(
     (request) =>
       request.employeeId === employeeId &&
       request.status === "approved" &&
       !WORKING_LEAVE.includes(request.code) &&
+      !request.half &&
       request.from <= date &&
       date <= request.to,
+  );
+}
+
+/** Approved half-day leave on this date, if any. */
+export function halfDayLeave(requests: LeaveRequest[], employeeId: string, date: string): LeaveRequest | undefined {
+  return requests.find(
+    (request) =>
+      request.employeeId === employeeId &&
+      request.status === "approved" &&
+      !WORKING_LEAVE.includes(request.code) &&
+      Boolean(request.half) &&
+      request.from === date,
   );
 }
 
@@ -1214,6 +1228,9 @@ export function validateTimesheet(
     if (dates.has(date) && value > 0) return `${formatLongDate(date)} is a holiday.`;
     if (blockingLeave(state.leaveRequests, employeeId, date) && value > 0) {
       return `${formatLongDate(date)} is approved leave.`;
+    }
+    if (halfDayLeave(state.leaveRequests, employeeId, date) && value + otherProjects > HALF_DAY_MAX_HOURS) {
+      return `${formatLongDate(date)} is a half day of leave — at most ${HALF_DAY_MAX_HOURS} hours.`;
     }
     if (state.absences.includes(date) && value > 0) return `${formatLongDate(date)} is marked absent.`;
     total += value;
@@ -1292,6 +1309,7 @@ export function attendanceOn(
   );
   if (leave?.code === "wfh") return { date, kind: "wfh", detail: "WFH" };
   if (leave?.code === "emergency_wfh") return { date, kind: "wfh", detail: "Emergency WFH" };
+  if (leave?.half) return { date, kind: "leave", detail: `Half-day leave (${leave.half} half)` };
   if (leave) return { date, kind: "leave", detail: "On leave" };
   const day = parseISODate(date).getDay();
   if (weeklyOffDays.includes(day)) return { date, kind: "weekend", detail: "Weekly Off" };
