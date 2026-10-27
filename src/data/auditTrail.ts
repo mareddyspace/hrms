@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { RETIRED_ACCOUNT_IDS, mentionsRetiredAccount } from "../demoAccounts.ts";
 
 /** One recorded change: who did what to which record, with the values before and after. */
 export interface AuditEntry {
@@ -24,7 +25,9 @@ function read(): AuditEntry[] {
   if (cache) return cache;
   try {
     const raw = localStorage.getItem(KEY);
-    cache = raw ? (JSON.parse(raw) as AuditEntry[]) : [];
+    const saved = raw ? (JSON.parse(raw) as AuditEntry[]) : [];
+    // Entries by or about a retired sign-in account (the Compensation persona) are dropped.
+    cache = saved.filter((e) => !RETIRED_ACCOUNT_IDS.has(e.actorId) && !mentionsRetiredAccount(e));
   } catch {
     cache = [];
   }

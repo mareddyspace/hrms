@@ -2,7 +2,7 @@
  * Infotech frontend RBAC — single source of truth for the 8 demo roles.
  * Frontend-only checks today; shape is ready for backend policy claims later.
  *
- * Roles: Employee · Manager · HR (incl. compensation & benefits) · Recruiter · Hiring Manager · Executive · Admin
+ * Roles: Employee · Manager · HR (incl. compensation & benefits) · Recruiter · Executive · Admin
  */
 import type { DemoAccount, NavAccessId, RbacFlags } from "../demoAccounts.ts";
 import { accountHasNavAccess } from "../demoAccounts.ts";
@@ -80,7 +80,6 @@ export function getProfileDepth(viewer: DemoAccount, ctx: SubjectContext): Profi
   }
 
   if (role === "manager" && ctx.isDirectReport) return "team";
-  if (role === "hiring_manager" && (ctx.isDirectReport || ctx.inRecruitingScope)) return "team";
 
   if (isExecutive(role)) return "basic";
   if (isAdminPlatform(role)) return "basic"; // system admin ≠ full HR dossier
@@ -109,7 +108,7 @@ export function canViewSensitivePii(viewer: DemoAccount, ctx: SubjectContext): b
   if (isSelf(ctx)) return true;
   const depth = getProfileDepth(viewer, ctx);
   if (depth === "full_hr") return true;
-  if (depth === "team" && (viewer.role === "manager" || viewer.role === "hiring_manager" || isHr(viewer.role))) {
+  if (depth === "team" && (viewer.role === "manager" || isHr(viewer.role))) {
     return true;
   }
   return false;
@@ -119,7 +118,7 @@ export function getPeopleListScope(viewer: DemoAccount): PeopleListScope {
   const role = viewer.role;
   if (isHr(role)) return "global";
   if (isExecutive(role)) return "org";
-  if (role === "manager" || role === "hiring_manager") return "team";
+  if (role === "manager") return "team";
   if (role === "recruiter") return "org"; // directory for hiring context — profiles still gated
   if (isAdminPlatform(role)) return "org"; // limited directory for admin ops
   // Everyone else with People access gets the basic company directory (see directoryFieldLevel).
@@ -135,7 +134,7 @@ export function getPeopleListScope(viewer: DemoAccount): PeopleListScope {
 export function directoryFieldLevel(viewer: DemoAccount): "basic" | "full" {
   const role = viewer.role;
   if (isHr(role) || isExecutive(role) || isAdminPlatform(role)) return "full";
-  if (role === "manager" || role === "hiring_manager") return "full";
+  if (role === "manager") return "full";
   return "basic";
 }
 
@@ -149,7 +148,6 @@ export function candidateAccess(viewer: DemoAccount, inRecruitingScope = true): 
   const role = viewer.role;
   if (role === "recruiter") return "full";
   if (isHr(role)) return "full";
-  if (role === "hiring_manager" && inRecruitingScope) return "full";
   if (isExecutive(role) && inRecruitingScope) return "masked";
   return "hidden";
 }
@@ -163,7 +161,7 @@ export function canViewCandidateProfile(viewer: DemoAccount, inRecruitingScope =
 /**
  * Individual salary / bonus amounts.
  * - Employee: own only (masked display of figures is still allowed as "full" for own slip UI)
- * - Manager / Recruiter / Hiring Manager: never by default
+ * - Manager / Recruiter: never by default
  * - HR: when hrCompAuthorized (default true in demo)
  * - Executive: only when salaryAuthorized flag is true
  * - Finance: authorized full (compensation & benefits sit with HR)
@@ -189,7 +187,7 @@ export function getSalaryVisibility(viewer: DemoAccount, ctx: SubjectContext): V
   }
 
   // Explicit denials
-  if (role === "manager" || role === "recruiter" || role === "hiring_manager") return "hidden";
+  if (role === "manager" || role === "recruiter") return "hidden";
   if (isAdminPlatform(role)) return "hidden"; // platform admin ≠ pay access
   if (role === "employee") return "hidden";
 
@@ -206,20 +204,20 @@ export function canViewCompensationModule(viewer: DemoAccount): boolean {
   if (isHr(role) && rbacFlags(viewer).hrCompAuthorized !== false) return true;
   if (isExecutive(role) && rbacFlags(viewer).salaryAuthorized) return true;
   // Managers may see non-amount structures only via separate helper — module entry for structures
-  if (role === "manager" || role === "hiring_manager") return accountHasNavAccess(viewer, "compensation");
+  if (role === "manager") return accountHasNavAccess(viewer, "compensation");
   return accountHasNavAccess(viewer, "compensation");
 }
 
 export function canViewCompStructures(viewer: DemoAccount): boolean {
   const role = viewer.role;
   if (role === "finance" || isHr(role)) return true;
-  if (role === "manager" || role === "hiring_manager" || isExecutive(role)) return true;
+  if (role === "manager" || isExecutive(role)) return true;
   return accountHasNavAccess(viewer, "compensation");
 }
 
 /** Final compensation approval sits with HR (compensation & benefits). Never for one's own item — callers check the subject. */
 export function canApproveCompReviews(viewer: DemoAccount): boolean {
-  return isHr(viewer.role) && rbacFlags(viewer).hrCompAuthorized !== false;
+  return (viewer.role === "hr" || viewer.role === "hr_admin") && rbacFlags(viewer).hrCompAuthorized !== false;
 }
 
 /* ───────────── Reports ───────────── */
@@ -237,8 +235,6 @@ export function getReportScopes(viewer: DemoAccount): ReportScope[] {
       return ["self", "team", "hr", "compensation", "company"];
     case "recruiter":
       return ["self", "recruiting"];
-    case "hiring_manager":
-      return ["self", "team", "hiring"];
     case "executive":
     case "founder":
     case "cofounder":
@@ -302,7 +298,7 @@ export function rbacPolicySummary(viewer: DemoAccount): string {
         : "Salary / payslips not authorized for this executive."
       : viewer.role === "admin" || viewer.role === "it_admin"
         ? "Admin manages settings — no automatic salary access."
-        : viewer.role === "manager" || viewer.role === "recruiter" || viewer.role === "hiring_manager"
+        : viewer.role === "manager" || viewer.role === "recruiter"
           ? "Own payslips allowed; team/colleague salary & slips stay blocked."
           : isHr(viewer.role)
             ? "HR owns compensation & benefits — authorized pay access (never approves own pay)."

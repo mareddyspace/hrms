@@ -222,7 +222,7 @@ function RequestRow({ request, me }: { request: FeedbackItem; me: TalentActor })
       <strong>{request.fromName} asks:</strong>
       <p>{request.message}</p>
       <div className="row-gap">
-        <input
+        <input aria-label="Your feedback"
           value={reply}
           onChange={(e) => setReply(e.target.value)}
           placeholder="Your feedback (sent privately)…"
@@ -454,7 +454,7 @@ function ChecklistSection({
         ))}
       </ul>
       <form className="row-gap" onSubmit={add}>
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder={`Add ${title.toLowerCase()}…`} style={{ flex: 1 }} />
+        <input aria-label={`Add ${title.toLowerCase()}`} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Add ${title.toLowerCase()}…`} style={{ flex: 1 }} />
         <button type="submit" className="btn-ghost btn-tiny">
           Add
         </button>

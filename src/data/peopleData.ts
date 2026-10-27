@@ -1,7 +1,6 @@
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import { TIMEZ_COUNTRIES, type CountryCode } from "../model.ts";
 import {
-  COUNTRY_HEAD_TITLE,
   DEPARTMENT_CODE,
   DEPARTMENTS,
   DIVISION_BY_DEPARTMENT,
@@ -12,8 +11,6 @@ import {
   TEAMMATES,
   buildTimezWorkforce,
   gradeForTitle,
-  headTitle,
-  type WorkforceRow,
 } from "../workforce.ts";
 import {
   NATIONALITY_BY_COUNTRY,
@@ -274,7 +271,6 @@ const NAMED_PEOPLE: Record<string, { gender: string; dateOfJoining: string }> = 
   "demo-ceo": { gender: "Male", dateOfJoining: "2012-03-01" },
   "emp-ram": { gender: "Male", dateOfJoining: "2014-06-16" },
   "demo-hr-admin": { gender: "Male", dateOfJoining: "2015-01-12" },
-  "demo-hiring-manager": { gender: "Male", dateOfJoining: "2017-08-07" },
   "demo-recruiter": { gender: "Female", dateOfJoining: "2018-02-05" },
   "emp-mahesh": { gender: "Male", dateOfJoining: "2019-05-13" },
   "demo-admin": { gender: "Female", dateOfJoining: "2020-01-20" },
@@ -284,31 +280,23 @@ function countryByCode(code: string) {
   return TIMEZ_COUNTRIES.find((c) => c.code === code) ?? TIMEZ_COUNTRIES[0];
 }
 
-/** Personas whose manager is another persona (team members below a persona department head). */
-const PERSONA_FIXED_MANAGER: Record<string, string> = {
+/**
+ * Reporting line for the sign-in personas. It runs only through other sign-in personas so approvals and the org
+ * chart stay within the six accounts: Jordan (CEO) → Farhan → Sophie; Jordan → Ram → Babu; Jordan → Alex.
+ * The generated Country Managers keep reporting to the CEO with their own generated teams.
+ */
+const PERSONA_MANAGER: Record<string, string> = {
+  "demo-ceo": "",
+  "demo-hr-admin": "demo-ceo",
+  "emp-ram": "demo-ceo",
+  "demo-admin": "demo-ceo",
   "emp-mahesh": "emp-ram",
   "demo-recruiter": "demo-hr-admin",
 };
 const CEO_ID = "demo-ceo";
 
-/**
- * Reporting line for personas: CEO → Country Manager → department head → team lead → staff.
- * A persona department head (Ram, Farhan, Daniel) reports to their country's Country Manager; a persona in a
- * department with a generated head reports to that head; otherwise to the Country Manager.
- */
-function personaManagerId(account: (typeof DEMO_ACCOUNTS)[number], workforce: WorkforceRow[]): string {
-  if (account.id === CEO_ID) return "";
-  // A Country Manager account holds a generated seat: keep that seat's manager (the CEO).
-  const seat = workforce.find((w) => w.id === account.id);
-  if (seat) return seat.managerId;
-  const fixed = PERSONA_FIXED_MANAGER[account.id];
-  if (fixed) return fixed;
-  const countryCode = account.countryCode ?? "IN";
-  const department = account.department ?? "";
-  const deptHead = workforce.find((w) => w.countryCode === countryCode && w.designation === headTitle(department));
-  if (deptHead) return deptHead.id;
-  const countryHead = workforce.find((w) => w.countryCode === countryCode && w.designation === COUNTRY_HEAD_TITLE);
-  return countryHead?.id ?? CEO_ID;
+function personaManagerId(account: (typeof DEMO_ACCOUNTS)[number]): string {
+  return PERSONA_MANAGER[account.id] ?? (account.id === CEO_ID ? "" : CEO_ID);
 }
 
 function positionIdFor(department: string, countryCode: string, employeeCode: string): string {
@@ -364,11 +352,8 @@ function buildBasePeople(): PersonRecord[] {
     const country = countryByCode(account.countryCode ?? "IN");
     const department = account.department ?? "Engineering";
     const family = familyForDepartment(department);
-    const managerId = personaManagerId(account, workforce);
-    // Accounts that hold a generated directory seat (Country Managers) keep that seat's facts and position.
-    const seat = workforce.find((w) => w.id === account.id);
-    const facts = NAMED_PEOPLE[account.id] ??
-      (seat ? { gender: seat.gender, dateOfJoining: seat.dateOfJoining } : { gender: "Unspecified", dateOfJoining: "2020-01-06" });
+    const managerId = personaManagerId(account);
+    const facts = NAMED_PEOPLE[account.id] ?? { gender: "Unspecified", dateOfJoining: "2020-01-06" };
     return {
       id: account.id,
       employeeCode: account.employeeCode,
@@ -384,8 +369,8 @@ function buildBasePeople(): PersonRecord[] {
       designation: account.designation,
       jobFamily: family,
       jobProfileId: jobProfileFor(account.designation, family)?.id ?? "",
-      positionId: seat?.positionId ?? positionIdFor(department, country.code, account.employeeCode),
-      grade: seat?.grade ?? gradeForTitle(account.designation),
+      positionId: positionIdFor(department, country.code, account.employeeCode),
+      grade: gradeForTitle(account.designation),
       department,
       division: divisionForDepartment(department),
       businessUnit: `Infotech ${country.name}`,
@@ -396,7 +381,7 @@ function buildBasePeople(): PersonRecord[] {
       legalEntity: account.legalEntity ?? LEGAL_BY_COUNTRY[country.code],
       managerId,
       managerName: managerId ? nameById.get(managerId) ?? "" : "",
-      availability: seat?.availability ?? "In Office",
+      availability: "In Office",
       timeZone: account.timeZone,
       currency: account.currency ?? country.currency,
       address: account.address,

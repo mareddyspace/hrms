@@ -52,6 +52,8 @@ export const navGroups: readonly NavGroup[] = [
       { id: "notifications", label: "Notifications", to: "/notifications", badgeKey: "/notifications" },
       { id: "announcements", label: "Announcements", to: "/announcements" },
       { id: "help", label: "Helpdesk", to: "/help" },
+      // Approvals sits under Help desk and is shown to the admin only; others approve from their Home.
+      { id: "approvalsmenu", label: "Approvals", to: "/approvals", badgeKey: "/approvals" },
     ],
   },
   {
@@ -89,7 +91,6 @@ export const navGroups: readonly NavGroup[] = [
     label: "Team",
     links: [
       { id: "team", label: "Team overview", to: "/team" },
-      { id: "inbox", label: "Approvals", to: "/approvals", badgeKey: "/approvals" },
       { id: "workflows", label: "Workflows", to: "/workflows" },
       { id: "probationreviews", label: "Probation reviews", to: "/team/probation" },
       { id: "teamexits", label: "Team exits", to: "/team/exits" },
@@ -173,8 +174,6 @@ export function roleLabel(role: UserRole): string {
       return "HR Business Partner";
     case "recruiter":
       return "Recruiter";
-    case "hiring_manager":
-      return "Hiring Manager";
     case "executive":
       return "Executive";
     case "founder":
@@ -185,8 +184,6 @@ export function roleLabel(role: UserRole): string {
       return "Learning Administrator";
     case "performance_admin":
       return "Performance Administrator";
-    case "compensation_admin":
-      return "Compensation";
     case "finance":
       return "Finance User";
     case "it_admin":

@@ -508,7 +508,7 @@ export function MyExitPage() {
   const history = mine.filter((c) => c !== current);
 
   return (
-    <Page title="My exit">
+    <Page title="Resignation">
       <Banner message={message} />
       {!current && <ResignationForm actor={actor} onMessage={setMessage} />}
       {current && (

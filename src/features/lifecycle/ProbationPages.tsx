@@ -13,7 +13,7 @@ import {
   Tabs,
 } from "../../components/ui.tsx";
 import { getPerson, listPeople, subscribePeople } from "../../data/peopleLocal.ts";
-import { formatShortDate } from "../../model.ts";
+import { formatShortDate, plural } from "../../model.ts";
 import { usePortal } from "../../store.tsx";
 import { PROBATION_POLICY, isHrRole, probationLabel } from "./lifecycleShared.ts";
 import {
@@ -101,7 +101,7 @@ export function MyProbationPage() {
           {(view.status === "In probation" || view.status === "Review pending HR") && (
             <div>
               <dt>Time left</dt>
-              <dd>{view.overdue ? "Review overdue" : `${view.daysLeft} days`}</dd>
+              <dd>{view.overdue ? "Review overdue" : plural(view.daysLeft, "day")}</dd>
             </div>
           )}
           {lastDecision?.decidedOn && (
@@ -229,7 +229,7 @@ function FinaliseForm({ view, onDone }: { view: ProbationView; onDone: (m: Messa
     if (warning) onDone({ tone: "warn", text: warning });
     else if (decision === "return") onDone({ tone: "ok", text: "Review returned to the manager." });
     else if (review!.recommendation === "Confirm") onDone({ tone: "ok", text: `${view.person.fullName} confirmed. Confirmation letter requested.` });
-    else if (review!.recommendation === "Extend") onDone({ tone: "ok", text: `Probation extended by ${review!.extendMonths} month(s).` });
+    else if (review!.recommendation === "Extend") onDone({ tone: "ok", text: `Probation extended by ${plural(review!.extendMonths ?? 0, "month")}.` });
     else onDone({ tone: "ok", text: `${view.person.fullName} marked not confirmed. Exit started.` });
   }
 
@@ -241,7 +241,7 @@ function FinaliseForm({ view, onDone }: { view: ProbationView; onDone: (m: Messa
           <dt>Recommendation</dt>
           <dd>
             {review.recommendation}
-            {review.recommendation === "Extend" ? ` · ${review.extendMonths} month(s)` : ""}
+            {review.recommendation === "Extend" ? ` · ${plural(review.extendMonths ?? 0, "month")}` : ""}
           </dd>
         </div>
         <div>

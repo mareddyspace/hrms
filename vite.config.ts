@@ -24,6 +24,8 @@ function spaFallback(): Plugin {
 }
 
 export default defineConfig({
+  // Changes on every build, so the app can tell when a new version is deployed.
+  define: { __APP_BUILD__: JSON.stringify(String(Date.now())) },
   plugins: [react(), spaFallback()],
   server: {
     port: 5173,

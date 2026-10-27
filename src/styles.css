@@ -2977,6 +2977,8 @@ html[data-theme="night"] .help-ticket-btn:hover {
   font-weight: 600;
   letter-spacing: 0.02em;
 }
+.data-table th.num,
+.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .data-table tr:last-child td { border-bottom: 0; }
 .data-table tbody tr:hover { background: var(--surface-hover); }
 .filter-bar {
@@ -6375,3 +6377,63 @@ html[data-motion="reduced"] *::after {
   place-items: center;
   color: var(--muted);
 }
+
+/* —— Night theme: tint pills, badges and calendar chips from tokens instead of light pastels —— */
+html[data-theme="night"] .status-badge.ok,
+html[data-theme="night"] .pill-verified,
+html[data-theme="night"] .pill-done,
+html[data-theme="night"] .att-pill,
+html[data-theme="night"] .day.present,
+html[data-theme="night"] .directory-table tbody tr.selected {
+  background: color-mix(in srgb, var(--ok) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--card));
+}
+html[data-theme="night"] .status-badge.warn,
+html[data-theme="night"] .att-pill.leave,
+html[data-theme="night"] .day.missing_punch {
+  background: color-mix(in srgb, var(--warn) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--card));
+  color: var(--warn);
+}
+html[data-theme="night"] .status-badge.danger,
+html[data-theme="night"] .pill-missing,
+html[data-theme="night"] .pill-high,
+html[data-theme="night"] .pill-urgent,
+html[data-theme="night"] .att-pill.absent,
+html[data-theme="night"] .profile-left-chip {
+  background: color-mix(in srgb, var(--danger) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--card));
+  color: var(--danger);
+}
+html[data-theme="night"] .status-badge.info,
+html[data-theme="night"] .att-pill.wfh {
+  background: color-mix(in srgb, var(--info) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--info) 35%, var(--card));
+  color: var(--info);
+}
+html[data-theme="night"] .att-pill.weekend,
+html[data-theme="night"] .day.not_checked_in,
+html[data-theme="night"] .avatar,
+html[data-theme="night"] .task-cal-chip.low {
+  background: var(--soft);
+  border-color: var(--line);
+  color: var(--muted);
+}
+html[data-theme="night"] .task-cal-chip,
+html[data-theme="night"] .task-cal-chip.medium { background: var(--accent-soft); color: var(--accent); }
+html[data-theme="night"] .task-cal-chip.urgent { background: color-mix(in srgb, var(--danger) 18%, var(--card)); color: var(--danger); }
+html[data-theme="night"] .task-cal-chip.high { background: color-mix(in srgb, var(--warn) 18%, var(--card)); color: var(--warn); }
+html[data-theme="night"] .cal-mini.holiday,
+html[data-theme="night"] .cal-pill.holiday { background: var(--cal-holiday); color: var(--info); }
+html[data-theme="night"] .cal-mini.leave,
+html[data-theme="night"] .cal-pill.leave,
+html[data-theme="night"] .cal-mini.reminder,
+html[data-theme="night"] .cal-pill.reminder { background: var(--cal-leave); color: var(--warn); }
+html[data-theme="night"] .cal-mini.wfh,
+html[data-theme="night"] .cal-pill.wfh,
+html[data-theme="night"] .cal-mini.ip_day,
+html[data-theme="night"] .cal-pill.ip_day { background: var(--cal-wfh); color: var(--ok); }
+html[data-theme="night"] .todo .ok { color: var(--ok); }
+
+/* Search fields hide the input outline, so show focus on the wrapper. */
+.topbar-search:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }

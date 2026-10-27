@@ -521,7 +521,7 @@ function recruitingAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer {
 }
 
 function approvalsAnswer(ctx: CopilotContext): RawCopilotAnswer {
-  const links = [{ label: "Open Approvals", to: "/approvals" }];
+  const links = [{ label: "Open approvals", to: "/approvals" }];
   if (!ctx.approvalsCount) return { kind: "text", summary: `Nothing is waiting on you. ${NO_DECISIONS}`, links };
   const rows = ctx.approvals.slice(0, 8);
   return {
@@ -613,7 +613,7 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
   const target = summaryTarget(question);
   if (target) return personSummaryAnswer(target, ctx)!;
 
-  // Somebody else's pay: only Compensation sees it, and never in chat.
+  // Somebody else's pay: only HR (compensation & benefits) sees it, and never in chat.
   const payWord = hasWord(q, ["salary", "pay", "ctc", "payslip", "earn", "earns", "earning", "package", "compensation"]);
   const otherPay = payWord && !self && (/\b(salary|pay|ctc|payslip|package|compensation) (of|for) [a-z]+/.test(q) || /\b[a-z]+s (salary|pay|ctc|payslip|package)\b/.test(q) || /\bdoes [a-z]+ (earn|make|get)\b/.test(q));
   const payOf =
@@ -622,10 +622,10 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
     q.match(/\bdoes ([a-z]+) (?:earn|make|get)\b/)?.[1];
   if (otherPay && payOf && ctx.firstName && payOf === ctx.firstName.toLowerCase()) return payslipAnswer(q, ctx);
   if (otherPay && !/\b(my|your|our)s? (salary|pay)/.test(q)) {
-    const comp = ctx.viewer.role === "compensation_admin" || ctx.viewer.role === "super_admin";
+    const comp = ctx.viewer.role === "hr" || ctx.viewer.role === "hr_admin" || ctx.viewer.role === "super_admin";
     return comp
       ? { kind: "text", summary: "I don't show individual pay in chat. Open Compensation to see it.", links: [{ label: "Compensation", to: "/compensation" }] }
-      : { kind: "text", summary: "I can't share anyone else's pay — only the person and Compensation can see it.", links: [{ label: "My payslips", to: "/payslips" }] };
+      : { kind: "text", summary: "I can't share anyone else's pay — only the person and HR can see it.", links: [{ label: "My payslips", to: "/payslips" }] };
   }
 
   // "<Name>'s leave / manager / goals …": Copilot only answers these about the asker.
@@ -909,7 +909,7 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
       requires: "integrations",
       summary: "Connector status and retries are in Integration Center; the audit log is in Administration.",
       links: [
-        { label: "Integration Center", to: "/integrations" },
+        { label: "Integrations", to: "/integrations" },
         { label: "Administration", to: "/admin" },
       ],
     };

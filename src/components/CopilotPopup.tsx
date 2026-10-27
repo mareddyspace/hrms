@@ -157,7 +157,7 @@ export function CopilotPopup() {
           )}
 
           <form className="copilot-fab-compose" onSubmit={onSubmit}>
-            <textarea
+            <textarea aria-label="Ask Copilot"
               ref={inputRef}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}

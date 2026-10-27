@@ -281,7 +281,7 @@ export function CalendarPage() {
             <span className="cal-pill leave">Leave</span>
             <span className="cal-pill wfh">WFH</span>
             <span className="cal-pill note">My notes</span>
-            <span className="cal-pill weekly-off">Weekly Off</span>
+            <span className="cal-pill weekly-off">Weekly off</span>
           </div>
 
           <div className="work-cal" role="grid" aria-label="Month calendar">
@@ -301,7 +301,7 @@ export function CalendarPage() {
                 isPrimaryWeeklyOffLabel(cell, schedule.weeklyOffDays);
               const tip = [
                 formatLongDate(cell),
-                weeklyOff ? `Weekly Off (${schedule.weeklyOffLabels.join(", ")})` : schedule.hoursLabel,
+                weeklyOff ? `Weekly off (${schedule.weeklyOffLabels.join(", ")})` : schedule.hoursLabel,
                 ...events.map((e) => e.title),
               ].join(" · ");
               return (
@@ -315,11 +315,11 @@ export function CalendarPage() {
                   <strong>{Number(cell.slice(-2))}</strong>
                   <ul className="work-cal-labels">
                     {pills.map((p) => (
-                      <li key={`${p.kind}-${p.text}`} className={`cal-mini ${p.kind}`}>
+                      <li key={`${p.kind}-${p.text}`} className={`cal-mini ${p.kind}`} title={p.text}>
                         {p.text}
                       </li>
                     ))}
-                    {showOffLabel && <li className="cal-mini weekly-off">Weekly Off</li>}
+                    {showOffLabel && <li className="cal-mini weekly-off">Weekly off</li>}
                   </ul>
                 </button>
               );
@@ -333,7 +333,7 @@ export function CalendarPage() {
         <div className="stack">
           <Card title={formatLongDate(selected)}>
             {selectedIsOff && dayEvents.length === 0 ? (
-              <p className="note">Weekly Off ({schedule.weeklyOffLabels.join(", ")})</p>
+              <p className="note">Weekly off ({schedule.weeklyOffLabels.join(", ")})</p>
             ) : null}
             {dayEvents.length === 0 && !selectedIsOff ? (
               <EmptyState title="Nothing scheduled" />

@@ -1,13 +1,12 @@
 export { HelpPage } from "./CollabModules.tsx";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { DEMO_MODE } from "../demoMode.ts";
 import type { FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { COMPANY_NAME, PRODUCT_TAGLINE } from "../brand.ts";
-import { HeadsetIcon, LifeRingIcon, SearchIcon } from "../components/icons.tsx";
 import { Banner, Card, Field, Page } from "../components/ui.tsx";
-import { groupDemoAccounts, type DemoAccount } from "../demoAccounts.ts";
+import type { DemoAccount } from "../demoAccounts.ts";
 import { maskEmail, maskMobile } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
@@ -27,10 +26,9 @@ export function LoginPage() {
     rememberedEmail,
   } = usePortal();
   const navigate = useNavigate();
-  // The main personas show first; the eight country managers stay folded away until asked for.
-  const [showCountryManagers, setShowCountryManagers] = useState(false);
-  const countryManagers = demoAccounts.filter((a) => a.personaLabel.startsWith("Country Manager"));
-  const mainAccounts = demoAccounts.filter((a) => !a.personaLabel.startsWith("Country Manager"));
+  useEffect(() => {
+    document.title = `Sign in · ${COMPANY_NAME}`;
+  }, []);
   const [mode, setMode] = useState<"login" | "forgot">("login");
   const [email, setEmail] = useState(rememberedEmail ?? "");
   const [password, setPassword] = useState("");
@@ -228,15 +226,10 @@ export function LoginPage() {
           <aside className="login-demo-panel" aria-label="Development accounts">
             <div className="login-demo-head">
               <h2>Development accounts</h2>
-              <p>{mainAccounts.length} main accounts</p>
+              <p>{demoAccounts.length} accounts</p>
             </div>
-            {groupDemoAccounts(showCountryManagers ? demoAccounts : mainAccounts).map(({ group, accounts }) => (
-            <section key={group} aria-label={group} style={{ marginBottom: 14 }}>
-            <h3 style={{ margin: "0 0 8px", fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--muted)" }}>
-              {group} · {accounts.length}
-            </h3>
             <div className="login-demo-grid">
-              {accounts.map((account) => (
+              {demoAccounts.map((account) => (
                 <article key={account.id} className="login-demo-card">
                   <div>
                     <strong>{account.personaLabel}</strong>
@@ -260,13 +253,6 @@ export function LoginPage() {
                 </article>
               ))}
             </div>
-            </section>
-            ))}
-            {countryManagers.length > 0 && (
-              <button type="button" className="btn-ghost btn-tiny" onClick={() => setShowCountryManagers((v) => !v)}>
-                {showCountryManagers ? "Hide country managers" : `Show ${countryManagers.length} country managers`}
-              </button>
-            )}
           </aside>
           )}
         </div>
@@ -385,260 +371,9 @@ export function LoginPage() {
   );
 }
 
-const HELP_TOPICS = ["All", "Leave", "Attendance", "Payroll", "Timesheets", "Profile"] as const;
-type HelpTopic = (typeof HELP_TOPICS)[number];
-
-type HelpArticle = {
-  id: string;
-  topic: Exclude<HelpTopic, "All">;
-  question: string;
-  answer: string;
-};
-
-const HELP_ARTICLES: HelpArticle[] = [
-  {
-    id: "leave-apply",
-    topic: "Leave",
-    question: "How do I apply for leave?",
-    answer:
-      "Open Leave & time → Leave. Choose the leave type and dates, then submit. Your manager approves or rejects it under Approvals. After approval, the home leave balance updates from that same request.",
-  },
-  {
-    id: "attendance-fix",
-    topic: "Attendance",
-    question: "How can I correct missing attendance?",
-    answer:
-      "Open Leave & time → Attendance to review the company calendar. For a missing day, raise a support ticket so HR can review it.",
-  },
-  {
-    id: "payslip-download",
-    topic: "Payroll",
-    question: "Where can I download my payslip?",
-    answer:
-      "Open Pay → Payslips, open a month, then use Download or Print.",
-  },
-  {
-    id: "timesheet-submit",
-    topic: "Timesheets",
-    question: "How do I submit a timesheet?",
-    answer:
-      "Open Leave & time → Timesheet. Enter hours against your projects, then submit the week for manager approval.",
-  },
-  {
-    id: "profile-update",
-    topic: "Profile",
-    question: "How do I update my profile?",
-    answer:
-      "Open Documents → My details, or use Edit on the home profile card. A verification code is sent when you save contact changes.",
-  },
-  {
-    id: "leave-balance",
-    topic: "Leave",
-    question: "Why did my leave balance change?",
-    answer:
-      "Approved requests and leave encashment both reduce your balance.",
-  },
-  {
-    id: "payroll-expense",
-    topic: "Payroll",
-    question: "How do I claim an expense?",
-    answer:
-      "Open Pay → Expenses. Submit a date, category, amount, project, and short note for approval.",
-  },
-  {
-    id: "profile-demo",
-    topic: "Profile",
-    question: "How do I restore the original data?",
-    answer:
-      "Use Reset data under Help.",
-  },
-];
-
-export function LegacyHelpPage() {
-  const { resetDemo } = usePortal();
-  const [query, setQuery] = useState("");
-  const [topic, setTopic] = useState<HelpTopic>("All");
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [ticketOpen, setTicketOpen] = useState(false);
-  const [ticketSubject, setTicketSubject] = useState("");
-  const [ticketBody, setTicketBody] = useState("");
-  const [ticketMessage, setTicketMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const [resetDone, setResetDone] = useState(false);
-
-  useEffect(() => {
-    document.title = `Help Center · ${COMPANY_NAME}`;
-  }, []);
-
-  const articles = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return HELP_ARTICLES.filter((item) => {
-      if (topic !== "All" && item.topic !== topic) return false;
-      if (!needle) return true;
-      return (
-        item.question.toLowerCase().includes(needle) ||
-        item.answer.toLowerCase().includes(needle) ||
-        item.topic.toLowerCase().includes(needle)
-      );
-    });
-  }, [query, topic]);
-
-  function submitTicket(event: FormEvent) {
-    event.preventDefault();
-    if (!ticketSubject.trim() || !ticketBody.trim()) {
-      setTicketMessage({ tone: "err", text: "Add a subject and a short description." });
-      return;
-    }
-    setTicketMessage({ tone: "ok", text: "Support ticket submitted." });
-    setTicketSubject("");
-    setTicketBody("");
-  }
-
-  return (
-    <section className="help-center">
-      <header className="help-hero">
-        <div className="help-hero-title">
-          <span className="help-hero-icon" aria-hidden>
-            <LifeRingIcon />
-          </span>
-          <div>
-            <h1>Help Center</h1>
-            <p>How can we help you today?</p>
-          </div>
-        </div>
-        <label className="help-search">
-          <SearchIcon />
-          <span className="sr-only">Search help</span>
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search articles, questions..."
-          />
-        </label>
-      </header>
-
-      <div className="help-body">
-        <h2 className="help-section-title">Browse help topics</h2>
-        <div className="help-topics" role="tablist" aria-label="Help topics">
-          {HELP_TOPICS.map((item) => (
-            <button
-              key={item}
-              type="button"
-              role="tab"
-              aria-selected={topic === item}
-              className={topic === item ? "help-topic active" : "help-topic"}
-              onClick={() => {
-                setTopic(item);
-                setOpenId(null);
-              }}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
-
-        <div className="help-faq" role="list">
-          {articles.length === 0 ? (
-            <p className="empty">No articles match that search. Try another topic or raise a ticket.</p>
-          ) : (
-            articles.map((item) => {
-              const open = openId === item.id;
-              return (
-                <div key={item.id} className={open ? "help-faq-item open" : "help-faq-item"} role="listitem">
-                  <button
-                    type="button"
-                    className="help-faq-trigger"
-                    aria-expanded={open}
-                    onClick={() => setOpenId(open ? null : item.id)}
-                  >
-                    <span>
-                      <strong>{item.question}</strong>
-                      <small>{item.topic}</small>
-                    </span>
-                    <span className="help-faq-chevron" aria-hidden>
-                      ▾
-                    </span>
-                  </button>
-                  {open && <div className="help-faq-answer">{item.answer}</div>}
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        <div className="help-support">
-          <div className="help-support-copy">
-            <span className="help-support-icon" aria-hidden>
-              <HeadsetIcon />
-            </span>
-            <div>
-              <strong>Still need help?</strong>
-              <p>Submit your issue to the support team.</p>
-            </div>
-          </div>
-          <button className="help-ticket-btn" type="button" onClick={() => setTicketOpen(true)}>
-            Raise a Support Ticket
-          </button>
-        </div>
-
-        <div className="help-demo-row">
-          <button
-            className="btn-ghost"
-            type="button"
-            onClick={() => {
-              resetDemo();
-              setResetDone(true);
-            }}
-          >
-            Reset data
-          </button>
-          {resetDone && <span className="note ok">Data restored.</span>}
-        </div>
-      </div>
-
-      {ticketOpen && (
-        <div className="modal-root" role="presentation">
-          <button className="modal-scrim" type="button" aria-label="Close" onClick={() => setTicketOpen(false)} />
-          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="help-ticket-title">
-            <h2 id="help-ticket-title">Raise a Support Ticket</h2>
-            <form onSubmit={submitTicket}>
-              <div className="form-grid">
-                <Field label="Subject" wide>
-                  <input
-                    value={ticketSubject}
-                    onChange={(event) => setTicketSubject(event.target.value)}
-                    placeholder="e.g. Missing attendance on 10 Oct"
-                  />
-                </Field>
-                <Field label="Details" wide>
-                  <textarea
-                    rows={4}
-                    value={ticketBody}
-                    onChange={(event) => setTicketBody(event.target.value)}
-                    placeholder="What happened, and what do you need?"
-                  />
-                </Field>
-              </div>
-              <Banner message={ticketMessage} />
-              <div className="form-actions">
-                <button className="btn-ghost" type="button" onClick={() => setTicketOpen(false)}>
-                  Cancel
-                </button>
-                <button className="btn" type="submit">
-                  Submit ticket
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
 export function TermsPage() {
   return (
-    <Page title="Terms & Conditions">
+    <Page title="Terms & conditions">
       <Card>
         <div className="prose">
           <p>{COMPANY_NAME} is your employee portal. It is not a payroll, tax, or attendance system of record until those records are connected.</p>

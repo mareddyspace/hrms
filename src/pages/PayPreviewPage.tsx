@@ -12,8 +12,8 @@ import { usePortal } from "../store.tsx";
 import { TEAMMATES } from "../workforce.ts";
 import { PayslipBody, PayslipHead } from "./PayslipsPage.tsx";
 
-/** Only these roles may see other people's pay. */
-const PREVIEW_ROLES = new Set(["hr_admin", "compensation_admin"]);
+/** Only HR (which owns compensation & benefits) may see other people's pay. */
+const PREVIEW_ROLES = new Set(["hr", "hr_admin"]);
 
 interface PreviewPerson {
   id: string;
@@ -129,7 +129,7 @@ export function PayPreviewPage() {
     return (
       <Page title="Pay preview">
         <Card>
-          <p className="empty">Pay preview is limited to HR and Compensation admins.</p>
+          <p className="empty">Pay preview is limited to HR.</p>
         </Card>
       </Page>
     );
@@ -140,7 +140,7 @@ export function PayPreviewPage() {
   const groups = [...new Set(people.map((p) => p.group))];
 
   return (
-    <Page title="Pay preview" subtitle="Payroll is processed by the external provider. Read only.">
+    <Page title="Pay preview" subtitle="Processed by the payroll provider · Read only">
       <Card>
         <div className="form-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
           <Field label="Person">

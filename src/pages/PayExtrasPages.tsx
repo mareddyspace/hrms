@@ -63,7 +63,7 @@ export function ReimbursementPage() {
   }
 
   return (
-    <Page title="Reimbursement" subtitle="Claim non-project reimbursements.">
+    <Page title="Other reimbursements" subtitle="Claims outside project expenses">
       <div className="split">
         <Card title="New reimbursement">
           <form onSubmit={onSubmit}>

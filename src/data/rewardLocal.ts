@@ -24,8 +24,9 @@ import {
 } from "./rewardData.ts";
 
 // v4: the Compensation persona was retired (HR owns compensation & benefits) — older data is replaced.
-const KEY = "timez.reward.state.v4";
-const OLD_KEYS = ["timez.reward.state.v1", "timez.reward.state.v2", "timez.reward.state.v3"];
+// v5: the Hiring Manager persona was retired — his pay, benefits and documents left the seed; older data is replaced.
+const KEY = "timez.reward.state.v5";
+const OLD_KEYS = ["timez.reward.state.v1", "timez.reward.state.v2", "timez.reward.state.v3", "timez.reward.state.v4"];
 
 type RewardState = {
   reviews: CompReviewItem[];

@@ -64,7 +64,7 @@ function ScopeNote({ text }: { text: string }) {
 
 /* ───────────────────────────── COMPENSATION ── */
 
-const STRUCTURE_ROLES = ["finance", "hr", "hr_admin", "hrbp", "manager", "hiring_manager", "executive", "founder", "cofounder"];
+const STRUCTURE_ROLES = ["finance", "hr", "hr_admin", "hrbp", "manager", "executive", "founder", "cofounder"];
 
 const COMP_STATUS_TONE: Record<string, "ok" | "warn" | "danger" | "info" | "neutral"> = {
   Draft: "neutral",
@@ -287,7 +287,7 @@ function ChangeRequestButton({ onSend }: { onSend: (note: string) => string | nu
   }
   return (
     <span className="row-gap">
-      <input value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="What should change?" />
+      <input aria-label="What should change" value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="What should change?" />
       <button type="button" className="btn btn-tiny" disabled={note.trim().length < 5} onClick={() => !onSend(note) && setOpen(false)}>
         Send
       </button>
@@ -394,7 +394,7 @@ export function BenefitsPage() {
               ))}
             </select>
           ) : (
-            <select value={ownCountry} disabled>
+            <select aria-label="Country" value={ownCountry} disabled>
               <option value={ownCountry}>{ownCountry || "Not set"}</option>
             </select>
           )}
@@ -658,7 +658,7 @@ export function DocumentsLettersPage() {
 
   return (
     <Page
-      title="Documents & Letters"
+      title="Documents & letters"
       action={
         <button
           type="button"

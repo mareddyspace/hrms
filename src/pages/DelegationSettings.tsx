@@ -65,8 +65,7 @@ export function DelegationSettings({ myId }: { myId: string }) {
         </p>
       )}
       <p className="muted">
-        Someone you choose decides requests from your team in your place for the dates you set. They never decide their own requests
-        or those of anyone they report to.
+        Your delegate decides your team's requests for the dates you set — never their own.
       </p>
       <div className="form-grid">
         <Field label="Delegate to">

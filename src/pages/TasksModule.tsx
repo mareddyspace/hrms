@@ -291,7 +291,7 @@ export function TasksPage() {
   const closedCount = scopeTasks.filter((t) => t.status === "done").length;
   const overdueCount = summary.overdue;
 
-  const monthLabel = new Date(calCursor.year, calCursor.month, 1).toLocaleString(undefined, {
+  const monthLabel = new Date(calCursor.year, calCursor.month, 1).toLocaleString("en-GB", {
     month: "long",
     year: "numeric",
   });
@@ -424,7 +424,7 @@ export function TasksPage() {
 
   return (
     <Page
-      title={isManager ? "Task command center" : "My tasks"}
+      title={isManager ? "Team tasks" : "My tasks"}
       action={
         isManager ? (
           <button type="button" className="btn" onClick={() => setShowCreate((v) => !v)}>
@@ -842,10 +842,10 @@ export function TasksPage() {
               Status
               <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
                 <option value="">All</option>
-                <option value="todo">To Do</option>
+                <option value="todo">To do</option>
                 <option value="progress">In progress</option>
                 <option value="blocked">Blocked</option>
-                <option value="review">Action Required</option>
+                <option value="review">Action required</option>
                 <option value="scheduled">Scheduled</option>
                 <option value="done">Completed</option>
               </select>
@@ -916,7 +916,7 @@ export function TasksPage() {
                 action={<span className="muted">{filtered.length} shown</span>}
               >
                 {filtered.length === 0 ? (
-                  <EmptyState title="No tasks match" description="Try adjusting filters." />
+                  <EmptyState title="No tasks match" description="Try other filters." />
                 ) : (
                   <ul className="task-list">
                     {filtered.map((task) => {
@@ -1139,7 +1139,7 @@ export function TasksPage() {
                         )}
                         {canActOnSelected && (
                           <div className="row-gap" style={{ marginTop: 8 }}>
-                            <input
+                            <input aria-label="Add a comment"
                               value={commentDraft}
                               onChange={(e) => setCommentDraft(e.target.value)}
                               placeholder="Add a comment…"
@@ -1473,7 +1473,7 @@ export function TasksPage() {
               <div className="task-board">
                 {(
                   [
-                    ["todo", "To Do", (t: Task) => t.status === "open" && !t.blocked],
+                    ["todo", "To do", (t: Task) => t.status === "open" && !t.blocked],
                     ["progress", "In progress", (t: Task) => t.status === "progress" && !t.blocked],
                     ["blocked", "Blocked", (t: Task) => isTaskBlocked(t)],
                     ["done", "Completed", (t: Task) => t.status === "done"],

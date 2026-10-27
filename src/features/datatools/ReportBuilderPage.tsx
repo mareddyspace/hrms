@@ -38,7 +38,7 @@ import "./datatools.css";
 
 type Message = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 const PREVIEW_ROWS = 50;
-const MANAGER_ROLES = ["manager", "hiring_manager"];
+const MANAGER_ROLES = ["manager"];
 
 function formatWhen(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;

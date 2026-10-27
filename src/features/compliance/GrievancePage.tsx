@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
 import { Banner, Card, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
-import { formatShortDate } from "../../model.ts";
+import { formatShortDate, plural } from "../../model.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import {
   CASE_CATEGORIES,
@@ -219,7 +219,7 @@ function SlaBadge({ c }: { c: CaseRecord }) {
   if (!isPosh(c) || !isCaseOpen(c)) return null;
   if (isSlaOverdue(c)) return <StatusBadge status="SLA overdue" tone="danger" literal />;
   const left = slaDaysLeft(c) ?? 0;
-  return <StatusBadge status={`${left} days to SLA`} tone={left <= 15 ? "warn" : "info"} literal />;
+  return <StatusBadge status={`${plural(left, "day")} to SLA`} tone={left <= 15 ? "warn" : "info"} literal />;
 }
 
 function CaseSummary({ c, onOpen, showCode = false, staffView = false }: { c: CaseRecord; onOpen: () => void; showCode?: boolean; staffView?: boolean }) {

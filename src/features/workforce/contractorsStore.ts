@@ -1,5 +1,5 @@
 import { canApproveTeam, todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
-import { DEMO_ACCOUNTS, findDemoById, managementChain } from "../../demoAccounts.ts";
+import { DEMO_ACCOUNTS, RETIRED_COUNTRY_MANAGER_IDS, findDemoById, managementChain } from "../../demoAccounts.ts";
 import {
   createStore,
   daysBetween,
@@ -13,7 +13,23 @@ import {
   type WorkforceResult,
 } from "./workforceShared.ts";
 
-const KEY = "kastech.contractors.v1";
+// v2: the Hiring Manager persona was retired — his contractor moved on.
+// v3: Country Managers no longer sign in — contractors they managed move to the CEO (saved v2 data is migrated).
+const KEY = "kastech.contractors.v3";
+try {
+  localStorage.removeItem("kastech.contractors.v1");
+  const v2 = localStorage.getItem("kastech.contractors.v2");
+  if (v2 && !localStorage.getItem(KEY)) {
+    const saved = JSON.parse(v2) as { contractors?: { managerId?: string }[] };
+    for (const c of Array.isArray(saved?.contractors) ? saved.contractors : []) {
+      if (c?.managerId && RETIRED_COUNTRY_MANAGER_IDS.has(c.managerId)) c.managerId = "demo-ceo";
+    }
+    localStorage.setItem(KEY, JSON.stringify(saved));
+  }
+  localStorage.removeItem("kastech.contractors.v2");
+} catch {
+  /* ignore */
+}
 const ROUTE = "/workforce/contractors";
 export const ENDING_SOON_DAYS = 30;
 
@@ -70,7 +86,7 @@ function defaults(): ContractorState {
       { id: "ctr-arjun", name: "Arjun Verma", vendorId: "vd-nimbus", managerId: "emp-ram", project: "Payments revamp", startDate: "2026-05-01", endDate: "2026-11-10", dailyRate: 9000 },
       { id: "ctr-meera", name: "Meera Iyer", vendorId: "vd-nimbus", managerId: "emp-ram", project: "Mobile app QA", startDate: "2026-07-01", endDate: "2027-01-31", dailyRate: 8500 },
       { id: "ctr-tom", name: "Tom Fletcher", vendorId: "vd-brightlane", managerId: "demo-admin", project: "Cloud migration", startDate: "2026-04-15", endDate: "2026-09-30", dailyRate: 450 },
-      { id: "ctr-lena", name: "Lena Hart", vendorId: "vd-brightlane", managerId: "demo-hiring-manager", project: "Product discovery", startDate: "2026-06-01", endDate: "2026-11-06", dailyRate: 520 },
+      { id: "ctr-lena", name: "Lena Hart", vendorId: "vd-brightlane", managerId: "demo-ceo", project: "Product discovery", startDate: "2026-06-01", endDate: "2026-11-06", dailyRate: 520 },
     ],
     extensions: [],
   };

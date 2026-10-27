@@ -58,7 +58,7 @@ function useCollab() {
 
 function formatWhen(iso: string) {
   try {
-    return new Date(iso).toLocaleString(undefined, {
+    return new Date(iso).toLocaleString("en-GB", {
       month: "short",
       day: "numeric",
       hour: "2-digit",
@@ -145,7 +145,7 @@ export function InboxApprovalsPage() {
   }
 
   return (
-    <Page title="Inbox and Approvals">
+    <Page title="Inbox and approvals">
       <MetricGrid>
         <MetricCard label="Pending" value={collab.inbox.filter((t) => t.status === "Pending").length} />
         <MetricCard label="Approved" value={collab.inbox.filter((t) => t.status === "Approved").length} />
@@ -449,7 +449,7 @@ export function MessagingPage() {
                 />
               </label>
               {people.length === 0 ? (
-                <EmptyState title="No people found" description="Try a different search." />
+                <EmptyState title="No people found" description="Try other filters." />
               ) : (
                 <ul className="collab-list">
                   {people.map((p) => (
@@ -566,7 +566,7 @@ export function MessagingPage() {
                           {c.title}{" "}
                           {unreadCount > 0 && <StatusBadge status={`${unreadCount} new`} tone="warn" />}
                           {c.restricted === "compensation" && (
-                            <StatusBadge status="Compensation" tone="danger" />
+                            <StatusBadge status="Pay confidential" tone="danger" />
                           )}
                           {c.restricted === "hr_confidential" && (
                             <StatusBadge status="HR confidential" tone="danger" />
@@ -594,7 +594,7 @@ export function MessagingPage() {
               />
             </label>
             {people.length === 0 ? (
-              <EmptyState title="No people found" description="Try a different search." />
+              <EmptyState title="No people found" description="Try other filters." />
             ) : (
               <ul className="collab-list">
                 {people.map((p) => (
@@ -652,7 +652,7 @@ export function MessagingPage() {
                 )}
                 {active.restricted && (
                   <StatusBadge
-                    status={active.restricted === "compensation" ? "Compensation restricted" : "HR confidential"}
+                    status={active.restricted === "compensation" ? "Pay confidential" : "HR confidential"}
                     tone="danger"
                   />
                 )}
@@ -939,7 +939,7 @@ export function HelpHrRequestsPage() {
   }
 
   return (
-    <Page title={hrView ? "HR requests" : "Help & HR Requests"}>
+    <Page title={hrView ? "HR requests" : "Helpdesk"}>
       <Tabs
         tabs={[
           ...(hrView ? [] : [{ id: "request", label: "New request" }]),
@@ -1029,7 +1029,7 @@ export function HelpHrRequestsPage() {
                 <h3 style={{ margin: 0 }}>{selected.subject}</h3>
                 <p className="muted">
                   {selected.category} · Created {selected.createdAt}
-                  {hrView && ` · Raised by ${selected.requesterName ?? "unknown (legacy ticket)"}`}
+                  {hrView && ` · Raised by ${selected.requesterName ?? "Unknown"}`}
                 </p>
                 {statusOptions.length > 0 ? (
                   <Field label="Status">
@@ -1128,7 +1128,7 @@ export function HelpHrRequestsPage() {
               <Link className="auth-shortcut" to="/benefits">Benefits</Link>
               <Link className="auth-shortcut" to="/documents">Documents</Link>
               <Link className="auth-shortcut" to="/payslips">Payslips</Link>
-              <Link className="auth-shortcut" to="/info">My Profile</Link>
+              <Link className="auth-shortcut" to="/info">My profile</Link>
             </div>
           </Card>
         </div>

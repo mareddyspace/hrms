@@ -30,7 +30,7 @@ export type PolicyCategory = (typeof POLICY_CATEGORIES)[number];
 /** Categories everyone must acknowledge. */
 export const MANDATORY_CATEGORIES: PolicyCategory[] = ["Code of conduct", "Data privacy & security", "Leave", "Working time & attendance"];
 
-export type PolicyOwner = "HR" | "Compensation" | "IT";
+export type PolicyOwner = "HR" | "IT";
 
 /** Who a policy applies to. Empty / missing fields mean "everyone". */
 export interface PolicyScope {
@@ -297,7 +297,7 @@ function globalPolicies(): Policy[] {
       id: "manager-approvals",
       title: "Approving for your team",
       category: "Handbook",
-      appliesTo: { roles: ["manager", "hiring_manager", "executive", "founder", "cofounder", "hr_admin", "hrbp"] },
+      appliesTo: { roles: ["manager", "executive", "founder", "cofounder", "hr_admin", "hrbp"] },
       version: "1.0",
       effective: EFFECTIVE,
       owner: "HR",
@@ -503,7 +503,7 @@ export function benefitsPolicy(code: CountryCode): Policy {
     appliesTo: { countries: [code], employment: "employees" },
     version: "2026.1",
     effective: EFFECTIVE,
-    owner: "Compensation",
+    owner: "HR",
     mandatory: false,
     sections: [
       {
@@ -530,7 +530,7 @@ export function payTaxPolicy(code: CountryCode): Policy {
     appliesTo: { countries: [code] },
     version: "2026.1",
     effective: EFFECTIVE,
-    owner: "Compensation",
+    owner: "HR",
     mandatory: false,
     sections: [
       {

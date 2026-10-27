@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore, type FormEvent } from "react";
 import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
-import { todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
+import { plural, todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
 import { findDemoById } from "../../demoAccounts.ts";
 import { money } from "../../countryPay.ts";
 import {
@@ -183,7 +183,7 @@ function ContractorList({ actor }: { actor: WorkforceActor }) {
               v ? money(c.dailyRate, v.currency) : String(c.dailyRate),
               <span key="s" className="wf-block">
                 <StatusBadge status={status} tone={STATUS_TONE[status]} literal />
-                {status === "Ending soon" && <span className="muted wf-block">{left === 0 ? "Ends today" : `${left} days left`}</span>}
+                {status === "Ending soon" && <span className="muted wf-block">{left === 0 ? "Ends today" : `${plural(left, "day")} left`}</span>}
               </span>,
               <div key="a" className="row-gap">
                 {c.managerId === actor.id && status !== "Ended" && (
@@ -293,7 +293,7 @@ function ContractorList({ actor }: { actor: WorkforceActor }) {
               Cancel
             </button>
             <button className="btn" type="submit" form="wf-extension-form">
-              Send for approval
+              Submit for approval
             </button>
           </>
         }
@@ -466,7 +466,7 @@ function Extensions({ actor }: { actor: WorkforceActor }) {
                     {v && <span className="muted">{v.name} contract ends {fmt(v.contractEnd)}</span>}
                     <p className="muted">{e.reason}</p>
                     <div className="approval-actions">
-                      <input placeholder="Note (needed to reject)" value={notes[e.id] ?? ""} onChange={(ev) => setNotes({ ...notes, [e.id]: ev.target.value })} />
+                      <input aria-label="Decision note" placeholder="Note (needed to reject)" value={notes[e.id] ?? ""} onChange={(ev) => setNotes({ ...notes, [e.id]: ev.target.value })} />
                       <button className="btn btn-tiny" type="button" onClick={() => setMsg(result(decideExtension(actor, e.id, true, notes[e.id]), `${name(e)} extended to ${fmt(e.newEnd)}.`))}>
                         Approve
                       </button>

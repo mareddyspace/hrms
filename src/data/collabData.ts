@@ -271,9 +271,9 @@ export function defaultNotifActionLabel(category: NotifCategory): string {
   }
 }
 
-/** Manager / hiring-manager personas see team-scoped manager notifications. */
+/** Manager personas see team-scoped manager notifications. */
 export function isManagerNotifRole(role: string): boolean {
-  return role === "manager" || role === "hiring_manager";
+  return role === "manager";
 }
 
 export function notificationVisibleForRole(n: AppNotification, role: string, userId?: string): boolean {
@@ -361,15 +361,6 @@ export const CHAT_PEOPLE: ChatPerson[] = [
     channelTags: ["general", "recruiting"],
   },
   {
-    id: "demo-hiring-manager",
-    name: "Daniel Ortiz",
-    title: "Director of Product",
-    department: "Product",
-    roleLabel: "Hiring Manager",
-    availability: "Online",
-    channelTags: ["general", "recruiting", "leadership"],
-  },
-  {
     id: "demo-ceo",
     name: "Jordan Blake",
     title: "Chief Executive Officer",
@@ -399,7 +390,7 @@ export const CHAT_PEOPLE: ChatPerson[] = [
   {
     id: "emp-anu",
     name: "Anu Rao",
-    title: "Performance Mgr",
+    title: "Performance Manager",
     department: "Engineering",
     roleLabel: "Colleague",
     availability: "Offline",

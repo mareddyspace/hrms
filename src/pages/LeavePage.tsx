@@ -11,6 +11,7 @@ import {
   holidaysForPerson,
   leaveRows,
   needsBackdatedPermission,
+  plural,
   SICK_LEAVE_GRACE_DAYS,
   todayISO,
   workingDays,
@@ -159,7 +160,7 @@ export function LeavePage() {
             tone: "ok",
             text: hasApprover
               ? `Leave request submitted to ${approver?.fullName ?? "your manager"}.`
-              : "Time off added to your calendar.",
+              : "Leave added to your calendar.",
           },
     );
     if (!error) resetForm();
@@ -190,7 +191,7 @@ export function LeavePage() {
 
   return (
     <Page
-      title="Leave & Absence"
+      title="Leave & holidays"
       action={
         <Link className="btn-ghost" to="/leave/team-calendar">
           Team calendar
@@ -228,7 +229,7 @@ export function LeavePage() {
                     </div>
                     <span>
                       {leaveName(p.code)} · {formatShortDate(p.from)} – {formatShortDate(p.to)} ·{" "}
-                      {workingDays(p.from, p.to, holidaySet(holidaysForPerson(state.holidays, p.employeeId)))} day(s) · asked {formatShortDate(p.requestedOn)}
+                      {plural(workingDays(p.from, p.to, holidaySet(holidaysForPerson(state.holidays, p.employeeId))), "day")} · asked {formatShortDate(p.requestedOn)}
                     </span>
                     <span className="muted">Reason: {p.reason}</span>
                     <div className="approval-actions">
@@ -255,7 +256,7 @@ export function LeavePage() {
                     </div>
                     <span>
                       {leaveName(r.code)} · {formatShortDate(r.from)} – {formatShortDate(r.to)} ·{" "}
-                      {workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half)} day(s)
+                      {plural(workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half), "day")}
                       {r.half ? ` · ${halfLabel(r.half)}` : ""}
                     </span>
                     <span className="muted">Reason: {r.reason}</span>
@@ -323,7 +324,7 @@ export function LeavePage() {
             </Card>
           )}
 
-          <Card title={hasApprover ? `My requests · ${year}` : `My time off · ${year}`}>
+          <Card title={hasApprover ? `My requests · ${year}` : `My leave · ${year}`}>
             <div className="table-scroll">
               <table className="data requests">
                 <thead>
@@ -394,7 +395,7 @@ export function LeavePage() {
             </div>
           </Card>
         </div>
-        <Card title={hasApprover ? "Apply Leave" : "Mark time off"}>
+        <Card title={hasApprover ? "Apply for leave" : "Record leave"}>
           {hasApprover && approver && (
             <p className="muted" style={{ marginTop: 0 }}>
               <Link to={`/mail?compose=manager&subject=${encodeURIComponent("Leave request discussion")}`}>
@@ -475,7 +476,7 @@ export function LeavePage() {
             )}
             <div className="form-actions">
               <button className="btn" type="submit">
-                {needsPermission ? "Request permission" : hasApprover ? "Submit request" : "Add time off"}
+                {needsPermission ? "Request permission" : hasApprover ? "Submit request" : "Record leave"}
               </button>
             </div>
             <Banner message={message} />

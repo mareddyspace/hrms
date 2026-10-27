@@ -244,14 +244,14 @@ export function JobsPage() {
 
   if (!hasModuleAccess(demoProfile, "jobs") && !hasModuleAccess(demoProfile, "*")) {
     return (
-      <Page title="Jobs & Positions">
+      <Page title="Jobs & positions">
         <EmptyState title="Not available" description="No access." />
       </Page>
     );
   }
 
   return (
-    <Page title="Jobs & Positions">
+    <Page title="Jobs & positions">
       <FilterBar>
         <label className="filter-label">
           Search

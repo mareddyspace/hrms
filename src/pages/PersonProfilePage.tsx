@@ -19,6 +19,7 @@ import {
   Users,
   Video,
 } from "lucide-react";
+import { COMPANY_NAME } from "../brand.ts";
 import { Banner, Card, Dialog, EmptyState, Field, Page } from "../components/ui.tsx";
 import { SelfProfileEditor } from "../components/SelfProfileEditor.tsx";
 import { initials } from "../components/OrgChart.tsx";
@@ -387,14 +388,14 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
           )}
 
           {access.work && career.length > 0 && (
-            <Card title="Career at Infotech">
+            <Card title={`Career at ${COMPANY_NAME}`}>
               <ol className="profile-timeline">
                 {career
                   .filter((e) => access.compensation || e.type !== "Compensation change")
                   .map((e) => (
                     <li key={e.id}>
                       <strong>
-                        {e.type === "Hire" ? "Joined Infotech" : e.type}
+                        {e.type === "Hire" ? `Joined ${COMPANY_NAME}` : e.type}
                         {isScheduled(e) ? " · Scheduled" : ""}
                       </strong>
                       <span>

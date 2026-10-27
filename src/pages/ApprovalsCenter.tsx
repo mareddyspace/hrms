@@ -14,7 +14,7 @@ import { money } from "../countryPay.ts";
 import { Banner, Card, EmptyState, Page, StatusBadge, Tabs } from "../components/ui.tsx";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
-import { addDaysISO, formatShortDate, holidaySet, holidaysForPerson, parseISODate, todayISO, workingDays } from "../model.ts";
+import { addDaysISO, formatShortDate, plural, holidaySet, holidaysForPerson, parseISODate, todayISO, workingDays } from "../model.ts";
 import type { DecisionInfo, PortalState } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import {
@@ -189,7 +189,7 @@ export function ApprovalsCenterPage() {
           const halfDay = r.half && r.from === r.to;
           const days = workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half);
           const span = halfDay ? formatShortDate(r.from) : `${formatShortDate(r.from)} – ${formatShortDate(r.to)}`;
-          return `${leaveName(r.code)} · ${span} · ${halfDay ? `${days} day (${r.half} half)` : `${days} day(s)`}`;
+          return `${leaveName(r.code)} · ${span} · ${halfDay ? `${days} day (${r.half} half)` : plural(days, "day")}`;
         })(),
         detail: r.reason,
         raisedOn: r.appliedOn,
@@ -205,7 +205,7 @@ export function ApprovalsCenterPage() {
         key: `enc-${e.id}`,
         kind: "Leave encashment",
         employeeId: e.employeeId,
-        title: `${e.days} day(s) of ${leaveName(e.code)}`,
+        title: `${plural(e.days, "day")} of ${leaveName(e.code)}`,
         raisedOn: e.appliedOn,
         status: e.status,
         open: e.status === "pending",
@@ -490,7 +490,7 @@ export function ApprovalsCenterPage() {
                   {item.detail && <span className="muted">{item.detail}</span>}
                   {item.raisedOn && (
                     <span className="muted">
-                      Raised {formatShortDate(item.raisedOn)} · waiting {ageOf(item)} day(s)
+                      Raised {formatShortDate(item.raisedOn)} · waiting {plural(ageOf(item), "day")}
                       {ageOf(item) > SLA_DAYS && <span className="pill pill-mandatory"> Overdue</span>}
                     </span>
                   )}
@@ -551,7 +551,7 @@ export function ApprovalsCenterPage() {
                       <span className="muted">
                         With {delegated ? personLabel(delegated.delegateId) : (available?.fullName ?? first.fullName)}
                         {delegated ? ` (delegated by ${first.fullName} until ${formatShortDate(delegated.to)})` : ""}
-                        {away ? ` (${first.fullName} is away)` : ""} · {ageOf(item)} day(s)
+                        {away ? ` (${first.fullName} is away)` : ""} · {plural(ageOf(item), "day")}
                         {ageOf(item) > SLA_DAYS && <span className="pill pill-mandatory"> Overdue</span>}
                         {escalatedTo && <span className="pill pill-mandatory"> Escalated to {personLabel(escalatedTo)}</span>}
                       </span>

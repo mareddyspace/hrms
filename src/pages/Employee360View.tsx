@@ -1,6 +1,7 @@
 import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Card, DataTable, EmptyState, MetricCard, MetricGrid, StatusBadge, Tabs } from "../components/ui.tsx";
+import { COMPANY_NAME } from "../brand.ts";
 import { money, payRulesFor } from "../countryPay.ts";
 import { attendanceContextFor, buildAttendanceHistory, formatHm, kindLabel } from "../data/attendanceData.ts";
 import { getAttendanceState, listCorrectionsForEmployee, subscribeAttendance } from "../data/attendanceLocal.ts";
@@ -243,7 +244,7 @@ export function Employee360View({
       effectiveDate: h.effective,
       before: "",
       after: `${h.event} · ${h.grade}`,
-      by: "Compensation",
+      by: "HR",
       byId: "",
       recordedOn: h.effective,
       derived: true,
@@ -284,7 +285,7 @@ export function Employee360View({
     lines.push(
       terminated
         ? `${firstName} was a ${person.designation} in ${person.department} and left${exit.exitDate ? ` on ${exit.exitDate}` : ""}.`
-        : `${firstName} is a ${person.designation} (${person.grade}) in ${person.department}, ${person.location}, with ${tenure} at Infotech.`,
+        : `${firstName} is a ${person.designation} (${person.grade}) in ${person.department}, ${person.location}, with ${tenure} at ${COMPANY_NAME}.`,
     );
     if (manager) {
       lines.push(
@@ -420,7 +421,7 @@ export function Employee360View({
           </Card>
           <Card title="Experience">
             {person.experience.length === 0 ? (
-              <EmptyState title="None before Infotech" />
+              <EmptyState title={`None before ${COMPANY_NAME}`} />
             ) : (
               <ul className="todo">
                 {person.experience.map((x) => (

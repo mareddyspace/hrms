@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, Suspense } from "react";
-import { DEMO_MODE } from "../demoMode.ts";
 import { countUnreadNotificationsFor } from "../data/notificationFeed.ts";
 import type { FormEvent, ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -10,8 +9,6 @@ import {
   Building2,
   CalendarDays,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   CircleHelp,
   ClipboardList,
   Clock3,
@@ -157,18 +154,18 @@ function WelcomeLoginDialog() {
       )}
       {stale && <div className="modal-scrim modal-scrim-lock" aria-hidden />}
       <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="welcome-login-title">
-        <h2 id="welcome-login-title">{stale ? "Update password" : "Welcome Back!"}</h2>
+        <h2 id="welcome-login-title">{stale ? "Update password" : "Welcome back"}</h2>
         <p className="modal-lede">
-          {stale ? "Please set a new password to continue." : "Here are your last login details."}
+          {stale ? "Please set a new password to continue." : "Here are your last sign-in details."}
         </p>
         {stamp && (
           <dl className="login-facts">
             <div>
-              <dt>Previous login date</dt>
+              <dt>Previous sign-in date</dt>
               <dd>{stamp.date}</dd>
             </div>
             <div>
-              <dt>Previous login time</dt>
+              <dt>Previous sign-in time</dt>
               <dd>{stamp.time}</dd>
             </div>
             <div>
@@ -287,7 +284,7 @@ function usePasswordPolicyPrompt() {
 }
 
 export function Shell() {
-  const { employee, demoProfile, demoAccounts, signOut, switchDemoPersona, counts, state, canDecideFor, canVerifyProofs } =
+  const { employee, demoProfile, signOut, counts, state, canDecideFor, canVerifyProofs } =
     usePortal();
   const { regionCode, setRegionCode, language, setLanguage, countries, t, languageLabels, activeCountry } = useLocale();
   const passwordPrompt = usePasswordPolicyPrompt();
@@ -299,7 +296,8 @@ export function Shell() {
   const prefs = useApplyPreferences(employee.id);
   // Task due/overdue reminders fire on any page, not only when Tasks is open.
   useTaskAutoReminders();
-  const collapsed = prefs.menuStyle === "icons";
+  // Icons-only sidebar; the chosen section's pages run as a horizontal bar above the page.
+  const collapsed = true;
   const theme = document.documentElement.dataset.theme === "night" ? "night" : "light";
   const [openGroups, setOpenGroups] = useState<string[]>(["Me", "Time & pay"]);
   const location = useLocation();
@@ -428,17 +426,6 @@ export function Shell() {
               <span>{PRODUCT_TAGLINE}</span>
             </div>
           </Link>
-
-          <button
-            type="button"
-            className="side-collapse"
-            onClick={() => updatePreferences(employee.id, { menuStyle: collapsed ? "full" : "icons" })}
-            aria-pressed={collapsed}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
-            <span>{collapsed ? "Expand" : "Collapse"}</span>
-          </button>
 
           <label className="side-search">
             <span className="sr-only">Filter menu</span>
@@ -601,7 +588,7 @@ export function Shell() {
                 { id: "personalise", label: "Personalisation", to: "/settings/personalisation" },
                 {
                   id: "org-context",
-                  label: `Home: ${employee.countryName ?? "—"} · ${employee.legalEntity ?? "Infotech"}`,
+                  label: `Home: ${employee.countryName ?? "—"} · ${employee.legalEntity ?? COMPANY_NAME}`,
                 },
                 {
                   id: "view-region",
@@ -613,23 +600,6 @@ export function Shell() {
                   : []),
                 { id: "help", label: "Help", to: "/help" },
                 ...aboutLinks.filter((item) => item.to !== "/help").map((item) => ({ id: item.id, label: item.label, to: item.to })),
-                // Switching persona skips the password, so it only exists while developing (npm run dev).
-                ...(DEMO_MODE
-                  ? [
-                      {
-                        id: "switcher-label",
-                        label: "—— Switch account (development only) ——",
-                      },
-                    ]
-                  : []),
-                ...(DEMO_MODE ? demoAccounts : []).map((account) => ({
-                  id: `switch-${account.id}`,
-                  label: `${account.personaLabel}${account.id === demoProfile.id ? " ✓" : ""}`,
-                  onSelect: () => {
-                    switchDemoPersona(account.id);
-                    navigate("/");
-                  },
-                })),
                 {
                   id: "signout",
                   label: "Sign out",

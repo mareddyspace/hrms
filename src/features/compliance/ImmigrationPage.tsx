@@ -1,6 +1,6 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
-import { formatShortDate, todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
+import { formatShortDate, plural, todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
 import { getPerson, listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import {
   DOC_TYPES,
@@ -37,9 +37,9 @@ function emptyInput(personId: string): DocInput {
 
 function expiryHint(doc: IdDocument): string {
   const days = daysToExpiry(doc);
-  if (days < 0) return `${-days} days ago`;
+  if (days < 0) return `${plural(-days, "day")} ago`;
   if (days === 0) return "today";
-  return `in ${days} days`;
+  return `in ${plural(days, "day")}`;
 }
 
 export function ImmigrationPage() {

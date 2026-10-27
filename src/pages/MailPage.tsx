@@ -183,7 +183,7 @@ export function MailPage() {
   return (
     <Page
       title="Mail"
-      subtitle={`Write to your manager, reporting line or HR. Times in ${employee.timeZone}.`}
+      subtitle={`Times in ${employee.timeZone}`}
       action={
         manager ? (
           <button className="btn" type="button" onClick={writeToManager}>
@@ -396,7 +396,7 @@ function ThreadRow({
           <span className="mail-row-who">{who}</span>
           <span className="mail-row-time">{when(latest.sentAt, timeZone)}</span>
         </span>
-        <span className="mail-row-subject">
+        <span className="mail-row-subject" title={thread.subject}>
           {thread.subject}
           {thread.messages.length > 1 && <span className="mail-count">{thread.messages.length}</span>}
         </span>

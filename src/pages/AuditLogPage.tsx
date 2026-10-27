@@ -67,7 +67,7 @@ export function AuditLogPage() {
   return (
     <Page
       title="Audit log"
-      subtitle={`Times shown in ${employee.timeZone}.`}
+      subtitle={`Times in ${employee.timeZone}`}
       action={
         <button className="btn-ghost" type="button" onClick={exportCsv} disabled={rows.length === 0}>
           Export CSV

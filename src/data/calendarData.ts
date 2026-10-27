@@ -187,7 +187,7 @@ export const CALENDAR_SEED: CalendarEvent[] = [
     title: "Panel interview — Senior Frontend",
     time: "11:30–12:30",
     location: "Conf · Vega",
-    audienceIds: ["emp-ram", "demo-recruiter", "demo-hiring-manager"],
+    audienceIds: ["emp-ram", "demo-recruiter"],
   },
 ];
 

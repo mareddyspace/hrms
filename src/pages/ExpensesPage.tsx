@@ -63,7 +63,7 @@ export function ExpensesPage() {
   }
 
   return (
-    <Page title="Claim expenses">
+    <Page title="Reimbursements">
       <section className="summary-row" aria-label="Claim summary">
         <div className="summary">
           <span>Claims</span>
@@ -146,31 +146,33 @@ export function ExpensesPage() {
           {mine.length === 0 ? (
             <p className="empty">No expenses yet.</p>
           ) : (
-            <table className="data doc-table pay-list expense-claims">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Category</th>
-                  <th className="num">Amount</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mine.map((expense) => (
-                  <tr key={expense.id}>
-                    <td>{expense.date}</td>
-                    <td>
-                      {expense.category}
-                      <div className="muted" style={{ whiteSpace: "pre-line" }}>{expense.description}</div>
-                    </td>
-                    <td className="num">{money(expense.amount, itemCurrency(expense))}</td>
-                    <td>
-                      <StatusPill status={expense.status} />
-                    </td>
+            <div className="doc-table-wrap">
+              <table className="data doc-table pay-list expense-claims">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Category</th>
+                    <th className="num">Amount</th>
+                    <th>Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {mine.map((expense) => (
+                    <tr key={expense.id}>
+                      <td>{expense.date}</td>
+                      <td>
+                        {expense.category}
+                        <div className="muted" style={{ whiteSpace: "pre-line" }}>{expense.description}</div>
+                      </td>
+                      <td className="num">{money(expense.amount, itemCurrency(expense))}</td>
+                      <td>
+                        <StatusPill status={expense.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
       </div>

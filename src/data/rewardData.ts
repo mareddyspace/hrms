@@ -234,9 +234,7 @@ export const COMP_HISTORY: CompHistoryRow[] = [
   { id: "ch-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", effective: "2026-04-01", event: "Annual increment", grade: "L4", base: "₹17,40,000", currency: "INR", managerId: "emp-ram" },
   { id: "ch-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", effective: "2025-04-01", event: "Annual increment", grade: "L4", base: "₹16,20,000", currency: "INR", managerId: "emp-ram" },
   { id: "ch-3", employeeId: "emp-ram", employeeName: "Ram Krishnan", effective: "2026-04-01", event: "Promotion + increment", grade: "M1", base: "₹34,00,000", currency: "INR", managerId: "demo-ceo" },
-  { id: "ch-4", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", effective: "2026-04-01", event: "Annual increment", grade: "L6", base: "$178,000", currency: "USD", managerId: "demo-ceo" },
   { id: "ch-5", employeeId: "emp-priya", employeeName: "Priya Nair", effective: "2026-04-01", event: "Annual increment", grade: "L5", base: "₹22,00,000", currency: "INR", managerId: "emp-ram" },
-  { id: "ch-6", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", effective: "2026-10-15", event: "FY2026 annual compensation review", grade: "L6", base: "$186,000", currency: "USD", managerId: "demo-ceo" },
 ];
 
 export const COMP_REVIEWS: CompReviewItem[] = [
@@ -272,32 +270,12 @@ export const COMP_REVIEWS: CompReviewItem[] = [
     status: "Draft",
     bonusProposal: "₹1,00,000",
   },
-  {
-    id: "cr-3",
-    cycleId: "cc-2026",
-    employeeId: "demo-hiring-manager",
-    employeeName: "Daniel Ortiz",
-    managerId: "demo-ceo",
-    managerName: "Jordan Blake",
-    currentGrade: "L6",
-    proposedGrade: "L6",
-    currentBase: "$178,000",
-    proposedBase: "$186,000",
-    proposedIncreasePct: 4.5,
-    currency: "USD",
-    status: "Approved",
-    bonusProposal: "$18,000",
-    approver: "Farhan Ali",
-    decidedOn: "2026-10-15",
-  },
 ];
 
 export const BONUSES: BonusRecord[] = [
   { id: "bn-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", type: "Annual incentive", period: "FY2025", amount: "₹1,20,000", currency: "INR", status: "Paid" },
   { id: "bn-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", type: "Spot award", period: "Q2 2026", amount: "₹25,000", currency: "INR", status: "Accrued" },
   { id: "bn-3", employeeId: "emp-ram", employeeName: "Ram Krishnan", type: "Annual incentive", period: "FY2025", amount: "₹3,00,000", currency: "INR", status: "Paid" },
-  { id: "bn-4", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", type: "Annual incentive", period: "FY2025", amount: "$22,000", currency: "USD", status: "Paid" },
-  { id: "bn-5", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", type: "Annual incentive", period: "FY2026", amount: "$18,000", currency: "USD", status: "Accrued" },
 ];
 
 export const BENEFIT_PLANS: BenefitPlan[] = [
@@ -380,8 +358,6 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
 export const BENEFIT_ENROLLMENTS: BenefitEnrollment[] = [
   { id: "be-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", planId: "bp-in-med", planName: "Group Medical (India)", country: "India", status: "Enrolled", effective: "2026-01-01" },
   { id: "be-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", planId: "bp-in-pf", planName: "Provident Fund", country: "India", status: "Enrolled", effective: "2024-11-04" },
-  { id: "be-3", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", planId: "bp-us-med", planName: "Medical PPO", country: "United States", status: "Enrolled", effective: "2026-01-01" },
-  { id: "be-4", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", planId: "bp-us-401", planName: "401(k)", country: "United States", status: "Enrolled", effective: "2025-03-01" },
   { id: "be-5", employeeId: "demo-hr-admin", employeeName: "Farhan Ali", planId: "bp-in-med", planName: "Group Medical (India)", country: "India", status: "Enrolled", effective: "2026-01-01" },
   { id: "be-6", employeeId: "demo-ceo", employeeName: "Jordan Blake", planId: "bp-us-med", planName: "Medical PPO", country: "United States", status: "Eligible", effective: "2026-11-01" },
 ];
@@ -389,13 +365,11 @@ export const BENEFIT_ENROLLMENTS: BenefitEnrollment[] = [
 export const DEPENDENTS: Dependent[] = [
   { id: "dep-1", employeeId: "emp-mahesh", name: "Ananya Menon", relationship: "Spouse", coveredPlans: ["Group Medical (India)"] },
   { id: "dep-2", employeeId: "emp-mahesh", name: "Arjun Menon", relationship: "Child", coveredPlans: ["Group Medical (India)"] },
-  { id: "dep-3", employeeId: "demo-hiring-manager", name: "Sam Ortiz", relationship: "Spouse", coveredPlans: ["Medical PPO"] },
 ];
 
 export const BENEFIT_HISTORY: BenefitHistoryRow[] = [
   { id: "bh-1", employeeId: "emp-mahesh", date: "2026-01-01", event: "Enrollment", detail: "Renewed Group Medical (India)" },
   { id: "bh-2", employeeId: "emp-mahesh", date: "2025-06-12", event: "Dependent add", detail: "Added Arjun Menon to medical" },
-  { id: "bh-3", employeeId: "demo-hiring-manager", date: "2025-11-15", event: "Open enrollment", detail: "Confirmed PPO + 401(k)" },
 ];
 
 export interface LetterTemplateInfo {
@@ -500,19 +474,6 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     uploadedAt: "2024-11-04T09:00:00",
     sizeLabel: "110 KB",
     preview: "NDA acknowledgement · signed copy held by HR.",
-    isDemoFile: true,
-  },
-  {
-    id: "dl-3",
-    employeeId: "demo-hiring-manager",
-    employeeName: "Daniel Ortiz",
-    name: "I-9 worksheet",
-    category: "Onboarding",
-    docType: "Form",
-    uploadedBy: "HR US",
-    uploadedAt: "2025-02-01T15:00:00",
-    sizeLabel: "88 KB",
-    preview: "Onboarding form metadata for the US entity.",
     isDemoFile: true,
   },
 ];

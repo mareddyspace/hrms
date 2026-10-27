@@ -42,7 +42,7 @@ import {
   type SkillProfile,
   type StageStep,
 } from "./talentData.ts";
-import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../demoAccounts.ts";
+import { DEMO_ACCOUNTS, managementChain, mentionsRetiredAccount, type DemoAccount } from "../demoAccounts.ts";
 import { TIMEZ_COUNTRIES, todayISO, type UserRole } from "../model.ts";
 import { legalEntityFor } from "../countryPay.ts";
 import { TASK_TEAM } from "./taskTeam.ts";
@@ -51,10 +51,13 @@ import { upsertPerson, type LocalPersonRecord } from "./peopleLocal.ts";
 
 // v3: recruiting seed made consistent (approval trails, structured offers, joiners linked to hires).
 // v4: manager → HR → recruiter hiring flow and per-candidate stage history.
-const KEY = "timez.talent.state.v4";
-/** v3 data is migrated once: recruiting and onboarding restart from the v4 seed, everything else is kept. */
-const LEGACY_KEY = "timez.talent.state.v3";
-const OLD_KEYS = ["timez.talent.state.v1", "timez.talent.state.v2"];
+// v5: the Hiring Manager persona was retired — his requisitions, offers, interviews and joiners moved on.
+// v6: Country Managers no longer sign in — their requisitions, panels, offers and joiners moved to a sign-in person
+// (India roles: Ram Krishnan; other countries: Jordan Blake, the CEO).
+const KEY = "timez.talent.state.v6";
+/** v5 data is migrated once: recruiting and onboarding restart from the v6 seed, everything else is kept (and cleaned). */
+const LEGACY_KEY = "timez.talent.state.v5";
+const OLD_KEYS = ["timez.talent.state.v1", "timez.talent.state.v2", "timez.talent.state.v3", "timez.talent.state.v4"];
 const RESEEDED_ON_MIGRATION = ["requisitions", "candidates", "interviews", "offers", "joiners", "tasks"] as const;
 
 type TalentState = {
@@ -99,8 +102,13 @@ function defaults(): TalentState {
   };
 }
 
-/** Drops data that should never exist: reviews for people with no one above them (the CEO). */
+/** Drops data that should never exist: reviews for people with no one above them (the CEO), and records of retired accounts. */
 function clean(state: TalentState): TalentState {
+  // The Compensation persona was retired: its separate offer step is folded into HR's approval.
+  state.offers = state.offers.map((o) => ({ ...o, approvals: o.approvals.filter((a) => (a.role as string) !== "Compensation") }));
+  for (const key of ["requisitions", "candidates", "interviews", "joiners", "tasks", "goals", "reviews", "enrollments", "certifications", "feedback", "oneOnOnes", "skillProfiles"] as const) {
+    (state as Record<typeof key, unknown[]>)[key] = (state[key] as unknown[]).filter((row) => !mentionsRetiredAccount(row));
+  }
   state.reviews = state.reviews.filter((r) => managementChain(r.employeeId, DEMO_ACCOUNTS).length > 0);
   return deriveJoiners(ensureHistory(state));
 }
@@ -179,7 +187,7 @@ export function isHrRole(role: UserRole): boolean {
 
 /** Recruiter, HR and hiring managers run the hiring workflow. */
 export function canEditRecruiting(role: UserRole): boolean {
-  return role === "recruiter" || role === "hiring_manager" || isHrRole(role);
+  return role === "recruiter" || isHrRole(role);
 }
 
 /** True when `actorId` sits above `employeeId` in the reporting line. */
@@ -205,7 +213,7 @@ function sameName(a: string | undefined, b: string | undefined): boolean {
 // Order: the hiring manager raises a requisition → HR approves it and assigns a recruiter →
 // the recruiter runs the pipeline (HR may too) → the hiring manager gives interview feedback and the
 // Final Review decision → offer: recruiter prepares → hiring manager agrees → HR approves
-// (+ Compensation above band) → recruiter sends and records the answer. Nobody approves their own step.
+// (HR also signs off offers above band) → recruiter sends and records the answer. Nobody approves their own step.
 
 /** Recruiter assigned when HR approves without picking one. */
 export const DEFAULT_RECRUITER_ID = "demo-recruiter";
@@ -239,7 +247,7 @@ export function canActOnRequisition(actor: TalentActor, req: Requisition): boole
   return canRunPipeline(actor, req) || isHiringManagerOf(actor, req);
 }
 
-const RAISING_ROLES: readonly UserRole[] = ["manager", "hiring_manager", "executive", "founder", "cofounder"];
+const RAISING_ROLES: readonly UserRole[] = ["manager", "executive", "founder", "cofounder"];
 
 /** The manager who needs the role raises the requisition. */
 export function canRaiseRequisition(actor: TalentActor): boolean {
@@ -529,18 +537,18 @@ export function bandFor(offer: Pick<OfferRecord, "grade">, req: Pick<Requisition
   return bands.find((b) => b.family === req.department) ?? bands[0];
 }
 
-/** Above the band's maximum, or no band for this grade and country: Compensation must approve too. */
+/** Above the band's maximum, or no band for this grade and country: HR's approval covers the exception (compensation sits with HR). */
 export function needsCompApproval(offer: Pick<OfferRecord, "grade" | "baseSalary">, req: Pick<Requisition, "country" | "department"> | undefined): boolean {
   const band = bandFor(offer, req);
   return !band || offer.baseSalary > parseAmount(band.max);
 }
 
-/** Next approval on a pending offer: hiring manager → HR → Compensation (above band), or null when done. */
+/** Next approval on a pending offer: hiring manager → HR (HR also approves above-band offers), or null when done. */
 export function offerApprovalNeeded(offer: OfferRecord, req: Requisition | undefined): OfferApproval["role"] | null {
+  void req;
   const has = (role: OfferApproval["role"]) => offer.approvals.some((a) => a.role === role);
   if (!has("Hiring manager")) return "Hiring manager";
   if (!has("HR")) return "HR";
-  if (needsCompApproval(offer, req) && !has("Compensation")) return "Compensation";
   return null;
 }
 
@@ -551,7 +559,6 @@ export function canApproveOffer(actor: TalentActor, offer: OfferRecord, req: Req
   const step = offerApprovalNeeded(offer, req);
   if (step === "Hiring manager") return isHiringManagerOf(actor, req);
   if (step === "HR") return isHrRole(actor.role) && !isHiringManagerOf(actor, req);
-  if (step === "Compensation") return actor.role === "compensation_admin" && !isHiringManagerOf(actor, req);
   return false;
 }
 
@@ -618,7 +625,6 @@ export function createOffer(actor: TalentActor, input: OfferInput): TalentResult
 const APPROVAL_REFUSAL: Record<OfferApproval["role"], string> = {
   "Hiring manager": "The hiring manager must agree first.",
   HR: "HR approves after the hiring manager (not the hiring manager themselves).",
-  Compensation: "This offer is outside the band and needs Compensation approval.",
 };
 
 export function approveOffer(actor: TalentActor, id: string): TalentResult {
@@ -1073,7 +1079,7 @@ export function courseOpenTo(course: Course, learner: Learner): boolean {
     case "Managers":
       return hasReports(learner.id);
     case "Hiring":
-      return hasReports(learner.id) || learner.role === "recruiter" || learner.role === "hiring_manager" || isHrRole(learner.role);
+      return hasReports(learner.id) || learner.role === "recruiter" || isHrRole(learner.role);
     case "Engineering":
       return learner.department === "Engineering" || learner.department === "IT";
   }

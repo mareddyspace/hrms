@@ -39,6 +39,7 @@ import {
 } from "../../data/homeInsights.ts";
 import { useHomeLayout } from "../../data/preferences.ts";
 import { getRewardState, subscribeReward } from "../../data/rewardLocal.ts";
+import { canApproveCompReviews } from "../../data/rbac.ts";
 import { attendanceContextFor, formatHm, nonWorkingReason, phaseLabel } from "../../data/attendanceData.ts";
 import {
   attendanceAction,
@@ -807,7 +808,7 @@ export function ManagerHome() {
       })),
   ];
 
-  useTitle("Manager Home");
+  useTitle("Manager home");
 
   const sections: Section[] = [
     { id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> },
@@ -1009,7 +1010,7 @@ export function ManagerHome() {
 
   return (
     <div className="stack">
-      <DashGreeting title="Manager Home" subtitle={`${dayGreeting(employee.fullName)} · ${employee.designation} · ${formatLongDate(today)}`} />
+      <DashGreeting title="Manager home" subtitle={`${dayGreeting(employee.fullName)} · ${employee.designation} · ${formatLongDate(today)}`} />
       <MetricGrid>
         <MetricCard label="Team headcount" value={data.team.length} hint={`${m.direct} direct reports`} />
         <MetricCard label="Working today" value={m.working} hint={`${checkedIn.size} checked in · ${m.wfh} WFH · ${m.onLeave} on leave`} />
@@ -1032,6 +1033,9 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
   const { talent, attState, today } = data;
   const exitState = useSyncExternalStore(subscribeExits, getExitState, getExitState);
   const bgv = useSyncExternalStore(subscribeBgv, getBgvState, getBgvState);
+  const reward = useSyncExternalStore(subscribeReward, getRewardState, getRewardState);
+  const comp = compReviewStatus(reward.reviews);
+  const showComp = !hrbp && canApproveCompReviews(demoProfile);
   const region = useRegionFilter();
   const country: CountryCode | "ALL" = hrbp ? ((employee.countryCode ?? "IN") as CountryCode) : region;
   const scopeName = country === "ALL" ? undefined : countryNameOf(country);
@@ -1129,7 +1133,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
     [data.people, scopePeople, state.holidays, state.leaveRequests, today],
   );
 
-  const title = hrbp ? "HRBP Home" : "HR Home";
+  const title = hrbp ? "HRBP home" : "HR home";
   useTitle(title);
 
   const sections: Section[] = [
@@ -1298,6 +1302,30 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
         </Card>
       ),
     },
+    // HR owns compensation & benefits: the pay review cycle sits on the HR home.
+    ...(comp && showComp
+      ? [
+          {
+            id: "comp-cycle",
+            label: "Compensation review",
+            node: (
+              <Card title={`${comp.cycle} · ${comp.status}`} to="/compensation">
+                {comp.total ? (
+                  <>
+                    <ProgressBar value={comp.submittedPct} label={`Submitted · ${comp.total} proposals`} />
+                    <ProgressBar value={(comp.approved / comp.total) * 100} label={`Approved · ${comp.approved}`} />
+                    <p className="note">
+                      {comp.awaiting} awaiting approval · {comp.pendingManagers} managers still to submit
+                    </p>
+                  </>
+                ) : (
+                  <p className="note">No proposals yet.</p>
+                )}
+              </Card>
+            ),
+          },
+        ]
+      : []),
     { id: "holidays", label: "Upcoming holidays", node: <HolidaysCard holidays={data.holidays} countryName={employee.countryName} /> },
     {
       id: "links",
@@ -1308,6 +1336,9 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
             allowed={demoProfile.navAccess}
             items={[
               { label: "People directory", to: R.directory, access: "people" },
+              { label: "Compensation", to: "/compensation", access: "compensation" },
+              { label: "Benefits", to: R.benefits, access: "benefits" },
+              { label: "Pay preview", to: "/payroll/preview", access: "paypreview" },
               { label: "Organization", to: "/organization", access: "organization" },
               { label: "Onboarding", to: R.onboarding, access: "onboarding" },
               { label: "Bulk updates", to: "/data-tools/bulk", access: "bulkdata" },
@@ -1350,7 +1381,7 @@ export function RecruiterHome() {
   const upcoming = talent.interviews.filter((i) => i.when.slice(0, 10) >= data.today);
   const byStage = [...active.reduce((m, c) => m.set(c.stage, (m.get(c.stage) ?? 0) + 1), new Map<string, number>())];
 
-  useTitle("Recruiter Home");
+  useTitle("Recruiter home");
 
   const sections: Section[] = [
     ...(data.waitingCount > 0 || data.team.length > 0
@@ -1417,103 +1448,12 @@ export function RecruiterHome() {
 
   return (
     <div className="stack">
-      <DashGreeting title="Recruiter Home" subtitle={`${dayGreeting(employee.fullName)} · Talent acquisition`} />
+      <DashGreeting title="Recruiter home" subtitle={`${dayGreeting(employee.fullName)} · Talent acquisition`} />
       <MetricGrid>
         <MetricCard label="My requisitions" value={mine.length} hint={`${mine.reduce((n, r) => n + r.openings, 0)} openings`} />
         <MetricCard label="Active candidates" value={active.length} />
         <MetricCard label="Upcoming interviews" value={upcoming.length} />
         <MetricCard label="Feedback pending" value={pendingFeedback.length} />
-      </MetricGrid>
-      <HomeSections userId={employee.id} sections={sections} />
-    </div>
-  );
-}
-
-/* ───────────────────────────────────────────── HIRING MANAGER ── */
-
-export function HiringManagerHome() {
-  const { employee, demoProfile } = usePortal();
-  const data = useHomeData();
-  const { talent } = data;
-  const myReqs = talent.requisitions.filter((r) => r.hiringManager === employee.fullName);
-  const reqIds = new Set(myReqs.map((r) => r.id));
-  const myCandidates = talent.candidates.filter((c) => reqIds.has(c.requisitionId) && !["Hired", "Rejected", "Withdrawn"].includes(c.stage));
-  const candIds = new Set(myCandidates.map((c) => c.id));
-  const myInterviews = talent.interviews.filter((i) => candIds.has(i.candidateId));
-  const feedbackDue = myInterviews.filter((i) => i.feedbackStatus === "Pending");
-
-  useTitle("Hiring Manager Home");
-
-  const sections: Section[] = [
-    ...(data.waitingCount > 0 || data.team.length > 0
-      ? [{ id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> }]
-      : []),
-    { id: "myday", label: "My day", node: <MyDayCard /> },
-    {
-      id: "requisitions",
-      label: "My requisitions",
-      node: (
-        <Card title="My requisitions" to="/jobs">
-          <DataTable
-            headers={["ID", "Title", "Openings", "Status"]}
-            rows={myReqs.map((j) => [j.id, j.title, String(j.openings), j.approvalStatus === "Approved" ? j.stageSummary : j.approvalStatus])}
-            empty={<p className="note">You have no requisitions.</p>}
-          />
-        </Card>
-      ),
-    },
-    {
-      id: "candidates",
-      label: "My candidates",
-      node: (
-        <Card title="Candidates for my roles" to="/recruiting">
-          <DataTable
-            headers={["Candidate", "Role", "Stage"]}
-            rows={myCandidates.map((c) => [c.name, c.role, c.stage])}
-            empty={<p className="note">No active candidates.</p>}
-          />
-        </Card>
-      ),
-    },
-    {
-      id: "feedback",
-      label: "Feedback due",
-      node: (
-        <Card title="Interview feedback due" to="/recruiting">
-          <DataTable
-            headers={["Candidate", "Role", "Interview"]}
-            rows={feedbackDue.map((i) => [i.candidateName, i.role, i.when])}
-            empty={<p className="note">No feedback due.</p>}
-          />
-        </Card>
-      ),
-    },
-    {
-      id: "links",
-      label: "Shortcuts",
-      node: (
-        <Card title="Shortcuts">
-          <AuthShortcuts
-            allowed={demoProfile.navAccess}
-            items={[
-              { label: "Recruiting", to: "/recruiting", access: "recruiting" },
-              { label: "Jobs", to: "/jobs", access: "jobs" },
-              { label: "Approvals", to: R.approvals, access: "inbox" },
-            ]}
-          />
-        </Card>
-      ),
-    },
-  ];
-
-  return (
-    <div className="stack">
-      <DashGreeting title="Hiring Manager Home" subtitle={`${dayGreeting(employee.fullName)} · Your requisitions & interviews`} />
-      <MetricGrid>
-        <MetricCard label="My requisitions" value={myReqs.length} hint={`${myReqs.filter((r) => r.approvalStatus === "Approved").length} approved`} />
-        <MetricCard label="Active candidates" value={myCandidates.length} />
-        <MetricCard label="Feedback due" value={feedbackDue.length} />
-        <MetricCard label="Pending approvals" value={data.waitingCount} hint="Waiting on you" />
       </MetricGrid>
       <HomeSections userId={employee.id} sections={sections} />
     </div>
@@ -1543,7 +1483,7 @@ export function ExecutiveHome() {
     [data.talent, data.people, country],
   );
 
-  useTitle("Executive Home");
+  useTitle("Executive home");
 
   const sections: Section[] = [
     { id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> },
@@ -1610,7 +1550,7 @@ export function ExecutiveHome() {
 
   return (
     <div className="stack">
-      <DashGreeting title="Executive Home" subtitle={`${dayGreeting(employee.fullName)} · Workforce overview`} />
+      <DashGreeting title="Executive home" subtitle={`${dayGreeting(employee.fullName)} · Workforce overview`} />
       <DateRangeFilter value={range} onChange={setRange} extras={<RegionalFilter label="Country" />} />
       <MetricGrid>
         <MetricCard label="Headcount" value={stats.headcount} hint={country === "ALL" ? "All countries" : stats.byCountry[0]?.name} />
@@ -1630,9 +1570,7 @@ const ROLE_LABELS: Partial<Record<DemoAccount["role"], string>> = {
   manager: "Manager",
   hr_admin: "HR",
   recruiter: "Recruiter",
-  hiring_manager: "Hiring Manager",
   executive: "Executive",
-  compensation_admin: "Compensation",
   admin: "Admin",
 };
 
@@ -1694,7 +1632,7 @@ export function AdministrationHome() {
     }));
   const ticketData = countInto(TICKET_STATUSES, tickets.map((t) => t.status));
 
-  useTitle("Administration Home");
+  useTitle("Admin home");
 
   const sections: Section[] = [
     { id: "myday", label: "My day", node: <MyDayCard /> },
@@ -1894,7 +1832,7 @@ export function AdministrationHome() {
 
   return (
     <div className="stack">
-      <DashGreeting title="Administration Home" subtitle={`${dayGreeting(employee.fullName)} · Platform`} />
+      <DashGreeting title="Admin home" subtitle={`${dayGreeting(employee.fullName)} · Platform`} />
       <MetricGrid>
         <MetricCard label="People" value={stats.headcount} hint={country === "ALL" ? "All countries" : stats.byCountry[0]?.name} />
         <MetricCard label="Sign-in accounts" value={DEMO_ACCOUNTS.length} />
@@ -1904,72 +1842,6 @@ export function AdministrationHome() {
           value={integrations.filter((i) => i.status === "Connected").length}
           hint={`of ${integrations.length}`}
         />
-      </MetricGrid>
-      <HomeSections userId={employee.id} sections={sections} />
-    </div>
-  );
-}
-
-/* ───────────────────────────────────────────── COMPENSATION ── */
-
-export function CompensationAdminHome() {
-  const { employee, demoProfile } = usePortal();
-  const data = useHomeData();
-
-  const reward = useSyncExternalStore(subscribeReward, getRewardState, getRewardState);
-  const comp = compReviewStatus(reward.reviews);
-
-  useTitle("Compensation Home");
-
-  const sections: Section[] = [
-    ...(data.waitingCount > 0 || data.team.length > 0
-      ? [{ id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> }]
-      : []),
-    { id: "myday", label: "My day", node: <MyDayCard /> },
-    {
-      id: "cycle",
-      label: "Review cycle",
-      node: (
-        <Card title={comp ? `${comp.cycle} · ${comp.status}` : "Review cycle"} to="/compensation">
-          {comp && comp.total ? (
-            <>
-              <ProgressBar value={comp.submittedPct} label={`Submitted · ${comp.total} proposals`} />
-              <ProgressBar value={comp.total ? (comp.approved / comp.total) * 100 : 0} label={`Approved · ${comp.approved}`} />
-              <p className="note">{comp.pendingManagers} managers still to submit</p>
-            </>
-          ) : (
-            <p className="note">No proposals yet.</p>
-          )}
-        </Card>
-      ),
-    },
-    {
-      id: "links",
-      label: "Shortcuts",
-      node: (
-        <Card title="Shortcuts">
-          <AuthShortcuts
-            allowed={demoProfile.navAccess}
-            items={[
-              { label: "Compensation", to: "/compensation", access: "compensation" },
-              { label: "Benefits", to: R.benefits, access: "benefits" },
-              { label: "Payroll", to: "/payroll", access: "payroll" },
-              { label: "Analytics", to: "/analytics", access: "analytics" },
-            ]}
-          />
-        </Card>
-      ),
-    },
-  ];
-
-  return (
-    <div className="stack">
-      <DashGreeting title="Compensation Home" subtitle={dayGreeting(employee.fullName)} />
-      <MetricGrid>
-        <MetricCard label="Review submitted" value={`${comp?.submittedPct ?? 0}%`} />
-        <MetricCard label="Awaiting approval" value={comp?.awaiting ?? 0} />
-        <MetricCard label="Managers pending" value={comp?.pendingManagers ?? 0} />
-        <MetricCard label="Pending approvals" value={data.waitingCount} hint="Waiting on you" />
       </MetricGrid>
       <HomeSections userId={employee.id} sections={sections} />
     </div>
@@ -1987,14 +1859,10 @@ export function RoleHomeRouter({ profile }: { profile: DemoAccount }) {
       return <HrAdminHome hrbp />;
     case "recruiter":
       return <RecruiterHome />;
-    case "hiring_manager":
-      return <HiringManagerHome />;
     case "executive":
     case "founder":
     case "cofounder":
       return <ExecutiveHome />;
-    case "compensation_admin":
-      return <CompensationAdminHome />;
     case "it_admin":
     case "admin":
     case "super_admin":

@@ -338,7 +338,7 @@ export function saveShift(
       const today = todayISO();
       const upcoming = s.assignments.filter((a) => a.shiftId === input.id && a.date >= today);
       if (upcoming.length && (existing.start !== input.start || existing.end !== input.end || existing.weekendOnly !== input.weekendOnly)) {
-        return `${existing.name} is on ${upcoming.length} upcoming roster day(s) — clear those before changing its hours.`;
+        return `${existing.name} is on ${upcoming.length} upcoming roster ${upcoming.length === 1 ? "day" : "days"} — clear those before changing its hours.`;
       }
       Object.assign(existing, { name, start: input.start, end: input.end, weekendOnly: input.weekendOnly });
     } else {
@@ -356,7 +356,7 @@ export function setShiftActive(actor: WorkforceActor, id: string, active: boolea
     if (!active) {
       const today = todayISO();
       const upcoming = s.assignments.filter((a) => a.shiftId === id && a.date >= today).length;
-      if (upcoming) return `${shift.name} is on ${upcoming} upcoming roster day(s) — clear those first.`;
+      if (upcoming) return `${shift.name} is on ${upcoming} upcoming roster ${upcoming === 1 ? "day" : "days"} — clear those first.`;
     }
     shift.active = active;
     return null;

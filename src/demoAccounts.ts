@@ -17,6 +17,7 @@ export type NavAccessId =
   | "tasks"
   | "tickets"
   | "inbox"
+  | "approvalsmenu"
   | "messages"
   | "announcements"
   | "notifications"
@@ -161,6 +162,7 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "bulkdata",
   "reportbuilder",
   "auditlog",
+  "approvalsmenu",
 ];
 
 function account(
@@ -178,64 +180,18 @@ function account(
   };
 }
 
-/** Country Managers: the CEO's direct reports who lead each country, plus country-wide reports and hiring. */
-const ACCESS_COUNTRY_MANAGER: NavAccessId[] = [
-  ...ACCESS_MANAGER,
-  "organization",
-  "jobs",
-  "reportbuilder",
-  // analytics, recruiting and succession already come with ACCESS_MANAGER; no compensation.
-];
-
-/*
- * Country Managers. Ids, names, phones and locations are the directory's generated country heads
- * (buildTimezWorkforce in workforce.ts), so their position and reports stay where they were.
- */
-const CM_INDIA = "wf-TZ0001";
-const CM_US = "wf-TZ0194";
-const CM_UK = "wf-TZ0290";
-
-const COUNTRY_MANAGER_SEEDS: {
-  id: string;
-  employeeCode: string;
-  fullName: string;
-  mobile: string;
-  countryCode: NonNullable<Employee["countryCode"]>;
-  countryName: string;
-  legalEntity: string;
-  location: string;
-  timeZone: string;
-  currency: string;
-  shiftHours: string;
-}[] = [
-  { id: CM_INDIA, employeeCode: "CMG4101", fullName: "Aarav Sharma", mobile: "+91 95345 16922", countryCode: "IN", countryName: "India", legalEntity: "Infotech India Pvt Ltd", location: "Bengaluru", timeZone: "Asia/Kolkata", currency: "INR", shiftHours: "09:30 AM to 06:30 PM" },
-  { id: CM_US, employeeCode: "CMG4102", fullName: "William Sharma", mobile: "+1 212 555 0190", countryCode: "US", countryName: "United States", legalEntity: "Infotech Inc", location: "New York", timeZone: "America/New_York", currency: "USD", shiftHours: "09:00 AM to 06:00 PM" },
-  { id: CM_UK, employeeCode: "CMG4103", fullName: "Hans Schmidt", mobile: "+44 20 7946 0395", countryCode: "GB", countryName: "United Kingdom", legalEntity: "Infotech UK Ltd", location: "London", timeZone: "Europe/London", currency: "GBP", shiftHours: "09:00 AM to 05:30 PM" },
-  { id: "wf-TZ0349", employeeCode: "CMG4104", fullName: "Mia Sharma", mobile: "+61 465 640 190", countryCode: "AU", countryName: "Australia", legalEntity: "Infotech Australia Pty", location: "Sydney", timeZone: "Australia/Sydney", currency: "AUD", shiftHours: "09:00 AM to 05:30 PM" },
-  { id: "wf-TZ0389", employeeCode: "CMG4105", fullName: "Sara Patel", mobile: "+1 416 555 0518", countryCode: "CA", countryName: "Canada", legalEntity: "Infotech Canada Inc", location: "Toronto", timeZone: "America/Toronto", currency: "CAD", shiftHours: "09:00 AM to 05:00 PM" },
-  { id: "wf-TZ0424", employeeCode: "CMG4106", fullName: "Rohan Mueller", mobile: "+971 50 297 3405", countryCode: "AE", countryName: "United Arab Emirates", legalEntity: "Infotech Middle East FZ", location: "Dubai", timeZone: "Asia/Dubai", currency: "AED", shiftHours: "09:00 AM to 06:00 PM" },
-  { id: "wf-TZ0449", employeeCode: "CMG4107", fullName: "Sara Nair", mobile: "+966 57 006 8859", countryCode: "SA", countryName: "Saudi Arabia", legalEntity: "Infotech Saudi LLC", location: "Riyadh", timeZone: "Asia/Riyadh", currency: "SAR", shiftHours: "08:00 AM to 05:00 PM" },
-  { id: "wf-TZ0469", employeeCode: "CMG4108", fullName: "Mia Khan", mobile: "+49 151 6449 7739", countryCode: "DE", countryName: "Germany", legalEntity: "Infotech Germany GmbH", location: "Berlin", timeZone: "Europe/Berlin", currency: "EUR", shiftHours: "09:00 AM to 05:30 PM" },
-];
-
 /**
- * Demo cast. Reporting line (org chart) is separate from RBAC:
+ * The six sign-in accounts. Reporting line (org chart) is separate from RBAC:
  *
  *   Jordan Blake (Executive) ── root
- *   ├── Aarav Sharma (Country Manager · India)
- *   │   ├── Ram Krishnan (Manager)
- *   │   │   └── Babu Menon (Employee)       ← Ram approves Babu's leave via reporting
- *   │   └── Farhan Ali (HR)
- *   │       └── Sophie Clark (Recruiter)    ← candidate access = Recruiter role, not chart
- *   │           (HR also owns compensation & benefits: final pay approvals, benefits, pay preview)
- *   ├── William Sharma (Country Manager · United States)
- *   │   └── Daniel Ortiz (Hiring Manager)
- *   ├── Hans Schmidt (Country Manager · United Kingdom)
- *   │   └── Alex Morgan (Admin)             ← accounts = Admin role; no auto payslips
- *   └── Country Managers for Australia, Canada, UAE, Saudi Arabia and Germany
+ *   ├── Farhan Ali (HR)
+ *   │   └── Sophie Clark (Recruiter)    ← candidate access = Recruiter role, not chart
+ *   │       (HR also owns compensation & benefits: final pay approvals, benefits, pay preview)
+ *   ├── Ram Krishnan (Manager)
+ *   │   └── Babu Menon (Employee)       ← Ram approves Babu's leave via reporting
+ *   └── Alex Morgan (Admin)             ← accounts = Admin role; no auto payslips
  *
- * Country Managers keep their place in the generated directory (same wf-… id and position); the
- * directory takes their name, email and employee code from these accounts.
+ * The generated directory's Country Managers (wf-TZ0001 … wf-TZ0469) are ordinary people who cannot sign in.
  * Jordan sees executive reports; individual salary stays blocked (salaryAuthorized: false).
  */
 export const DEMO_ACCOUNTS: DemoAccount[] = [
@@ -278,7 +234,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     location: "Bengaluru",
     department: "Engineering",
     currency: "INR",
-    reportsToId: CM_INDIA,
+    reportsToId: "demo-ceo",
     navAccess: ACCESS_MANAGER,
   }),
   account({
@@ -299,7 +255,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     location: "Bengaluru",
     department: "People",
     currency: "INR",
-    reportsToId: CM_INDIA,
+    reportsToId: "demo-ceo",
     rbacFlags: { hrCompAuthorized: true },
     navAccess: [
       ...ACCESS_MANAGER,
@@ -351,28 +307,6 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     ],
   }),
   account({
-    id: "demo-hiring-manager",
-    employeeCode: "HM1102",
-    fullName: "Daniel Ortiz",
-    personaLabel: "Hiring Manager",
-    role: "hiring_manager",
-    designation: "Director of Product",
-    email: "daniel.ortiz@infotech.com",
-    password: "Hiring@1102",
-    mobile: "+1 415 555 0190",
-    address: "San Francisco, USA",
-    timeZone: "America/Los_Angeles",
-    countryCode: "US",
-    countryName: "United States",
-    legalEntity: "Infotech Inc",
-    location: "San Francisco",
-    department: "Product",
-    currency: "USD",
-    shiftHours: "08:30 AM to 05:30 PM",
-    reportsToId: CM_US,
-    navAccess: [...ACCESS_MANAGER, "jobs", "recruiting", "onboarding"],
-  }),
-  account({
     id: "demo-ceo",
     employeeCode: "EXE5001",
     fullName: "Jordan Blake",
@@ -422,44 +356,37 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     department: "IT",
     currency: "GBP",
     shiftHours: "09:00 AM to 05:30 PM",
-    reportsToId: CM_UK,
+    reportsToId: "demo-ceo",
     navAccess: ACCESS_ADMIN,
   }),
-  ...COUNTRY_MANAGER_SEEDS.map((cm) =>
-    account({
-      id: cm.id,
-      employeeCode: cm.employeeCode,
-      fullName: cm.fullName,
-      personaLabel: `Country Manager · ${cm.countryName}`,
-      role: "manager",
-      designation: "Country Manager",
-      email: `${cm.fullName.toLowerCase().replace(/\s+/g, ".")}@infotech.com`,
-      password: `CountryMgr@${cm.employeeCode.replace(/\D/g, "")}`,
-      mobile: cm.mobile,
-      address: `${cm.location}, ${cm.countryName}`,
-      timeZone: cm.timeZone,
-      countryCode: cm.countryCode,
-      countryName: cm.countryName,
-      legalEntity: cm.legalEntity,
-      location: cm.location,
-      department: "Executive",
-      currency: cm.currency,
-      shiftHours: cm.shiftHours,
-      reportsToId: "demo-ceo",
-      navAccess: ACCESS_COUNTRY_MANAGER,
-    }),
-  ),
 ];
-
-/** Ids of the Country Manager sign-in accounts (they hold the directory's generated country-head seats). */
-export const COUNTRY_MANAGER_IDS: ReadonlySet<string> = new Set(COUNTRY_MANAGER_SEEDS.map((cm) => cm.id));
 
 /**
  * Sign-in accounts that were retired. Saved browser data that still mentions them is dropped on load.
- * (The Compensation & Benefits persona was removed — HR now owns compensation & benefits.)
+ * (The Compensation & Benefits persona was removed — HR now owns compensation & benefits. The Hiring Manager persona
+ * was removed — line managers raise requisitions; his now sit with the CEO.)
  */
-export const RETIRED_ACCOUNT_IDS: ReadonlySet<string> = new Set(["demo-compensation"]);
-export const RETIRED_ACCOUNT_NAMES: ReadonlySet<string> = new Set(["Helen Brooks"]);
+export const RETIRED_ACCOUNT_IDS: ReadonlySet<string> = new Set(["demo-compensation", "demo-hiring-manager"]);
+export const RETIRED_ACCOUNT_NAMES: ReadonlySet<string> = new Set(["Helen Brooks", "Daniel Ortiz"]);
+
+/**
+ * The eight Country Managers no longer sign in. They are still people in the generated directory, so records that
+ * mention them stay; only a saved session or per-account settings for them are cleared on load.
+ */
+export const RETIRED_COUNTRY_MANAGER_IDS: ReadonlySet<string> = new Set([
+  "wf-TZ0001", "wf-TZ0194", "wf-TZ0290", "wf-TZ0349", "wf-TZ0389", "wf-TZ0424", "wf-TZ0449", "wf-TZ0469",
+]);
+
+/** Every id that was once a sign-in account and no longer is: a saved session for any of them is signed out. */
+export const RETIRED_SIGN_IN_IDS: ReadonlySet<string> = new Set([...RETIRED_ACCOUNT_IDS, ...RETIRED_COUNTRY_MANAGER_IDS]);
+
+/**
+ * The directory seat that took over a retired account's reports: the Hiring Manager led US Product, now led by the
+ * generated US Head of Product (wf-TZ0490).
+ */
+export const RETIRED_SEAT_SUCCESSOR: Readonly<Record<string, { id: string; fullName: string }>> = {
+  "demo-hiring-manager": { id: "wf-TZ0490", fullName: "James Iyer" },
+};
 
 /** True when a saved record (any shape) points at a retired account by id or name. */
 export function mentionsRetiredAccount(value: unknown): boolean {
@@ -470,36 +397,11 @@ export function mentionsRetiredAccount(value: unknown): boolean {
   return false;
 }
 
-/** Sections of the development sign-in list, in display order. */
-export const DEMO_ACCOUNT_GROUPS = ["Leadership", "HR & Admin", "Managers", "Employees"] as const;
-export type DemoAccountGroup = (typeof DEMO_ACCOUNT_GROUPS)[number];
-
-const HR_ADMIN_ROLES: readonly string[] = ["hr", "hr_admin", "hrbp", "recruiter", "admin", "super_admin", "it_admin"];
-
-export function demoAccountGroup(account: Pick<DemoAccount, "id" | "role">): DemoAccountGroup {
-  if (account.role === "executive" || account.role === "founder" || account.role === "cofounder" || COUNTRY_MANAGER_IDS.has(account.id)) {
-    return "Leadership";
-  }
-  if (HR_ADMIN_ROLES.includes(account.role)) return "HR & Admin";
-  if (account.role === "manager" || account.role === "hiring_manager") return "Managers";
-  return "Employees";
-}
-
-/** Accounts split into the sign-in list's sections (empty sections left out). */
-export function groupDemoAccounts<T extends Pick<DemoAccount, "id" | "role">>(
-  accounts: readonly T[],
-): { group: DemoAccountGroup; accounts: T[] }[] {
-  return DEMO_ACCOUNT_GROUPS.map((group) => ({ group, accounts: accounts.filter((a) => demoAccountGroup(a) === group) })).filter(
-    (g) => g.accounts.length > 0,
-  );
-}
-
 export type DemoOrgNode = DemoAccount & { children: DemoOrgNode[] };
 
 /** Display order under a leader (story-friendly, not alphabetical). */
 const ORG_CHILD_ORDER: Record<string, string[]> = {
-  "demo-ceo": ["wf-TZ0001", "wf-TZ0194", "wf-TZ0290", "wf-TZ0349", "wf-TZ0389", "wf-TZ0424", "wf-TZ0449", "wf-TZ0469"],
-  "wf-TZ0001": ["emp-ram", "demo-hr-admin"],
+  "demo-ceo": ["demo-hr-admin", "emp-ram", "demo-admin"],
   "emp-ram": ["emp-mahesh"],
   "demo-hr-admin": ["demo-recruiter"],
 };

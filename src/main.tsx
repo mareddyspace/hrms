@@ -7,6 +7,18 @@ import { LocaleProvider } from "./locale/LocaleContext.tsx";
 import { PortalProvider } from "./store.tsx";
 import "./styles.css";
 
+// A new hosted build replaces sample data saved by an older version, so the site matches the code.
+// Personal settings, notes and the signed-in session are kept.
+const BUILD_KEY = "kastech.build";
+if (import.meta.env.PROD && localStorage.getItem(BUILD_KEY) !== __APP_BUILD__) {
+  const keep = /^(kastech\.prefs\.|kastech\.notes|kastech\.ess\.(user|session|theme|last-active|remember)|kastech\.build$)/;
+  for (const key of Object.keys(localStorage)) {
+    if (!/^(kastech|timez|hrms)\./.test(key) || keep.test(key)) continue;
+    localStorage.removeItem(key);
+  }
+  localStorage.setItem(BUILD_KEY, __APP_BUILD__);
+}
+
 // One-time rename in data saved by earlier versions: "Isha Reddy" was replaced by "Riya Kapoor"
 // (and the generated directory entry by "Isha Kapoor").
 const RENAME_KEY = "kastech.migrate.isha-reddy";

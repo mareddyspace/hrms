@@ -58,7 +58,7 @@ function readSettings(): CountrySettings[] {
 }
 
 /** HR, leadership, pay and platform roles look across countries by default. */
-const ALL_REGION_ROLES = ["hr", "hr_admin", "hrbp", "executive", "founder", "cofounder", "admin", "super_admin", "it_admin", "compensation_admin"];
+const ALL_REGION_ROLES = ["hr", "hr_admin", "hrbp", "executive", "founder", "cofounder", "admin", "super_admin", "it_admin"];
 
 function regionKey(accountId: string) {
   return `${REGION_KEY}.${accountId}`;

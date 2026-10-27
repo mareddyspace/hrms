@@ -3,7 +3,7 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { COMPANY_NAME } from "../brand.ts";
 import type { LeaveRow, Project } from "../model.ts";
-import { parseISODate, partyName } from "../model.ts";
+import { formatShortDate, partyName } from "../model.ts";
 import { breadcrumbsFor } from "../nav.ts";
 
 export function Card({
@@ -103,7 +103,7 @@ export function MetricCard({
   return (
     <article className="metric-card">
       <p className="metric-label">{label}</p>
-      <p className="metric-value">{value}</p>
+      <p className="metric-value">{typeof value === "number" ? value.toLocaleString("en-GB") : value}</p>
       {hint && <p className="metric-hint">{hint}</p>}
     </article>
   );
@@ -111,6 +111,13 @@ export function MetricCard({
 
 export function MetricGrid({ children }: { children: ReactNode }) {
   return <div className="metric-grid">{children}</div>;
+}
+
+const NUMERIC_TEXT = /^[-+−]?(?:[A-Z]{2,3}\s|[^\d\sA-Za-z]{1,3}\s?)?[\d,]+(?:\.\d+)?\s?%?$/;
+
+function isNumericCell(cell: ReactNode): boolean {
+  if (typeof cell === "number") return true;
+  return typeof cell === "string" && NUMERIC_TEXT.test(cell.trim());
 }
 
 export function DataTable({
@@ -123,15 +130,20 @@ export function DataTable({
   empty?: ReactNode;
 }) {
   if (!rows.length) {
-    return <>{empty ?? <EmptyState title="No records" description="Nothing to show yet." />}</>;
+    return <>{empty ?? <EmptyState title="Nothing here yet" />}</>;
   }
+  // Columns whose filled cells are all numbers or amounts are right-aligned.
+  const numericCols = headers.map((_, col) => {
+    const cells = rows.map((row) => row[col]).filter((cell) => cell !== "" && cell != null && cell !== "—");
+    return cells.length > 0 && cells.every(isNumericCell);
+  });
   return (
     <div className="data-table-wrap">
       <table className="data-table">
         <thead>
           <tr>
-            {headers.map((header) => (
-              <th key={header}>{header}</th>
+            {headers.map((header, col) => (
+              <th key={`${header}-${col}`} className={numericCols[col] ? "num" : undefined}>{header}</th>
             ))}
           </tr>
         </thead>
@@ -139,7 +151,7 @@ export function DataTable({
           {rows.map((row, index) => (
             <tr key={index}>
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex}>{cell}</td>
+                <td key={cellIndex} className={numericCols[cellIndex] ? "num" : undefined}>{cell}</td>
               ))}
             </tr>
           ))}
@@ -159,7 +171,7 @@ function normalizeStatusLabel(status: string): string {
   if (key === "approved" || key === "done" || key === "completed") return "Approved";
   if (key === "rejected" || key === "withdrawn") return "Rejected";
   if (key === "draft") return "Draft";
-  if (key === "action required" || key === "actionrequired" || key === "returned") return "Action Required";
+  if (key === "action required" || key === "actionrequired" || key === "returned") return "Action required";
   if (key === "progress" || key === "in progress") return "In progress";
   if (key === "open") return "Open";
   if (key === "scheduled") return "Scheduled";
@@ -362,31 +374,33 @@ export function LoadingState({ label = "Loading…" }: { label?: string }) {
 
 export function LeaveTable({ rows, showPending = false }: { rows: LeaveRow[]; showPending?: boolean }) {
   return (
-    <table className="leave">
-      <thead>
-        <tr>
-          <th>Leave type</th>
-          <th>Allowed</th>
-          <th>Used</th>
-          {showPending && <th>Pending</th>}
-          <th>Left</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.code}>
-            <td>{row.name}</td>
-            <td>
-              {row.quota}
-              {row.carriedOver ? <span className="muted"> (incl. {row.carriedOver} carried over)</span> : null}
-            </td>
-            <td>{row.utilized}</td>
-            {showPending && <td>{row.pending}</td>}
-            <td>{row.balance}</td>
+    <div className="doc-table-wrap">
+      <table className="leave">
+        <thead>
+          <tr>
+            <th>Leave type</th>
+            <th>Allowed</th>
+            <th>Used</th>
+            {showPending && <th>Pending</th>}
+            <th>Left</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.code}>
+              <td>{row.name}</td>
+              <td>
+                {row.quota}
+                {row.carriedOver ? <span className="muted"> (incl. {row.carriedOver} carried over)</span> : null}
+              </td>
+              <td>{row.utilized}</td>
+              {showPending && <td>{row.pending}</td>}
+              <td>{row.balance}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -400,7 +414,7 @@ export function ProjectFacts({ project, hours }: { project: Project; hours?: num
         <dt>Client</dt>
         <dd>{partyName(project.client, "—")}</dd>
         <dt>Start</dt>
-        <dd>{parseISODate(project.startDate).toLocaleDateString("en-IN")}</dd>
+        <dd>{formatShortDate(project.startDate)}</dd>
         {hours != null && (
           <>
             <dt>Hours logged</dt>

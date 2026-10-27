@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { mentionsRetiredAccount } from "../demoAccounts.ts";
 
 /** Internal mail between a person and their reporting line / HR. */
 export type MailCategory = "Leave" | "Attendance" | "Work from home" | "Pay" | "General";
@@ -99,7 +100,11 @@ function read(): MailMessage[] {
   if (cache) return cache;
   try {
     const raw = localStorage.getItem(KEY);
-    cache = raw ? (JSON.parse(raw) as MailMessage[]) : seed();
+    const saved = raw ? (JSON.parse(raw) as MailMessage[]) : null;
+    // Mail to or from a retired sign-in account (the Compensation persona) is dropped.
+    const kept = saved?.filter((m) => !mentionsRetiredAccount(m)) ?? null;
+    if (saved && kept && kept.length !== saved.length) localStorage.setItem(KEY, JSON.stringify(kept));
+    cache = kept ?? seed();
   } catch {
     cache = seed();
   }

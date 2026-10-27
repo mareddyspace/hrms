@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
 import { claimLimitsFor, itemCurrency, money, moneyTotals, payRulesFor } from "../countryPay.ts";
-import { formatShortDate, inr, todayISO } from "../model.ts";
+import { formatShortDate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { ASSET_SUGGESTIONS, TEMPLATE_BLANKS_ERROR, hasOwnTemplate, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 
@@ -16,7 +16,7 @@ export function EncashmentPage() {
   return (
     <Page
       title="Leave encashment"
-      subtitle="Only privilege leave can be encashed."
+      subtitle="Privilege leave only"
     >
       <section className="summary-row" aria-label="Privilege leave">
         <div className="summary">
@@ -56,19 +56,21 @@ export function EncashmentPage() {
           {mine.length === 0 ? (
             <p className="empty">No encashment requests yet.</p>
           ) : (
-            <table className="data">
-              <tbody>
-                {mine.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.days} days</td>
-                    <td>{item.appliedOn}</td>
-                    <td>
-                      <StatusPill status={item.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="doc-table-wrap">
+              <table className="data">
+                <tbody>
+                  {mine.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.days} days</td>
+                      <td>{item.appliedOn}</td>
+                      <td>
+                        <StatusPill status={item.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
       </div>
@@ -99,7 +101,7 @@ export function CashPage() {
   const pendingCount = rows.filter((item) => item.status === "pending").length;
 
   return (
-    <Page title="Cash advance" subtitle="Approved advances are recovered from a later payslip.">
+    <Page title="Cash advance" subtitle="Recovered from a later payslip">
       <section className="cash-summary" aria-label="Cash advance summary">
         <div className="cash-stat">
           <span>Total requested</span>
@@ -211,31 +213,33 @@ export function AssetsPage() {
   const assigned = state.assets.filter((asset) => asset.employeeId === employee.id);
   const requests = state.assetRequests.filter((request) => request.employeeId === employee.id);
   return (
-    <Page title="My Asset Request">
+    <Page title="Asset requests">
       <Card title="Assigned to me">
         {assigned.length === 0 ? (
           <p className="empty">No assets are assigned to you.</p>
         ) : (
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Asset</th>
-              <th>Tag</th>
-              <th>Since</th>
-              <th>Condition</th>
-            </tr>
-          </thead>
-          <tbody>
-            {assigned.map((asset) => (
-              <tr key={asset.id}>
-                <td>{asset.name}</td>
-                <td>{asset.tag}</td>
-                <td>{asset.assignedOn}</td>
-                <td>{asset.condition}</td>
+        <div className="doc-table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Asset</th>
+                <th>Tag</th>
+                <th>Since</th>
+                <th>Condition</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {assigned.map((asset) => (
+                <tr key={asset.id}>
+                  <td>{asset.name}</td>
+                  <td>{asset.tag}</td>
+                  <td>{asset.assignedOn}</td>
+                  <td>{asset.condition}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         )}
       </Card>
       <RequestSplit
@@ -293,93 +297,22 @@ export function AssetsPage() {
           requests.length === 0 ? (
             <p className="empty">No open asset requests.</p>
           ) : (
-            <table className="data">
-              <tbody>
-                {requests.map((request) => (
-                  <tr key={request.id}>
-                    <td>{request.date}</td>
-                    <td>{request.item}</td>
-                    <td>{request.reason}</td>
-                    <td>
-                      <StatusPill status={request.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-        }
-      />
-    </Page>
-  );
-}
-
-export function CabPage() {
-  const { state, employee, addCab, hasApprover } = usePortal();
-  const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const rows = state.cabBookings.filter((item) => item.employeeId === employee.id);
-  return (
-    <Page title="Book my Cab">
-      <RequestSplit
-        form={
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              const error = addCab({ date, time, from, to });
-              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Cab requested." : "Cab booking approved automatically." });
-              if (!error) {
-                setFrom("");
-                setTo("");
-              }
-            }}
-          >
-            <div className="form-grid">
-              <Field label="Date">
-                <input type="date" min={todayISO()} value={date} onChange={(event) => setDate(event.target.value)} />
-              </Field>
-              <Field label="Time">
-                <input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
-              </Field>
-              <Field label="Pickup">
-                <input value={from} onChange={(event) => setFrom(event.target.value)} />
-              </Field>
-              <Field label="Drop">
-                <input value={to} onChange={(event) => setTo(event.target.value)} />
-              </Field>
+            <div className="doc-table-wrap">
+              <table className="data">
+                <tbody>
+                  {requests.map((request) => (
+                    <tr key={request.id}>
+                      <td>{request.date}</td>
+                      <td>{request.item}</td>
+                      <td>{request.reason}</td>
+                      <td>
+                        <StatusPill status={request.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <div className="form-actions">
-              <button className="btn" type="submit">
-                Book cab
-              </button>
-            </div>
-            <Banner message={message} />
-          </form>
-        }
-        rows={
-          rows.length === 0 ? (
-            <p className="empty">No cab bookings.</p>
-          ) : (
-            <table className="data">
-              <tbody>
-                {rows.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      {item.date} {item.time}
-                    </td>
-                    <td>
-                      {item.from} → {item.to}
-                    </td>
-                    <td>
-                      <StatusPill status={item.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           )
         }
       />
@@ -400,7 +333,7 @@ export function SoftwarePage() {
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const rows = state.softwareRequests.filter((item) => item.employeeId === employee.id);
   return (
-    <Page title="Request For Software">
+    <Page title="Software requests">
       <RequestSplit
         form={
           <form
@@ -444,93 +377,24 @@ export function SoftwarePage() {
           rows.length === 0 ? (
             <p className="empty">No software requests.</p>
           ) : (
-            <table className="data">
-              <tbody>
-                {rows.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.software}</td>
-                    <td>{item.justification}</td>
-                    <td>
-                      <StatusPill status={item.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="doc-table-wrap">
+              <table className="data">
+                <tbody>
+                  {rows.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.software}</td>
+                      <td>{item.justification}</td>
+                      <td>
+                        <StatusPill status={item.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )
         }
       />
-    </Page>
-  );
-}
-
-export function CafeteriaPage() {
-  const { state, employee, menuItem, orderMeal, cancelMeal } = usePortal();
-  const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const orders = state.cafeteriaOrders.filter((order) => order.employeeId === employee.id);
-  return (
-    <Page title="My Cafeteria">
-      <div className="menu-grid">
-        {state.menu.map((item) => (
-          <article key={item.id} className="menu-card">
-            <h3>{item.name}</h3>
-            <p className="muted">{item.category}</p>
-            <strong>{inr(item.price)}</strong>
-            <div className="form-actions">
-              <button
-                className="btn"
-                type="button"
-                onClick={() => {
-                  const error = orderMeal(item.id);
-                  setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `${item.name} ordered.` });
-                }}
-              >
-                Order
-              </button>
-            </div>
-          </article>
-        ))}
-      </div>
-      <Card title="My orders">
-        <Banner message={message} />
-        {orders.length === 0 ? (
-          <p className="empty">No orders yet.</p>
-        ) : (
-          <table className="data">
-            <tbody>
-              {orders.map((order) => {
-                const item = menuItem(order.menuItemId);
-                // Use the name and price saved with the order; older orders fall back to today's menu.
-                const price = order.unitPrice ?? item?.price;
-                return (
-                  <tr key={order.id}>
-                    <td>{order.date}</td>
-                    <td>{order.itemName ?? item?.name ?? "Menu item"}</td>
-                    <td>{price != null ? inr(price) : "—"}</td>
-                    <td>
-                      <StatusPill status={order.status} />
-                    </td>
-                    <td>
-                      {order.status === "placed" && order.date === todayISO() && (
-                        <button
-                          type="button"
-                          className="btn-ghost btn-tiny"
-                          onClick={() => {
-                            const error = cancelMeal(order.id);
-                            setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Order cancelled." });
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </Card>
     </Page>
   );
 }
