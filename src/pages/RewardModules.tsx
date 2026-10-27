@@ -35,6 +35,7 @@ import {
   UPLOAD_EXTENSIONS,
   addLibraryDoc,
   canAdminBenefits,
+  canDecideBenefitFor,
   canDecideCompReview,
   decideChangeRequest,
   decideCompReview,
@@ -63,7 +64,7 @@ function ScopeNote({ text }: { text: string }) {
 
 /* ───────────────────────────── COMPENSATION ── */
 
-const STRUCTURE_ROLES = ["compensation_admin", "finance", "hr", "hr_admin", "hrbp", "manager", "hiring_manager", "executive", "founder", "cofounder"];
+const STRUCTURE_ROLES = ["finance", "hr", "hr_admin", "hrbp", "manager", "hiring_manager", "executive", "founder", "cofounder"];
 
 const COMP_STATUS_TONE: Record<string, "ok" | "warn" | "danger" | "info" | "neutral"> = {
   Draft: "neutral",
@@ -97,12 +98,12 @@ export function CompensationPage() {
   const bands = GRADE_BANDS.filter((b) => !country || b.country === country);
   const cycle = COMP_CYCLES.find((c) => c.id === cycleId) ?? COMP_CYCLES[0];
 
-  // Pay amounts: your own, or everyone's for Compensation / HR.
+  // Pay amounts: your own, or everyone's for HR (compensation & benefits) / Finance.
   const seesPay = (employeeId: string) => employeeId === me.id || canViewSalaryAmount(me, employeeId, { selfId: me.id }) !== "hidden";
   const visibleHistory = reward.history.filter((row) => seesPay(row.employeeId));
   const visibleBonuses = reward.bonuses.filter((row) => seesPay(row.employeeId));
 
-  // Proposals: never your own; Compensation / HR see the cycle, others only people below them.
+  // Proposals: never your own; HR sees the cycle, others only people below them.
   const visibleReviews = useMemo(
     () =>
       reward.reviews.filter(
@@ -200,7 +201,7 @@ export function CompensationPage() {
             </Card>
           )}
           <Card title="Increase proposals">
-            <p className="note">Approval: someone above the employee (not the proposer), then Compensation.</p>
+            <p className="note">Approval: someone above the employee (not the proposer), then HR. HR's own pay is finalised by their line manager.</p>
             {cycle?.status === "Closed" && <Banner message={{ tone: "info", text: "This cycle is closed." }} />}
             <Banner message={reviewMsg} />
             <DataTable
@@ -319,12 +320,18 @@ export function BenefitsPage() {
   const plans = BENEFIT_PLANS.filter((p) => (canSeeOthers ? !country || p.country === country : p.country === ownCountry));
   const selectedPlan = plans.find((p) => p.id === planId) ?? plans[0];
 
+  // HR's own pending requests go to their line manager, who sees just those rows.
+  const decidesFor = (employeeId: string) => !isBenefitsAdmin && canDecideBenefitFor(demoProfile, employeeId);
   const enrollments = reward.enrollments.filter((e) =>
-    canSeeOthers ? !country || e.country === country : e.employeeId === employee.id,
+    canSeeOthers
+      ? !country || e.country === country
+      : e.employeeId === employee.id || (e.status === "Pending" && decidesFor(e.employeeId)),
   );
   const myPlanIds = new Set(reward.enrollments.filter((e) => e.employeeId === employee.id).map((e) => e.planId));
   const availablePlans = plans.filter((p) => p.country === ownCountry && !myPlanIds.has(p.id) && !p.mandatory);
-  const changeRequests = reward.changeRequests.filter((c) => (canSeeOthers ? inScope(c.employeeId) : c.employeeId === employee.id));
+  const changeRequests = reward.changeRequests.filter((c) =>
+    canSeeOthers ? inScope(c.employeeId) : c.employeeId === employee.id || (c.status === "Pending" && decidesFor(c.employeeId)),
+  );
 
   const dependents = DEPENDENTS.filter((d) => inScope(d.employeeId));
   const history = BENEFIT_HISTORY.filter((h) => inScope(h.employeeId));
@@ -349,7 +356,7 @@ export function BenefitsPage() {
         </button>
       );
     }
-    if (isBenefitsAdmin && e.status === "Pending") {
+    if (e.status === "Pending" && canDecideBenefitFor(demoProfile, e.employeeId)) {
       return (
         <span className="reward-actions">
           <button type="button" className="btn" onClick={() => run(decideEnrollment(demoProfile, e.id, "Enrolled"), `${e.employeeName} enrolled in ${e.planName}.`)}>
@@ -483,7 +490,7 @@ export function BenefitsPage() {
                   c.planName,
                   c.note,
                   <StatusBadge key={c.id} status={c.status} literal />,
-                  isBenefitsAdmin && c.status === "Pending" && c.employeeId !== employee.id ? (
+                  c.status === "Pending" && canDecideBenefitFor(demoProfile, c.employeeId) ? (
                     <span key={`${c.id}-a`} className="reward-actions">
                       <button type="button" className="btn" onClick={() => run(decideChangeRequest(demoProfile, c.id, "Done"), "Change marked done.")}>
                         Done

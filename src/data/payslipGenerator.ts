@@ -7,7 +7,6 @@ import { approvedMonthHours, payBasisFor, type PayBasisKind } from "./payBasis.t
 export function payScaleFor(role: UserRole | string): number {
   if (role === "employee") return 1;
   if (role === "manager" || role === "hiring_manager") return 1.35;
-  if (role === "compensation_admin") return 1.45;
   if (role === "hr_admin" || role === "hr") return 1.4;
   if (role === "executive") return 2.1;
   if (role === "admin" || role === "super_admin") return 1.25;

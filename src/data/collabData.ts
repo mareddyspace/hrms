@@ -379,15 +379,6 @@ export const CHAT_PEOPLE: ChatPerson[] = [
     channelTags: ["general", "leadership"],
   },
   {
-    id: "demo-compensation",
-    name: "Helen Brooks",
-    title: "Compensation & Benefits Manager",
-    department: "Total Rewards",
-    roleLabel: "Compensation",
-    availability: "Away",
-    channelTags: ["general", "compensation", "hr"],
-  },
-  {
     id: "demo-admin",
     name: "Alex Morgan",
     title: "Platform Administrator",
@@ -437,7 +428,6 @@ export function canAccessRestrictedChat(
   if (!restricted) return true;
   if (restricted === "compensation") {
     return (
-      role === "compensation_admin" ||
       role === "hr_admin" ||
       role === "hr" ||
       role === "finance" ||
@@ -668,32 +658,6 @@ export const CONVERSATIONS_SEED: Conversation[] = [
     ],
   },
   {
-    id: "cv-comp-1",
-    kind: "direct",
-    title: "Helen Brooks · Compensation case",
-    participantIds: ["demo-compensation", "demo-hr-admin"],
-    participantNames: ["Helen Brooks", "Farhan Ali"],
-    restricted: "compensation",
-    messages: [
-      {
-        id: "m-comp-1",
-        fromId: "demo-hr-admin",
-        fromName: "Farhan Ali",
-        text: "Please review the band exception draft for L5 London (confidential).",
-        at: "2026-10-12T15:00:00",
-        readBy: ["demo-compensation", "demo-hr-admin"],
-      },
-      {
-        id: "m-comp-2",
-        fromId: "demo-compensation",
-        fromName: "Helen Brooks",
-        text: "Received — I'll mark the case in Comp review. Do not forward outside Comp/HR.",
-        at: "2026-10-12T15:40:00",
-        readBy: ["demo-compensation", "demo-hr-admin"],
-      },
-    ],
-  },
-  {
     id: "cv-hr-1",
     kind: "direct",
     title: "Farhan Ali · Employee relations",
@@ -767,7 +731,8 @@ export const ANNOUNCEMENTS_SEED: Announcement[] = [
     scope: "Country",
     audience: "United States",
     state: "Draft",
-    author: "Helen Brooks",
+    author: "Farhan Ali",
+    authorId: "demo-hr-admin",
     readBy: [],
   },
 ];

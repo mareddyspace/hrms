@@ -397,7 +397,8 @@ export function ApprovalsCenterPage() {
     if (item.kind === "Tax-saving proof") return canVerifyProofs;
     if (item.key.startsWith("swt-")) return true; // already limited to the teammate asked
     if (item.kind === "Leave encashment" && managementChain(item.employeeId, demoAccounts).length === 0) {
-      return portal.demoProfile.role === "compensation_admin";
+      // The CEO has no one above them: HR (compensation & benefits) decides their encashment.
+      return portal.demoProfile.role === "hr" || portal.demoProfile.role === "hr_admin";
     }
     return canDecideFor(item.employeeId, scopeOf(item.kind));
   });

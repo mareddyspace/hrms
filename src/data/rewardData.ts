@@ -49,7 +49,7 @@ export interface CompReviewItem {
   currency: string;
   /**
    * Draft → Pending approval (someone above the employee in their line, not the proposer)
-   * → Pending final approval (Compensation) → Approved. Either step can reject.
+   * → Pending final approval (HR; for HR's own pay, their line manager) → Approved. Either step can reject.
    */
   status: "Draft" | "Pending approval" | "Pending final approval" | "Approved" | "Rejected";
   bonusProposal: string;
@@ -287,7 +287,7 @@ export const COMP_REVIEWS: CompReviewItem[] = [
     currency: "USD",
     status: "Approved",
     bonusProposal: "$18,000",
-    approver: "Helen Brooks",
+    approver: "Farhan Ali",
     decidedOn: "2026-10-15",
   },
 ];

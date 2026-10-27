@@ -68,7 +68,7 @@ import {
   findDemoByEmailOrCode,
   findDemoById,
   managementChain,
-  type DemoAccount, setDirectoryChainSource, setNavOverrideSource } from "./demoAccounts.ts";
+  type DemoAccount, RETIRED_ACCOUNT_IDS, mentionsRetiredAccount, setDirectoryChainSource, setNavOverrideSource } from "./demoAccounts.ts";
 import { canApproveTeam, holidaysForPerson, setEarnedLeaveSource, setHolidayContext } from "./model.ts";
 import { getOptionalHolidayState, subscribeOptionalHolidays } from "./features/workforce/optionalHolidaysStore.ts";
 import { getPerson, isAccountActive, managerChainIds } from "./data/peopleLocal.ts";
@@ -187,6 +187,23 @@ function loadState(): PortalState {
       localStorage.setItem(PHOTO_RESET_KEY, "1");
     }
     if (!parsed.profiles || typeof parsed.profiles !== "object") parsed.profiles = {};
+    // Retired sign-in accounts (the Compensation persona): drop saved records that still point at them.
+    let retiredDropped = false;
+    for (const id of RETIRED_ACCOUNT_IDS) {
+      if (id in parsed.profiles) {
+        delete parsed.profiles[id];
+        retiredDropped = true;
+      }
+    }
+    for (const [key, value] of Object.entries(parsed) as [string, unknown][]) {
+      if (!Array.isArray(value)) continue;
+      const kept = value.filter((row) => !mentionsRetiredAccount(row));
+      if (kept.length !== value.length) {
+        (parsed as unknown as Record<string, unknown>)[key] = kept;
+        retiredDropped = true;
+      }
+    }
+    if (retiredDropped) localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
     if (parsed.profile) {
       const { fullName, mobile, email, address } = parsed.profile;
       parsed.profiles[EMPLOYEE.id] ??= { fullName, mobile, email, address, photo: parsed.profilePhoto };
@@ -464,7 +481,15 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   });
   latestLeaveRequests = state.leaveRequests;
   const [signedIn, setSignedIn] = useState(readSession);
-  const [userId, setUserId] = useState(() => localStorage.getItem(USER_KEY) ?? EMPLOYEE.id);
+  const [userId, setUserId] = useState(() => {
+    const saved = localStorage.getItem(USER_KEY);
+    // A session saved for a retired account falls back to the default persona.
+    if (saved && RETIRED_ACCOUNT_IDS.has(saved)) {
+      localStorage.removeItem(USER_KEY);
+      return EMPLOYEE.id;
+    }
+    return saved ?? EMPLOYEE.id;
+  });
   // A forced password change survives a page refresh until the password is actually changed.
   const [loginNotice, setLoginNotice] = useState<LoginNotice | null>(() => {
     const account = findDemoById(localStorage.getItem(USER_KEY) ?? EMPLOYEE.id);
@@ -651,7 +676,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       return managementChain(employeeId, TIMEZ_DEMOS).some((manager) => manager.id === active.id);
     }
 
-    const canVerifyProofs = ["hr", "hr_admin", "hrbp", "finance", "compensation_admin"].includes(active.role);
+    const canVerifyProofs = ["hr", "hr_admin", "hrbp", "finance"].includes(active.role);
 
     /**
      * One rule for every request type: approvers (above the person in their reporting line) move an open request to
@@ -1067,10 +1092,10 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       setEncashmentStatus: (encashmentId, status, note) => {
         const item = state.encashments.find((entry) => entry.id === encashmentId);
         if (!item) return "Encashment request not found.";
-        // Encashment is a payout: someone with no one above them is decided by Compensation instead.
+        // Encashment is a payout: someone with no one above them (the CEO) is decided by HR instead — never by themselves.
         const compensationDecides =
           managementChain(item.employeeId, TIMEZ_DEMOS).length === 0 &&
-          active.role === "compensation_admin" &&
+          (active.role === "hr" || active.role === "hr_admin") &&
           item.employeeId !== active.id &&
           (status === "approved" || status === "rejected");
         const error = compensationDecides

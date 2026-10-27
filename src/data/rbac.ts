@@ -2,7 +2,7 @@
  * Infotech frontend RBAC — single source of truth for the 8 demo roles.
  * Frontend-only checks today; shape is ready for backend policy claims later.
  *
- * Roles: Employee · Manager · HR · Recruiter · Hiring Manager · Executive · Compensation · Admin
+ * Roles: Employee · Manager · HR (incl. compensation & benefits) · Recruiter · Hiring Manager · Executive · Admin
  */
 import type { DemoAccount, NavAccessId, RbacFlags } from "../demoAccounts.ts";
 import { accountHasNavAccess } from "../demoAccounts.ts";
@@ -82,7 +82,6 @@ export function getProfileDepth(viewer: DemoAccount, ctx: SubjectContext): Profi
   if (role === "manager" && ctx.isDirectReport) return "team";
   if (role === "hiring_manager" && (ctx.isDirectReport || ctx.inRecruitingScope)) return "team";
 
-  if (role === "compensation_admin") return "basic"; // limited employee context for pay work
   if (isExecutive(role)) return "basic";
   if (isAdminPlatform(role)) return "basic"; // system admin ≠ full HR dossier
 
@@ -119,7 +118,6 @@ export function canViewSensitivePii(viewer: DemoAccount, ctx: SubjectContext): b
 export function getPeopleListScope(viewer: DemoAccount): PeopleListScope {
   const role = viewer.role;
   if (isHr(role)) return "global";
-  if (role === "compensation_admin") return "org";
   if (isExecutive(role)) return "org";
   if (role === "manager" || role === "hiring_manager") return "team";
   if (role === "recruiter") return "org"; // directory for hiring context — profiles still gated
@@ -137,7 +135,7 @@ export function getPeopleListScope(viewer: DemoAccount): PeopleListScope {
 export function directoryFieldLevel(viewer: DemoAccount): "basic" | "full" {
   const role = viewer.role;
   if (isHr(role) || isExecutive(role) || isAdminPlatform(role)) return "full";
-  if (role === "manager" || role === "hiring_manager" || role === "compensation_admin") return "full";
+  if (role === "manager" || role === "hiring_manager") return "full";
   return "basic";
 }
 
@@ -168,7 +166,7 @@ export function canViewCandidateProfile(viewer: DemoAccount, inRecruitingScope =
  * - Manager / Recruiter / Hiring Manager: never by default
  * - HR: when hrCompAuthorized (default true in demo)
  * - Executive: only when salaryAuthorized flag is true
- * - Compensation: authorized full
+ * - Finance: authorized full (compensation & benefits sit with HR)
  * - Admin: does NOT receive confidential salary (own masked only)
  */
 export function getSalaryVisibility(viewer: DemoAccount, ctx: SubjectContext): Visibility {
@@ -180,7 +178,7 @@ export function getSalaryVisibility(viewer: DemoAccount, ctx: SubjectContext): V
     return "full";
   }
 
-  if (role === "compensation_admin" || role === "finance") return "full";
+  if (role === "finance") return "full";
 
   if (isHr(role)) {
     return flags.hrCompAuthorized === false ? "hidden" : "full";
@@ -204,7 +202,7 @@ export function canViewPayslip(viewer: DemoAccount, ctx: SubjectContext): boolea
 
 export function canViewCompensationModule(viewer: DemoAccount): boolean {
   const role = viewer.role;
-  if (role === "compensation_admin" || role === "finance") return true;
+  if (role === "finance") return true;
   if (isHr(role) && rbacFlags(viewer).hrCompAuthorized !== false) return true;
   if (isExecutive(role) && rbacFlags(viewer).salaryAuthorized) return true;
   // Managers may see non-amount structures only via separate helper — module entry for structures
@@ -214,13 +212,14 @@ export function canViewCompensationModule(viewer: DemoAccount): boolean {
 
 export function canViewCompStructures(viewer: DemoAccount): boolean {
   const role = viewer.role;
-  if (role === "compensation_admin" || role === "finance" || isHr(role)) return true;
+  if (role === "finance" || isHr(role)) return true;
   if (role === "manager" || role === "hiring_manager" || isExecutive(role)) return true;
   return accountHasNavAccess(viewer, "compensation");
 }
 
+/** Final compensation approval sits with HR (compensation & benefits). Never for one's own item — callers check the subject. */
 export function canApproveCompReviews(viewer: DemoAccount): boolean {
-  return viewer.role === "compensation_admin";
+  return isHr(viewer.role) && rbacFlags(viewer).hrCompAuthorized !== false;
 }
 
 /* ───────────── Reports ───────────── */
@@ -235,7 +234,7 @@ export function getReportScopes(viewer: DemoAccount): ReportScope[] {
     case "hr":
     case "hr_admin":
     case "hrbp":
-      return ["self", "team", "hr", "company"];
+      return ["self", "team", "hr", "compensation", "company"];
     case "recruiter":
       return ["self", "recruiting"];
     case "hiring_manager":
@@ -244,7 +243,6 @@ export function getReportScopes(viewer: DemoAccount): ReportScope[] {
     case "founder":
     case "cofounder":
       return ["self", "company"];
-    case "compensation_admin":
     case "finance":
       return ["self", "compensation", "company"];
     case "admin":
@@ -270,7 +268,6 @@ export function canManageLetters(viewer: DemoAccount): boolean {
 export function canViewEmployeeDocuments(viewer: DemoAccount, ctx: SubjectContext): Visibility {
   if (isSelf(ctx)) return "full";
   if (isHr(viewer.role)) return "full";
-  if (viewer.role === "compensation_admin") return "masked";
   if (viewer.role === "manager" && ctx.isDirectReport) return "masked";
   if (isExecutive(viewer.role)) return "masked";
   return "hidden";
@@ -307,10 +304,8 @@ export function rbacPolicySummary(viewer: DemoAccount): string {
         ? "Admin manages settings — no automatic salary access."
         : viewer.role === "manager" || viewer.role === "recruiter" || viewer.role === "hiring_manager"
           ? "Own payslips allowed; team/colleague salary & slips stay blocked."
-          : viewer.role === "compensation_admin"
-            ? "Authorized compensation & payslip access."
-            : isHr(viewer.role)
-              ? "HR compensation access for authorized cases."
-              : "Own salary & payslips only.";
+          : isHr(viewer.role)
+            ? "HR owns compensation & benefits — authorized pay access (never approves own pay)."
+            : "Own salary & payslips only.";
   return `${viewer.personaLabel}: reports [${scopes}]. ${salaryNote}`;
 }

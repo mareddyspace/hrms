@@ -56,7 +56,6 @@ function demoPayslips(): Payslip[] {
   const scaleFor = (account: Employee) => {
     if (account.role === "employee") return 1;
     if (account.role === "manager" || account.role === "hiring_manager") return 1.35;
-    if (account.role === "compensation_admin") return 1.45;
     if (account.role === "hr_admin" || account.role === "hr") return 1.4;
     if (account.role === "executive") return 2.1;
     if (account.role === "admin" || account.role === "super_admin") return 1.25;

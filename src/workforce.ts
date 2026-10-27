@@ -147,6 +147,15 @@ const PERSONA_HEADS: Record<string, string> = {
 };
 const CEO_ID = "demo-ceo";
 
+/**
+ * Seats once held by retired sign-in accounts (the US Compensation & Benefits persona). They still count toward the
+ * country's headcount and are filled by a generated person in the normal hierarchy. They are built after every
+ * country so all other generated ids, names and positions stay exactly where they were.
+ */
+const RETIRED_SEATS: { country: string; dept: (typeof DEPARTMENTS)[number]; title: string; grade: string; dateOfJoining: string }[] = [
+  { country: "US", dept: "People", title: "HR Generalist", grade: "L4", dateOfJoining: "2016-09-19" },
+];
+
 export const LOCATIONS: Record<string, string[]> = {
   IN: ["Bengaluru", "Hyderabad", "Pune", "Chennai"],
   US: ["New York", "San Francisco", "Austin"],
@@ -289,11 +298,8 @@ export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
   };
 
   let seq = 1;
-  for (const country of TIMEZ_COUNTRIES) {
-    const locs = LOCATIONS[country.code] ?? [country.name];
-    const namedHere = named.filter((n) => n.country === country.code).length;
-    const generated = country.headcount - namedHere;
-    const make = (input: {
+  type Country = (typeof TIMEZ_COUNTRIES)[number];
+  const makeFor = (country: Country, input: {
       title: string; grade: string; dept: string; managerId: string; location: string;
       dateOfJoining: string; status?: WorkforceRow["status"];
     }): WorkforceRow => {
@@ -330,6 +336,14 @@ export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
       rows.push(row);
       return row;
     };
+
+  for (const country of TIMEZ_COUNTRIES) {
+    const locs = LOCATIONS[country.code] ?? [country.name];
+    // Retired seats are filled after the loop but still counted here, so the country total stays exact.
+    const namedHere =
+      named.filter((n) => n.country === country.code).length + RETIRED_SEATS.filter((r) => r.country === country.code).length;
+    const generated = country.headcount - namedHere;
+    const make = (input: Parameters<typeof makeFor>[1]) => makeFor(country, input);
 
     // Country head.
     const head = make({
@@ -402,6 +416,20 @@ export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
         });
       }
     }
+  }
+
+  // Fill retired seats under that country's department (a team lead with the fewest reports, else the department head).
+  for (const seat of RETIRED_SEATS) {
+    const country = TIMEZ_COUNTRIES.find((c) => c.code === seat.country);
+    if (!country) continue;
+    const inDept = rows.filter((r) => r.countryCode === seat.country && r.department === seat.dept);
+    const deptHeadId = PERSONA_HEADS[`${seat.country}:${seat.dept}`] ?? inDept.find((r) => r.designation === headTitle(seat.dept))?.id;
+    const reportsTo = (id: string) => rows.filter((r) => r.managerId === id).length;
+    const leads = inDept.filter((r) => r.designation === leadTitle(seat.dept)).sort((a, b) => reportsTo(a.id) - reportsTo(b.id));
+    const managerId =
+      leads[0]?.id ?? deptHeadId ?? rows.find((r) => r.countryCode === seat.country && r.designation === COUNTRY_HEAD_TITLE)?.id ?? CEO_ID;
+    const locs = LOCATIONS[seat.country] ?? [country.name];
+    makeFor(country, { title: seat.title, grade: seat.grade, dept: seat.dept, managerId, location: locs[0], dateOfJoining: seat.dateOfJoining });
   }
 
   // Country heads who sign in: the seat keeps its id and position; name, email and code come from the account.
