@@ -63,7 +63,7 @@ type ImmigrationState = { documents: IdDocument[] };
 
 const SPONSOR_COUNTRIES = ["United Arab Emirates", "Saudi Arabia"];
 const SPONSORED_TYPES: DocType[] = ["Visa", "Work permit", "Residence ID/Iqama", "Emirates ID"];
-const DEMO_IDS = new Set(["emp-mahesh", "emp-ram", "demo-hr-admin", "demo-recruiter", "demo-hiring-manager", "demo-ceo", "demo-compensation", "demo-admin"]);
+const DEMO_IDS = new Set(["emp-mahesh", "emp-ram", "demo-hr-admin", "demo-recruiter", "demo-ceo", "demo-admin"]);
 
 export const EXPIRING_WINDOW_DAYS = 90;
 

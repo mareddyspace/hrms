@@ -242,7 +242,7 @@ function AcknowledgementsView({ acks }: { acks: ReturnType<typeof getPolicyAcks>
   return (
     <Card title="Acknowledgements">
       <p className="muted pol-hint">
-        Sign-in personas and teammates. Teammates can't sign in, so they stay pending. Acknowledgements of an older version count as pending.
+        Acknowledgements of an older version count as pending.
       </p>
       <label className="pol-toggle">
         <input type="checkbox" checked={mandatoryOnly} onChange={(e) => setMandatoryOnly(e.target.checked)} /> Mandatory policies only

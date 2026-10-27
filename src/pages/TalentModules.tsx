@@ -207,13 +207,13 @@ export function RecruitingPage() {
 
   const candAccess = candidateAccess(demoProfile, true);
   const maskCandidates = candAccess === "masked";
-  // A hiring manager always sees their own requisitions' candidates; the hiring_manager role sees only those.
+  // A hiring manager always sees their own requisitions' candidates.
   const hmReqIds = useMemo(
     () => new Set(talent.requisitions.filter((r) => isHiringManagerOf(actor, r)).map((r) => r.id)),
     [talent.requisitions, actor],
   );
   const accessFor = (c: { requisitionId: string }) =>
-    hmReqIds.has(c.requisitionId) ? "full" : actor.role === "hiring_manager" ? "hidden" : candAccess;
+    hmReqIds.has(c.requisitionId) ? "full" : candAccess;
   const canSeeCandidates = candAccess !== "hidden" || hmReqIds.size > 0;
 
   const regionReqs = useMemo(
@@ -450,7 +450,7 @@ export function RecruitingPage() {
               {reqMoves.length > 0 ? (
                 <div className="stack">
                   {reqMoves.some((m) => m !== "Pending approval") && (
-                    <input value={reqNote} maxLength={200} onChange={(e) => setReqNote(e.target.value)} placeholder="Note (optional)" />
+                    <input aria-label="Requisition note" value={reqNote} maxLength={200} onChange={(e) => setReqNote(e.target.value)} placeholder="Note (optional)" />
                   )}
                   {reqMoves.includes("Approved") && !requisition.recruiterId && (
                     <Field label="Assign recruiter">
@@ -511,7 +511,7 @@ export function RecruitingPage() {
           </Card>
           <Card title="Move candidate stage">
             {candidates.length === 0 ? (
-              <EmptyState title="No candidates" description="Try adjusting filters." />
+              <EmptyState title="No candidates" description="Try other filters." />
             ) : (
               <DataTable
                 headers={["Candidate", "Role", "Stage", "Advance"]}
@@ -527,7 +527,7 @@ export function RecruitingPage() {
                     req && req.approvalStatus !== "Approved" && !CLOSED_STAGES.includes(c.stage) ? (
                       <span key={`${c.id}-stage`} className="muted">{req.id} {req.approvalStatus.toLowerCase()}</span>
                     ) : (
-                      <select
+                      <select aria-label={`Stage for ${c.name}`}
                         key={`${c.id}-stage`}
                         value={c.stage}
                         disabled={moves.length === 0}
@@ -720,7 +720,7 @@ export function RecruitingPage() {
                     <p className="note">
                       {offerBand ? `Band ${offerBand.min} – ${offerBand.max}.` : "No band for this grade and country."}
                       {offerForm.baseSalary && needsCompApproval({ grade: offerForm.grade, baseSalary: Number(offerForm.baseSalary) }, offerReq)
-                        ? " Compensation must also approve."
+                        ? " Above band — HR's approval covers the exception."
                         : ""}
                     </p>
                   )}
@@ -794,7 +794,7 @@ function OfferActions({
   if (answer) {
     return (
       <span className="stack">
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="How was the answer received?" />
+        <input aria-label="Interview note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="How was the answer received?" />
         <span className="row-gap">
           <button
             type="button"
@@ -870,7 +870,7 @@ function TaskStatusCell({
   if (!owner && !isHrRole(actor.role)) return <span className="muted">{task.owner}</span>;
   return (
     <span className="stack">
-      <select
+      <select aria-label="Task status"
         value={task.status}
         disabled={!owner && reason.trim().length < 5}
         title={!owner ? "Add a reason first" : undefined}
@@ -884,7 +884,7 @@ function TaskStatusCell({
           <option key={s} value={s}>{s}</option>
         ))}
       </select>
-      {!owner && <input value={reason} maxLength={120} onChange={(e) => setReason(e.target.value)} placeholder={`Reason (owner: ${task.owner})`} />}
+      {!owner && <input aria-label="Reason" value={reason} maxLength={120} onChange={(e) => setReason(e.target.value)} placeholder={`Reason (owner: ${task.owner})`} />}
       {task.overrideNote && <span className="muted">{task.overrideNote}</span>}
     </span>
   );
@@ -898,7 +898,7 @@ export function OnboardingPage() {
   const [ownerFilter, setOwnerFilter] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
 
-  const isStaff = canEditOnboarding(actor.role) || actor.role === "hiring_manager";
+  const isStaff = canEditOnboarding(actor.role);
   if (!isStaff && !accountHasNavAccess(actor, "onboarding")) return <NotAuthorized module="Onboarding" />;
 
   const joiner = talent.joiners.find((j) => j.id === selected) ?? talent.joiners[0];
@@ -1018,7 +1018,7 @@ function AssessmentEditor({
   if (!editable) return <p className="muted">{text || "—"}</p>;
   return (
     <div className="stack">
-      <textarea rows={3} maxLength={1000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Summary…" />
+      <textarea aria-label="Summary" rows={3} maxLength={1000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Summary…" />
       <div className="row-gap">
         <button type="button" className="btn-ghost btn-tiny" onClick={() => onSave(draft, false)}>
           Save draft
@@ -1037,6 +1037,7 @@ function DevPlanInput({ value, editable, onSave }: { value?: string; editable: b
   if (!editable) return <span>{value || "—"}</span>;
   return (
     <input
+      aria-label="Development plan"
       value={draft}
       maxLength={300}
       onChange={(e) => setDraft(e.target.value)}
@@ -1225,7 +1226,7 @@ export function PerformancePage() {
                 `${g.weight ?? 0}%`,
                 g.period || "—",
                 <Progress key={g.id} value={g.progress} />,
-                <input
+                <input aria-label="Goal progress"
                   key={`${g.id}-p`}
                   type="range"
                   min={0}
@@ -1351,7 +1352,7 @@ export function PerformancePage() {
             rows={reviews.map((r) => [
               r.employeeName,
               <StatusBadge key={r.id} status={r.feedback360Status} literal />,
-              <select
+              <select aria-label="360 feedback status"
                 key={`${r.id}-360`}
                 value={r.feedback360Status}
                 disabled={!canWriteManagerReview(actor, r.employeeId) || status !== "Active"}
@@ -1383,7 +1384,7 @@ export function PerformancePage() {
                 r.managerStatus,
                 r.feedback360Status,
                 canRate ? (
-                  <select
+                  <select aria-label="Rating"
                     key={`${r.id}-rate`}
                     value={r.rating ?? ""}
                     disabled={!ready}
@@ -1895,7 +1896,7 @@ export function SkillsCareerPage() {
   }, [gaps, demoProfile, myEnrollments]);
 
   return (
-    <Page title="Skills & Career">
+    <Page title="Skills & career">
       <Tabs
         tabs={[
           { id: "library", label: "Skills library" },
@@ -1926,12 +1927,12 @@ export function SkillsCareerPage() {
               const levels = SKILL_LIBRARY.find((x) => x.id === s.skillId)?.levels ?? [];
               return [
                 s.skillName,
-                <select key={`${s.skillId}-c`} value={s.level} onChange={(e) => setSkill(s.skillId, { level: e.target.value })}>
+                <select aria-label="Current level" key={`${s.skillId}-c`} value={s.level} onChange={(e) => setSkill(s.skillId, { level: e.target.value })}>
                   {levels.map((lvl) => (
                     <option key={lvl} value={lvl}>{lvl}</option>
                   ))}
                 </select>,
-                <select key={`${s.skillId}-t`} value={s.targetLevel} onChange={(e) => setSkill(s.skillId, { targetLevel: e.target.value })}>
+                <select aria-label="Target level" key={`${s.skillId}-t`} value={s.targetLevel} onChange={(e) => setSkill(s.skillId, { targetLevel: e.target.value })}>
                   {levels.map((lvl) => (
                     <option key={lvl} value={lvl}>{lvl}</option>
                   ))}
@@ -1987,7 +1988,7 @@ export function SkillsCareerPage() {
                 <li key={c.id}>
                   {c.title} · {c.category} · {c.durationHours}h
                   {myEnrollments.some((e) => e.courseId === c.id) ? " · Enrolled " : " "}
-                  <Link to="/programs">Open Learning</Link>
+                  <Link to="/programs">Open learning</Link>
                 </li>
               ))}
             </ul>

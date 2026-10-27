@@ -32,7 +32,6 @@ export type UserRole =
   | "hr_admin"
   | "hrbp"
   | "recruiter"
-  | "hiring_manager"
   | "executive"
   | "founder"
   | "cofounder"
@@ -85,7 +84,6 @@ export interface Employee {
 export function canApproveTeam(role: UserRole): boolean {
   return (
     role === "manager" ||
-    role === "hiring_manager" ||
     role === "hr" ||
     role === "hr_admin" ||
     role === "hrbp" ||
@@ -96,7 +94,7 @@ export function canApproveTeam(role: UserRole): boolean {
 }
 
 export function isLeadership(role: UserRole): boolean {
-  return canApproveTeam(role) || role === "recruiter" || role === "compensation_admin" || role === "finance";
+  return canApproveTeam(role) || role === "recruiter" || role === "finance";
 }
 
 export const PASSWORD_STALE_DAYS = 90;
@@ -801,12 +799,17 @@ export function todayISO(): string {
 }
 
 export function formatLongDate(iso: string): string {
-  return parseISODate(iso).toLocaleDateString("en-US", {
+  return parseISODate(iso).toLocaleDateString("en-GB", {
     weekday: "long",
     month: "long",
     day: "numeric",
     year: "numeric",
   });
+}
+
+/** "1 day", "3 days" — pass the plural form for irregular words. */
+export function plural(n: number, word: string, many = `${word}s`): string {
+  return `${n} ${n === 1 ? word : many}`;
 }
 
 export function formatShortDate(iso: string): string {
@@ -1136,7 +1139,7 @@ export function validateLeave(
     Number(input.from.slice(0, 4)),
   ).find((item) => item.code === input.code);
   if (!row) return "Choose a leave type.";
-  if (days > row.available) return `Only ${row.available} day(s) are available for ${row.name}.`;
+  if (days > row.available) return `Only ${plural(row.available, "day")} ${row.available === 1 ? "is" : "are"} available for ${row.name}.`;
   const overlap = state.leaveRequests.some(
     (request) =>
       request.employeeId === employeeId &&
@@ -1170,7 +1173,7 @@ export function validateEncashment(
     Number(todayISO().slice(0, 4)),
   ).find((item) => item.code === code);
   if (!row) return "Privilege leave is not available.";
-  if (days > row.available) return `Only ${row.available} privilege leave day(s) can be encashed.`;
+  if (days > row.available) return `Only ${plural(row.available, "privilege leave day")} can be encashed.`;
   return null;
 }
 
@@ -1312,7 +1315,7 @@ export function attendanceOn(
   if (leave?.half) return { date, kind: "leave", detail: `Half-day leave (${leave.half} half)` };
   if (leave) return { date, kind: "leave", detail: "On leave" };
   const day = parseISODate(date).getDay();
-  if (weeklyOffDays.includes(day)) return { date, kind: "weekend", detail: "Weekly Off" };
+  if (weeklyOffDays.includes(day)) return { date, kind: "weekend", detail: "Weekly off" };
   if (absences.includes(date)) return { date, kind: "absent", detail: "Absent" };
   if (date > today) return { date, kind: "upcoming", detail: "" };
   return { date, kind: "present", detail: shiftHours };

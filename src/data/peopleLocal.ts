@@ -1,3 +1,4 @@
+import { DEMO_ACCOUNTS, RETIRED_ACCOUNT_IDS, RETIRED_COUNTRY_MANAGER_IDS, RETIRED_SEAT_SUCCESSOR } from "../demoAccounts.ts";
 import { ensureProfileDetails, getBasePeople, type PersonRecord } from "./peopleData.ts";
 
 const STORAGE_KEY = "infotech.people.overlay.v2";
@@ -40,10 +41,29 @@ function readOverlay(): Overlay {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { upserts: [], removedIds: [], scheduled: [] };
     const parsed = JSON.parse(raw) as Partial<Overlay>;
+    // Records saved for a retired sign-in account (Compensation, Hiring Manager) are dropped, so headcount stays
+    // exact; saved records that reported to one move to the seat that took over their team.
+    // Sign-in personas report only through other sign-in people, so a saved persona record whose manager does not
+    // sign in (a Country Manager or a generated head) moves back to its sign-in manager. A saved Country Manager record that still
+    // carries their old sign-in identity (CMG code) goes back to the generated one.
+    const reassign = (p: LocalPersonRecord): LocalPersonRecord => {
+      const successor = RETIRED_SEAT_SUCCESSOR[p.managerId];
+      if (successor) return { ...p, managerId: successor.id, managerName: successor.fullName };
+      const persona = DEMO_ACCOUNTS.find((a) => a.id === p.id);
+      const managerSignsIn = DEMO_ACCOUNTS.some((a) => a.id === p.managerId);
+      if (persona && !managerSignsIn && (persona.reportsToId ?? "") !== p.managerId) {
+        const manager = DEMO_ACCOUNTS.find((a) => a.id === persona.reportsToId);
+        return { ...p, managerId: manager?.id ?? "", managerName: manager?.fullName ?? "" };
+      }
+      return p;
+    };
+    const staleSignIn = (p: LocalPersonRecord) => RETIRED_COUNTRY_MANAGER_IDS.has(p.id) && /^CMG/.test(p.employeeCode ?? "");
     return {
-      upserts: Array.isArray(parsed.upserts) ? parsed.upserts : [],
-      removedIds: Array.isArray(parsed.removedIds) ? parsed.removedIds : [],
-      scheduled: Array.isArray(parsed.scheduled) ? parsed.scheduled : [],
+      upserts: Array.isArray(parsed.upserts)
+        ? parsed.upserts.filter((p) => !RETIRED_ACCOUNT_IDS.has(p.id) && !staleSignIn(p)).map(reassign)
+        : [],
+      removedIds: Array.isArray(parsed.removedIds) ? parsed.removedIds.filter((id) => !RETIRED_ACCOUNT_IDS.has(id)) : [],
+      scheduled: Array.isArray(parsed.scheduled) ? parsed.scheduled.filter((c) => !RETIRED_ACCOUNT_IDS.has(c.personId)) : [],
     };
   } catch {
     return { upserts: [], removedIds: [], scheduled: [] };

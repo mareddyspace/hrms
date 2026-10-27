@@ -218,7 +218,7 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
                 <span>{swapLine(s, data)}</span>
                 <p className="muted">{s.reason}</p>
                 <div className="approval-actions">
-                  <input
+                  <input aria-label="Decision note"
                     placeholder="Note (needed to reject)"
                     value={notes[s.id] ?? ""}
                     onChange={(e) => setNotes({ ...notes, [s.id]: e.target.value })}
@@ -266,7 +266,7 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
               </Field>
             </div>
             <div className="row-gap">
-              <button className="btn" type="submit">Send request</button>
+              <button className="btn" type="submit">Submit request</button>
             </div>
           </form>
         )}

@@ -145,20 +145,7 @@ export function canManageBgv(role: UserRole): boolean {
 }
 
 export function canReadAllBgv(role: UserRole): boolean {
-  return canManageBgv(role) || role === "hiring_manager";
-}
-
-/** Hiring managers only see the outcome, never the individual checks. */
-export function seesOutcomeOnly(role: UserRole): boolean {
-  return role === "hiring_manager";
-}
-
-/** The outcome a hiring manager sees: Clear, Not clear, or Pending while checks are still running. */
-export function outcomeLabel(record: BgvRecord): "Clear" | "Not clear" | "Pending" {
-  const overall = overallResult(record);
-  if (overall === "Clear") return "Clear";
-  if (overall === "Needs review" || overall === "Incomplete") return "Not clear";
-  return "Pending";
+  return canManageBgv(role);
 }
 
 /** The person the record is about (employee by id; joiner by name, as joiners have no account yet). */

@@ -68,7 +68,7 @@ import {
   findDemoByEmailOrCode,
   findDemoById,
   managementChain,
-  type DemoAccount, RETIRED_ACCOUNT_IDS, mentionsRetiredAccount, setDirectoryChainSource, setNavOverrideSource } from "./demoAccounts.ts";
+  type DemoAccount, RETIRED_ACCOUNT_IDS, RETIRED_SIGN_IN_IDS, mentionsRetiredAccount, setDirectoryChainSource, setNavOverrideSource } from "./demoAccounts.ts";
 import { canApproveTeam, holidaysForPerson, setEarnedLeaveSource, setHolidayContext } from "./model.ts";
 import { getOptionalHolidayState, subscribeOptionalHolidays } from "./features/workforce/optionalHolidaysStore.ts";
 import { getPerson, isAccountActive, managerChainIds } from "./data/peopleLocal.ts";
@@ -128,6 +128,13 @@ function notePasswordChanged(employeeCode: string) {
 
 /** Session lives in localStorage with "Remember me", otherwise only until the browser closes. */
 function readSession(): boolean {
+  // A session saved for a retired sign-in account (Compensation, Hiring Manager, the Country Managers) is signed out.
+  const savedUser = localStorage.getItem(USER_KEY);
+  if (savedUser && RETIRED_SIGN_IN_IDS.has(savedUser)) {
+    localStorage.setItem(SESSION_KEY, "out");
+    sessionStorage.removeItem(SESSION_KEY);
+    return false;
+  }
   return localStorage.getItem(SESSION_KEY) === "in" || sessionStorage.getItem(SESSION_KEY) === "in";
 }
 
@@ -483,8 +490,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const [signedIn, setSignedIn] = useState(readSession);
   const [userId, setUserId] = useState(() => {
     const saved = localStorage.getItem(USER_KEY);
-    // A session saved for a retired account falls back to the default persona.
-    if (saved && RETIRED_ACCOUNT_IDS.has(saved)) {
+    // A session saved for a retired account is signed out (readSession) and falls back to the default persona.
+    if (saved && RETIRED_SIGN_IN_IDS.has(saved)) {
       localStorage.removeItem(USER_KEY);
       return EMPLOYEE.id;
     }
@@ -883,7 +890,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       switchDemoPersona: (accountId) => {
         const account = findDemoById(accountId);
-        if (!account) return "That demo persona was not found.";
+        if (!account) return "That account was not found.";
         activateSession(account, { silent: true });
         return null;
       },

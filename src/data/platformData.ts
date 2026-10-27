@@ -25,7 +25,7 @@ export type CopilotPersona =
 
 export function copilotPersonaFromRole(role: UserRole): CopilotPersona {
   if (role === "employee") return "employee";
-  if (role === "manager" || role === "hiring_manager") return "manager";
+  if (role === "manager") return "manager";
   if (role === "hr" || role === "hr_admin" || role === "hrbp") return "hr";
   if (role === "recruiter") return "recruiter";
   if (role === "executive" || role === "founder" || role === "cofounder") return "executive";

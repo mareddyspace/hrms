@@ -27,7 +27,7 @@ import {
   type NotifPrefs,
   type NotifRef,
 } from "./collabData.ts";
-import { DEMO_ACCOUNTS, findDemoById, managementChain } from "../demoAccounts.ts";
+import { DEMO_ACCOUNTS, RETIRED_ACCOUNT_IDS, RETIRED_ACCOUNT_NAMES, findDemoById, managementChain, mentionsRetiredAccount } from "../demoAccounts.ts";
 
 const KEY = "timez.collab.state.v6";
 /** v5: old notification categories and seed rows that pointed at records that don't exist. */
@@ -148,6 +148,35 @@ function normalizeNotifications(rows: AppNotification[]): AppNotification[] {
     .slice(0, MAX_STORED);
 }
 
+/**
+ * Saved data from before the Compensation persona was retired: drop chats, tasks, notifications and requests that
+ * involve that account, and hand their announcements to HR. Returns true when anything changed.
+ */
+function dropRetiredAccounts(state: CollabState): boolean {
+  let changed = false;
+  const keep = <T,>(rows: T[]): T[] => {
+    const kept = rows.filter((row) => !mentionsRetiredAccount(row));
+    if (kept.length !== rows.length) changed = true;
+    return kept;
+  };
+  state.inbox = keep(state.inbox);
+  state.conversations = keep(state.conversations);
+  state.notifications = keep(state.notifications);
+  state.hrRequests = keep(state.hrRequests);
+  state.announcements = state.announcements.map((a) => {
+    if (!RETIRED_ACCOUNT_NAMES.has(a.author) && !(a.authorId && RETIRED_ACCOUNT_IDS.has(a.authorId))) return a;
+    changed = true;
+    return { ...a, author: "Farhan Ali", authorId: "demo-hr-admin" };
+  });
+  for (const id of RETIRED_ACCOUNT_IDS) {
+    if (id in state.prefsByUser) {
+      delete state.prefsByUser[id];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function read(): CollabState {
   const base = defaults();
   try {
@@ -181,7 +210,8 @@ function read(): CollabState {
     state.notifications = normalizeNotifications(
       from === "current" ? state.notifications : refreshSeedNotifications(state.notifications),
     );
-    if (from !== "current") {
+    const retiredDropped = dropRetiredAccounts(state);
+    if (from !== "current" || retiredDropped) {
       localStorage.setItem(KEY, JSON.stringify(state));
       localStorage.removeItem(PREVIOUS_KEY);
       localStorage.removeItem(LEGACY_KEY);

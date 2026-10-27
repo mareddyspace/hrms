@@ -18,7 +18,7 @@ export function isHrOrAdmin(role: UserRole): boolean {
 
 /** Roles whose report builder covers the whole organisation (compensation columns are always stripped). */
 export function hasOrgWideReports(role: UserRole): boolean {
-  return isHrOrAdmin(role) || role === "executive" || role === "compensation_admin";
+  return isHrOrAdmin(role) || role === "executive";
 }
 
 /** Scheduled report files may only go to company mailboxes. */

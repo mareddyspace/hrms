@@ -1,5 +1,5 @@
 import { todayISO } from "../../model.ts";
-import { DEMO_ACCOUNTS } from "../../demoAccounts.ts";
+import { DEMO_ACCOUNTS, mentionsRetiredAccount } from "../../demoAccounts.ts";
 import { getPerson } from "../../data/peopleLocal.ts";
 import { getTalentState } from "../../data/talentLocal.ts";
 import type { Requisition } from "../../data/talentData.ts";
@@ -61,7 +61,6 @@ interface JobBoardState {
 function defaults(): JobBoardState {
   return {
     applications: [
-      { id: "ia-seed-1", postingId: "JOB-218", employeeId: "demo-compensation", employeeName: "Helen Brooks", note: "Keen to move into an HRBP role.", status: "Screening", submittedOn: "2026-10-02", updatedOn: "2026-10-06" },
     ],
     referrals: [
       { id: "rf-seed-1", postingId: "JOB-221", referrerId: "emp-mahesh", referrerName: "Babu Menon", name: "Riya Kapoor", email: "riya.kapoor@example.com", phone: "", relationship: "Former colleague", linkedIn: "", note: "Worked together on the payments UI.", status: "Hired", submittedOn: "2026-08-20", updatedOn: "2026-09-22", hiredOn: "2026-09-22" },
@@ -73,7 +72,9 @@ function defaults(): JobBoardState {
 
 function normalize(saved: unknown, base: JobBoardState): JobBoardState {
   const s = (saved ?? {}) as Partial<JobBoardState>;
-  return { applications: arrayOr(s.applications, base.applications), referrals: arrayOr(s.referrals, base.referrals) };
+  // Applications and referrals by a retired sign-in account (Compensation, Hiring Manager) are dropped.
+  const live = <T,>(rows: T[]) => rows.filter((row) => !mentionsRetiredAccount(row));
+  return { applications: live(arrayOr(s.applications, base.applications)), referrals: live(arrayOr(s.referrals, base.referrals)) };
 }
 
 // v2: referral seed matches the recruiting pipeline.
@@ -82,7 +83,7 @@ try {
 } catch {
   /* ignore */
 }
-const store = createLocalStore<JobBoardState>("kastech.jobboard.v2", defaults, normalize);
+const store = createLocalStore<JobBoardState>("kastech.jobboard.v3", defaults, normalize);
 
 export const subscribeJobBoard = store.subscribe;
 export const getJobBoardState = store.getState;

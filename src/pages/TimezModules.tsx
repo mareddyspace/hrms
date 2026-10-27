@@ -8,12 +8,11 @@ import {
   MetricGrid,
   Page,
   StatusBadge,
-  StatusPill,
   Tabs,
 } from "../components/ui.tsx";
 import { allReportIds, directReportIds, getPerson, listPeople, managerChainIds, subscribePeople } from "../data/peopleLocal.ts";
 import { managementChain } from "../demoAccounts.ts";
-import { parseISODate, todayISO } from "../model.ts";
+import { parseISODate, plural, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
 export {
@@ -61,7 +60,7 @@ export function MyTeamPage() {
 
   if (everyone.length === 0) {
     return (
-      <Page title="My Team">
+      <Page title="Team overview">
         <EmptyState title="No team" description="No one reports to you." />
       </Page>
     );
@@ -70,7 +69,7 @@ export function MyTeamPage() {
   const rows = view === "direct" ? direct : everyone;
 
   return (
-    <Page title="My Team">
+    <Page title="Team overview">
       <MetricGrid>
         <MetricCard label="Direct reports" value={direct.length} />
         <MetricCard label="Whole team" value={everyone.length} hint="Direct and indirect" />
@@ -127,7 +126,7 @@ export function WorkflowsPage() {
       .map((r) => ({ id: r.id, type: "Expense", employeeId: r.employeeId, detail: `${r.category} · ${r.description}`, submittedOn: r.date })),
     ...state.encashments
       .filter((r) => r.status === "pending")
-      .map((r) => ({ id: r.id, type: "Leave encashment", employeeId: r.employeeId, detail: `${r.days} day(s) of ${r.code}`, submittedOn: r.appliedOn })),
+      .map((r) => ({ id: r.id, type: "Leave encashment", employeeId: r.employeeId, detail: `${plural(r.days, "day")} of ${r.code}`, submittedOn: r.appliedOn })),
     ...state.backdatedPermissions
       .filter((r) => r.status === "pending")
       .map((r) => ({ id: r.id, type: "Past-dated leave", employeeId: r.employeeId, detail: `${r.code} · ${r.from}`, submittedOn: r.requestedOn })),
@@ -141,7 +140,7 @@ export function WorkflowsPage() {
   const overdue = (list: TrackedRequest[]) => list.filter((r) => ageInDays(r.submittedOn, today) > 3).length;
 
   return (
-    <Page title="Approvals tracker">
+    <Page title="Workflows">
       <MetricGrid>
         <MetricCard label="Waiting for you" value={toDecide.length} />
         <MetricCard label="Overdue (over 3 days)" value={overdue(toDecide)} />
@@ -170,53 +169,6 @@ export function WorkflowsPage() {
       <p className="muted">
         Decide requests in <Link to="/approvals">Approvals</Link>.
       </p>
-    </Page>
-  );
-}
-
-export function RoadmapPage() {
-  const phases = [
-    { name: "Phase 0 – Discovery", status: "Done" },
-    { name: "Phase 1 – Platform foundation", status: "In progress" },
-    { name: "Phase 2 – Core workforce", status: "In progress" },
-    { name: "Phase 3 – Talent", status: "Scaffolded" },
-    { name: "Phase 4 – Compensation & benefits", status: "Scaffolded" },
-    { name: "Phase 5 – AI platform", status: "Scaffolded" },
-    { name: "Phase 6 – Global enterprise", status: "Planned" },
-  ];
-  return (
-    <Page title="Product roadmap" subtitle="Delivery phases">
-      <Card title="Roadmap">
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Phase</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {phases.map((phase) => (
-                <tr key={phase.name}>
-                  <td>{phase.name}</td>
-                  <td>
-                    <StatusPill
-                      status={
-                        phase.status === "Done"
-                          ? "approved"
-                          : phase.status === "In progress"
-                            ? "pending"
-                            : "withdrawn"
-                      }
-                    />{" "}
-                    {phase.status}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
     </Page>
   );
 }

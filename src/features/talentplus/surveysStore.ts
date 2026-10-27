@@ -88,7 +88,7 @@ const PULSE_ROWS: [number, number, number, string, string, string, string[]][] =
 
 const PULSE_RESPONDED = [
   "emp-mahesh", "emp-priya", "emp-anu", "emp-kabir", "emp-diya", "emp-ram",
-  "demo-hr-admin", "demo-recruiter", "demo-compensation", "demo-hiring-manager", "demo-admin",
+  "demo-hr-admin", "demo-recruiter", "demo-admin",
 ];
 
 function defaults(): SurveyState {
@@ -146,12 +146,13 @@ function normalize(saved: unknown, base: SurveyState): SurveyState {
 }
 
 // v2: seed matches real team sizes.
+// v3: the Compensation persona was retired. v4: the Hiring Manager persona was retired.
 try {
-  localStorage.removeItem("kastech.surveys.v1");
+  ["kastech.surveys.v1", "kastech.surveys.v2", "kastech.surveys.v3"].forEach((k) => localStorage.removeItem(k));
 } catch {
   /* ignore */
 }
-const store = createLocalStore<SurveyState>("kastech.surveys.v2", defaults, normalize);
+const store = createLocalStore<SurveyState>("kastech.surveys.v4", defaults, normalize);
 
 export const subscribeSurveys = store.subscribe;
 export const getSurveysState = store.getState;

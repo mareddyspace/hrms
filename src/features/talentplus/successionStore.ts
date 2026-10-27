@@ -64,8 +64,6 @@ function defaults(): SuccessionState {
     { employeeId: "emp-mahesh", performance: "Medium", potential: "High", flightRisk: "Medium", readiness: "Ready in 1–2 years", note: "Strong system design growth.", updatedBy: "emp-ram", updatedOn: "2026-09-30" },
     { employeeId: "emp-ram", performance: "High", potential: "High", flightRisk: "Low", readiness: "Ready now", note: "", updatedBy: "demo-ceo", updatedOn: "2026-09-28" },
     { employeeId: "demo-recruiter", performance: "High", potential: "Medium", flightRisk: "Medium", readiness: "Ready in 1–2 years", note: "", updatedBy: "demo-hr-admin", updatedOn: "2026-09-26" },
-    { employeeId: "demo-hiring-manager", performance: "Medium", potential: "Medium", flightRisk: "Low", readiness: "Ready in 1–2 years", note: "", updatedBy: "demo-ceo", updatedOn: "2026-09-26" },
-    { employeeId: "demo-compensation", performance: "High", potential: "Low", flightRisk: "High", readiness: "Ready in 3+ years", note: "Retention conversation planned.", updatedBy: "demo-hr-admin", updatedOn: "2026-09-25" },
     { employeeId: "demo-admin", performance: "Low", potential: "Medium", flightRisk: "Low", readiness: "Ready in 3+ years", note: "", updatedBy: "demo-ceo", updatedOn: "2026-09-25" },
   ];
   const mix: [Level, Level, Level][] = [
@@ -101,7 +99,6 @@ function defaults(): SuccessionState {
         executive: true,
         successors: [
           { employeeId: "emp-ram", readiness: "Ready in 3+ years", nominatedBy: "demo-hr-admin", nominatedOn: "2026-09-20" },
-          { employeeId: "demo-hiring-manager", readiness: "Ready in 1–2 years", nominatedBy: "demo-hr-admin", nominatedOn: "2026-09-20" },
         ],
       },
     ],
@@ -114,12 +111,13 @@ function normalize(saved: unknown, base: SuccessionState): SuccessionState {
 }
 
 // v2: Ram's team re-seeded with his real reports, executive roles flagged.
+// v3: the Compensation persona was retired. v4: the Hiring Manager persona was retired.
 try {
-  localStorage.removeItem("kastech.succession.v1");
+  ["kastech.succession.v1", "kastech.succession.v2", "kastech.succession.v3"].forEach((k) => localStorage.removeItem(k));
 } catch {
   /* ignore */
 }
-const store = createLocalStore<SuccessionState>("kastech.succession.v2", defaults, normalize);
+const store = createLocalStore<SuccessionState>("kastech.succession.v4", defaults, normalize);
 
 export const subscribeSuccession = store.subscribe;
 export const getSuccessionState = store.getState;

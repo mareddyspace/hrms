@@ -1,6 +1,6 @@
 import type { Colleague } from "./model.ts";
 import { TIMEZ_COUNTRIES } from "./model.ts";
-import { COUNTRY_MANAGER_IDS, DEMO_ACCOUNTS, TIMEZ_PERSONAS } from "./demoAccounts.ts";
+import { DEMO_ACCOUNTS, TIMEZ_PERSONAS } from "./demoAccounts.ts";
 
 export { DEMO_ACCOUNTS, TIMEZ_PERSONAS } from "./demoAccounts.ts";
 
@@ -143,18 +143,31 @@ export const TEAMMATE_MANAGER_ID = "emp-ram";
 const PERSONA_HEADS: Record<string, string> = {
   "IN:Engineering": "emp-ram",
   "IN:People": "demo-hr-admin",
-  "US:Product": "demo-hiring-manager",
 };
 const CEO_ID = "demo-ceo";
 
 /**
- * Seats once held by retired sign-in accounts (the US Compensation & Benefits persona). They still count toward the
- * country's headcount and are filled by a generated person in the normal hierarchy. They are built after every
- * country so all other generated ids, names and positions stay exactly where they were.
+ * Seats once held by retired sign-in accounts: the US Compensation & Benefits persona (now an HR Generalist) and the
+ * US Hiring Manager, who led US Product (now a generated Head of Product under the US country head). They still
+ * count toward the country's headcount and are filled by a generated person in the normal hierarchy. They are built
+ * after every country so all other generated ids, names and positions stay exactly where they were. A seat with
+ * `head` was a department head: the loop keeps the department shaped as before (no generated head, the team under a
+ * placeholder), and the placeholder is replaced by the seat's id once it exists.
  */
-const RETIRED_SEATS: { country: string; dept: (typeof DEPARTMENTS)[number]; title: string; grade: string; dateOfJoining: string }[] = [
+const RETIRED_SEATS: {
+  country: string; dept: (typeof DEPARTMENTS)[number]; title: string; grade: string; dateOfJoining: string; head?: boolean;
+}[] = [
   { country: "US", dept: "People", title: "HR Generalist", grade: "L4", dateOfJoining: "2016-09-19" },
+  { country: "US", dept: "Product", title: headTitle("Product"), grade: "M2", dateOfJoining: "2017-08-07", head: true },
 ];
+const retiredHeadPlaceholder = (country: string, dept: string) => `retired-head:${country}:${dept}`;
+/** Department-head seats for the generation loop: persona heads, plus retired head seats (filled after the loop). */
+const LOOP_HEADS: Record<string, string> = {
+  ...PERSONA_HEADS,
+  ...Object.fromEntries(RETIRED_SEATS.filter((r) => r.head).map((r) => [`${r.country}:${r.dept}`, retiredHeadPlaceholder(r.country, r.dept)])),
+};
+/** Names of retired sign-in accounts, never reused for generated people (keeps every generated name where it was). */
+const RETIRED_NAMES = ["Daniel Ortiz"];
 
 export const LOCATIONS: Record<string, string[]> = {
   IN: ["Bengaluru", "Hyderabad", "Pune", "Chennai"],
@@ -270,17 +283,16 @@ function allocate(total: number, min: (dept: string) => number): Record<string, 
  *
  * Reporting line in every country: country head (reports to the CEO) → department head → team leads
  * (about 8 reports each) → staff, all in the same country and department. Where a persona leads a
- * department (Ram for India Engineering, Farhan for India People, Daniel for US Product) that team reports to them.
+ * department (Ram for India Engineering, Farhan for India People) that team reports to them.
  */
 export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
   void _total;
   const rows: WorkforceRow[] = [];
-  // Country Manager accounts hold the generated country-head seats, so they are not counted separately.
   const named = [
-    ...DEMO_ACCOUNTS.filter((a) => !COUNTRY_MANAGER_IDS.has(a.id)).map((a) => ({ name: a.fullName, country: a.countryCode ?? "IN" })),
+    ...DEMO_ACCOUNTS.map((a) => ({ name: a.fullName, country: a.countryCode ?? "IN" })),
     ...TEAMMATES.map((t) => ({ name: t.name, country: "IN" })),
   ];
-  const usedNames = new Set(named.map((n) => n.name));
+  const usedNames = new Set([...named.map((n) => n.name), ...RETIRED_NAMES]);
   let nameIndex = 0;
   const nextName = (): { first: string; last: string } => {
     for (;;) {
@@ -355,10 +367,10 @@ export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
       dateOfJoining: joinBetween(seq * 7, FIRST_DAY + 30, daysFromIso("2016-12-31")),
     });
 
-    const perDept = allocate(generated - 1, (dept) => (PERSONA_HEADS[`${country.code}:${dept}`] ? 1 : 2));
+    const perDept = allocate(generated - 1, (dept) => (LOOP_HEADS[`${country.code}:${dept}`] ? 1 : 2));
     for (const dept of DEPARTMENTS) {
       const count = perDept[dept];
-      const personaHead = PERSONA_HEADS[`${country.code}:${dept}`];
+      const personaHead = LOOP_HEADS[`${country.code}:${dept}`];
       let deptHeadId = personaHead;
       let remaining = count;
       if (!deptHeadId) {
@@ -419,29 +431,25 @@ export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
   }
 
   // Fill retired seats under that country's department (a team lead with the fewest reports, else the department head).
+  // A retired department head reports to the country head and takes over the team that waited under the placeholder.
   for (const seat of RETIRED_SEATS) {
     const country = TIMEZ_COUNTRIES.find((c) => c.code === seat.country);
     if (!country) continue;
+    const locs = LOCATIONS[seat.country] ?? [country.name];
+    if (seat.head) {
+      const countryHeadId = rows.find((r) => r.countryCode === seat.country && r.designation === COUNTRY_HEAD_TITLE)?.id ?? CEO_ID;
+      const head = makeFor(country, { title: seat.title, grade: seat.grade, dept: seat.dept, managerId: countryHeadId, location: locs[0], dateOfJoining: seat.dateOfJoining });
+      const placeholder = retiredHeadPlaceholder(seat.country, seat.dept);
+      for (const row of rows) if (row.managerId === placeholder) row.managerId = head.id;
+      continue;
+    }
     const inDept = rows.filter((r) => r.countryCode === seat.country && r.department === seat.dept);
     const deptHeadId = PERSONA_HEADS[`${seat.country}:${seat.dept}`] ?? inDept.find((r) => r.designation === headTitle(seat.dept))?.id;
     const reportsTo = (id: string) => rows.filter((r) => r.managerId === id).length;
     const leads = inDept.filter((r) => r.designation === leadTitle(seat.dept)).sort((a, b) => reportsTo(a.id) - reportsTo(b.id));
     const managerId =
       leads[0]?.id ?? deptHeadId ?? rows.find((r) => r.countryCode === seat.country && r.designation === COUNTRY_HEAD_TITLE)?.id ?? CEO_ID;
-    const locs = LOCATIONS[seat.country] ?? [country.name];
     makeFor(country, { title: seat.title, grade: seat.grade, dept: seat.dept, managerId, location: locs[0], dateOfJoining: seat.dateOfJoining });
-  }
-
-  // Country heads who sign in: the seat keeps its id and position; name, email and code come from the account.
-  for (const row of rows) {
-    if (!COUNTRY_MANAGER_IDS.has(row.id)) continue;
-    const account = DEMO_ACCOUNTS.find((a) => a.id === row.id);
-    if (!account) continue;
-    row.name = account.fullName;
-    row.email = account.email;
-    row.employeeCode = account.employeeCode;
-    row.mobile = account.mobile;
-    row.location = account.location ?? row.location;
   }
 
   // Fill in manager names now that everyone exists.

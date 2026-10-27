@@ -1,4 +1,4 @@
-import { DEMO_ACCOUNTS, managementChain } from "../demoAccounts.ts";
+import { DEMO_ACCOUNTS, RETIRED_ACCOUNT_IDS, RETIRED_COUNTRY_MANAGER_IDS, managementChain, mentionsRetiredAccount } from "../demoAccounts.ts";
 import { todayISO } from "../model.ts";
 import { getPerson, listPeople, managerChainIds } from "./peopleLocal.ts";
 
@@ -55,10 +55,17 @@ function read(): State {
   try {
     const raw = localStorage.getItem(KEY);
     const saved = raw ? (JSON.parse(raw) as Partial<State>) : null;
-    return {
-      delegations: Array.isArray(saved?.delegations) ? saved.delegations : [],
-      prefs: saved?.prefs && typeof saved.prefs === "object" ? saved.prefs : {},
-    };
+    // Delegations and preferences that involve a retired sign-in account (the Compensation persona) are dropped, as are
+    // those set up by or handed to a Country Manager (they no longer sign in).
+    const cm = (id: string | undefined) => Boolean(id && RETIRED_COUNTRY_MANAGER_IDS.has(id));
+    const delegations = (Array.isArray(saved?.delegations) ? saved.delegations : []).filter(
+      (d) => !mentionsRetiredAccount(d) && !cm(d.delegatorId) && !cm(d.delegateId),
+    );
+    const prefs: Record<string, DelegationPrefs> = {};
+    for (const [id, pref] of Object.entries(saved?.prefs && typeof saved.prefs === "object" ? saved.prefs : {})) {
+      if (!RETIRED_ACCOUNT_IDS.has(id) && !cm(id) && !cm(pref?.autoDelegateId) && !mentionsRetiredAccount(pref)) prefs[id] = pref;
+    }
+    return { delegations, prefs };
   } catch {
     return { delegations: [], prefs: {} };
   }

@@ -7,7 +7,7 @@ import {
   isWeeklyOffDate,
   scheduleForEmployee,
 } from "../data/workSchedule.ts";
-import { formatLongDate, monthCells, monthLabel, todayISO } from "../model.ts";
+import { monthCells, monthLabel, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { PersonProfilePage } from "./PersonProfilePage.tsx";
 
@@ -17,50 +17,6 @@ export { AttendancePage } from "./AttendanceModule.tsx";
 export function MyInfo() {
   const { employee } = usePortal();
   return <PersonProfilePage personId={employee.id} />;
-}
-
-export function EmsPage() {
-  const { employee, currentProjects, previousProjects } = usePortal();
-  return (
-    <Page title="Employee EMS">
-      <Card>
-        <table className="data">
-          <tbody>
-            <tr>
-              <th>Employee code</th>
-              <td>{employee.employeeCode}</td>
-            </tr>
-            <tr>
-              <th>Name</th>
-              <td>{employee.fullName}</td>
-            </tr>
-            <tr>
-              <th>Type</th>
-              <td>{employee.employmentType}</td>
-            </tr>
-            <tr>
-              <th>Designation</th>
-              <td>{employee.designation}</td>
-            </tr>
-            <tr>
-              <th>Shift</th>
-              <td>
-                {employee.shiftName} · {employee.shiftHours}
-              </td>
-            </tr>
-            <tr>
-              <th>Current assignment</th>
-              <td>{currentProjects.map((project) => project.name).join(", ") || "—"}</td>
-            </tr>
-            <tr>
-              <th>Previous assignment</th>
-              <td>{previousProjects.map((project) => project.name).join(", ") || "—"}</td>
-            </tr>
-          </tbody>
-        </table>
-      </Card>
-    </Page>
-  );
 }
 
 export function ProjectsPage() {
@@ -124,7 +80,7 @@ export function HolidaysPage() {
   }
 
   return (
-    <Page title="Company holiday calendar">
+    <Page title="Holiday calendar">
       <Card>
         <div className="row-between" style={{ marginBottom: 12 }}>
           <h2 className="card-title" style={{ margin: 0 }}>
@@ -155,50 +111,17 @@ export function HolidaysPage() {
               <div
                 key={date}
                 className={`day ${holiday ? "holiday" : weeklyOff ? "weekend" : ""} ${date === today ? "today" : ""}`}
-                title={holiday ? holiday.name : weeklyOff ? "Weekly Off" : undefined}
+                title={holiday ? holiday.name : weeklyOff ? "Weekly off" : undefined}
               >
                 <strong>{Number(date.slice(-2))}</strong>
                 {date === today && <span className="day-today-tag">Today</span>}
-                {holiday ? holiday.name : showOff ? "Weekly Off" : ""}
+                {holiday ? holiday.name : showOff ? "Weekly off" : ""}
               </div>
             );
           })}
         </div>
       </Card>
       <OptionalHolidaysCard />
-    </Page>
-  );
-}
-
-export function HighlightsPage() {
-  const { state, employee, leaveTable, counts } = usePortal();
-  // Only the holidays that apply to this person (their country / location), not every office's list.
-  const holidays = useMemo(() => holidaysForPerson(state.holidays, employee.id), [state.holidays, employee.id]);
-  const today = todayISO();
-  const next = holidays.find((holiday) => holiday.date >= today);
-  return (
-    <Page title="Highlights">
-      <div className="stat-grid">
-        <div className="stat">
-          <span>Next holiday</span>
-          <strong style={{ fontSize: 18 }}>{next ? next.name : `None left in ${today.slice(0, 4)}`}</strong>
-          <span>{next ? formatLongDate(next.date) : "The published list is complete."}</span>
-        </div>
-        {leaveTable.map((row) => (
-          <div className="stat" key={row.code}>
-            <span>{row.name} balance</span>
-            <strong>{row.balance}</strong>
-            <span>
-              {row.utilized} used · {row.pending} pending
-            </span>
-          </div>
-        ))}
-        <div className="stat">
-          <span>Open actions</span>
-          <strong>{counts.tasks + counts.timesheet + counts.evaluation + counts.programs}</strong>
-          <span>Tasks, timesheets, evaluations, programs</span>
-        </div>
-      </div>
     </Page>
   );
 }

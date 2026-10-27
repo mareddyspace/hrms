@@ -31,10 +31,10 @@ export function taskStatusLabel(task: Task): string {
   if (task.status === "done") return "Completed";
   if (task.status === "scheduled") return "Scheduled";
   if (task.blocked) return "Blocked";
-  if (task.inReview) return "Action Required";
+  if (task.inReview) return "Action required";
   if (task.status === "progress") return "In progress";
   if (task.accepted) return "Open";
-  return "To Do";
+  return "To do";
 }
 
 /** Single primary next step for the assignee (or manager reviewing). */

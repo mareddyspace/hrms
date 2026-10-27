@@ -58,16 +58,16 @@ function relativeLabel(ms: number, now: number, timeZone?: string): string {
   if (mins < 1) return "Just now";
   if (mins < 60) return `${mins} min ago`;
   if (mins < 24 * 60 && dayNumber(ms, timeZone) === dayNumber(now, timeZone)) return `${Math.floor(mins / 60)} h ago`;
-  const time = new Intl.DateTimeFormat(undefined, { timeZone, hour: "2-digit", minute: "2-digit" }).format(ms);
+  const time = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit" }).format(ms);
   const days = dayNumber(now, timeZone) - dayNumber(ms, timeZone);
   if (days === 1) return `Yesterday, ${time}`;
   if (days > 1 && days < 7) {
-    return `${new Intl.DateTimeFormat(undefined, { timeZone, weekday: "short" }).format(ms)}, ${time}`;
+    return `${new Intl.DateTimeFormat("en-GB", { timeZone, weekday: "short" }).format(ms)}, ${time}`;
   }
   const sameYear =
     new Intl.DateTimeFormat("en", { timeZone, year: "numeric" }).format(ms) ===
     new Intl.DateTimeFormat("en", { timeZone, year: "numeric" }).format(now);
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     timeZone,
     day: "numeric",
     month: "short",
@@ -78,7 +78,7 @@ function relativeLabel(ms: number, now: number, timeZone?: string): string {
 function fullStamp(ms: number, timeZone?: string): string {
   // dateStyle/timeStyle can't be combined with timeZoneName, so the zone is added separately.
   try {
-    const stamp = new Intl.DateTimeFormat(undefined, { timeZone, dateStyle: "medium", timeStyle: "short" }).format(ms);
+    const stamp = new Intl.DateTimeFormat("en-GB", { timeZone, dateStyle: "medium", timeStyle: "short" }).format(ms);
     return timeZone ? `${stamp} (${timeZone})` : stamp;
   } catch {
     return new Date(ms).toLocaleString();

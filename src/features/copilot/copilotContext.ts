@@ -3,7 +3,7 @@ import type { CopilotContext } from "../../data/platformData.ts";
 import { getAttendanceState } from "../../data/attendanceLocal.ts";
 import { compReviewStatus } from "../../data/homeInsights.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
-import { canViewReport } from "../../data/rbac.ts";
+import { canApproveCompReviews, canViewReport } from "../../data/rbac.ts";
 import { getRewardState } from "../../data/rewardLocal.ts";
 import { getTalentState } from "../../data/talentLocal.ts";
 import { TASK_TEAM } from "../../data/taskTeam.ts";
@@ -35,8 +35,8 @@ export function useCopilotContext(): () => CopilotContext {
     const shifts = getShiftState();
     const rostered = publishedShiftsFor(employee.id, shifts).find((a) => a.date === today);
     const rosteredShift = rostered ? shiftById(rostered.shiftId, shifts) : undefined;
-    // Company-wide pay figures: Compensation only (everyone else sees just their own payslips).
-    const canSeeComp = demoProfile.role === "compensation_admin" || demoProfile.role === "super_admin";
+    // Company-wide pay figures: HR (compensation & benefits) only — everyone else sees just their own payslips.
+    const canSeeComp = canApproveCompReviews(demoProfile) || demoProfile.role === "super_admin";
     const comp = canSeeComp ? compReviewStatus(getRewardState().reviews) : undefined;
     return buildCopilotContext({
       today,

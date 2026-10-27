@@ -1,4 +1,5 @@
 /** Per-user policy acknowledgements: {policyId, version, at}. Small localStorage store. */
+import { RETIRED_SIGN_IN_IDS } from "../demoAccounts.ts";
 
 export interface PolicyAck {
   policyId: string;
@@ -17,7 +18,9 @@ function read(): AckState {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed = raw ? (JSON.parse(raw) as unknown) : {};
-    cache = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as AckState) : {};
+    cache = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? { ...(parsed as AckState) } : {};
+    // Acknowledgements of a retired sign-in account (Compensation persona, Country Managers) are dropped.
+    for (const id of RETIRED_SIGN_IN_IDS) delete cache[id];
   } catch {
     cache = {};
   }

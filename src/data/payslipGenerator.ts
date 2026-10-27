@@ -6,7 +6,7 @@ import { approvedMonthHours, payBasisFor, type PayBasisKind } from "./payBasis.t
 /** Seniority multiplier on the country's base pay. */
 export function payScaleFor(role: UserRole | string): number {
   if (role === "employee") return 1;
-  if (role === "manager" || role === "hiring_manager") return 1.35;
+  if (role === "manager") return 1.35;
   if (role === "hr_admin" || role === "hr") return 1.4;
   if (role === "executive") return 2.1;
   if (role === "admin" || role === "super_admin") return 1.25;

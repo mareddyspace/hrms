@@ -74,23 +74,25 @@ function payslipText(payslip: PayslipView, employee: Employee): string {
 
 function LinesTable({ lines, currency, empty }: { lines: PayLine[]; currency?: string; empty: string }) {
   return (
-    <table className="data pay-lines-table">
-      <tbody>
-        {lines.length === 0 && (
-          <tr>
-            <td colSpan={2} className="muted">
-              {empty}
-            </td>
-          </tr>
-        )}
-        {lines.map((line) => (
-          <tr key={line.name}>
-            <td>{line.name}</td>
-            <td>{money(line.amount, currency)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="doc-table-wrap">
+      <table className="data pay-lines-table">
+        <tbody>
+          {lines.length === 0 && (
+            <tr>
+              <td colSpan={2} className="muted">
+                {empty}
+              </td>
+            </tr>
+          )}
+          {lines.map((line) => (
+            <tr key={line.name}>
+              <td>{line.name}</td>
+              <td>{money(line.amount, currency)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -132,43 +134,45 @@ export function PayslipBody({ payslip }: { payslip: PayslipView }) {
           <summary>
             Tax computation · {detail.tax.taxYear}
           </summary>
-          <table className="data pay-lines-table" style={{ marginTop: 8 }}>
-            <tbody>
-              <tr>
-                <td>Basis</td>
-                <td>{detail.tax.basis}</td>
-              </tr>
-              <tr>
-                <td>Annual gross (annualised)</td>
-                <td>{money(detail.tax.annualGross, currency)}</td>
-              </tr>
-              {detail.tax.reliefs.map((r) => (
-                <tr key={r.name}>
-                  <td className="muted">Less {r.name}</td>
-                  <td className="muted">{money(r.amount, currency)}</td>
+          <div className="doc-table-wrap">
+            <table className="data pay-lines-table" style={{ marginTop: 8 }}>
+              <tbody>
+                <tr>
+                  <td>Basis</td>
+                  <td>{detail.tax.basis}</td>
                 </tr>
-              ))}
-              <tr>
-                <td>Annual taxable income</td>
-                <td>{money(detail.tax.annualTaxable, currency)}</td>
-              </tr>
-              {detail.tax.components.length > 1 &&
-                detail.tax.components.map((c) => (
-                  <tr key={c.name}>
-                    <td className="muted">{c.name}</td>
-                    <td className="muted">{money(c.amount, currency)}</td>
+                <tr>
+                  <td>Annual gross (annualised)</td>
+                  <td>{money(detail.tax.annualGross, currency)}</td>
+                </tr>
+                {detail.tax.reliefs.map((r) => (
+                  <tr key={r.name}>
+                    <td className="muted">Less {r.name}</td>
+                    <td className="muted">{money(r.amount, currency)}</td>
                   </tr>
                 ))}
-              <tr>
-                <td>Annual tax</td>
-                <td>{money(detail.tax.annualTax, currency)}</td>
-              </tr>
-              <tr>
-                <td>This month</td>
-                <td>{money(detail.tax.monthTax, currency)}</td>
-              </tr>
-            </tbody>
-          </table>
+                <tr>
+                  <td>Annual taxable income</td>
+                  <td>{money(detail.tax.annualTaxable, currency)}</td>
+                </tr>
+                {detail.tax.components.length > 1 &&
+                  detail.tax.components.map((c) => (
+                    <tr key={c.name}>
+                      <td className="muted">{c.name}</td>
+                      <td className="muted">{money(c.amount, currency)}</td>
+                    </tr>
+                  ))}
+                <tr>
+                  <td>Annual tax</td>
+                  <td>{money(detail.tax.annualTax, currency)}</td>
+                </tr>
+                <tr>
+                  <td>This month</td>
+                  <td>{money(detail.tax.monthTax, currency)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </details>
       )}
       {detail && (

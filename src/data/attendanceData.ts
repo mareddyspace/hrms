@@ -186,7 +186,7 @@ export function kindLabel(kind: AttendanceDayKind): string {
     leave: "Leave",
     wfh: "Work from home",
     holiday: "Holiday",
-    weekend: "Weekly Off",
+    weekend: "Weekly off",
     missing_punch: "Missing punch",
     pending_correction: "Correction pending",
     not_checked_in: "Not checked in",

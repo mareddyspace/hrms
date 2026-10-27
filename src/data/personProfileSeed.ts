@@ -252,21 +252,6 @@ const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "
     ],
     dependents: [],
   },
-  "demo-hiring-manager": {
-    preferredName: "Dan",
-    dateOfBirth: "1983-09-03",
-    nationality: "American",
-    workArrangement: "Hybrid",
-    education: [
-      { degree: "BS Computer Science", institution: "UC San Diego", year: 2005 },
-      { degree: "MBA", institution: "UCLA Anderson", year: 2011 },
-    ],
-    experience: [
-      { employer: "Lakeside Software", title: "Software Engineer", from: "2005-07-05", to: "2009-08-31" },
-      { employer: "Orbit Retail", title: "Product Manager", from: "2011-07-11", to: "2017-07-28" },
-    ],
-    dependents: [{ name: "Sam Ortiz", relation: "Spouse", dateOfBirth: "1984-12-20" }],
-  },
   "demo-ceo": {
     middleName: "Alexander",
     preferredName: "Jordan",

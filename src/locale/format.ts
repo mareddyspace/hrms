@@ -28,7 +28,7 @@ export function formatInTimeZone(
   const date = typeof isoOrDate === "string" ? new Date(isoOrDate) : isoOrDate;
   if (Number.isNaN(date.getTime())) return String(isoOrDate);
   try {
-    return new Intl.DateTimeFormat(undefined, { ...options, timeZone }).format(date);
+    return new Intl.DateTimeFormat("en-GB", { ...options, timeZone }).format(date);
   } catch {
     return date.toLocaleString();
   }

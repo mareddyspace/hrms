@@ -20,7 +20,6 @@ export const POSH_SLA_DAYS = 90;
 /** Internal Committee for POSH cases. Members with an account can see and act on POSH cases. */
 export const ICC_MEMBERS: { id?: string; name: string; seat: string }[] = [
   { id: "demo-hr-admin", name: "Farhan Ali", seat: "Presiding officer" },
-  { id: "demo-compensation", name: "Helen Brooks", seat: "Member" },
   { name: "Kavitha Rao", seat: "External member" },
 ];
 
@@ -125,7 +124,7 @@ function defaults(): GrievanceState {
       timeline: [
         entry(`${relDay(-96)}T07:30:00.000Z`, "filed", "Case raised.", w1.id, "Reporter"),
         entry(`${relDay(-92)}T10:00:00.000Z`, "status", "Referred to the Internal Committee.", "demo-hr-admin", "Farhan Ali", false, "Investigating"),
-        entry(`${relDay(-60)}T14:00:00.000Z`, "note", "Two witness statements recorded; respondent hearing pending.", "demo-compensation", "Helen Brooks", true),
+        entry(`${relDay(-60)}T14:00:00.000Z`, "note", "Two witness statements recorded; respondent hearing pending.", "demo-hr-admin", "Farhan Ali", true),
       ],
     });
   }
@@ -151,7 +150,7 @@ function defaults(): GrievanceState {
   return { cases };
 }
 
-const store = createLocalStore<GrievanceState>("kastech.grievance.v1", defaults);
+const store = createLocalStore<GrievanceState>("kastech.grievance.v2", defaults);
 
 export const subscribeGrievance = store.subscribe;
 export const getGrievanceState = store.getState;

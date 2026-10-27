@@ -37,14 +37,14 @@ export function BulkDataPage() {
 
   if (!isHrOrAdmin(demoProfile.role)) {
     return (
-      <Page title="Bulk import and updates">
+      <Page title="Bulk data">
         <EmptyState title="No access" description="Only HR and admins can import employees or make mass updates." />
       </Page>
     );
   }
 
   return (
-    <Page title="Bulk import and updates">
+    <Page title="Bulk data">
       <Tabs
         tabs={[
           { id: "import", label: "Import employees" },

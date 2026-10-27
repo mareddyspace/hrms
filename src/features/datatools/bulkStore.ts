@@ -74,7 +74,7 @@ function write(state: BulkState): DataToolsResult {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch {
-    return "This change was not saved. Please try again.";
+    return "Could not save. Please try again.";
   }
   cache = state;
   listeners.forEach((fn) => fn());

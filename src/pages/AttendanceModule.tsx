@@ -371,7 +371,7 @@ export function AttendancePage() {
 
   return (
     <Page
-      title="Time & Attendance"
+      title="Time & attendance"
       action={
         <button type="button" className="btn-ghost" onClick={downloadReport}>
           Download report
@@ -546,7 +546,7 @@ export function AttendancePage() {
                     <span className="day wfh legend-swatch">WFH</span>
                     <span className="day holiday legend-swatch">Holiday</span>
                     <span className="day absent legend-swatch">Absent</span>
-                    <span className="day weekend legend-swatch">Weekly Off</span>
+                    <span className="day weekend legend-swatch">Weekly off</span>
                     <span className="day missing_punch legend-swatch">Missing punch</span>
                     <span className="day pending_correction legend-swatch">Correction</span>
                   </div>
@@ -574,7 +574,7 @@ export function AttendancePage() {
                         kind === "weekend" &&
                         isPrimaryWeeklyOffLabel(date, schedule.weeklyOffDays)
                       ) {
-                        caption = "Weekly Off";
+                        caption = "Weekly off";
                       }
                       const tip = [
                         formatShortDate(date),

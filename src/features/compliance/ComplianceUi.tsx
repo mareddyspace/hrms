@@ -63,6 +63,7 @@ export function PersonPicker({
   return (
     <>
       <input
+        aria-label={placeholder}
         list={listId}
         value={text}
         placeholder={placeholder}

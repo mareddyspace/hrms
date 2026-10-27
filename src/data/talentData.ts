@@ -100,8 +100,8 @@ export interface Interview {
 export type OfferStatus = "Preparing" | "Pending approval" | "Approved" | "Sent" | "Accepted" | "Declined" | "Withdrawn";
 
 export interface OfferApproval {
-  /** Order: hiring manager agrees → HR approves → Compensation (only above band). */
-  role: "Hiring manager" | "HR" | "Compensation";
+  /** Order: hiring manager agrees → HR approves (HR also signs off offers above band). */
+  role: "Hiring manager" | "HR";
   by: string;
   byId: string;
   on: string;
@@ -330,12 +330,11 @@ export interface SkillProfile {
 /*
  * Hiring flow: the hiring manager raises a requisition → HR approves it and assigns a recruiter →
  * the recruiter runs the pipeline → the hiring manager decides at Final Review → offer
- * (recruiter prepares → hiring manager agrees → HR approves, + Compensation above band) → recruiter sends.
+ * (recruiter prepares → hiring manager agrees → HR approves, including any offer above band) → recruiter sends.
  */
 const SOPHIE = { by: "Sophie Clark", byId: "demo-recruiter" };
 const FARHAN = { by: "Farhan Ali", byId: "demo-hr-admin" };
 const JORDAN = { by: "Jordan Blake", byId: "demo-ceo" };
-const DANIEL = { by: "Daniel Ortiz", byId: "demo-hiring-manager" };
 const RAM = { by: "Ram Krishnan", byId: "emp-ram" };
 
 /** Standard trail: manager raised → HR approved → recruiter assigned. */
@@ -408,8 +407,8 @@ export const REQUISITIONS: Requisition[] = [
     country: "Canada",
     location: "Toronto",
     openings: 1,
-    hiringManager: "Daniel Ortiz",
-    hiringManagerId: "demo-hiring-manager",
+    hiringManager: "Jordan Blake",
+    hiringManagerId: "demo-ceo",
     recruiter: "Sophie Clark",
     recruiterId: "demo-recruiter",
     recruiterAssignedOn: "2026-06-22",
@@ -419,7 +418,7 @@ export const REQUISITIONS: Requisition[] = [
     approver: "Farhan Ali",
     decidedOn: "2026-07-02",
     history: [
-      ...raisedApproved(DANIEL, "2026-06-18", "2026-06-22"),
+      ...raisedApproved(JORDAN, "2026-06-18", "2026-06-22"),
       { ...FARHAN, on: "2026-07-02", action: "Put on hold", note: "Budget review" },
     ],
   },
@@ -430,8 +429,8 @@ export const REQUISITIONS: Requisition[] = [
     country: "India",
     location: "Bengaluru",
     openings: 1,
-    hiringManager: "Daniel Ortiz",
-    hiringManagerId: "demo-hiring-manager",
+    hiringManager: "Ram Krishnan",
+    hiringManagerId: "emp-ram",
     recruiter: "Sophie Clark",
     recruiterId: "demo-recruiter",
     recruiterAssignedOn: "2026-10-03",
@@ -440,7 +439,7 @@ export const REQUISITIONS: Requisition[] = [
     created: "2026-10-01",
     approver: "Farhan Ali",
     decidedOn: "2026-10-03",
-    history: raisedApproved(DANIEL, "2026-10-01", "2026-10-03"),
+    history: raisedApproved(RAM, "2026-10-01", "2026-10-03"),
   },
   {
     id: "JOB-226",
@@ -449,8 +448,8 @@ export const REQUISITIONS: Requisition[] = [
     country: "United States",
     location: "San Francisco",
     openings: 1,
-    hiringManager: "Daniel Ortiz",
-    hiringManagerId: "demo-hiring-manager",
+    hiringManager: "Jordan Blake",
+    hiringManagerId: "demo-ceo",
     recruiter: "Sophie Clark",
     recruiterId: "demo-recruiter",
     recruiterAssignedOn: "2026-08-03",
@@ -459,7 +458,7 @@ export const REQUISITIONS: Requisition[] = [
     created: "2026-08-01",
     approver: "Farhan Ali",
     decidedOn: "2026-08-03",
-    history: raisedApproved(DANIEL, "2026-08-01", "2026-08-03"),
+    history: raisedApproved(JORDAN, "2026-08-01", "2026-08-03"),
   },
   {
     id: "JOB-224",
@@ -468,8 +467,8 @@ export const REQUISITIONS: Requisition[] = [
     country: "United Arab Emirates",
     location: "Dubai",
     openings: 1,
-    hiringManager: "Daniel Ortiz",
-    hiringManagerId: "demo-hiring-manager",
+    hiringManager: "Jordan Blake",
+    hiringManagerId: "demo-ceo",
     recruiter: "Sophie Clark",
     recruiterId: "demo-recruiter",
     recruiterAssignedOn: "2026-08-22",
@@ -478,7 +477,7 @@ export const REQUISITIONS: Requisition[] = [
     created: "2026-08-20",
     approver: "Farhan Ali",
     decidedOn: "2026-08-22",
-    history: raisedApproved(DANIEL, "2026-08-20", "2026-08-22"),
+    history: raisedApproved(JORDAN, "2026-08-20", "2026-08-22"),
   },
 ];
 
@@ -572,7 +571,7 @@ export const CANDIDATES: Candidate[] = [
     history: steps([
       ["Applied", "2026-10-05T09:30", "Priya Desai", "Applied on careers site"],
       ["Screening", "2026-10-07T11:00", SOPHIE],
-      ["Shortlisted", "2026-10-12T15:00", SOPHIE, "Daniel Ortiz agreed"],
+      ["Shortlisted", "2026-10-12T15:00", SOPHIE, "Ram Krishnan agreed"],
       ["Interview", "2026-10-22T10:00", SOPHIE, "Round booked for 29 Oct"],
     ]),
   },
@@ -663,7 +662,7 @@ export const CANDIDATES: Candidate[] = [
       ["Interview", "2026-08-19T11:00", SOPHIE],
       ["Assessment", "2026-08-26T15:30", SOPHIE, "Portfolio review"],
       ["Final Review", "2026-09-02T12:00", SOPHIE],
-      ["Offer", "2026-09-08T10:00", DANIEL, "Hiring manager: go ahead"],
+      ["Offer", "2026-09-08T10:00", JORDAN, "Hiring manager: go ahead"],
       ["Hired", "2026-09-15T18:00", SOPHIE, "Offer accepted"],
     ]),
   },
@@ -687,7 +686,7 @@ export const CANDIDATES: Candidate[] = [
       ["Interview", "2026-09-07T11:00", SOPHIE],
       ["Assessment", "2026-09-14T10:00", SOPHIE, "Language check"],
       ["Final Review", "2026-09-19T16:00", SOPHIE],
-      ["Offer", "2026-09-23T10:30", DANIEL, "Hiring manager: go ahead"],
+      ["Offer", "2026-09-23T10:30", JORDAN, "Hiring manager: go ahead"],
       ["Hired", "2026-09-30T16:00", SOPHIE, "Offer accepted"],
     ]),
   },
@@ -750,7 +749,7 @@ export const INTERVIEWS: Interview[] = [
     candidateName: "Priya Desai",
     role: "Product Manager",
     when: "2026-10-29 16:00",
-    panel: "Daniel Ortiz · Sophie Clark",
+    panel: "Ram Krishnan · Sophie Clark",
     type: "Hiring manager + recruiter",
     feedbackStatus: "Pending",
   },
@@ -772,7 +771,7 @@ export const INTERVIEWS: Interview[] = [
     candidateName: "Vikram Nair",
     role: "Product Manager",
     when: "2026-10-20 14:00",
-    panel: "Daniel Ortiz",
+    panel: "Ram Krishnan",
     type: "Hiring manager",
     feedbackStatus: "Submitted",
     score: 2,
@@ -838,7 +837,7 @@ export const OFFERS: OfferRecord[] = [
     createdById: "demo-recruiter",
     createdOn: "2026-09-08",
     approvals: [
-      { role: "Hiring manager", ...DANIEL, on: "2026-09-09" },
+      { role: "Hiring manager", ...JORDAN, on: "2026-09-09" },
       { role: "HR", ...FARHAN, on: "2026-09-10" },
     ],
     sentOn: "2026-09-12",
@@ -857,14 +856,13 @@ export const OFFERS: OfferRecord[] = [
     baseSalary: 120000,
     currency: "AED",
     startDate: "2026-10-27",
-    packageNote: "Dubai office · no UAE band yet, so Compensation approved",
+    packageNote: "Dubai office · no UAE band yet, so HR approved it above band",
     createdBy: "Sophie Clark",
     createdById: "demo-recruiter",
     createdOn: "2026-09-23",
     approvals: [
-      { role: "Hiring manager", ...DANIEL, on: "2026-09-24" },
+      { role: "Hiring manager", ...JORDAN, on: "2026-09-24" },
       { role: "HR", ...FARHAN, on: "2026-09-25" },
-      { role: "Compensation", by: "Helen Brooks", byId: "demo-compensation", on: "2026-09-26" },
     ],
     sentOn: "2026-09-27",
     responseNote: "Accepted by phone; signed copy received by email.",
@@ -895,8 +893,8 @@ export const ONBOARDING_JOINERS: OnboardingJoiner[] = [
     role: "Product Designer",
     startDate: "2026-10-13",
     country: "United States",
-    manager: "Daniel Ortiz",
-    managerId: "demo-hiring-manager",
+    manager: "Jordan Blake",
+    managerId: "demo-ceo",
     candidateId: "cand-9",
     requisitionId: "JOB-226",
     preboardingPct: 70,
@@ -910,8 +908,8 @@ export const ONBOARDING_JOINERS: OnboardingJoiner[] = [
     role: "Customer Success Associate",
     startDate: "2026-10-27",
     country: "United Arab Emirates",
-    manager: "Daniel Ortiz",
-    managerId: "demo-hiring-manager",
+    manager: "Jordan Blake",
+    managerId: "demo-ceo",
     candidateId: "cand-10",
     requisitionId: "JOB-224",
     preboardingPct: 40,
@@ -1006,8 +1004,6 @@ export const PERF_REVIEWS: PerfReview[] = [
   review("rev-6", "emp-ram", "Ram Krishnan", { selfStatus: "Draft" }),
   review("rev-7", "demo-hr-admin", "Farhan Ali"),
   review("rev-8", "demo-recruiter", "Sophie Clark"),
-  review("rev-9", "demo-compensation", "Helen Brooks"),
-  review("rev-10", "demo-hiring-manager", "Daniel Ortiz"),
   review("rev-11", "demo-admin", "Alex Morgan"),
 ];
 
@@ -1190,8 +1186,6 @@ const STARTER_SKILLS: Record<string, { track: SkillTrack; skills: EmployeeSkill[
   "emp-ram": { track: "engineering", skills: [skill("sk-3", "Advanced", "Expert"), skill("sk-7", "Advanced", "Expert"), skill("sk-1", "Intermediate", "Intermediate"), skill("sk-4", "Working", "Intermediate"), skill("sk-11", "Working", "Advanced")] },
   "demo-hr-admin": { track: "people", skills: [skill("sk-8", "Expert", "Expert"), skill("sk-3", "Advanced", "Expert"), skill("sk-5", "Intermediate", "Intermediate"), skill("sk-9", "Working", "Intermediate"), skill("sk-11", "Intermediate", "Advanced")] },
   "demo-recruiter": { track: "recruiting", skills: [skill("sk-5", "Advanced", "Expert"), skill("sk-8", "Working", "Intermediate"), skill("sk-3", "Awareness", "Intermediate")] },
-  "demo-compensation": { track: "reward", skills: [skill("sk-9", "Advanced", "Expert"), skill("sk-6", "Intermediate", "Advanced"), skill("sk-8", "Working", "Intermediate"), skill("sk-3", "Working", "Intermediate")] },
-  "demo-hiring-manager": { track: "product", skills: [skill("sk-10", "Advanced", "Expert"), skill("sk-3", "Advanced", "Advanced"), skill("sk-11", "Intermediate", "Advanced"), skill("sk-5", "Working", "Working")] },
   "demo-ceo": { track: "executive", skills: [skill("sk-11", "Expert", "Expert"), skill("sk-3", "Expert", "Expert"), skill("sk-6", "Advanced", "Advanced"), skill("sk-10", "Advanced", "Advanced")] },
   "demo-admin": { track: "it", skills: [skill("sk-12", "Advanced", "Expert"), skill("sk-4", "Intermediate", "Advanced"), skill("sk-7", "Working", "Intermediate")] },
   "emp-priya": { track: "engineering", skills: [skill("sk-3", "Working", "Intermediate"), skill("sk-8", "Intermediate", "Advanced"), skill("sk-2", "Working", "Intermediate")] },

@@ -335,7 +335,7 @@ export function AnalyticsPage() {
                 <p className="note">Nothing waiting on you.</p>
               )}
               <p className="note" style={{ marginTop: 8 }}>
-                <Link to="/approvals">Open Approvals</Link>
+                <Link to="/approvals">Open approvals</Link>
               </p>
             </Card>
           </div>
@@ -497,7 +497,7 @@ export function AnalyticsPage() {
                 ])}
               />
               <p className="note">
-                <Link to="/integrations">Integration Center</Link>
+                <Link to="/integrations">Integrations</Link>
               </p>
             </Card>
             <Card title="Recent audit events">
@@ -717,7 +717,7 @@ export function IntegrationsPage() {
 
   if (!hasModuleAccess(demoProfile, "integrations") && !hasModuleAccess(demoProfile, "*")) {
     return (
-      <Page title="Integration Center" subtitle="Connectors and sync status">
+      <Page title="Integrations" subtitle="Connectors and sync status">
         <EmptyState title="Not authorized" description="Only admins manage integrations." />
       </Page>
     );
@@ -739,7 +739,7 @@ export function IntegrationsPage() {
   }
 
   return (
-    <Page title="Integration Center">
+    <Page title="Integrations">
       {toast && <Banner message={toast} />}
       <div className="grid-2">
         {integrations.map((item) => (
@@ -872,7 +872,7 @@ export function PayrollPage() {
           })}
         />
         <p className="note">
-          Connector retries: <Link to="/integrations">Integration Center</Link>
+          Connector retries: <Link to="/integrations">Integrations</Link>
         </p>
       </Card>
       <Card title="Not done in this app">
@@ -998,7 +998,7 @@ export function AdminPage() {
             </select>
           </FilterBar>
           {!canEdit && (
-            <Banner message={{ tone: "err", text: "Read-only: only Admin can change permissions." }} />
+            <Banner message={{ tone: "err", text: "Only admins can change permissions." }} />
           )}
           {canEdit && editingSelf && (
             <Banner message={{ tone: "err", text: "You cannot change permissions on your own account." }} />

@@ -149,7 +149,7 @@ export function getCompensationAccess(viewer: DemoAccount): CompensationAccess {
     };
   }
 
-  if (role === "manager" || role === "hiring_manager") {
+  if (role === "manager") {
     return {
       module: hasModuleAccess(viewer, "compensation"),
       structures: true,

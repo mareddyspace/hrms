@@ -10,11 +10,9 @@ import {
   canReadAllBgv,
   getBgvState,
   isSubject,
-  outcomeLabel,
   overallResult,
   recordConsent,
   removeVerification,
-  seesOutcomeOnly,
   startVerification,
   subscribeBgv,
   updateCheck,
@@ -47,7 +45,7 @@ export function BackgroundChecksPage() {
 
   if (!readAll) {
     return (
-      <Page title="Background verification">
+      <Page title="Background checks">
         <Card title="My verification">
           {own.length === 0 ? (
             <EmptyState title="No verification on record" />
@@ -77,27 +75,6 @@ export function BackgroundChecksPage() {
     );
   }
 
-  if (seesOutcomeOnly(actor.role)) {
-    return (
-      <Page title="Background verification">
-        <Card title="Results">
-          <DataTable
-            headers={["Name", "Role", "Result"]}
-            empty={<EmptyState title="No verifications" />}
-            rows={state.records.map((r) => {
-              const outcome = outcomeLabel(r);
-              return [
-                r.subjectName,
-                r.role,
-                <StatusBadge key="o" status={outcome} tone={outcome === "Clear" ? "ok" : outcome === "Not clear" ? "danger" : "neutral"} literal />,
-              ];
-            })}
-          />
-        </Card>
-      </Page>
-    );
-  }
-
   const records = state.records;
   const withoutRecord = talent.joiners.filter((j) => !records.some((r) => r.subjectKind === "joiner" && r.subjectId === j.id));
   const counts = { clear: 0, review: 0, progress: 0, consent: 0 };
@@ -115,7 +92,7 @@ export function BackgroundChecksPage() {
   }
 
   return (
-    <Page title="Background verification">
+    <Page title="Background checks">
       <Banner message={msg} />
       <MetricGrid>
         <MetricCard label="Clear" value={counts.clear} />
