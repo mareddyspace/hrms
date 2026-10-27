@@ -7,6 +7,7 @@ import {
   backdatedPermissionFor,
   formatShortDate,
   holidaySet,
+  holidaysForPerson,
   leaveRows,
   needsBackdatedPermission,
   SICK_LEAVE_GRACE_DAYS,
@@ -14,6 +15,7 @@ import {
   workingDays,
 } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { scheduleForEmployee } from "../data/workSchedule.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
 
 const PERMISSION_LABEL: Record<BackdatedLeavePermission["status"], { text: string; tone: "ok" | "warn" | "danger" | "neutral" | "info" }> = {
@@ -41,6 +43,11 @@ export function LeavePage() {
   } = portal;
   const today = todayISO();
   const approver = managementChain(employee.id, demoAccounts)[0];
+  const activeOffs = scheduleForEmployee({
+    shiftName: employee.shiftName,
+    shiftHours: employee.shiftHours,
+    countryCode: employee.countryCode,
+  }).weeklyOffDays;
   const years = useMemo(() => {
     const set = new Set<number>([new Date().getFullYear()]);
     for (const request of state.leaveRequests) {
@@ -51,16 +58,28 @@ export function LeavePage() {
   const [year, setYear] = useState(years[0] ?? new Date().getFullYear());
   const [code, setCode] = useState<LeaveCode>("pto");
   const [from, setFrom] = useState("");
+  // Balances in the dropdown follow the year of the chosen start date.
+  const formYear = from ? Number(from.slice(0, 4)) : Number(todayISO().slice(0, 4));
+  const formRows = leaveRows(
+    state.leavePolicies,
+    state.leaveRequests,
+    state.encashments,
+    state.holidays,
+    employee.id,
+    scheduleForEmployee({ shiftName: employee.shiftName, shiftHours: employee.shiftHours, countryCode: employee.countryCode })
+      .weeklyOffDays,
+    formYear,
+  );
   const [to, setTo] = useState("");
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   // Set when the form was filled from an approved permission: the permission only covers that leave type.
   const [lockedCode, setLockedCode] = useState<LeaveCode | null>(null);
-  const days = from && to ? workingDays(from, to, holidaySet(state.holidays)) : 0;
+  const days = from && to ? workingDays(from, to, holidaySet(holidaysForPerson(state.holidays, employee.id)), activeOffs) : 0;
   // Balances for the selected leave year (quotas reset every January).
   const yearRows = useMemo(
     () =>
-      leaveRows(state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, employee.id, undefined, year),
+      leaveRows(state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, employee.id, activeOffs, year),
     [state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, employee.id, year],
   );
   const requests = state.leaveRequests.filter(
@@ -108,7 +127,7 @@ export function LeavePage() {
             tone: "ok",
             text: hasApprover
               ? `Leave request submitted to ${approver?.fullName ?? "your manager"}.`
-              : "Leave recorded and approved — there's no one above you to approve it.",
+              : "Time off added to your calendar.",
           },
     );
     if (!error) resetForm();
@@ -120,7 +139,7 @@ export function LeavePage() {
     setFrom(p.from);
     setTo(p.to);
     setReason(p.reason);
-    setMessage({ tone: "ok", text: "Dates filled in from your approved permission. Review and submit." });
+    setMessage({ tone: "ok", text: "Dates filled in. Review and submit." });
   }
 
   function decide(id: string, decision: "approved" | "rejected", kind: "permission" | "leave") {
@@ -138,7 +157,7 @@ export function LeavePage() {
   }
 
   return (
-    <Page title="Leave & Absence" subtitle="Balances, requests and history.">
+    <Page title="Leave & Absence">
       <div className="year-bar" role="tablist" aria-label="Leave year">
         {years.map((item) => (
           <button
@@ -157,7 +176,7 @@ export function LeavePage() {
         <div className="leave-main">
           <Card title={`Leave balance · ${year}`}>
             {/* Unpaid leave has no balance; it stays available in the apply form below. */}
-            <LeaveTable rows={yearRows.filter((row) => row.code !== "unpaid")} showPending />
+            <LeaveTable rows={yearRows.filter((row) => row.code !== "unpaid")} showPending={hasApprover} />
           </Card>
           {(teamPermissions.length > 0 || teamLeave.length > 0) && (
             <Card title={`Team approvals (${teamPermissions.length + teamLeave.length})`}>
@@ -170,7 +189,7 @@ export function LeavePage() {
                     </div>
                     <span>
                       {leaveName(p.code)} · {formatShortDate(p.from)} – {formatShortDate(p.to)} ·{" "}
-                      {workingDays(p.from, p.to, holidaySet(state.holidays))} day(s) · asked {formatShortDate(p.requestedOn)}
+                      {workingDays(p.from, p.to, holidaySet(holidaysForPerson(state.holidays, p.employeeId)))} day(s) · asked {formatShortDate(p.requestedOn)}
                     </span>
                     <span className="muted">Reason: {p.reason}</span>
                     <div className="approval-actions">
@@ -197,7 +216,7 @@ export function LeavePage() {
                     </div>
                     <span>
                       {leaveName(r.code)} · {formatShortDate(r.from)} – {formatShortDate(r.to)} ·{" "}
-                      {workingDays(r.from, r.to, holidaySet(state.holidays))} day(s)
+                      {workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)))} day(s)
                     </span>
                     <span className="muted">Reason: {r.reason}</span>
                     <div className="approval-actions">
@@ -264,7 +283,7 @@ export function LeavePage() {
             </Card>
           )}
 
-          <Card title={`My requests · ${year}`}>
+          <Card title={hasApprover ? `My requests · ${year}` : `My time off · ${year}`}>
             <div className="table-scroll">
               <table className="data requests">
                 <thead>
@@ -287,7 +306,7 @@ export function LeavePage() {
                   )}
                   {requests.map((request) => {
                     const policy = leaveTable.find((row) => row.code === request.code);
-                    const count = workingDays(request.from, request.to, holidaySet(state.holidays));
+                    const count = workingDays(request.from, request.to, holidaySet(holidaysForPerson(state.holidays, employee.id)), activeOffs);
                     return (
                       <tr key={request.id}>
                         <td>{policy?.name ?? request.code}</td>
@@ -327,7 +346,7 @@ export function LeavePage() {
             </div>
           </Card>
         </div>
-        <Card title="Apply Leave">
+        <Card title={hasApprover ? "Apply Leave" : "Mark time off"}>
           <form onSubmit={onSubmit}>
             <div className="form-grid">
               <Field label="Leave type" wide>
@@ -337,9 +356,9 @@ export function LeavePage() {
                   onChange={(event) => setCode(event.target.value as LeaveCode)}
                   title={lockedCode ? "Fixed by your approved permission" : undefined}
                 >
-                  {leaveTable.map((row) => (
+                  {formRows.map((row) => (
                     <option key={row.code} value={row.code}>
-                      {row.name} · {row.available} available
+                      {row.code === "unpaid" ? row.name : `${row.name} · ${row.available} available`}
                     </option>
                   ))}
                 </select>
@@ -354,7 +373,7 @@ export function LeavePage() {
                 <textarea value={reason} onChange={(event) => setReason(event.target.value)} />
               </Field>
             </div>
-            <p className="note">Working days in this range: {days}. Weekends and holidays are skipped.</p>
+            <p className="note">Working days: {days}.</p>
             {needsPermission && (
               <p className="note warn">
                 These dates are in the past. {approver?.fullName ?? "Your manager"} must approve before you can apply.
@@ -370,7 +389,7 @@ export function LeavePage() {
             )}
             <div className="form-actions">
               <button className="btn" type="submit">
-                {needsPermission ? "Request permission" : "Submit request"}
+                {needsPermission ? "Request permission" : hasApprover ? "Submit request" : "Add time off"}
               </button>
             </div>
             <Banner message={message} />

@@ -1,9 +1,20 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
+import { decideCorrection, getAttendanceState, subscribeAttendance } from "../data/attendanceLocal.ts";
+import { managementChain } from "../demoAccounts.ts";
+import {
+  compOffCandidates,
+  decideSwap,
+  getShiftState,
+  grantCompOff,
+  respondSwap,
+  shiftById,
+  subscribeShifts,
+} from "../features/workforce/shiftsStore.ts";
 import { money } from "../countryPay.ts";
 import { Banner, Card, EmptyState, Page, StatusBadge, Tabs } from "../components/ui.tsx";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
-import { formatShortDate, holidaySet, inr, workingDays } from "../model.ts";
+import { formatShortDate, holidaySet, holidaysForPerson, parseISODate, todayISO, workingDays } from "../model.ts";
 import type { DecisionInfo, PortalState } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
@@ -72,7 +83,14 @@ export function countWaitingOnMe(
   const proofs = canVerifyProofs
     ? state.investmentProofs.filter((p) => p.status === "submitted" && p.employeeId !== myId).length
     : 0;
-  return requests + timesheets + proofs;
+  const corrections = getAttendanceState().corrections.filter((c) => c.status === "Pending" && mine(c.employeeId)).length;
+  const shifts = getShiftState();
+  const swaps = shifts.swaps.filter(
+    (w) =>
+      (w.status === "awaiting_teammate" && w.teammateId === myId) ||
+      (w.status === "awaiting_manager" && mine(w.requesterId) && mine(w.teammateId)),
+  ).length;
+  return requests + timesheets + proofs + corrections + swaps;
 }
 
 /** Approvals inbox built from real requests: decide what's waiting on you, track what you've asked for. */
@@ -80,6 +98,10 @@ export function ApprovalsCenterPage() {
   const portal = usePortal();
   const { state, employee, demoAccounts, leaveTable, canDecideFor, canVerifyProofs } = portal;
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
+  const attendance = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
+  const shifts = useSyncExternalStore(subscribeShifts, getShiftState, getShiftState);
+  const actor = { id: employee.id, fullName: employee.fullName, role: portal.demoProfile.role };
+  const rosterCtx = { leaves: state.leaveRequests, holidays: state.holidays };
   const [tab, setTab] = useState<"waiting" | "mine">("waiting");
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
@@ -90,7 +112,6 @@ export function ApprovalsCenterPage() {
     taskPersonById(id)?.fullName ??
     id;
   const leaveName = (code: string) => leaveTable.find((row) => row.code === code)?.name ?? code;
-  const holidays = holidaySet(state.holidays);
 
   const items = useMemo<RequestItem[]>(() => {
     const isOpen = (status: string) => status === "pending" || status === "submitted";
@@ -116,7 +137,7 @@ export function ApprovalsCenterPage() {
         key: `lv-${r.id}`,
         kind: "Leave",
         employeeId: r.employeeId,
-        title: `${leaveName(r.code)} · ${formatShortDate(r.from)} – ${formatShortDate(r.to)} · ${workingDays(r.from, r.to, holidays)} day(s)`,
+        title: `${leaveName(r.code)} · ${formatShortDate(r.from)} – ${formatShortDate(r.to)} · ${workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)))} day(s)`,
         detail: r.reason,
         raisedOn: r.appliedOn,
         status: r.status,
@@ -145,7 +166,7 @@ export function ApprovalsCenterPage() {
         key: `ex-${x.id}`,
         kind: "Expense claim",
         employeeId: x.employeeId,
-        title: `${x.category} · ${inr(x.amount)} · ${formatShortDate(x.date)}`,
+        title: `${x.category} · ${money(x.amount, x.currency)} · ${formatShortDate(x.date)}`,
         detail: x.description,
         status: x.status,
         open: isOpen(x.status),
@@ -159,7 +180,7 @@ export function ApprovalsCenterPage() {
         key: `rb-${x.id}`,
         kind: "Reimbursement",
         employeeId: x.employeeId,
-        title: `${x.category} · ${inr(x.amount)} · ${formatShortDate(x.date)}`,
+        title: `${x.category} · ${money(x.amount, x.currency)} · ${formatShortDate(x.date)}`,
         detail: x.description,
         status: x.status,
         open: isOpen(x.status),
@@ -173,7 +194,7 @@ export function ApprovalsCenterPage() {
         key: `ca-${x.id}`,
         kind: "Cash advance",
         employeeId: x.employeeId,
-        title: `${inr(x.amount)} · ${x.category} · needed by ${formatShortDate(x.requiredBy)}`,
+        title: `${money(x.amount, x.currency)} · ${x.category} · needed by ${formatShortDate(x.requiredBy)}`,
         detail: x.purpose,
         raisedOn: x.date,
         status: x.status,
@@ -255,20 +276,98 @@ export function ApprovalsCenterPage() {
         decide: (d) => portal.setOrgTimesheetStatus(row.id, d === "approved" ? "approved" : "draft"),
       });
     }
+    for (const c of attendance.corrections) {
+      list.push({
+        key: `ac-${c.id}`,
+        kind: "Attendance correction",
+        employeeId: c.employeeId,
+        title: `${formatShortDate(c.date)} · ${[c.requestedCheckIn, c.requestedCheckOut].filter(Boolean).join(" – ") || c.kind}`,
+        detail: c.reason,
+        raisedOn: c.createdAt.slice(0, 10),
+        status: c.status === "Pending" ? "pending" : c.status === "Approved" ? "approved" : "rejected",
+        open: c.status === "Pending",
+        decided: { decidedByName: c.decidedByName, decidedOn: c.decidedAt?.slice(0, 10), decisionNote: c.decisionNote },
+        decide: (d, note) => decideCorrection(c.id, actor, d === "approved" ? "Approved" : "Rejected", note),
+      });
+    }
+    for (const w of shifts.swaps) {
+      const shiftName = (id: string) => shiftById(id, shifts)?.name ?? "shift";
+      const base = {
+        title: `${formatShortDate(w.date)} · ${shiftName(w.requesterShiftId)} ⇄ ${shiftName(w.teammateShiftId)}`,
+        detail: w.reason,
+        raisedOn: w.requestedOn,
+        decided: { decidedByName: w.decidedByName, decidedOn: w.decidedOn, decisionNote: w.decisionNote },
+      };
+      if (w.status === "awaiting_teammate") {
+        // The teammate answers first; it then goes to the manager of both.
+        list.push({
+          ...base,
+          key: `swt-${w.id}`,
+          kind: "Shift swap",
+          employeeId: w.requesterId,
+          status: "pending",
+          open: w.teammateId === employee.id,
+          approveLabel: "Accept",
+          decide: (d) => respondSwap(actor, w.id, d === "approved"),
+        });
+      } else {
+        list.push({
+          ...base,
+          key: `swm-${w.id}`,
+          kind: "Shift swap",
+          employeeId: w.requesterId,
+          status: w.status === "awaiting_manager" ? "pending" : w.status === "approved" ? "approved" : w.status === "cancelled" ? "withdrawn" : "rejected",
+          open: w.status === "awaiting_manager" && canDecideFor(w.teammateId),
+          decide: (d, note) => decideSwap(actor, rosterCtx, w.id, d === "approved", note ?? ""),
+        });
+      }
+    }
+    for (const c of compOffCandidates(actor, rosterCtx, shifts)) {
+      list.push({
+        key: `co-${c.assignment.personId}-${c.assignment.date}`,
+        kind: "Comp-off",
+        employeeId: c.assignment.personId,
+        title: `Worked ${formatShortDate(c.assignment.date)} · ${c.reason}`,
+        status: "pending",
+        open: true,
+        approveLabel: "Grant 1 day",
+        declineLabel: "Not now",
+        decide: (d) => (d === "approved" ? grantCompOff(actor, rosterCtx, c.assignment.personId, c.assignment.date) : null),
+      });
+    }
     return list;
     // portal functions are recreated with state, so state is the real dependency
-  }, [state, portal, leaveTable]);
+  }, [state, portal, leaveTable, attendance, shifts]);
 
-  const waiting = items.filter(
-    (item) =>
-      item.open &&
-      item.decide &&
-      item.employeeId !== employee.id &&
-      (item.kind === "Tax-saving proof" ? canVerifyProofs : canDecideFor(item.employeeId)),
-  );
+  const waiting = items.filter((item) => {
+    if (!item.open || !item.decide || item.employeeId === employee.id) return false;
+    if (item.kind === "Tax-saving proof") return canVerifyProofs;
+    if (item.key.startsWith("swt-")) return true; // already limited to the teammate asked
+    if (item.kind === "Leave encashment" && managementChain(item.employeeId, demoAccounts).length === 0) {
+      return portal.demoProfile.role === "compensation_admin";
+    }
+    return canDecideFor(item.employeeId);
+  });
   const mine = items
-    .filter((item) => item.employeeId === employee.id && item.kind !== "Timesheet")
+    .filter((item) => item.employeeId === employee.id && item.kind !== "Timesheet" && item.kind !== "Comp-off")
     .sort((a, b) => Number(b.open) - Number(a.open) || (b.raisedOn ?? "").localeCompare(a.raisedOn ?? ""));
+
+  // SLA: requests waiting more than this many days are flagged, and the next person up can act on them.
+  const SLA_DAYS = 3;
+  const today = todayISO();
+  const ageOf = (item: RequestItem) =>
+    item.raisedOn ? Math.max(0, Math.round((parseISODate(today).getTime() - parseISODate(item.raisedOn).getTime()) / 86400000)) : 0;
+  const awayToday = (personId: string) =>
+    state.leaveRequests.some(
+      (r) => r.employeeId === personId && r.status === "approved" && r.code !== "wfh" && r.code !== "emergency_wfh" && r.from <= today && today <= r.to,
+    );
+  /** Who the request is with now: the first person up the line who isn't away. */
+  const currentApprover = (employeeId: string) => {
+    const chain = managementChain(employeeId, demoAccounts);
+    const first = chain[0];
+    const available = chain.find((m) => !awayToday(m.id));
+    return { first, available };
+  };
 
   async function run(action: () => string | null | Promise<string | null>, success: string, key?: string) {
     const error = await action();
@@ -277,7 +376,7 @@ export function ApprovalsCenterPage() {
   }
 
   return (
-    <Page title="Approvals" subtitle="Requests waiting on you, and the status of everything you've asked for">
+    <Page title="Approvals">
       <Tabs
         tabs={[
           { id: "waiting", label: `Waiting on me (${waiting.length})` },
@@ -291,7 +390,7 @@ export function ApprovalsCenterPage() {
       {tab === "waiting" && (
         <Card>
           {waiting.length === 0 ? (
-            <EmptyState title="Nothing waiting on you" description="Requests from people who report to you will appear here." />
+            <EmptyState title="Nothing waiting on you" />
           ) : (
             <ul className="approval-list">
               {waiting.map((item) => (
@@ -302,7 +401,12 @@ export function ApprovalsCenterPage() {
                   </div>
                   <span>{item.title}</span>
                   {item.detail && <span className="muted">{item.detail}</span>}
-                  {item.raisedOn && <span className="muted">Raised {formatShortDate(item.raisedOn)}</span>}
+                  {item.raisedOn && (
+                    <span className="muted">
+                      Raised {formatShortDate(item.raisedOn)} · waiting {ageOf(item)} day(s)
+                      {ageOf(item) > SLA_DAYS && <span className="pill pill-mandatory"> Overdue</span>}
+                    </span>
+                  )}
                   <div className="approval-actions">
                     {item.kind !== "Timesheet" && (
                       <input
@@ -337,7 +441,7 @@ export function ApprovalsCenterPage() {
       {tab === "mine" && (
         <Card>
           {mine.length === 0 ? (
-            <EmptyState title="No requests yet" description="Leave, claims and other requests you raise will be tracked here." />
+            <EmptyState title="No requests yet" />
           ) : (
             <ul className="approval-list">
               {mine.map((item) => (
@@ -347,6 +451,18 @@ export function ApprovalsCenterPage() {
                     <StatusBadge status={STATUS_TEXT[item.status] ?? item.status} tone={STATUS_TONE[item.status]} literal />
                   </div>
                   <span>{item.title}</span>
+                  {item.open && (() => {
+                    const { first, available } = currentApprover(item.employeeId);
+                    if (!first) return null;
+                    const away = available && available.id !== first.id;
+                    return (
+                      <span className="muted">
+                        With {available?.fullName ?? first.fullName}
+                        {away ? ` (${first.fullName} is away)` : ""} · {ageOf(item)} day(s)
+                        {ageOf(item) > SLA_DAYS && <span className="pill pill-mandatory"> Overdue</span>}
+                      </span>
+                    );
+                  })()}
                   <span className="muted">
                     {item.decided?.decidedByName
                       ? `${item.status === "rejected" ? "Declined" : "Decided"} by ${item.decided.decidedByName}${

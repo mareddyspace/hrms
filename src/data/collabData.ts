@@ -1,3 +1,4 @@
+import { findDemoById } from "../demoAccounts.ts";
 /** Infotech collaboration & workflow — fictional demo data only. */
 
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
@@ -6,7 +7,7 @@ import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 const SEEN_BY_ALL: string[] = DEMO_ACCOUNTS.map((a) => a.id);
 
 export const COLLAB_DISCLAIMER =
-  "Demo collaboration only. Real-time messaging, email delivery, and external integrations are not operational without a backend.";
+  "Real-time messaging, email delivery and external integrations are not available.";
 
 export type ApprovalKind =
   | "Leave"
@@ -131,6 +132,8 @@ export interface AppNotification {
   audience: NotifAudience;
   /** When set, only this user sees the notification (audience is ignored). */
   recipientId?: string;
+  /** When set, only people working in this country see it (e.g. a national holiday). */
+  countryCode?: string;
   href?: string;
   /** Primary CTA label (shown when actions[] omitted). */
   actionLabel?: string;
@@ -195,6 +198,10 @@ export function isManagerNotifRole(role: string): boolean {
 
 export function notificationVisibleForRole(n: AppNotification, role: string, userId?: string): boolean {
   if (n.recipientId) return n.recipientId === userId;
+  if (n.countryCode && userId) {
+    const country = findDemoById(userId)?.countryCode ?? (userId.startsWith("emp-") ? "IN" : undefined);
+    if (country && country !== n.countryCode) return false;
+  }
   if (n.audience === "all") return true;
   if (n.audience === "manager") return isManagerNotifRole(role);
   return !isManagerNotifRole(role);
@@ -265,15 +272,6 @@ export const CHAT_PEOPLE: ChatPerson[] = [
     channelTags: ["general", "hr"],
   },
   {
-    id: "demo-hrbp",
-    name: "Meera Iyer",
-    title: "HR Business Partner",
-    department: "People",
-    roleLabel: "HRBP",
-    availability: "Online",
-    channelTags: ["general", "hr"],
-  },
-  {
     id: "demo-recruiter",
     name: "Sophie Clark",
     title: "Senior Recruiter",
@@ -319,10 +317,10 @@ export const CHAT_PEOPLE: ChatPerson[] = [
     channelTags: ["general"],
   },
   {
-    id: "demo-learning",
+    id: "emp-priya",
     name: "Priya Nair",
-    title: "L&D Lead",
-    department: "Learning",
+    title: "Software Engineer",
+    department: "Engineering",
     roleLabel: "Colleague",
     availability: "Online",
     channelTags: ["general"],
@@ -463,7 +461,7 @@ export const INBOX_SEED: InboxTask[] = [
     title: "Salary revision letter · Babu Menon",
     requester: "Ram Krishnan",
     requesterId: "emp-ram",
-    summary: "Demo letter pending HR approve",
+    summary: "Letter pending HR approval",
     status: "Pending",
     createdAt: "2026-10-08T11:00:00",
     requiresReasonOnReject: true,
@@ -477,7 +475,7 @@ export const INBOX_SEED: InboxTask[] = [
     kind: "Leave",
     title: "WFH · 3 Oct",
     requester: "Priya Nair",
-    requesterId: "demo-learning",
+    requesterId: "emp-priya",
     summary: "Approved earlier this month",
     status: "Approved",
     createdAt: "2026-10-01T10:00:00",
@@ -492,7 +490,7 @@ export const INBOX_SEED: InboxTask[] = [
     kind: "Timesheet",
     title: "Timesheet week of 22 Sep",
     requester: "Anu Rao",
-    requesterId: "demo-performance",
+    requesterId: "emp-anu",
     summary: "Rejected — missing project codes",
     status: "Rejected",
     createdAt: "2026-09-26T17:00:00",
@@ -549,17 +547,17 @@ export const CONVERSATIONS_SEED: Conversation[] = [
   {
     id: "cv-2",
     kind: "direct",
-    title: "Meera Iyer",
-    participantIds: ["emp-mahesh", "demo-hrbp"],
-    participantNames: ["Babu Menon", "Meera Iyer"],
+    title: "Farhan Ali",
+    participantIds: ["emp-mahesh", "demo-hr-admin"],
+    participantNames: ["Babu Menon", "Farhan Ali"],
     messages: [
       {
         id: "m3",
-        fromId: "demo-hrbp",
-        fromName: "Meera Iyer",
+        fromId: "demo-hr-admin",
+        fromName: "Farhan Ali",
         text: "Your policy acknowledgement is still open — ping me if the link fails.",
         at: "2026-10-10T11:20:00",
-        readBy: ["emp-mahesh", "demo-hrbp"],
+        readBy: ["emp-mahesh", "demo-hr-admin"],
       },
     ],
   },
@@ -567,7 +565,7 @@ export const CONVERSATIONS_SEED: Conversation[] = [
     id: "cv-3",
     kind: "group",
     title: "Engineering Bengaluru",
-    participantIds: ["emp-mahesh", "emp-ram", "demo-learning"],
+    participantIds: ["emp-mahesh", "emp-ram", "emp-priya"],
     participantNames: ["Babu Menon", "Ram Krishnan", "Priya Nair"],
     messages: [
       {
@@ -580,12 +578,12 @@ export const CONVERSATIONS_SEED: Conversation[] = [
       },
       {
         id: "m5",
-        fromId: "demo-learning",
+        fromId: "emp-priya",
         fromName: "Priya Nair",
         text: "Secure coding module due end of month — please enroll.",
         at: "2026-10-14T09:00:00",
-        readBy: ["demo-learning"],
-        attachmentName: "secure-coding-outline-demo.txt",
+        readBy: ["emp-priya"],
+        attachmentName: "secure-coding-outline.txt",
       },
     ],
   },
@@ -619,17 +617,17 @@ export const CONVERSATIONS_SEED: Conversation[] = [
     id: "cv-hr-1",
     kind: "direct",
     title: "Farhan Ali · Employee relations",
-    participantIds: ["demo-hr-admin", "demo-hrbp"],
-    participantNames: ["Farhan Ali", "Meera Iyer"],
+    participantIds: ["demo-hr-admin", "demo-recruiter"],
+    participantNames: ["Farhan Ali", "Sophie Clark"],
     restricted: "hr_confidential",
     messages: [
       {
         id: "m-hr-1",
-        fromId: "demo-hrbp",
-        fromName: "Meera Iyer",
-        text: "ER intake logged for demo case #ER-204 — keep this thread HR-only.",
+        fromId: "demo-recruiter",
+        fromName: "Sophie Clark",
+        text: "ER intake logged for case #ER-204 — keep this thread HR-only.",
         at: "2026-10-11T10:00:00",
-        readBy: ["demo-hr-admin", "demo-hrbp"],
+        readBy: ["demo-hr-admin", "demo-recruiter"],
       },
     ],
   },
@@ -639,7 +637,7 @@ export const ANNOUNCEMENTS_SEED: Announcement[] = [
   {
     id: "an-1",
     title: "Q4 All-hands",
-    body: "Join the global all-hands on 22 Oct. Agenda covers roadmap, hiring, and wellbeing resources. This is a demo announcement.",
+    body: "Join the global all-hands on 22 Oct. Agenda covers roadmap, hiring, and wellbeing resources.",
     scope: "Company",
     audience: "All Infotech",
     state: "Published",
@@ -704,6 +702,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-01T16:41:00",
     readBy: [],
     audience: "employee",
+    recipientId: "emp-mahesh",
     href: "/leave",
     actionLabel: "View Calendar",
     actions: [{ id: "open", label: "View Calendar", kind: "link", href: "/leave" }],
@@ -716,6 +715,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-14T08:00:00",
     readBy: [],
     audience: "employee",
+    recipientId: "emp-mahesh",
     href: "/timesheet",
     actionLabel: "Open Timesheet",
     actions: [{ id: "open", label: "Open Timesheet", kind: "link", href: "/timesheet" }],
@@ -728,6 +728,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-13T16:02:00",
     readBy: [],
     audience: "employee",
+    recipientId: "emp-mahesh",
     href: "/chat",
     actionLabel: "Open Message",
     actions: [{ id: "open", label: "Open Message", kind: "link", href: "/chat" }],
@@ -740,6 +741,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-12T07:00:00",
     readBy: SEEN_BY_ALL,
     audience: "all",
+    countryCode: "IN",
     href: "/calendar",
     actionLabel: "View Calendar",
     actions: [
@@ -755,6 +757,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-10T09:00:00",
     readBy: [],
     audience: "employee",
+    recipientId: "emp-mahesh",
     href: "/programs",
     actionLabel: "Review",
     actions: [{ id: "open", label: "Review", kind: "link", href: "/programs" }],
@@ -767,6 +770,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-09T10:00:00",
     readBy: [],
     audience: "employee",
+    recipientId: "emp-mahesh",
     href: "/evaluations",
     actionLabel: "Review",
     actions: [{ id: "open", label: "Review", kind: "link", href: "/evaluations" }],
@@ -793,15 +797,14 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-14T09:20:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/approvals",
     inboxTaskId: "ib-1",
     actionLabel: "Review",
     detail:
-      "Diya Patel · Privilege leave · 16–17 Oct 2026 · Project coverage noted as Babu Menon. Approve or reject from here or open Approvals.",
+      "Diya Patel · Privilege leave · 16–17 Oct 2026 · Project coverage noted as Babu Menon. Decide it in Approvals.",
     actions: [
       { id: "review", label: "Review", kind: "detail" },
-      { id: "approve", label: "Approve", kind: "approve" },
-      { id: "reject", label: "Reject", kind: "reject" },
       { id: "inbox", label: "Open Approvals", kind: "link", href: "/approvals" },
     ],
   },
@@ -813,6 +816,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-13T11:05:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/leave",
     actionLabel: "View Calendar",
     detail: "Kabir Sharma (TZ0042) · Senior Engineer · Leave overlaps Maple Health sprint checkpoint. Coverage: Diya + Babu.",
@@ -829,14 +833,14 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-13T18:10:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/timesheet",
     inboxTaskId: "ib-2",
     actionLabel: "Open Timesheet",
     detail: "Kabir Sharma · 40h submitted · no overtime flagged. Approve from Approvals or open Timesheet.",
     actions: [
       { id: "ts", label: "Open Timesheet", kind: "link", href: "/timesheet" },
-      { id: "approve", label: "Approve", kind: "approve" },
-      { id: "reject", label: "Reject", kind: "reject" },
+      { id: "inbox", label: "Open Approvals", kind: "link", href: "/approvals" },
     ],
   },
   {
@@ -847,6 +851,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-13T17:40:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/timesheet",
     actionLabel: "Open Timesheet",
     actions: [
@@ -862,14 +867,14 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-11T08:05:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/attendance",
     inboxTaskId: "ib-3",
     actionLabel: "View Attendance",
     detail: "Babu Menon · Forgot to check out · proposed out-time 18:32.",
     actions: [
       { id: "att", label: "View Attendance", kind: "link", href: "/attendance" },
-      { id: "approve", label: "Approve", kind: "approve" },
-      { id: "reject", label: "Reject", kind: "reject" },
+      { id: "inbox", label: "Open Approvals", kind: "link", href: "/approvals" },
     ],
   },
   {
@@ -880,6 +885,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-14T10:15:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/attendance",
     actionLabel: "View Attendance",
     detail: "Diya Patel · Expected In Office · no check-in by 10:15 IST. Confirm WFH or leave if applicable.",
@@ -896,6 +902,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-14T08:42:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/chat",
     actionLabel: "Open Message",
     actions: [{ id: "msg", label: "Open Message", kind: "link", href: "/chat" }],
@@ -908,6 +915,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-13T15:20:00",
     readBy: SEEN_BY_ALL,
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/chat",
     actionLabel: "Open Message",
     actions: [{ id: "msg", label: "Open Message", kind: "link", href: "/chat" }],
@@ -932,6 +940,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-12T07:00:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/calendar",
     actionLabel: "View Calendar",
     actions: [
@@ -947,6 +956,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-12T09:00:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/evaluations",
     actionLabel: "Review",
     detail: "Priya Nair · Mid-year check-in · due 18 Oct — prepare qualitative feedback notes.",
@@ -963,6 +973,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-10T09:30:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/programs",
     actionLabel: "Review",
     actions: [
@@ -978,6 +989,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-06T09:00:00",
     readBy: SEEN_BY_ALL,
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/team",
     actionLabel: "Open",
     actions: [
@@ -993,6 +1005,7 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     at: "2026-10-14T07:30:00",
     readBy: [],
     audience: "manager",
+    recipientId: "emp-ram",
     href: "/team",
     actionLabel: "Review",
     detail: "Kabir Sharma on leave · Diya + Babu covering Maple Health for today.",
@@ -1029,7 +1042,7 @@ export const HR_REQUESTS_SEED: HrRequest[] = [
     updatedAt: "2026-09-03",
     comments: [
       { at: "2026-09-01T11:00:00", author: "Babu Menon", text: "Requested via Help." },
-      { at: "2026-09-03T14:20:00", author: "Farhan Ali", text: "Issued demo letter — see Documents." },
+      { at: "2026-09-03T14:20:00", author: "Farhan Ali", text: "Issued letter — see Documents." },
     ],
   },
   {
@@ -1053,35 +1066,35 @@ export const FAQ_ITEMS: FaqItem[] = [
   {
     id: "faq-1",
     question: "How do I request leave?",
-    answer: "Open Leave & Absence, create a request, and submit for manager approval. This is a frontend demo.",
+    answer: "Open Leave & Absence, create a request, and submit for manager approval.",
     topic: "Leave",
     policyLink: "/policies",
   },
   {
     id: "faq-2",
     question: "Where are payslips?",
-    answer: "Use Payslips under Pay. Payroll processing itself is out of scope for this prototype.",
+    answer: "Use Payslips under Pay. Payroll is processed by external providers.",
     topic: "Payroll",
     policyLink: "/payslips",
   },
   {
     id: "faq-3",
     question: "How do benefits enrollments work?",
-    answer: "Open Benefits, select your country plan, and update enrollment status in the demo UI.",
+    answer: "Open Benefits, select your country plan, and update your enrollment status.",
     topic: "Benefits",
     policyLink: "/benefits",
   },
   {
     id: "faq-4",
     question: "Who approves document letters?",
-    answer: "HR Admin / HRBP personas can move letter requests from Draft to Issued in Documents & Letters.",
+    answer: "HR Admin / HRBP can move letter requests from Draft to Issued in Documents & Letters.",
     topic: "Documents",
     policyLink: "/documents",
   },
   {
     id: "faq-5",
     question: "Is messaging real-time?",
-    answer: "No. Messages are stored in browser local demo state only — not delivered by email or push.",
+    answer: "No. Messages are not delivered by email or push.",
     topic: "Messages",
   },
 ];

@@ -64,7 +64,8 @@ export type NavAccessId =
   | "reportbuilder"
   | "shifts"
   | "optionalholidays"
-  | "contractors";
+  | "contractors"
+  | "auditlog";
 
 export interface DemoAccount extends Employee {
   /** Prototype-only plain-text password (frontend mock). */
@@ -109,6 +110,7 @@ const ACCESS_EMPLOYEE: NavAccessId[] = [
   "copilot",
   "locale",
   "taxdeclarations",
+  "compensation", // own pay history only; others' pay stays restricted
   "exit",
   "probation",
   "immigration",
@@ -130,6 +132,7 @@ const ACCESS_MANAGER: NavAccessId[] = [
   "skills",
   "people",
   "analytics",
+  "recruiting", // managers see and act on their own requisitions only
   "probationreviews",
   "teamexits",
   "succession",
@@ -139,12 +142,11 @@ const ACCESS_MANAGER: NavAccessId[] = [
 
 /** Platform admin: settings & system reports — not confidential pay. */
 const ACCESS_ADMIN: NavAccessId[] = [
-  // Admin inherits manager tools except payslips — role manages accounts, not pay data
-  ...ACCESS_MANAGER.filter((id) => id !== "payslips"),
+  // Own self-service (own payslips included) plus platform tools — no team tools without a team, no others' pay.
+  ...ACCESS_EMPLOYEE,
+  "people",
   "organization",
   "jobs",
-  "recruiting",
-  "onboarding",
   "agents",
   "locale",
   "integrations",
@@ -152,8 +154,7 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "administration",
   "bulkdata",
   "reportbuilder",
-  "exitsadmin",
-  // no "compensation" / "payslips" — Admin does not auto-receive salary access
+  "auditlog",
 ];
 
 function account(
@@ -261,6 +262,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "bgv",
       "bulkdata",
       "reportbuilder",
+      "auditlog",
     ],
   }),
   account({
@@ -338,8 +340,9 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     currency: "USD",
     /** Executive reports yes; individual salary/payslips require explicit grant. */
     rbacFlags: { salaryAuthorized: false },
+    // The CEO is exempt from project timesheets and probation.
     navAccess: [
-      ...ACCESS_MANAGER,
+      ...ACCESS_MANAGER.filter((id) => id !== "timesheet" && id !== "probation"),
       "organization",
       "jobs",
       "recruiting",
@@ -374,8 +377,6 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       ...ACCESS_EMPLOYEE,
       "people",
       "organization",
-      "team",
-      "workflows",
       "analytics",
       "compensation",
       "payroll",
@@ -470,7 +471,24 @@ const TEAMMATE_REPORTS_TO: Record<string, string> = {
   "emp-diya": "emp-ram",
 };
 
+/**
+ * The directory's reporting line (wired up in store.tsx): returns the managers above a person, nearest first,
+ * or null when the person isn't in the directory. One source, so the org chart and approvals always agree.
+ */
+let directoryChainSource: (employeeId: string) => { id: string; fullName: string }[] | null = () => null;
+
+export function setDirectoryChainSource(source: (employeeId: string) => { id: string; fullName: string }[] | null): void {
+  directoryChainSource = source;
+}
+
 export function managementChain(employeeId: string, accounts: readonly DemoAccount[] = DEMO_ACCOUNTS): DemoAccount[] {
+  const fromDirectory = directoryChainSource(employeeId);
+  if (fromDirectory) {
+    // Managers who aren't sign-in personas are returned with just their id and name.
+    return fromDirectory.map(
+      (m) => accounts.find((a) => a.id === m.id) ?? DEMO_ACCOUNTS.find((a) => a.id === m.id) ?? ({ id: m.id, fullName: m.fullName } as DemoAccount),
+    );
+  }
   const chain: DemoAccount[] = [];
   const seen = new Set<string>([employeeId]);
   let current =
@@ -492,7 +510,17 @@ export function demoPasswordFor(employeeCode: string): string {
   return findDemoByCode(employeeCode)?.password ?? "welcome";
 }
 
+/** Per-account grants/revokes saved by an admin in the role editor (wired up in store.tsx). */
+let navOverrideSource: (accountId: string) => { grant: string[]; revoke: string[] } | null = () => null;
+
+export function setNavOverrideSource(source: (accountId: string) => { grant: string[]; revoke: string[] } | null): void {
+  navOverrideSource = source;
+}
+
 export function accountHasNavAccess(account: DemoAccount, linkId: string): boolean {
+  const override = navOverrideSource(account.id);
+  if (override?.revoke.includes(linkId)) return false;
+  if (override?.grant.includes(linkId)) return true;
   if (account.navAccess.includes("*")) return true;
   return account.navAccess.includes(linkId as NavAccessId);
 }

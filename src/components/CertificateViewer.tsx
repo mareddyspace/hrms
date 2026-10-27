@@ -13,7 +13,12 @@ export type CertificateDoc = {
   issuer: string;
   issuedOn: string;
   expiresOn?: string;
-  credentialId: string;
+  /** Shown only when there is a real number: our own course ID, or one HR recorded from the issuer. */
+  credentialId?: string;
+  /** External certifications: true once HR has checked it with the issuer. */
+  verified?: boolean;
+  /** External certifications: past the expiry date. */
+  expired?: boolean;
   /** Short line under the title, e.g. "4 hours · Engineering". */
   details?: string;
 };
@@ -45,11 +50,13 @@ export function certificateSvg(doc: CertificateDoc): string {
   const verb = isCourse ? "has successfully completed" : "holds the professional certification";
   const issuerLine = isCourse
     ? `${COMPANY_NAME} Learning & Development`
-    : `Issued by ${doc.issuer} · on file with ${COMPANY_NAME} HR`;
+    : `Issued by ${doc.issuer} · ${doc.verified ? "verified by HR" : "not verified"}`;
   const dates = [
     `${isCourse ? "Completed" : "Issued"} ${longDate(doc.issuedOn)}`,
-    doc.expiresOn ? `Valid until ${longDate(doc.expiresOn)}` : "No expiry",
+    doc.expiresOn ? `${doc.expired ? "Expired" : "Valid until"} ${longDate(doc.expiresOn)}` : "No expiry",
   ].join("   ·   ");
+  const stamp = isCourse ? "COMPLETED" : doc.expired ? "EXPIRED" : doc.verified ? "VERIFIED" : "ON FILE";
+  const stampColor = !isCourse && doc.expired ? "#b91c1c" : "#0e7490";
   const font = "Segoe UI, Helvetica, Arial, sans-serif";
   const serif = "Georgia, 'Times New Roman', serif";
 
@@ -78,12 +85,12 @@ export function certificateSvg(doc: CertificateDoc): string {
   <line x1="150" x2="450" y1="700" y2="700" stroke="#94a3b8" stroke-width="1.5"/>
   <text x="300" y="728" text-anchor="middle" font-family="${font}" font-size="17" fill="#334155">${esc(issuerLine)}</text>
   <line x1="${W - 450}" x2="${W - 150}" y1="700" y2="700" stroke="#94a3b8" stroke-width="1.5"/>
-  <text x="${W - 300}" y="728" text-anchor="middle" font-family="${font}" font-size="17" fill="#334155">Credential ID ${esc(doc.credentialId)}</text>
+  ${doc.credentialId ? `<text x="${W - 300}" y="728" text-anchor="middle" font-family="${font}" font-size="17" fill="#334155">Credential ID ${esc(doc.credentialId)}</text>` : ""}
   <g transform="translate(${W / 2}, 712)">
-    <circle r="46" fill="#e0f2f7" stroke="#0e7490" stroke-width="3"/>
-    <circle r="36" fill="none" stroke="#0e7490" stroke-width="1.5" stroke-dasharray="4 4"/>
-    <text y="-4" text-anchor="middle" font-family="${font}" font-size="13" font-weight="700" fill="#0b2545">${isCourse ? "COMPLETED" : "VERIFIED"}</text>
-    <text y="16" text-anchor="middle" font-family="${font}" font-size="12" fill="#0e7490">${esc(doc.issuedOn.slice(0, 4))}</text>
+    <circle r="46" fill="#e0f2f7" stroke="${stampColor}" stroke-width="3"/>
+    <circle r="36" fill="none" stroke="${stampColor}" stroke-width="1.5" stroke-dasharray="4 4"/>
+    <text y="-4" text-anchor="middle" font-family="${font}" font-size="13" font-weight="700" fill="${stampColor}">${stamp}</text>
+    <text y="16" text-anchor="middle" font-family="${font}" font-size="12" fill="${stampColor}">${esc(doc.issuedOn.slice(0, 4))}</text>
   </g>
 </svg>`;
 }
@@ -168,13 +175,21 @@ export function CertificateDialog({ doc, onClose }: { doc: CertificateDoc | null
           <dd>{longDate(doc.issuedOn)}</dd>
         </div>
         <div>
-          <dt>Valid until</dt>
+          <dt>{doc.expired ? "Expired" : "Valid until"}</dt>
           <dd>{doc.expiresOn ? longDate(doc.expiresOn) : "No expiry"}</dd>
         </div>
-        <div>
-          <dt>Credential ID</dt>
-          <dd>{doc.credentialId}</dd>
-        </div>
+        {doc.kind === "professional" && (
+          <div>
+            <dt>Status</dt>
+            <dd>{doc.expired ? "Expired" : doc.verified ? "Verified by HR" : "Not verified"}</dd>
+          </div>
+        )}
+        {doc.credentialId && (
+          <div>
+            <dt>Credential ID</dt>
+            <dd>{doc.credentialId}</dd>
+          </div>
+        )}
       </dl>
       {error && <p className="note err">{error}</p>}
       <div className="dialog-actions">

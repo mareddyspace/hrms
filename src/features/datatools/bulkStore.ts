@@ -1,7 +1,7 @@
 import { listPeople, removePerson, upsertPerson, type LocalPersonRecord } from "../../data/peopleLocal.ts";
 import { todayISO } from "../../model.ts";
 import { buildImportRecords, validateImport, type RawImportRow } from "./importRules.ts";
-import { describeChange, planMassUpdate, type MassChange } from "./massUpdateRules.ts";
+import { canMassUpdate, describeChange, planMassUpdate, type MassChange } from "./massUpdateRules.ts";
 import { isHrOrAdmin, newId, type DataToolsActor, type DataToolsResult } from "./shared.ts";
 
 const KEY = "kastech.bulkdata.v1";
@@ -74,7 +74,7 @@ function write(state: BulkState): DataToolsResult {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch {
-    return "Browser storage is full, so this change was not saved.";
+    return "This change was not saved. Please try again.";
   }
   cache = state;
   listeners.forEach((fn) => fn());
@@ -165,6 +165,7 @@ export function commitImport(
 export function commitMassUpdate(actor: DataToolsActor, ids: string[], change: MassChange): DataToolsResult {
   const denied = guard(actor);
   if (denied) return denied;
+  if (!canMassUpdate(actor.role)) return "Only HR can make mass updates.";
   const people = listPeople();
   const plan = planMassUpdate(actor, ids, change, people, todayISO());
   if (plan.error) return plan.error;
@@ -190,6 +191,7 @@ export function undoLast(actor: DataToolsActor): DataToolsResult {
   if (denied) return denied;
   const entry = undoableEntry();
   if (!entry) return "There is nothing to undo.";
+  if (entry.kind === "mass_update" && !canMassUpdate(actor.role)) return "Only HR can undo a mass update.";
   if (!entry.snapshots.length && !entry.createdIds.length) return "This change has no undo data.";
   try {
     for (const snapshot of entry.snapshots) upsertPerson(snapshot);

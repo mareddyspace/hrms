@@ -8,6 +8,7 @@ import {
   isAboveInLine,
   isHrRole,
   isValidISO,
+  lineManagerId,
   noticeDaysFor,
   personName,
   seedCandidates,
@@ -18,6 +19,8 @@ import {
 const KEY = "kastech.exits.v1";
 
 export type ExitStatus = "Submitted" | "Accepted" | "Conversation requested" | "Withdrawn" | "Completed";
+/** Who accepts the resignation: someone above the person, or the Board for the CEO. */
+export const BOARD = "Board";
 export type ClearanceOwner = "employee" | "manager" | "it" | "finance" | "hr";
 export type SettlementStatus = "Pending" | "In progress" | "Paid";
 
@@ -97,6 +100,8 @@ export interface ExitCase {
   completedBy?: string;
   completedOn?: string;
   completionNote?: string;
+  /** Set when the company starts the exit (e.g. probation not confirmed) rather than a resignation. */
+  kind?: "Resignation" | "Probation not confirmed";
 }
 
 type ExitState = { cases: ExitCase[] };
@@ -150,8 +155,8 @@ function defaults(): ExitState {
         reason: "Relocation",
         note: "Moving cities for family reasons.",
         status: "Accepted",
-        decidedBy: "Ram Krishnan",
-        decidedById: "emp-ram",
+        decidedBy: personName(lineManagerId(person.id) ?? "emp-ram"),
+        decidedById: lineManagerId(person.id) ?? "emp-ram",
         decidedOn: addDaysISO(submittedOn, 2),
         decisionNote: "Thanks for the notice — handover plan agreed.",
         clearance,
@@ -190,7 +195,7 @@ function write(state: ExitState): LifecycleResult {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch {
-    return "Could not save — browser storage is full or unavailable.";
+    return "Could not save. Please try again.";
   }
   cache = state;
   listeners.forEach((fn) => fn());
@@ -240,18 +245,18 @@ export function canSeeInterview(actor: LifecycleActor, row: ExitCase): boolean {
 export function canTickItem(actor: LifecycleActor, row: ExitCase, item: ClearanceItem): boolean {
   if (row.status !== "Accepted") return false;
   if (actor.id === row.employeeId) return item.owner === "employee";
-  if (isHrRole(actor.role)) return true;
   switch (item.owner) {
     case "employee":
       return false;
     case "manager":
-      return isAboveInLine(actor.id, row.employeeId);
+      // Manager sign-off belongs to the reporting line; for the CEO (no one above), HR records it.
+      return lineManagerId(row.employeeId) ? isAboveInLine(actor.id, row.employeeId) : isHrRole(actor.role);
     case "it":
-      return actor.role === "it_admin" || actor.role === "admin" || actor.role === "super_admin";
+      return isHrRole(actor.role) || actor.role === "it_admin" || actor.role === "admin" || actor.role === "super_admin";
     case "finance":
-      return actor.role === "finance";
+      return isHrRole(actor.role) || actor.role === "finance";
     case "hr":
-      return false;
+      return isHrRole(actor.role);
   }
 }
 
@@ -291,8 +296,9 @@ export function submitResignation(
   }
   if (input.proposedLastDay > addDaysISO(today, 180)) return "Last working day must be within 180 days.";
   const state = getExitState();
+  const id = `exit-${Date.now()}`;
   const row: ExitCase = {
-    id: `exit-${Date.now()}`,
+    id,
     employeeId: actor.id,
     employeeName: actor.fullName,
     submittedOn: today,
@@ -305,7 +311,17 @@ export function submitResignation(
     status: "Submitted",
     clearance: [],
     settlement: "Pending",
+    kind: "Resignation",
   };
+  // No one is above the CEO: the resignation goes to the Board and is simply recorded as accepted.
+  if (!lineManagerId(actor.id)) {
+    row.status = "Accepted";
+    row.decidedBy = BOARD;
+    row.decidedById = "board";
+    row.decidedOn = today;
+    row.decisionNote = "Recorded for the Board.";
+    row.clearance = buildClearance(id, []);
+  }
   return write({ ...state, cases: [row, ...state.cases] });
 }
 
@@ -327,7 +343,7 @@ export function decideResignation(
 ): LifecycleResult {
   return mutateCase(id, (row) => {
     if (row.employeeId === actor.id) return "You cannot act on your own resignation.";
-    if (!canActForEmployee(actor, row.employeeId)) return "Only the reporting line or HR can act on this resignation.";
+    if (!canActForEmployee(actor, row.employeeId)) return "Only someone above this person in their reporting line can act on this resignation.";
     if (row.status !== "Submitted") return `This resignation is already ${row.status.toLowerCase()}.`;
     const note = options.note.trim();
     const today = todayISO();
@@ -360,7 +376,9 @@ export function setClearanceItem(actor: LifecycleActor, id: string, itemId: stri
     const item = row.clearance.find((i) => i.id === itemId);
     if (!item) return "Checklist item not found.";
     if (row.status !== "Accepted") return "The checklist is locked for this exit.";
-    if (!canTickItem(actor, row, item)) return `Only ${OWNER_LABEL[item.owner]} or HR can update this item.`;
+    if (!canTickItem(actor, row, item)) {
+      return item.owner === "manager" ? "Only the reporting line can sign this off." : `Only ${OWNER_LABEL[item.owner]} can update this item.`;
+    }
     if (item.owner === "hr" && done && row.clearance.some((i) => i.id !== item.id && !i.done)) {
       return "HR sign-off comes last — finish the other items first.";
     }
@@ -439,11 +457,11 @@ export function completeExit(actor: DemoAccount, id: string, onWarning?: (text: 
       ...person,
       employmentStatus: "Terminated",
       exitDate: row.lastWorkingDay,
-      exitReason: `Resignation — ${row.reason}`,
+      exitReason: row.kind === "Probation not confirmed" ? `Probation not confirmed — ${row.reason}` : `Resignation — ${row.reason}`,
     };
     upsertPerson(updated);
   } catch {
-    return "Could not update the directory record — browser storage is unavailable.";
+    return "Could not update the directory record. Please try again.";
   }
   const error = mutateCase(id, (r) => {
     r.status = "Completed";
@@ -465,6 +483,46 @@ export function completeExit(actor: DemoAccount, id: string, onWarning?: (text: 
     .filter(Boolean);
   if (letterErrors.length) onWarning?.(`Exit completed, but a letter request was not created: ${letterErrors.join(" ")}`);
   return null;
+}
+
+/**
+ * The company starts an exit (probation not confirmed). It is accepted straight away by the person who
+ * approved the decision, so clearance can begin; HR then completes it like any other exit.
+ */
+export function startCompanyExit(
+  actor: LifecycleActor,
+  employeeId: string,
+  input: { reason: string; lastWorkingDay: string; assets?: Pick<AssetAssignment, "id" | "name" | "tag" | "employeeId">[] },
+): LifecycleResult {
+  if (actor.id === employeeId) return "You cannot start your own exit.";
+  const person = getPerson(employeeId);
+  if (!person) return "This person is not in the directory.";
+  if (person.employmentStatus === "Terminated") return "This person has already left.";
+  if (openExitFor(employeeId)) return "An exit is already open for this person.";
+  const today = todayISO();
+  const id = `exit-${Date.now()}`;
+  const state = getExitState();
+  const row: ExitCase = {
+    id,
+    employeeId,
+    employeeName: person.fullName,
+    submittedOn: today,
+    noticeDays: noticeDaysFor(employeeId),
+    proposedLastDay: input.lastWorkingDay,
+    lastWorkingDay: input.lastWorkingDay,
+    earlyRelease: false,
+    reason: input.reason.trim() || "Probation not confirmed",
+    note: "",
+    status: "Accepted",
+    decidedBy: actor.fullName,
+    decidedById: actor.id,
+    decidedOn: today,
+    decisionNote: "Probation not confirmed.",
+    clearance: buildClearance(id, (input.assets ?? []).filter((a) => a.employeeId === employeeId)),
+    settlement: "Pending",
+    kind: "Probation not confirmed",
+  };
+  return write({ ...state, cases: [row, ...state.cases] });
 }
 
 /** Re-export so pages can show the person's country without extra imports. */

@@ -131,7 +131,7 @@ export function getCompensationAccess(viewer: DemoAccount): CompensationAccess {
       ownAmounts: "full",
       othersAmounts: "full",
       peopleScope: "global",
-      canApprove: true,
+      canApprove: role === "compensation_admin",
       canConfigure: role === "compensation_admin",
     };
   }

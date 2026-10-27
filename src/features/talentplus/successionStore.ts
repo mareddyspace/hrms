@@ -1,5 +1,5 @@
 import { todayISO } from "../../model.ts";
-import { getPerson, listPeople } from "../../data/peopleLocal.ts";
+import { listPeople } from "../../data/peopleLocal.ts";
 import { getTalentState } from "../../data/talentLocal.ts";
 import {
   arrayOr,
@@ -7,7 +7,10 @@ import {
   isExecutive,
   isHr,
   isInReportingLine,
+  isTopOfOrg,
+  lookupPerson,
   newId,
+  type OrgPerson,
   type PlusActor,
   type PlusResult,
 } from "./shared.ts";
@@ -40,6 +43,8 @@ export interface KeyRole {
   title: string;
   incumbentId: string;
   successors: Successor[];
+  /** Executive roles (CEO, HR Director): only HR and the CEO edit their succession. */
+  executive?: boolean;
 }
 
 interface SuccessionState {
@@ -48,6 +53,9 @@ interface SuccessionState {
 }
 
 export const MAX_SUCCESSORS = 3;
+
+/** Ram's team, the same set used for tasks, leave and timesheets. */
+const RAM_TEAM = ["emp-priya", "emp-anu", "emp-kabir", "emp-diya"];
 
 /* ───────────── Seed ───────────── */
 
@@ -60,18 +68,15 @@ function defaults(): SuccessionState {
     { employeeId: "demo-compensation", performance: "High", potential: "Low", flightRisk: "High", readiness: "Ready in 3+ years", note: "Retention conversation planned.", updatedBy: "demo-hr-admin", updatedOn: "2026-09-25" },
     { employeeId: "demo-admin", performance: "Low", potential: "Medium", flightRisk: "Low", readiness: "Ready in 3+ years", note: "", updatedBy: "demo-ceo", updatedOn: "2026-09-25" },
   ];
-  // A few people who report to Ram so the manager view has a team to work with.
-  const ramTeam = listPeople()
-    .filter((p) => p.managerId === "emp-ram" && p.id !== "emp-mahesh" && p.employmentStatus === "Active")
-    .slice(0, 3);
   const mix: [Level, Level, Level][] = [
     ["High", "Medium", "Low"],
     ["Medium", "Low", "Medium"],
     ["Low", "Low", "High"],
+    ["Medium", "Medium", "Low"],
   ];
-  ramTeam.forEach((p, i) => {
+  RAM_TEAM.forEach((id, i) => {
     const [performance, potential, flightRisk] = mix[i];
-    placements.push({ employeeId: p.id, performance, potential, flightRisk, readiness: "Ready in 3+ years", note: "", updatedBy: "emp-ram", updatedOn: "2026-09-30" });
+    placements.push({ employeeId: id, performance, potential, flightRisk, readiness: "Ready in 3+ years", note: "", updatedBy: "emp-ram", updatedOn: "2026-09-30" });
   });
   return {
     placements,
@@ -80,18 +85,20 @@ function defaults(): SuccessionState {
         id: "kr-eng-mgr",
         title: "Engineering Manager",
         incumbentId: "emp-ram",
-        successors: [{ employeeId: "emp-mahesh", readiness: "Ready in 1–2 years", nominatedBy: "emp-ram", nominatedOn: "2026-09-30" }],
+        successors: [{ employeeId: "emp-mahesh", readiness: "Ready in 1–2 years", nominatedBy: "demo-ceo", nominatedOn: "2026-09-30" }],
       },
       {
         id: "kr-hr-dir",
         title: "HR Director",
         incumbentId: "demo-hr-admin",
+        executive: true,
         successors: [{ employeeId: "demo-recruiter", readiness: "Ready in 3+ years", nominatedBy: "demo-ceo", nominatedOn: "2026-09-20" }],
       },
       {
         id: "kr-ceo",
         title: "Chief Executive Officer",
         incumbentId: "demo-ceo",
+        executive: true,
         successors: [
           { employeeId: "emp-ram", readiness: "Ready in 3+ years", nominatedBy: "demo-hr-admin", nominatedOn: "2026-09-20" },
           { employeeId: "demo-hiring-manager", readiness: "Ready in 1–2 years", nominatedBy: "demo-hr-admin", nominatedOn: "2026-09-20" },
@@ -106,11 +113,36 @@ function normalize(saved: unknown, base: SuccessionState): SuccessionState {
   return { placements: arrayOr(s.placements, base.placements), keyRoles: arrayOr(s.keyRoles, base.keyRoles) };
 }
 
-const store = createLocalStore<SuccessionState>("kastech.succession.v1", defaults, normalize);
+// v2: Ram's team re-seeded with his real reports, executive roles flagged.
+try {
+  localStorage.removeItem("kastech.succession.v1");
+} catch {
+  /* ignore */
+}
+const store = createLocalStore<SuccessionState>("kastech.succession.v2", defaults, normalize);
 
 export const subscribeSuccession = store.subscribe;
 export const getSuccessionState = store.getState;
 export const resetSuccession = store.reset;
+
+/* ───────────── People ───────────── */
+
+let peopleCache: { source: unknown; list: OrgPerson[] } | null = null;
+
+/** Directory people plus Ram's teammates (who are not directory records). */
+export function successionPeople(): OrgPerson[] {
+  const source = listPeople();
+  if (peopleCache?.source === source) return peopleCache.list;
+  const list: OrgPerson[] = source.map((p) => ({ id: p.id, fullName: p.fullName, designation: p.designation, employmentStatus: p.employmentStatus }));
+  for (const id of RAM_TEAM) {
+    if (!list.some((p) => p.id === id)) {
+      const person = lookupPerson(id);
+      if (person) list.push(person);
+    }
+  }
+  peopleCache = { source, list };
+  return list;
+}
 
 /* ───────────── Permissions ───────────── */
 
@@ -123,7 +155,7 @@ export function seesAll(actor: PlusActor): boolean {
 export function canOpenSuccession(actor: PlusActor): boolean {
   if (seesAll(actor)) return true;
   if (actor.role === "employee") return false;
-  return listPeople().some((p) => isInReportingLine(actor.id, p.id));
+  return successionPeople().some((p) => isInReportingLine(actor.id, p.id));
 }
 
 export function canSeePerson(actor: PlusActor, employeeId: string): boolean {
@@ -132,18 +164,32 @@ export function canSeePerson(actor: PlusActor, employeeId: string): boolean {
   return isInReportingLine(actor.id, employeeId);
 }
 
-/** HR or executives (any person but themselves) or anyone above the person in the reporting line. */
+/** HR or executives (any person but themselves) or anyone above the person. Nobody assesses the CEO. */
 export function canAssess(actor: PlusActor, employeeId: string): boolean {
   if (actor.id === employeeId) return false;
+  if (isTopOfOrg(employeeId)) return false;
   if (isHr(actor.role) || isExecutive(actor.role)) return true;
   if (actor.role === "employee") return false;
   return isInReportingLine(actor.id, employeeId);
 }
 
+/** Who may change a key role's successors: never the role holder; executive roles only HR and the CEO. */
+export function canEditKeyRole(actor: PlusActor, role: KeyRole): boolean {
+  if (role.incumbentId === actor.id) return false;
+  if (role.executive || isTopOfOrg(role.incumbentId)) return isHr(actor.role) || isTopOfOrg(actor.id);
+  return canOpenSuccession(actor);
+}
+
+export function canRemoveSuccessor(actor: PlusActor, role: KeyRole, successor: Successor): boolean {
+  if (!canEditKeyRole(actor, role)) return false;
+  if (successor.employeeId === actor.id) return false;
+  return isHr(actor.role) || isExecutive(actor.role) || successor.nominatedBy === actor.id;
+}
+
 /** People this persona may view on the grid. */
 export function visiblePeopleIds(actor: PlusActor): Set<string> {
   if (!canOpenSuccession(actor)) return new Set();
-  const people = listPeople().filter((p) => p.employmentStatus !== "Terminated");
+  const people = successionPeople().filter((p) => p.employmentStatus !== "Terminated");
   if (seesAll(actor)) return new Set(people.map((p) => p.id));
   return new Set(people.filter((p) => isInReportingLine(actor.id, p.id)).map((p) => p.id));
 }
@@ -177,10 +223,11 @@ export type PlacementInput = Omit<Placement, "updatedBy" | "updatedOn">;
 
 export function savePlacement(actor: PlusActor, input: PlacementInput): PlusResult {
   if (!input.employeeId) return "Choose a person.";
-  const person = getPerson(input.employeeId);
+  const person = lookupPerson(input.employeeId);
   if (!person) return "That person isn't in the directory.";
   if (person.employmentStatus === "Terminated") return "You can't assess someone who has left.";
   if (input.employeeId === actor.id) return "You can't place yourself on the grid.";
+  if (isTopOfOrg(input.employeeId)) return "The CEO is not placed on the grid.";
   if (!canAssess(actor, input.employeeId)) return "You can only assess people in your reporting line.";
   if (!isLevel(input.performance)) return "Choose a performance level.";
   if (!isLevel(input.potential)) return "Choose a potential level.";
@@ -211,10 +258,10 @@ export function addKeyRole(actor: PlusActor, title: string, incumbentId: string)
   if (!clean) return "Enter the role title.";
   if (clean.length > 80) return "Keep the role title under 80 characters.";
   if (!incumbentId) return "Choose the current role holder.";
-  if (!getPerson(incumbentId)) return "That person isn't in the directory.";
+  if (!lookupPerson(incumbentId)) return "That person isn't in the directory.";
   return store.mutate((s) => {
     if (s.keyRoles.some((r) => r.title.toLowerCase() === clean.toLowerCase())) return "This key role is already listed.";
-    s.keyRoles.push({ id: newId("kr"), title: clean, incumbentId, successors: [] });
+    s.keyRoles.push({ id: newId("kr"), title: clean, incumbentId, successors: [], executive: isTopOfOrg(incumbentId) || undefined });
     return null;
   });
 }
@@ -223,7 +270,7 @@ export function nominateSuccessor(actor: PlusActor, roleId: string, employeeId: 
   if (!canOpenSuccession(actor)) return "You don't have access to succession planning.";
   if (!employeeId) return "Choose a successor.";
   if (!isReadiness(readiness)) return "Choose a readiness.";
-  const person = getPerson(employeeId);
+  const person = lookupPerson(employeeId);
   if (!person) return "That person isn't in the directory.";
   if (person.employmentStatus === "Terminated") return "You can't nominate someone who has left.";
   if (employeeId === actor.id) return "You can't nominate yourself.";
@@ -231,6 +278,8 @@ export function nominateSuccessor(actor: PlusActor, roleId: string, employeeId: 
   return store.mutate((s) => {
     const role = s.keyRoles.find((r) => r.id === roleId);
     if (!role) return "Key role not found.";
+    if (role.incumbentId === actor.id) return "You can't pick successors for your own role.";
+    if (!canEditKeyRole(actor, role)) return "Only HR and the CEO pick successors for this role.";
     if (role.incumbentId === employeeId) return "A person can't succeed themselves.";
     if (role.successors.some((x) => x.employeeId === employeeId)) return "This person is already nominated for this role.";
     if (role.successors.length >= MAX_SUCCESSORS) return `A key role can have at most ${MAX_SUCCESSORS} successors.`;
@@ -245,9 +294,9 @@ export function removeSuccessor(actor: PlusActor, roleId: string, employeeId: st
     if (!role) return "Key role not found.";
     const row = role.successors.find((x) => x.employeeId === employeeId);
     if (!row) return "This person isn't nominated for this role.";
-    const allowed = isHr(actor.role) || isExecutive(actor.role) || row.nominatedBy === actor.id;
-    if (!allowed) return "Only HR or the person who nominated them can remove this nomination.";
+    if (role.incumbentId === actor.id) return "You can't change successors for your own role.";
     if (employeeId === actor.id) return "You can't change your own nomination.";
+    if (!canRemoveSuccessor(actor, role, row)) return "Only HR or the person who nominated them can remove this nomination.";
     role.successors = role.successors.filter((x) => x.employeeId !== employeeId);
     return null;
   });

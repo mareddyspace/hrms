@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { appendAuditEntries, diffForAudit } from "./data/auditTrail.ts";
 import { compOffCreditsFor, getShiftState, subscribeShifts } from "./features/workforce/shiftsStore.ts";
-import { declarableTaxYears, money, payRulesFor } from "./countryPay.ts";
+import { claimLimitsFor, declarableTaxYears, money, payRulesFor, receiptThresholdFor } from "./countryPay.ts";
 import type { ReactNode } from "react";
 import { createContext, useContext } from "react";
 import {
@@ -18,6 +19,7 @@ import {
   backdatedPermissionFor,
   needsBackdatedPermission,
   addDaysISO,
+  formatLongDate,
   hoursFromEntries,
   validateTimesheet,
   workingDays,
@@ -65,9 +67,11 @@ import {
   findDemoByEmailOrCode,
   findDemoById,
   managementChain,
-  type DemoAccount,
-} from "./demoAccounts.ts";
-import { canApproveTeam, setEarnedLeaveSource } from "./model.ts";
+  type DemoAccount, setDirectoryChainSource, setNavOverrideSource } from "./demoAccounts.ts";
+import { canApproveTeam, holidaysForPerson, setEarnedLeaveSource, setHolidayContext } from "./model.ts";
+import { getOptionalHolidayState, subscribeOptionalHolidays } from "./features/workforce/optionalHolidaysStore.ts";
+import { getPerson, isAccountActive, managerChainIds } from "./data/peopleLocal.ts";
+import { getNavOverrides } from "./data/platformLocal.ts";
 import { createSeed, DEMO_PASSWORD, EMPLOYEE, findAccountByCode, findAccountById } from "./seed.ts";
 import { taskPersonById } from "./data/taskTeam.ts";
 import { pushManagerTaskAlert, pushPersonTaskAlert } from "./data/collabLocal.ts";
@@ -98,6 +102,7 @@ function storedPassword(employeeCode: string = EMPLOYEE.employeeCode): string {
 
 const MUST_CHANGE_KEY = "kastech.ess.must-change-password";
 const LOCK_KEY = "kastech.ess.login-lock";
+const LAST_ACTIVE_KEY = "kastech.ess.last-active";
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCK_MINUTES = 5;
 
@@ -205,6 +210,24 @@ function loadState(): PortalState {
         return uploadedBy === document.uploadedBy && body === document.body ? document : { ...document, uploadedBy, body };
       });
     }
+    // Sample requests left waiting after their dates have passed are replaced with current ones.
+    for (const sample of seed.leaveRequests.filter((r) => ["lv-oct-wfh", "lv-priya-pto", "lv-anu-sick"].includes(r.id))) {
+      const saved = parsed.leaveRequests.find((r) => r.id === sample.id);
+      if (saved && saved.status === "pending" && saved.from < todayISO()) {
+        Object.assign(saved, sample);
+        renamed = true;
+      }
+    }
+    // Leave policies gained accrual / carry-forward and comp-off became earned-only.
+    if (!parsed.leavePolicies.some((p) => p.accrual)) {
+      parsed.leavePolicies = seed.leavePolicies;
+      renamed = true;
+    }
+    // Holidays used to be one Indian list for everyone; they are now tagged by country.
+    if (!Array.isArray(parsed.holidays) || parsed.holidays.some((h) => !h.countryCode)) {
+      parsed.holidays = seed.holidays;
+      renamed = true;
+    }
     // Payslips used to be Indian for everyone; they now follow each person's country.
     if (!Array.isArray(parsed.payslips) || parsed.payslips.some((slip) => !slip.currency)) {
       parsed.payslips = seed.payslips;
@@ -290,7 +313,6 @@ interface PortalApi {
   ) => string | null;
   removeTimeEntry: (projectId: string, weekStart: string, entryId: string) => string | null;
   submitWeekTimesheets: (weekStart: string) => string | null;
-  setTimesheetStatus: (id: string, status: TimesheetStatus) => void;
   setOrgTimesheetStatus: (id: string, status: OrgTimesheetStatus) => string | null;
   /** Whether the signed-in user may verify tax-saving proofs (payroll/HR). */
   canVerifyProofs: boolean;
@@ -365,13 +387,12 @@ interface PortalApi {
 }
 
 /** Yearly caps for common Indian tax-saving sections (income tax old regime). */
-const MAX_CASH_ADVANCE = 100000;
 const MAX_MEAL_ORDERS_PER_DAY = 3;
 
 /** Editing a week's time after submitting it takes it back out of the manager's queue. */
-function backToDraft(rows: PortalState["orgTimesheets"], weekStart: string, personId?: string): PortalState["orgTimesheets"] {
+function backToDraft(rows: PortalState["orgTimesheets"], weekStart: string, personId: string): PortalState["orgTimesheets"] {
   return rows.map((row) =>
-    row.weekStart === weekStart && (!personId || row.personId === personId) && row.status === "submitted"
+    row.weekStart === weekStart && row.personId === personId && row.status === "submitted"
       ? { ...row, status: "draft" as const }
       : row,
   );
@@ -387,15 +408,49 @@ function withoutPhoto<T extends { photo?: string }>(override: T | undefined): Om
 
 const PortalContext = createContext<PortalApi | null>(null);
 
+// Reporting lines come from the directory, so approvals follow the same chain as the org chart.
+setDirectoryChainSource((employeeId) => {
+  if (!getPerson(employeeId)) return null;
+  return managerChainIds(employeeId).map((id) => ({ id, fullName: getPerson(id)?.fullName ?? findDemoById(id)?.fullName ?? id }));
+});
+
+// Admin role-editor changes take effect on menus and page access.
+setNavOverrideSource((accountId) => getNavOverrides(accountId));
+
+// Holidays follow each person's country; optional holidays they picked count as days off too.
+setHolidayContext(
+  (employeeId) => findDemoById(employeeId)?.countryCode ?? (employeeId.startsWith("emp-") ? "IN" : undefined),
+  (employeeId) =>
+    getOptionalHolidayState()
+      .picks.filter((pick) => pick.employeeId === employeeId && pick.status === "picked")
+      .map((pick) => getOptionalHolidayState().holidays.find((h) => h.id === pick.holidayId))
+      .filter((h): h is NonNullable<typeof h> => Boolean(h))
+      .map((h) => ({ id: h.id, date: h.date, name: `${h.name} (optional)` })),
+);
 // Comp-off days granted for working weekends or holidays add to the comp-off balance.
-setEarnedLeaveSource((employeeId, code, year) => (code === "comp_off" ? compOffCreditsFor(employeeId, year) : 0));
+// Latest leave requests, so comp-off credits used before they expired stay counted.
+let latestLeaveRequests: LeaveRequest[] = [];
+function compOffDaysTaken(employeeId: string): string[] {
+  return latestLeaveRequests
+    .filter((r) => r.employeeId === employeeId && r.code === "comp_off" && (r.status === "approved" || r.status === "pending"))
+    .flatMap((r) => {
+      const days: string[] = [];
+      for (let d = r.from; d <= r.to; d = addDaysISO(d, 1)) days.push(d);
+      return days;
+    });
+}
+setEarnedLeaveSource((employeeId, code, year) =>
+  code === "comp_off" ? compOffCreditsFor(employeeId, year, compOffDaysTaken(employeeId)) : 0,
+);
 
 export function PortalProvider({ children }: { children: ReactNode }) {
   const shiftState = useSyncExternalStore(subscribeShifts, getShiftState);
+  const optionalHolidayState = useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState);
   const [state, setState] = useState<PortalState>(() => {
     ensureDemoLastLogin();
     return loadState();
   });
+  latestLeaveRequests = state.leaveRequests;
   const [signedIn, setSignedIn] = useState(readSession);
   const [userId, setUserId] = useState(() => localStorage.getItem(USER_KEY) ?? EMPLOYEE.id);
   // A forced password change survives a page refresh until the password is actually changed.
@@ -408,6 +463,21 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const [resetOtp, setResetOtp] = useState<{ code: string; expiresAt: number; employeeCode: string; attempts: number } | null>(null);
   const [passwordRevision, setPasswordRevision] = useState(0);
 
+  // Audit trail: every change to a business record is written down with who made it and what changed.
+  const auditedState = useRef(state);
+  useEffect(() => {
+    const previous = auditedState.current;
+    auditedState.current = state;
+    if (previous === state) return;
+    const actor = findDemoById(userId);
+    appendAuditEntries(
+      diffForAudit(previous as unknown as Record<string, unknown>, state as unknown as Record<string, unknown>, {
+        id: userId,
+        name: actor?.fullName ?? userId,
+      }),
+    );
+  }, [state, userId]);
+
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -416,6 +486,47 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       console.error("Could not save portal data to browser storage", error);
     }
   }, [state]);
+
+  // Idle sign-out: 30 minutes without any activity ends the session (also checked when the page reopens).
+  useEffect(() => {
+    if (!signedIn) return;
+    const IDLE_MS = 30 * 60 * 1000;
+    const stamp = () => {
+      try {
+        localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()));
+      } catch {
+        /* storage blocked */
+      }
+    };
+    const expired = () => Date.now() - Number(localStorage.getItem(LAST_ACTIVE_KEY) ?? Date.now()) > IDLE_MS;
+    const endSession = () => {
+      localStorage.setItem(SESSION_KEY, "out");
+      sessionStorage.removeItem(SESSION_KEY);
+      setSignedIn(false);
+      setLoginNotice(null);
+    };
+    if (expired()) {
+      endSession();
+      return;
+    }
+    stamp();
+    let last = 0;
+    const onActivity = () => {
+      if (Date.now() - last < 15000) return;
+      last = Date.now();
+      stamp();
+    };
+    const events = ["pointerdown", "keydown", "scroll", "pointermove"] as const;
+    events.forEach((name) => window.addEventListener(name, onActivity, { passive: true }));
+    const timer = window.setInterval(() => {
+      // Someone who has left the company is signed out too.
+      if (expired() || !isAccountActive(userId)) endSession();
+    }, 60000);
+    return () => {
+      events.forEach((name) => window.removeEventListener(name, onActivity));
+      window.clearInterval(timer);
+    };
+  }, [signedIn, userId]);
 
   useEffect(() => {
     const active = findAccountById(userId) ?? EMPLOYEE;
@@ -463,11 +574,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
 
     /** Saves the signed-in person's own contact details. Job title and shift are HR-owned and ignored here. */
     function saveOwnProfile(input: { fullName: string; mobile: string; email: string; address: string; photo?: string }): string | null {
-      const fullName = input.fullName.trim();
-      const email = input.email.trim();
+      // Legal name and work email are HR-owned: the employee's own edits never change them.
+      const current = { ...active, ...withoutPhoto(state.profiles?.[active.id]) };
+      const fullName = current.fullName;
+      const email = current.email;
       const mobile = input.mobile.trim();
-      if (!fullName) return "Enter a name.";
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Enter a valid email address.";
       if (!/^\+?[\d\s]{8,18}$/.test(mobile) || mobile.replace(/\D/g, "").length < 8 || mobile.replace(/\D/g, "").length > 15) {
         return "Enter a valid mobile number (8–15 digits).";
       }
@@ -490,7 +601,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     /** Approvals follow the reporting line: only someone above the person decides their requests. */
     function canDecideFor(employeeId: string): boolean {
       if (employeeId === active.id) return false;
-      return managementChain(employeeId, TIMEZ_DEMOS).some((manager) => manager.id === active.id);
+      // Personas follow their own reporting line; everyone else follows the directory's manager chain.
+      return (
+        managementChain(employeeId, TIMEZ_DEMOS).some((manager) => manager.id === active.id) ||
+        managerChainIds(employeeId).includes(active.id)
+      );
     }
 
     /** People at the top of the organisation have no one to approve their requests. */
@@ -543,7 +658,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     }
 
     function decision(status: string, note?: string): DecisionInfo {
-      if (status === "withdrawn") return {};
+      // Withdrawing clears any earlier decision so it never reads "Withdrawn · by <approver>".
+      if (status === "withdrawn") return { decidedById: undefined, decidedByName: undefined, decidedOn: undefined, decisionNote: undefined };
       return { decidedById: active.id, decidedByName: active.fullName, decidedOn: todayISO(), decisionNote: note?.trim() || undefined };
     }
 
@@ -663,8 +779,10 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       menuItem: (menuItemId: string) => state.menu.find((item) => item.id === menuItemId),
       signIn: async (emailOrCode, password, remember = false) => {
         const account = findDemoByEmailOrCode(emailOrCode);
-        if (!account) return "No prototype account matches that work email or employee ID.";
+        if (!account) return "That email/ID and password don't match.";
         if (!password.trim()) return "Enter your password.";
+        // People who have left can't sign in.
+        if (!isAccountActive(account.id)) return "This account is no longer active. Contact HR.";
         const lock = readLock(account.employeeCode);
         if (lock.until > Date.now()) {
           const minutes = Math.ceil((lock.until - Date.now()) / 60000);
@@ -679,7 +797,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           );
           return locked
             ? `Too many wrong passwords. Sign-in is locked for ${LOCK_MINUTES} minutes.`
-            : `The password does not match this account. ${MAX_LOGIN_ATTEMPTS - fails} tries left.`;
+            : `That email/ID and password don't match. ${MAX_LOGIN_ATTEMPTS - fails} tries left.`;
         }
         localStorage.removeItem(userKey(LOCK_KEY, account.employeeCode));
         if (remember) localStorage.setItem(REMEMBER_KEY, account.email);
@@ -759,7 +877,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (input.from < `${today.slice(0, 4)}-01-01`) return "Permission can only be requested for dates in this leave year.";
         if (input.to >= today) return "The whole range must be in the past. Apply separately for today and future dates.";
         if (!input.reason.trim()) return "Explain why the leave is being applied late.";
-        if (workingDays(input.from, input.to, holidaySet(state.holidays), activeOffs) <= 0) {
+        if (workingDays(input.from, input.to, holidaySet(holidaysForPerson(state.holidays, active.id)), activeOffs) <= 0) {
           return "That range has no working days (weekly offs and holidays are skipped).";
         }
         const overlapsLeave = state.leaveRequests.some(
@@ -848,8 +966,16 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             Number(request.from.slice(0, 4)),
           );
           const row = ownerRows.find((item) => item.code === request.code);
-          const days = workingDays(request.from, request.to, holidaySet(state.holidays), ownerOffs);
+          const days = workingDays(request.from, request.to, holidaySet(holidaysForPerson(state.holidays, request.employeeId)), ownerOffs);
           if (!row || days > row.available) return "Approving this would go past that employee's quota.";
+          // Hours logged while the request was waiting would clash with the leave days.
+          if (request.code !== "wfh" && request.code !== "emergency_wfh") {
+            const worked = state.timesheets
+              .filter((sheet) => sheet.employeeId === request.employeeId)
+              .flatMap((sheet) => Object.entries(sheet.hours))
+              .find(([date, hours]) => hours > 0 && request.from <= date && date <= request.to);
+            if (worked) return `They logged work on ${formatLongDate(worked[0])}. Ask them to remove those hours first.`;
+          }
         }
         setState((prev) => ({
           ...prev,
@@ -858,7 +984,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
       applyEncashment: (code, days) => {
-        const error = validateEncashment(state, active.id, code, days);
+        const error = validateEncashment(state, active.id, code, days, activeOffs);
         if (error) return error;
         const item: Encashment = {
           id: uid("enc"),
@@ -868,13 +994,23 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           status: "pending",
           appliedOn: todayISO(),
         };
-        setState((prev) => ({ ...prev, encashments: [withAutoApproval(item, "approved"), ...prev.encashments] }));
+        setState((prev) => ({ ...prev, encashments: [item, ...prev.encashments] }));
         return null;
       },
       setEncashmentStatus: (encashmentId, status, note) => {
         const item = state.encashments.find((entry) => entry.id === encashmentId);
         if (!item) return "Encashment request not found.";
-        const error = decisionError(item.employeeId, item.status, status, ["pending"]);
+        // Encashment is a payout: someone with no one above them is decided by Compensation instead.
+        const compensationDecides =
+          managementChain(item.employeeId, TIMEZ_DEMOS).length === 0 &&
+          active.role === "compensation_admin" &&
+          item.employeeId !== active.id &&
+          (status === "approved" || status === "rejected");
+        const error = compensationDecides
+          ? item.status === "pending"
+            ? null
+            : "This request has already been decided."
+          : decisionError(item.employeeId, item.status, status, ["pending"]);
         if (error) return error;
         if (status === "approved") {
           const ownerRows = leaveRows(
@@ -978,7 +1114,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           const timesheets = current
             ? prev.timesheets.map((sheet) => (sheet.id === current.id ? next : sheet))
             : [next, ...prev.timesheets];
-          return { ...prev, timesheets, orgTimesheets: backToDraft(prev.orgTimesheets, weekStart) };
+          return { ...prev, timesheets, orgTimesheets: backToDraft(prev.orgTimesheets, weekStart, active.id) };
         });
         return null;
       },
@@ -995,7 +1131,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             const entries = sheet.entries.filter((entry) => entry.id !== entryId);
             return { ...sheet, entries, hours: hoursFromEntries(entries), status: "draft" as TimesheetStatus };
           }),
-          orgTimesheets: backToDraft(prev.orgTimesheets, weekStart),
+          orgTimesheets: backToDraft(prev.orgTimesheets, weekStart, active.id),
         }));
         return null;
       },
@@ -1043,14 +1179,6 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         });
         return null;
       },
-      setTimesheetStatus: (sheetId, status) => {
-        setState((prev) => ({
-          ...prev,
-          timesheets: prev.timesheets.map((sheet) =>
-            sheet.id === sheetId && sheet.status !== "approved" ? { ...sheet, status } : sheet,
-          ),
-        }));
-      },
       setOrgTimesheetStatus: (recordId, status) => {
         const row = state.orgTimesheets.find((item) => item.id === recordId);
         if (!row) return "Timesheet record not found.";
@@ -1072,8 +1200,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
       addExpense: (input) => {
-        const error = validateExpense(input);
+        const error = validateExpense(input, claimLimitsFor(active.countryCode).maxClaim, payRulesFor(active.countryCode).currency);
         if (error) return error;
+        if (input.amount > receiptThresholdFor(active.countryCode) && !/Receipt:/i.test(input.description)) {
+          return "Attach the receipt for this amount.";
+        }
         if (!currentProjects.some((project) => project.id === input.projectId)) return "Choose one of your current projects.";
         const duplicate = state.expenses.some(
           (item) =>
@@ -1089,6 +1220,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           id: uid("ex"),
           employeeId: active.id,
           ...input,
+          currency: payRulesFor(active.countryCode).currency,
           description: input.description.trim(),
           status: "submitted",
         };
@@ -1509,8 +1641,15 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
       addReimbursement: (input) => {
-        const error = validateExpense({ ...input, category: input.category.trim() });
+        const error = validateExpense(
+          { ...input, category: input.category.trim() },
+          claimLimitsFor(active.countryCode).maxClaim,
+          payRulesFor(active.countryCode).currency,
+        );
         if (error) return error;
+        if (input.amount > receiptThresholdFor(active.countryCode) && !/Receipt:/i.test(input.description)) {
+          return "Attach the receipt for this amount.";
+        }
         const duplicate = state.reimbursements.some(
           (item) =>
             item.employeeId === active.id &&
@@ -1527,6 +1666,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           date: input.date,
           category: input.category.trim(),
           amount: input.amount,
+          currency: payRulesFor(active.countryCode).currency,
           description: input.description.trim(),
           status: "submitted",
         };
@@ -1691,8 +1831,10 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (!input.requiredBy) return "Select the required-by date.";
         if (input.requiredBy < todayISO()) return "The required-by date can't be in the past.";
         if (!Number.isFinite(input.amount) || input.amount <= 0) return "Enter an amount greater than zero.";
-        if (!Number.isInteger(input.amount)) return "Enter the amount in whole rupees.";
-        if (input.amount > MAX_CASH_ADVANCE) return `A cash advance can't be more than ₹${MAX_CASH_ADVANCE.toLocaleString("en-IN")}.`;
+        const cashCurrency = payRulesFor(active.countryCode).currency;
+        if (!Number.isInteger(input.amount)) return `Enter the amount in whole ${cashCurrency}.`;
+        const maxCash = claimLimitsFor(active.countryCode).maxCashAdvance;
+        if (input.amount > maxCash) return `A cash advance can't be more than ${money(maxCash, cashCurrency)}.`;
         if (state.cashAdvances.some((c) => c.employeeId === active.id && c.status === "pending")) {
           return "You already have a cash advance waiting for approval.";
         }
@@ -1700,6 +1842,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           id: uid("ca"),
           employeeId: active.id,
           amount: input.amount,
+          currency: cashCurrency,
           category: input.category.trim(),
           purpose: input.purpose.trim(),
           requiredBy: input.requiredBy,
@@ -1878,7 +2021,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
     };
-  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState]);
+  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState]);
 
   return <PortalContext.Provider value={api}>{children}</PortalContext.Provider>;
 }

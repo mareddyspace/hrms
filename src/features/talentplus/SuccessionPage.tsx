@@ -3,7 +3,7 @@ import { Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Pag
 import { formatShortDate } from "../../model.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
-import { isExecutive, isHr, personName } from "./shared.ts";
+import { isHr, personName } from "./shared.ts";
 import { useActor } from "./useActor.ts";
 import {
   LEVELS,
@@ -11,7 +11,9 @@ import {
   READINESS,
   addKeyRole,
   canAssess,
+  canEditKeyRole,
   canOpenSuccession,
+  canRemoveSuccessor,
   getSuccessionState,
   nominateSuccessor,
   removePlacement,
@@ -20,6 +22,7 @@ import {
   savePlacement,
   seesAll,
   subscribeSuccession,
+  successionPeople,
   visiblePeopleIds,
   type Level,
   type Placement,
@@ -57,7 +60,7 @@ export function SuccessionPage() {
     return (
       <Page title="Succession planning">
         <Card>
-          <EmptyState title="Restricted" description="Succession planning is available to HR, executives and people managers." />
+          <EmptyState title="Restricted" description="For HR, executives and people managers." />
         </Card>
       </Page>
     );
@@ -85,7 +88,8 @@ export function SuccessionPage() {
 
 function NineBox({ placements, visible }: { placements: Placement[]; visible: Set<string> }) {
   const actor = useActor();
-  const people = useSyncExternalStore(subscribePeople, listPeople);
+  useSyncExternalStore(subscribePeople, listPeople);
+  const people = successionPeople();
   const [editing, setEditing] = useState<string | null>(null);
   const [msg, setMsg] = useState<Msg>(null);
 
@@ -227,7 +231,7 @@ function PlacementForm({
   return (
     <Card title={employeeId ? `Assess ${personName(employeeId)}` : "Place a person"}>
       {!editable ? (
-        <p className="note">You can view this assessment but only HR or their reporting line can change it.</p>
+        <p className="note">View only. HR or their reporting line can edit.</p>
       ) : (
         <>
           <div className="form-grid-2">
@@ -325,7 +329,8 @@ function PlacementForm({
 function KeyRoles({ visible }: { visible: Set<string> }) {
   const actor = useActor();
   const state = useSyncExternalStore(subscribeSuccession, getSuccessionState);
-  const people = useSyncExternalStore(subscribePeople, listPeople);
+  useSyncExternalStore(subscribePeople, listPeople);
+  const people = successionPeople();
   const hr = isHr(actor.role);
   const all = seesAll(actor);
   const [msg, setMsg] = useState<Msg>(null);
@@ -354,7 +359,7 @@ function KeyRoles({ visible }: { visible: Set<string> }) {
                 personName(s.employeeId),
                 <StatusBadge key="r" status={s.readiness} tone={s.readiness === "Ready now" ? "ok" : s.readiness === "Ready in 1–2 years" ? "info" : "neutral"} literal />,
                 `${formatShortDate(s.nominatedOn)} by ${personName(s.nominatedBy)}`,
-                hr || isExecutive(actor.role) || s.nominatedBy === actor.id ? (
+                canRemoveSuccessor(actor, role, s) ? (
                   <button key="x" type="button" className="btn btn-ghost btn-tiny" onClick={() => report(removeSuccessor(actor, role.id, s.employeeId), "Nomination removed.")}>
                     Remove
                   </button>
@@ -364,7 +369,7 @@ function KeyRoles({ visible }: { visible: Set<string> }) {
               ])}
               empty={<p className="muted">No successors you can see yet.</p>}
             />
-            {role.successors.length < MAX_SUCCESSORS && (
+            {canEditKeyRole(actor, role) && role.successors.length < MAX_SUCCESSORS && (
               <div className="approval-actions">
                 <select
                   aria-label={`Successor for ${role.title}`}

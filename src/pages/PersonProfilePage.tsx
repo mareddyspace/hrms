@@ -11,7 +11,6 @@ import {
   Copy,
   Lock,
   Pencil,
-  GraduationCap,
   Mail,
   MapPin,
   MessageCircle,
@@ -25,15 +24,19 @@ import { SelfProfileEditor } from "../components/SelfProfileEditor.tsx";
 import { initials } from "../components/OrgChart.tsx";
 import { saveLocalMeeting } from "../data/calendarData.ts";
 import { startDirectChat } from "../data/collabLocal.ts";
-import { getPerson360Extras, type PersonRecord } from "../data/peopleData.ts";
-import { getPerson, isTerminated, listPeople, subscribePeople } from "../data/peopleLocal.ts";
-import { canManagePeople, canViewSensitivePiiFor } from "../data/peoplePermissions.ts";
+import type { PersonRecord } from "../data/peopleData.ts";
+import { getLifecycleHistory, isScheduled, subscribeLifecycleHistory, timelineFor } from "../data/lifecycleHistory.ts";
+import { canOpenFullRecord, profileAccessFor } from "../data/profileAccess.ts";
+import { skillsFor } from "../data/careerProfile.ts";
+import { getExitDetails, getPerson, isTerminated, listPeople, subscribePeople } from "../data/peopleLocal.ts";
+import { canManagePeople } from "../data/peoplePermissions.ts";
 import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
 import { getLinksState, setLinkedIn, subscribeLinks } from "../data/socialLinks.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
 import { todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { Employee360View } from "./Employee360View.tsx";
+import { EmployeeFormDialog, saveEmployee } from "./EmployeeFormDialog.tsx";
 
 /** What a coworker sees about someone — no pay, leave balances or other HR-only records. */
 type ProfilePerson = {
@@ -146,17 +149,19 @@ function useNow(intervalMs = 30_000) {
 }
 
 /**
- * The one profile page. `/info` (My profile) renders it for the signed-in employee via `personId`;
- * `/people/:id` renders it for anyone else.
+ * The one profile page. `/info` (My profile) and `/directory/:id` render it via `personId`;
+ * `/people/:id` renders it from the route. HR can edit the employee record from here.
  */
 export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   const params = useParams();
   const id = personId ?? params.id ?? "";
   const navigate = useNavigate();
-  const { employee, demoAccounts, demoProfile, canApproveLeaveFor } = usePortal();
+  const { employee, demoAccounts, demoProfile } = usePortal();
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
   const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
   const links = useSyncExternalStore(subscribeLinks, getLinksState, getLinksState);
+  const history = useSyncExternalStore(subscribeLifecycleHistory, getLifecycleHistory, getLifecycleHistory);
+  const [hrEditOpen, setHrEditOpen] = useState(false);
   const now = useNow();
   const today = todayISO();
   const [meetOpen, setMeetOpen] = useState(false);
@@ -169,6 +174,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   useEffect(() => {
     setBanner(null);
     setEditing(false);
+    setHrEditOpen(false);
     setTab("overview");
   }, [id]);
 
@@ -186,7 +192,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   if (!person) {
     return (
       <Page title="Profile">
-        <EmptyState title="Person not found" description="This profile does not exist or was removed." />
+        <EmptyState title="Person not found" description="It may have been removed." />
         <Link to="/org-chart" className="btn">
           Back to org chart
         </Link>
@@ -195,33 +201,29 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   }
 
   const isMe = person.id === employee.id;
-  // Personal details follow the same rule as the HR record: the person, anyone up their reporting line, and HR.
-  const canSeePersonal = canViewSensitivePiiFor(demoProfile, {
-    subjectId: person.id,
-    selfId: employee.id,
-    isDirectReport: person.managerId === employee.id || (!isMe && canApproveLeaveFor(person.id)),
-    inHrScope: true,
-  });
+  // Personal details: the person, anyone up their reporting line, and HR. Other sections have their own rules.
+  const access = profileAccessFor(demoProfile, person.id, employee.id);
+  const canSeePersonal = access.personal;
+  const canOpenRecord = canOpenFullRecord(access) && Boolean(person.record);
   // Someone who has left keeps a read-only profile: no chat, email or meeting actions.
   const hasLeft = isTerminated(person.record);
-  const manager =
-    demoAccounts.find((a) => a.id === person.managerId) ??
-    (person.managerId ? people.find((p) => p.id === person.managerId) : undefined);
-  const managerName = manager?.fullName ?? person.managerName;
+  const managerId = person.record?.managerId ?? person.managerId;
+  const manager = managerId && managerId !== person.id ? people.find((p) => p.id === managerId) : undefined;
+  const managerName = manager?.fullName ?? (managerId ? person.managerName : "");
   const managerTitle = manager?.designation ?? "";
 
-  const leftIds = new Set(people.filter(isTerminated).map((p) => p.id));
-  const reports = [
-    ...demoAccounts.filter((a) => a.reportsToId === person.id && !leftIds.has(a.id)).map((a) => ({ id: a.id, name: a.fullName, title: a.designation, photo: a.photo })),
-    ...people
-      .filter((p) => p.managerId === person.id && !isTerminated(p) && !demoAccounts.some((a) => a.id === p.id))
-      .map((p) => ({ id: p.id, name: p.fullName, title: p.designation, photo: p.photo })),
-  ];
-  const peers = person.managerId
-    ? demoAccounts.filter((a) => a.reportsToId === person.managerId && a.id !== person.id && !leftIds.has(a.id))
+  const reports = people
+    .filter((p) => p.managerId === person.id && p.id !== person.id && !isTerminated(p))
+    .map((p) => ({ id: p.id, name: p.fullName, title: p.designation, photo: p.photo }));
+  const peers = manager
+    ? people.filter((p) => p.managerId === manager.id && p.id !== person.id && !isTerminated(p)).slice(0, 6)
     : [];
 
-  const extras = person.record ? getPerson360Extras(person.record) : null;
+  const skills = person.record
+    ? skillsFor(talent.skillProfiles, person.record)
+    : talent.skillProfiles.find((sp) => sp.employeeId === person.id)?.skills ?? [];
+  const career = person.record ? timelineFor({ ...person.record, ...getExitDetails(person.record) }, history) : [];
+  const canHrEdit = canManagePeople(demoProfile.role) && !isMe && Boolean(person.record);
   const certs = talent.certifications.filter((c) => c.employeeId === person.id);
   const praise = talent.feedback.filter((f) => f.kind === "Praise" && f.toId === person.id);
   const theirTime = localTime(person.timeZone, now);
@@ -239,7 +241,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      setBanner({ tone: "err", text: "Could not copy — select the email address instead." });
+      setBanner({ tone: "err", text: "Could not copy the email." });
     }
   }
 
@@ -287,6 +289,11 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
             </ul>
           </div>
           <div className="profile-actions">
+            {canHrEdit && (
+              <button type="button" className="btn" onClick={() => setHrEditOpen(true)}>
+                <Pencil size={15} aria-hidden /> Edit employee
+              </button>
+            )}
             {isMe ? (
               <button type="button" className="btn" onClick={() => setEditing((open) => !open)}>
                 <Pencil size={15} aria-hidden /> {editing ? "Close editor" : "Edit profile"}
@@ -312,7 +319,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
 
       {isMe && editing && <SelfProfileEditor onClose={() => setEditing(false)} />}
 
-      {canSeePersonal && person.record && (
+      {canOpenRecord && (
         <Tabs
           tabs={[
             { id: "overview", label: "Overview" },
@@ -323,7 +330,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
         />
       )}
 
-      {tab === "record" && canSeePersonal && person.record ? (
+      {tab === "record" && canOpenRecord && person.record ? (
         <Employee360View
           person={{ ...person.record, photo: person.photo }}
           viewer={demoProfile}
@@ -382,51 +389,41 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
             </dl>
             {!canSeePersonal && (
               <p className="profile-private">
-                <Lock size={13} aria-hidden /> Personal details are visible to {firstName}, their manager and HR.
+                <Lock size={13} aria-hidden /> Visible to {firstName}, their managers and HR.
               </p>
             )}
           </Card>
 
-          {extras && (
+          {skills.length > 0 && (
             <Card title="Skills">
               <ul className="profile-skill-list">
-                {extras.skills.map((s) => (
-                  <li key={s.name}>
-                    <Sparkles size={14} aria-hidden /> {s.name}
-                    <span className="muted">{s.level}</span>
+                {skills.map((sk) => (
+                  <li key={sk.skillId}>
+                    <Sparkles size={14} aria-hidden /> {sk.skillName}
+                    <span className="muted">{sk.level}</span>
                   </li>
                 ))}
               </ul>
             </Card>
           )}
 
-          {extras && canSeePersonal && (
-            <Card title="Experience & education">
+          {access.work && career.length > 0 && (
+            <Card title="Career at Infotech">
               <ol className="profile-timeline">
-                <li>
-                  <strong>{person.designation}</strong>
-                  <span>
-                    Infotech{person.dateOfJoining ? ` · ${person.dateOfJoining.slice(0, 4)} – present` : ""}
-                  </span>
-                </li>
-                {extras.experience.map((e) => (
-                  <li key={`${e.company}-${e.from}`}>
-                    <strong>{e.title}</strong>
-                    <span>
-                      {e.company} · {e.from} – {e.to}
-                    </span>
-                  </li>
-                ))}
-                {extras.education.map((e) => (
-                  <li key={e.school} className="is-education">
-                    <strong>
-                      <GraduationCap size={14} aria-hidden /> {e.degree}
-                    </strong>
-                    <span>
-                      {e.school} · {e.year}
-                    </span>
-                  </li>
-                ))}
+                {career
+                  .filter((e) => access.compensation || e.type !== "Compensation change")
+                  .map((e) => (
+                    <li key={e.id}>
+                      <strong>
+                        {e.type === "Hire" ? "Joined Infotech" : e.type}
+                        {isScheduled(e) ? " · Scheduled" : ""}
+                      </strong>
+                      <span>
+                        {e.effectiveDate}
+                        {e.type === "Hire" ? ` · ${e.after}` : ` · ${e.before} → ${e.after}`}
+                      </span>
+                    </li>
+                  ))}
               </ol>
             </Card>
           )}
@@ -435,7 +432,6 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
             {praise.length === 0 ? (
               <EmptyState
                 title="No praise yet"
-                description={isMe ? "Praise from colleagues will show here." : `Recognise ${firstName} from Performance → Feedback & praise.`}
               />
             ) : (
               <ul className="feedback-list">
@@ -495,7 +491,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
                 <h3 className="profile-subhead">Reports to</h3>
                 {managerName ? (
                   // Only link when the manager has a profile; some sample managers exist as a name only.
-                  <PersonLink id={manager ? person.managerId : undefined} name={managerName} title={managerTitle} photo={manager?.photo} />
+                  <PersonLink id={manager?.id} name={managerName} title={managerTitle} photo={manager?.photo} />
                 ) : (
                   <p className="muted">Top of the organization</p>
                 )}
@@ -532,14 +528,11 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
           {/* Certifications are part of the personal record: self, reporting line and HR only. */}
           {canSeePersonal && (
           <Card title="Certifications">
-            {certs.length === 0 && !extras?.certifications.length ? (
+            {certs.length === 0 ? (
               <p className="muted">None listed.</p>
             ) : (
               <ul className="profile-certs">
-                {(certs.length
-                  ? certs.map((c) => ({ key: c.id, name: c.name, issuer: c.issuer, when: c.earnedOn }))
-                  : extras!.certifications.map((c) => ({ key: c.name, name: c.name, issuer: c.issuer, when: c.year }))
-                ).map((c) => (
+                {certs.map((c) => ({ key: c.id, name: c.name, issuer: c.issuer, when: c.earnedOn })).map((c) => (
                   <li key={c.key}>
                     <Award size={16} aria-hidden />
                     <span>
@@ -555,13 +548,24 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
           </Card>
           )}
 
-          {canManagePeople(demoProfile.role) && person.record && (
-            <Link to={`/directory/${person.id}`} className="btn-ghost">
-              Open HR record
-            </Link>
-          )}
         </div>
       </div>
+      )}
+
+      {hrEditOpen && person.record && (
+        <EmployeeFormDialog
+          key={person.id}
+          open
+          title="Edit employee"
+          initial={person.record}
+          people={people}
+          onClose={() => setHrEditOpen(false)}
+          onSave={(next, effectiveDate) => {
+            const scheduled = saveEmployee(next, effectiveDate, person.record!, demoProfile);
+            setHrEditOpen(false);
+            setBanner({ tone: "ok", text: scheduled ? `Change scheduled for ${effectiveDate}.` : "Employee record saved." });
+          }}
+        />
       )}
 
       <MeetDialog

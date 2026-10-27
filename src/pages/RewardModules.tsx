@@ -15,20 +15,18 @@ import {
   downloadText,
 } from "../components/ui.tsx";
 import {
-  canApproveCompReviews,
   canManageLetters,
-  canViewCompStructures,
   canViewSalaryAmount,
   displayMoney,
   formatCompAmount,
   getCompensationAccess,
   hasModuleAccess,
 } from "../data/peoplePermissions.ts";
+import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import {
   BENEFIT_HISTORY,
   BENEFIT_PLANS,
   COMP_CYCLES,
-  COMP_HISTORY,
   DEPENDENTS,
   GRADE_BANDS,
   LEGAL_DISCLAIMER,
@@ -41,15 +39,20 @@ import {
   addLetterRequest,
   addLibraryDoc,
   canAdminBenefits,
+  canDecideCompReview,
   canViewLetter,
+  decideChangeRequest,
+  decideCompReview,
   decideEnrollment,
   getRewardState,
+  isAboveInLine,
   isMandatoryPlan,
   nextLetterStatuses,
+  pendingChangeFor,
   requestEnrollment,
   requestEnrollmentChange,
   setLetterStatus,
-  setReviewStatus,
+  submitCompReview,
   subscribeReward,
   validateUpload,
 } from "../data/rewardLocal.ts";
@@ -66,153 +69,120 @@ function ScopeNote({ text }: { text: string }) {
 
 /* ───────────────────────────── COMPENSATION ── */
 
+const STRUCTURE_ROLES = ["compensation_admin", "finance", "hr", "hr_admin", "hrbp", "manager", "hiring_manager", "executive", "founder", "cofounder"];
+
+const COMP_STATUS_TONE: Record<string, "ok" | "warn" | "danger" | "info" | "neutral"> = {
+  Draft: "neutral",
+  "Pending approval": "warn",
+  "Pending final approval": "info",
+  Approved: "ok",
+  Rejected: "danger",
+};
+
 export function CompensationPage() {
-  const { demoProfile, employee } = usePortal();
+  const { demoProfile } = usePortal();
   const reward = useReward();
-  const [tab, setTab] = useState("structures");
+  const me = demoProfile;
+  const access = getCompensationAccess(me);
+  const compTeam = access.peopleScope === "global";
+  const leadsPeople = demoAccountsBelow(me.id);
+  const showStructures = STRUCTURE_ROLES.includes(me.role);
+  const showCycles = compTeam || leadsPeople;
+  const tabs = [
+    ...(showStructures ? [{ id: "structures", label: "Structures & ranges" }] : []),
+    { id: "history", label: compTeam ? "Compensation history" : "My pay history" },
+    ...(showCycles ? [{ id: "cycles", label: "Review cycles" }] : []),
+    { id: "bonuses", label: compTeam ? "Bonus & incentives" : "My bonuses" },
+  ];
+  const [tab, setTab] = useState(tabs[0].id);
   const [cycleId, setCycleId] = useState(COMP_CYCLES[0]?.id ?? "");
   const [country, setCountry] = useState("");
   const [reviewMsg, setReviewMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
-  const structuresOk = canViewCompStructures(demoProfile);
-  const canApprove = canApproveCompReviews(demoProfile);
-  const compAccess = getCompensationAccess(demoProfile);
-  const moduleOk =
-    hasModuleAccess(demoProfile, "compensation") ||
-    (compAccess.module && structuresOk) ||
-    (compAccess.othersAmounts !== "hidden" && structuresOk);
-
+  const moduleOk = hasModuleAccess(me, "compensation") || access.module;
   const bands = GRADE_BANDS.filter((b) => !country || b.country === country);
   const cycle = COMP_CYCLES.find((c) => c.id === cycleId) ?? COMP_CYCLES[0];
 
-  const visibleHistory = useMemo(() => {
-    return COMP_HISTORY.filter((row) => {
-      const access = canViewSalaryAmount(demoProfile, row.employeeId, {
-        selfId: employee.id,
-        isDirectReport: row.managerId === employee.id || row.managerId === demoProfile.id,
-      });
-      return access !== "hidden";
-    });
-  }, [demoProfile, employee.id]);
+  // Pay amounts: your own, or everyone's for Compensation / HR.
+  const seesPay = (employeeId: string) => employeeId === me.id || canViewSalaryAmount(me, employeeId, { selfId: me.id }) !== "hidden";
+  const visibleHistory = reward.history.filter((row) => seesPay(row.employeeId));
+  const visibleBonuses = reward.bonuses.filter((row) => seesPay(row.employeeId));
 
-  const visibleReviews = useMemo(() => {
-    return reward.reviews.filter((row) => {
-      if (row.cycleId !== cycleId) return false;
-      if (canApprove) return true;
-      if (row.managerId === employee.id || row.managerId === demoProfile.id) return true;
-      if (row.employeeId === employee.id) return true;
-      // Executives with compensation access see cycle counts, not individual proposals
-      if (demoProfile.role === "executive" || demoProfile.role === "founder" || demoProfile.role === "cofounder") {
-        return false;
-      }
-      if (demoProfile.role === "hrbp") return true;
-      return false;
-    });
-  }, [reward.reviews, cycleId, canApprove, employee.id, demoProfile]);
-
-  const visibleBonuses = useMemo(() => {
-    return reward.bonuses.filter((row) => {
-      const access = canViewSalaryAmount(demoProfile, row.employeeId, {
-        selfId: employee.id,
-        isDirectReport: false,
-      });
-      // Managers don't get org-wide bonus lists — only self
-      if (demoProfile.role === "manager") {
-        return row.employeeId === employee.id;
-      }
-      return access !== "hidden";
-    });
-  }, [reward.bonuses, demoProfile, employee.id]);
+  // Proposals: never your own; Compensation / HR see the cycle, others only people below them.
+  const visibleReviews = useMemo(
+    () =>
+      reward.reviews.filter(
+        (row) => row.cycleId === cycleId && row.employeeId !== me.id && (compTeam || isAboveInLine(me.id, row.employeeId)),
+      ),
+    [reward.reviews, cycleId, compTeam, me.id],
+  );
+  const amountAccess = (employeeId: string) =>
+    isAboveInLine(me.id, employeeId) ? ("full" as const) : canViewSalaryAmount(me, employeeId, { selfId: me.id });
+  const myDecisions = reward.reviews.filter((r) => canDecideCompReview(me, r)).length;
 
   if (!moduleOk) {
     return (
       <Page title="Compensation">
-        <EmptyState
-          title="Not authorized"
-          description="Compensation is outside this persona's navAccess / permission configuration."
-        />
+        <EmptyState title="No access" description="You don't have access to compensation." />
       </Page>
     );
   }
 
   return (
-    <Page title="Compensation" subtitle="Structures, history, review cycles, incentives">
+    <Page title="Compensation">
       <MetricGrid>
-        <MetricCard label="Grade bands" value={GRADE_BANDS.length} />
-        <MetricCard label="Open cycle" value={cycle?.status ?? "—"} hint={cycle?.name} />
-        <MetricCard label="Reviews in your scope" value={visibleReviews.length} />
-        <MetricCard
-          label="Pending approvals"
-          value={visibleReviews.filter((r) => r.status === "Pending approval").length}
-        />
+        {compTeam || leadsPeople ? (
+          <>
+            <MetricCard label="Open cycle" value={cycle?.status ?? "—"} hint={cycle?.name} />
+            <MetricCard label="Proposals in view" value={visibleReviews.length} />
+            <MetricCard label="Waiting for you" value={myDecisions} />
+          </>
+        ) : (
+          <>
+            <MetricCard label="Current grade" value={visibleHistory.find((h) => h.employeeId === me.id)?.grade ?? "—"} />
+            <MetricCard label="Pay changes" value={visibleHistory.length} />
+            <MetricCard label="Bonuses" value={visibleBonuses.length} />
+          </>
+        )}
       </MetricGrid>
 
-      <Tabs
-        tabs={[
-          { id: "structures", label: "Structures & ranges" },
-          { id: "history", label: "Compensation history" },
-          { id: "cycles", label: "Review cycles" },
-          { id: "bonuses", label: "Bonus & incentives" },
-        ]}
-        value={tab}
-        onChange={setTab}
-      />
+      <Tabs tabs={tabs} value={tabs.some((t) => t.id === tab) ? tab : tabs[0].id} onChange={setTab} />
 
-      {tab === "structures" && (
-        <Card title="Compensation structures, grades and salary ranges">
-          {!structuresOk ? (
-            <EmptyState title="Structures hidden" description="This persona cannot view grade bands." />
-          ) : (
-            <>
-              <FilterBar>
-                <label className="filter-label">
-                  Country
-                  <select value={country} onChange={(e) => setCountry(e.target.value)}>
-                    <option value="">All</option>
-                    {[...new Set(GRADE_BANDS.map((b) => b.country))].map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </label>
-              </FilterBar>
-              <DataTable
-                headers={["Grade", "Family", "Country", "Currency", "Min", "Mid", "Max"]}
-                rows={bands.map((b) => [b.grade, b.family, b.country, b.currency, b.min, b.mid, b.max])}
-              />
-            </>
-          )}
+      {tab === "structures" && showStructures && (
+        <Card title="Grades and salary ranges">
+          <FilterBar>
+            <label className="filter-label">
+              Country
+              <select value={country} onChange={(e) => setCountry(e.target.value)}>
+                <option value="">All</option>
+                {[...new Set(GRADE_BANDS.map((b) => b.country))].map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+          </FilterBar>
+          <DataTable
+            headers={["Grade", "Family", "Country", "Currency", "Min", "Mid", "Max"]}
+            rows={bands.map((b) =>
+              access.ranges === "full"
+                ? [b.grade, b.family, b.country, b.currency, b.min, b.mid, b.max]
+                : [b.grade, b.family, b.country, b.currency, "••••", "••••", "••••"],
+            )}
+          />
         </Card>
       )}
 
       {tab === "history" && (
-        <Card title="Compensation history (scoped)">
-          {visibleHistory.length === 0 ? (
-            <EmptyState
-              title="No visible history"
-              description="There are no compensation changes for you to see."
-            />
-          ) : (
-            <DataTable
-              headers={["Employee", "Effective", "Event", "Grade", "Base"]}
-              rows={visibleHistory.map((row) => {
-                const access = canViewSalaryAmount(demoProfile, row.employeeId, {
-                  selfId: employee.id,
-                  isDirectReport: row.managerId === employee.id || row.managerId === demoProfile.id,
-                });
-                return [
-                  row.employeeName,
-                  row.effective,
-                  row.event,
-                  row.grade,
-                  displayMoney(row.base, access),
-                ];
-              })}
-            />
-          )}
+        <Card title={compTeam ? "Compensation history" : "My pay history"}>
+          <DataTable
+            headers={[...(compTeam ? ["Employee"] : []), "Effective", "Event", "Grade", "Base"]}
+            rows={visibleHistory.map((row) => [...(compTeam ? [row.employeeName] : []), row.effective, row.event, row.grade, row.base])}
+            empty={<EmptyState title="No pay changes" description="Nothing recorded yet." />}
+          />
         </Card>
       )}
 
-      {tab === "cycles" && (
+      {tab === "cycles" && showCycles && (
         <div className="stack">
           <FilterBar>
             <label className="filter-label">
@@ -229,101 +199,106 @@ export function CompensationPage() {
           {cycle && (
             <Card title={cycle.name}>
               <dl className="info-grid">
-                <div className="info-fact"><dt>Status</dt><dd><StatusBadge status={cycle.status} /></dd></div>
+                <div className="info-fact"><dt>Status</dt><dd><StatusBadge status={cycle.status} literal /></dd></div>
                 <div className="info-fact"><dt>Window</dt><dd>{cycle.window}</dd></div>
                 <div className="info-fact"><dt>Countries</dt><dd>{cycle.countries.join(", ")}</dd></div>
               </dl>
             </Card>
           )}
-          <Card title="Increment proposals & approval workflow">
-            {(demoProfile.role === "executive" || demoProfile.role === "founder" || demoProfile.role === "cofounder") &&
-              !canApprove && (
-                <Banner
-                  message={{
-                    tone: "ok",
-                    text: "Executive personas see cycle status only — not employee-level salary proposals — unless granted compensation_admin / HR / Finance rights.",
-                  }}
-                />
-              )}
-            {cycle?.status === "Closed" && (
-              <Banner message={{ tone: "info", text: "This cycle is closed — proposals are read-only." }} />
-            )}
+          <Card title="Increase proposals">
+            <p className="note">Approval: someone above the employee (not the proposer), then Compensation.</p>
+            {cycle?.status === "Closed" && <Banner message={{ tone: "info", text: "This cycle is closed." }} />}
             <Banner message={reviewMsg} />
-            {visibleReviews.length === 0 ? (
-              <EmptyState
-                title="No proposals to review"
-                description="You only see your own row, direct reports (masked), or the HR/Comp approval queue."
-              />
-            ) : (
-              <DataTable
-                headers={["Employee", "Manager", "Grade", "Current", "Proposed", "Incr %", "Bonus", "Status", "Decided by", "Action"]}
-                rows={visibleReviews.map((r) => {
-                  const access = canViewSalaryAmount(demoProfile, r.employeeId, {
-                    selfId: employee.id,
-                    isDirectReport: r.managerId === employee.id || r.managerId === demoProfile.id,
-                  });
-                  const decide = (status: "Approved" | "Rejected") => {
-                    const error = setReviewStatus(demoProfile, r.id, status);
-                    setReviewMsg(error ? { tone: "err", text: error } : { tone: "ok", text: `${r.employeeName}: ${status}.` });
-                  };
-                  let action: ReactNode;
-                  if (!canApprove) action = <span className="muted">View only</span>;
-                  else if (cycle?.status === "Closed") action = <span className="muted">Locked</span>;
-                  else if (r.employeeId === employee.id) action = <span className="muted">Your own review</span>;
-                  else if (r.status !== "Pending approval") action = <span className="muted">—</span>;
-                  else
-                    action = (
-                      <span className="reward-actions">
-                        <button type="button" className="btn" onClick={() => decide("Approved")}>Approve</button>
-                        <button type="button" className="btn-ghost" onClick={() => decide("Rejected")}>Reject</button>
-                      </span>
-                    );
-                  return [
-                    r.employeeName,
-                    r.managerName,
-                    // Proposed grade and % reveal the outcome, so mask them with the amounts
-                    `${r.currentGrade} → ${formatCompAmount(access, r.proposedGrade, "•••")}`,
-                    displayMoney(r.currentBase, access),
-                    displayMoney(r.proposedBase, access),
-                    formatCompAmount(access, `${r.proposedIncreasePct}%`, "•••"),
-                    displayMoney(r.bonusProposal, access),
-                    <StatusBadge key={r.id} status={r.status} />,
-                    r.approver ? `${r.approver} · ${r.decidedOn ?? ""}` : "—",
-                    <span key={`${r.id}-a`}>{action}</span>,
-                  ];
-                })}
-              />
-            )}
+            <DataTable
+              headers={["Employee", "Proposed by", "Grade", "Current", "Proposed", "Incr %", "Bonus", "Status", "Line approval", "Final", "Action"]}
+              rows={visibleReviews.map((r) => {
+                const vis = amountAccess(r.employeeId);
+                const report = (error: string | null, ok: string) =>
+                  setReviewMsg(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
+                let action: ReactNode = <span className="muted">—</span>;
+                if (canDecideCompReview(me, r)) {
+                  action = (
+                    <span className="reward-actions">
+                      <button type="button" className="btn" onClick={() => report(decideCompReview(me, r.id, "Approved"), `${r.employeeName}: approved.`)}>
+                        Approve
+                      </button>
+                      <button type="button" className="btn-ghost" onClick={() => report(decideCompReview(me, r.id, "Rejected"), `${r.employeeName}: rejected.`)}>
+                        Reject
+                      </button>
+                    </span>
+                  );
+                } else if (r.status === "Draft" && r.managerId === me.id && cycle?.status !== "Closed") {
+                  action = (
+                    <button type="button" className="btn" onClick={() => report(submitCompReview(me, r.id), `${r.employeeName}: submitted.`)}>
+                      Submit
+                    </button>
+                  );
+                }
+                return [
+                  r.employeeName,
+                  r.managerName,
+                  `${r.currentGrade} → ${formatCompAmount(vis, r.proposedGrade, "•••")}`,
+                  displayMoney(r.currentBase, vis),
+                  displayMoney(r.proposedBase, vis),
+                  formatCompAmount(vis, `${r.proposedIncreasePct}%`, "•••"),
+                  displayMoney(r.bonusProposal, vis),
+                  <StatusBadge key={r.id} status={r.status} tone={COMP_STATUS_TONE[r.status]} literal />,
+                  r.lineApprover ? `${r.lineApprover} · ${r.lineApprovedOn ?? ""}` : "—",
+                  r.approver ? `${r.approver} · ${r.decidedOn ?? ""}` : "—",
+                  <span key={`${r.id}-a`}>{action}</span>,
+                ];
+              })}
+              empty={<EmptyState title="No proposals" description="Nothing in this cycle for you." />}
+            />
           </Card>
         </div>
       )}
 
       {tab === "bonuses" && (
-        <Card title="Bonus and incentive records">
-          {visibleBonuses.length === 0 ? (
-            <EmptyState title="No incentives to show" description="Company-wide bonus lists are visible to HR and Compensation only." />
-          ) : (
-            <DataTable
-              headers={["Employee", "Type", "Period", "Amount", "Status"]}
-              rows={visibleBonuses.map((b) => {
-                const access = canViewSalaryAmount(demoProfile, b.employeeId, { selfId: employee.id });
-                return [
-                  b.employeeName,
-                  b.type,
-                  b.period,
-                  displayMoney(b.amount, access),
-                  <StatusBadge key={b.id} status={b.status} />,
-                ];
-              })}
-            />
-          )}
+        <Card title={compTeam ? "Bonus and incentive records" : "My bonuses"}>
+          <DataTable
+            headers={[...(compTeam ? ["Employee"] : []), "Type", "Period", "Amount", "Status"]}
+            rows={visibleBonuses.map((b) => [
+              ...(compTeam ? [b.employeeName] : []),
+              b.type,
+              b.period,
+              b.amount,
+              <StatusBadge key={b.id} status={b.status} literal />,
+            ])}
+            empty={<EmptyState title="No bonuses" description="Nothing recorded yet." />}
+          />
         </Card>
       )}
     </Page>
   );
 }
 
+/** True when anyone in the demo org reports (directly or not) to this person. */
+function demoAccountsBelow(id: string): boolean {
+  return DEMO_ACCOUNTS.some((a) => isAboveInLine(id, a.id));
+}
+
 /* ───────────────────────────── BENEFITS ── */
+
+function ChangeRequestButton({ onSend }: { onSend: (note: string) => string | null }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  if (!open) {
+    return (
+      <button type="button" className="quiet-link" onClick={() => setOpen(true)}>
+        Request change
+      </button>
+    );
+  }
+  return (
+    <span className="row-gap">
+      <input value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="What should change?" />
+      <button type="button" className="btn btn-tiny" disabled={note.trim().length < 5} onClick={() => !onSend(note) && setOpen(false)}>
+        Send
+      </button>
+    </span>
+  );
+}
 
 export function BenefitsPage() {
   const { demoProfile, employee, demoAccounts } = usePortal();
@@ -332,13 +307,8 @@ export function BenefitsPage() {
   const [planId, setPlanId] = useState("");
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
-  const canSeeOthers =
-    demoProfile.role === "hr_admin" ||
-    demoProfile.role === "hr" ||
-    demoProfile.role === "hrbp" ||
-    demoProfile.role === "compensation_admin" ||
-    demoProfile.role === "super_admin";
   const isBenefitsAdmin = canAdminBenefits(demoProfile);
+  const canSeeOthers = isBenefitsAdmin;
 
   // Employees are locked to their own country; HR can browse any country.
   const ownCountry = employee.countryName ?? "";
@@ -359,13 +329,15 @@ export function BenefitsPage() {
     canSeeOthers ? !country || e.country === country : e.employeeId === employee.id,
   );
   const myPlanIds = new Set(reward.enrollments.filter((e) => e.employeeId === employee.id).map((e) => e.planId));
-  const availablePlans = plans.filter((p) => p.country === ownCountry && !myPlanIds.has(p.id));
+  const availablePlans = plans.filter((p) => p.country === ownCountry && !myPlanIds.has(p.id) && !p.mandatory);
+  const changeRequests = reward.changeRequests.filter((c) => (canSeeOthers ? inScope(c.employeeId) : c.employeeId === employee.id));
 
   const dependents = DEPENDENTS.filter((d) => inScope(d.employeeId));
   const history = BENEFIT_HISTORY.filter((h) => inScope(h.employeeId));
 
   function run(error: string | null, okText: string) {
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: okText });
+    return error;
   }
 
   function enrollmentAction(e: (typeof enrollments)[number]): ReactNode {
@@ -373,13 +345,9 @@ export function BenefitsPage() {
     if (e.employeeId === employee.id) {
       if (e.status === "Pending") return <span className="muted">Awaiting HR</span>;
       if (e.status === "Enrolled") {
-        return mandatory ? (
-          <span className="muted">Mandatory</span>
-        ) : (
-          <button type="button" className="quiet-link" onClick={() => run(requestEnrollmentChange(demoProfile, e.id), "Change request sent to HR.")}>
-            Request change
-          </button>
-        );
+        if (mandatory) return <span className="muted">Mandatory</span>;
+        if (pendingChangeFor(reward, e.id)) return <span className="muted">Change requested</span>;
+        return <ChangeRequestButton onSend={(note) => run(requestEnrollmentChange(demoProfile, e.id, note), "Change request sent to HR.")} />;
       }
       return (
         <button type="button" className="quiet-link" onClick={() => run(requestEnrollment(demoProfile, e.planId), "Enrollment request sent to HR.")}>
@@ -407,14 +375,13 @@ export function BenefitsPage() {
   if (!hasModuleAccess(demoProfile, "benefits")) {
     return (
       <Page title="Benefits">
-        <EmptyState title="Not authorized" description="Benefits module is outside this persona's navAccess." />
+        <EmptyState title="No access" description="You don't have access to benefits." />
       </Page>
     );
   }
 
   return (
-    <Page title="Benefits" subtitle="Country plans, eligibility, enrollment, dependents and plan documents">
-
+    <Page title="Benefits">
       <FilterBar>
         <label className="filter-label">
           Country
@@ -438,7 +405,7 @@ export function BenefitsPage() {
       <Tabs
         tabs={[
           { id: "plans", label: "Plans" },
-          { id: "enrollment", label: "Eligibility & enrollment" },
+          { id: "enrollment", label: "Enrollment" },
           { id: "dependents", label: "Dependents" },
           { id: "history", label: "Benefit history" },
         ]}
@@ -454,7 +421,7 @@ export function BenefitsPage() {
               rows={plans.map((p) => [
                 <>
                   {p.name}
-                  {p.mandatory && <span className="reward-tag">Mandatory</span>}
+                  {p.mandatory ? <span className="reward-tag">Mandatory</span> : p.autoEnrolled ? <span className="reward-tag">Automatic</span> : null}
                 </>,
                 p.category,
                 p.provider,
@@ -463,17 +430,19 @@ export function BenefitsPage() {
                   Details
                 </button>,
               ])}
-              empty={<EmptyState title="No plans" description="No benefit plans are available for this country." />}
+              empty={<EmptyState title="No plans" description="No benefit plans for this country." />}
             />
           </Card>
           {selectedPlan && (
             <Card title={selectedPlan.name}>
               <p>{selectedPlan.summary}</p>
               <p className="note">Provider: {selectedPlan.provider}</p>
-              {selectedPlan.mandatory && (
-                <p className="note">Statutory plan — enrollment is compulsory and cannot be waived.</p>
-              )}
-              <h3 style={{ fontSize: 14, marginTop: 12 }}>Benefit documents</h3>
+              {selectedPlan.mandatory ? (
+                <p className="note">Statutory. Enrollment is automatic and can't be waived.</p>
+              ) : selectedPlan.autoEnrolled ? (
+                <p className="note">You are enrolled automatically. Ask HR to opt out.</p>
+              ) : null}
+              <h3 style={{ fontSize: 14, marginTop: 12 }}>Plan documents</h3>
               <ul className="todo">
                 {selectedPlan.documents.map((d) => (
                   <li key={d}>
@@ -481,14 +450,9 @@ export function BenefitsPage() {
                     <button
                       type="button"
                       className="quiet-link"
-                      onClick={() =>
-                        downloadText(
-                          d.replace(/\.pdf$/i, ".txt"),
-                          `${d}\n\n${LEGAL_DISCLAIMER}\n\nPlan excerpt for ${selectedPlan.name}.`,
-                        )
-                      }
+                      onClick={() => downloadText(`${d}.txt`, `${d}\n\n${LEGAL_DISCLAIMER}\n\nPlan summary for ${selectedPlan.name}.`)}
                     >
-                      Download
+                      Download (.txt)
                     </button>
                   </li>
                 ))}
@@ -500,21 +464,47 @@ export function BenefitsPage() {
 
       {tab === "enrollment" && (
         <div className="stack">
-          <Card title="Eligibility and enrollment status">
+          <Card title="Enrollment status">
             <DataTable
               headers={["Employee", "Plan", "Country", "Status", "Effective", "Action"]}
               rows={enrollments.map((e) => [
                 e.employeeName,
                 e.planName,
                 e.country,
-                <StatusBadge key={e.id} status={e.status} />,
+                <StatusBadge key={e.id} status={e.status} literal />,
                 e.effective,
                 <span key={`${e.id}-a`}>{enrollmentAction(e)}</span>,
               ])}
-              empty={<EmptyState title="No enrollments" description="No enrollments yet." />}
+              empty={<EmptyState title="No enrollments" />}
             />
-            {!canSeeOthers && <ScopeNote text="Changes are sent to HR for approval." />}
+            {!canSeeOthers && <ScopeNote text="Requests go to HR." />}
           </Card>
+          {changeRequests.length > 0 && (
+            <Card title="Change requests">
+              <DataTable
+                headers={["Requested", "Employee", "Plan", "Change", "Status", ""]}
+                rows={changeRequests.map((c) => [
+                  c.requestedOn,
+                  c.employeeName,
+                  c.planName,
+                  c.note,
+                  <StatusBadge key={c.id} status={c.status} literal />,
+                  isBenefitsAdmin && c.status === "Pending" && c.employeeId !== employee.id ? (
+                    <span key={`${c.id}-a`} className="reward-actions">
+                      <button type="button" className="btn" onClick={() => run(decideChangeRequest(demoProfile, c.id, "Done"), "Change marked done.")}>
+                        Done
+                      </button>
+                      <button type="button" className="btn-ghost" onClick={() => run(decideChangeRequest(demoProfile, c.id, "Declined"), "Change declined.")}>
+                        Decline
+                      </button>
+                    </span>
+                  ) : (
+                    c.decidedBy ? `${c.decidedBy} · ${c.decidedOn ?? ""}` : "—"
+                  ),
+                ])}
+              />
+            </Card>
+          )}
           {availablePlans.length > 0 && (
             <Card title="Plans you can join">
               <DataTable
@@ -543,7 +533,7 @@ export function BenefitsPage() {
           <DataTable
             headers={["Name", "Relationship", "Covered plans"]}
             rows={dependents.map((d) => [d.name, d.relationship, d.coveredPlans.join(", ")])}
-            empty={<EmptyState title="No dependents on file" description="No dependents are recorded for this scope." />}
+            empty={<EmptyState title="No dependents on file" />}
           />
         </Card>
       )}
@@ -553,7 +543,7 @@ export function BenefitsPage() {
           <DataTable
             headers={["Date", "Event", "Detail"]}
             rows={history.map((h) => [h.date, h.event, h.detail])}
-            empty={<EmptyState title="No history" description="No benefit events for this scope." />}
+            empty={<EmptyState title="No history" description="No benefit events yet." />}
           />
         </Card>
       )}
@@ -686,7 +676,6 @@ export function DocumentsLettersPage() {
   return (
     <Page
       title="Documents & Letters"
-      subtitle="Employee library, uploads, letter templates and approval history"
       action={
         <button
           type="button"
@@ -746,7 +735,7 @@ export function DocumentsLettersPage() {
           </Card>
           <Card title="Preview">
             {!previewDoc ? (
-              <EmptyState title="Select a document" description="Choose Preview on a document to see it here." />
+              <EmptyState title="Select a document" />
             ) : previewDoc.preview.startsWith("data:image") ? (
               <div>
                 <p className="note">{previewDoc.name}</p>
@@ -819,7 +808,6 @@ export function DocumentsLettersPage() {
             </form>
           </Card>
           <Card title="Letter workflow statuses">
-            <p className="note">Pending approval → Approved → Issued (or Rejected).</p>
             <Banner message={letterMsg} />
             <DataTable
               headers={["Employee", "Type", "Status", "Preview", "Action"]}
@@ -875,17 +863,17 @@ export function DocumentsLettersPage() {
               l.decidedOn ?? "—",
               l.note,
             ])}
-            empty={<EmptyState title="No letter requests" description="Request a letter from the Letters tab." />}
+            empty={<EmptyState title="No letter requests" />}
           />
         </Card>
       )}
 
       {tab === "personal" && (
-        <Card title="My ESS documents (portal store)">
+        <Card title="My documents">
           <DataTable
             headers={["Name", "Category", "Type", "Expires"]}
             rows={portalDocs.map((d) => [d.name, d.category, d.docType, d.expires || "None"])}
-            empty={<EmptyState title="No ESS documents" description="Uploads also appear in the library tab." />}
+            empty={<EmptyState title="No ESS documents" />}
           />
         </Card>
       )}

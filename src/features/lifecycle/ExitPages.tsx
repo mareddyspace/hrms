@@ -40,7 +40,7 @@ import {
   type ExitStatus,
   type SettlementStatus,
 } from "./exitStore.ts";
-import { NOTICE_POLICY, canActForEmployee, isAboveInLine, isHrRole, noticeDaysFor, type LifecycleActor } from "./lifecycleShared.ts";
+import { NOTICE_POLICY, canActForEmployee, isAboveInLine, isHrRole, lineManagerId, noticeDaysFor, personName, type LifecycleActor } from "./lifecycleShared.ts";
 import "./lifecycle.css";
 
 type Message = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -209,7 +209,7 @@ function DecisionBlock({
 }
 
 function ClearanceList({ row, actor, onMessage }: { row: ExitCase; actor: LifecycleActor; onMessage: (m: Message) => void }) {
-  if (!row.clearance.length) return <p className="muted">The checklist is created when the resignation is accepted.</p>;
+  if (!row.clearance.length) return <p className="muted">Available once the resignation is accepted.</p>;
   return (
     <ul className="lc-checklist">
       {row.clearance.map((item) => {
@@ -287,7 +287,7 @@ function InterviewForm({ row, actor, onMessage }: { row: ExitCase; actor: Lifecy
 
   return (
     <form className="stack" onSubmit={submit}>
-      <p className="muted">Your answers are confidential to HR. Your manager does not see them.</p>
+      <p className="muted">Confidential to HR. Not shared with your manager.</p>
       <div>
         <p className="muted">Overall experience</p>
         <div className="lc-rating" role="group" aria-label="Overall rating">
@@ -409,7 +409,7 @@ function ExitDetail({ row, onMessage }: { row: ExitCase; onMessage: (m: Message)
             <Card title="Complete exit">
               <div className="stack">
                 <p className="muted">
-                  {blocker ?? "Marks the directory record as terminated and raises the relieving and experience letter."}
+                  {blocker ?? "Terminates the record and issues relieving and experience letters."}
                 </p>
                 <div>
                   <button className="btn" type="button" disabled={Boolean(blocker)} onClick={complete}>
@@ -440,7 +440,12 @@ function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessag
   function submit(event: FormEvent) {
     event.preventDefault();
     const error = submitResignation(actor, { proposedLastDay: lastDay, reason, note, earlyRelease: early && insideNotice });
-    onMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Resignation submitted to your manager." });
+    const toBoard = !lineManagerId(actor.id);
+    onMessage(
+      error
+        ? { tone: "err", text: error }
+        : { tone: "ok", text: toBoard ? "Resignation recorded for the Board." : `Resignation sent to ${personName(lineManagerId(actor.id)!)}.` },
+    );
   }
 
   return (
@@ -584,7 +589,7 @@ function ExitTable({ rows, onOpen }: { rows: ExitCase[]; onOpen: (id: string) =>
           Open
         </button>,
       ])}
-      empty={<EmptyState title="No exits" description="Nothing in this view." />}
+      empty={<EmptyState title="No exits" />}
     />
   );
 }

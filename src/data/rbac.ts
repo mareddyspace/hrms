@@ -124,8 +124,21 @@ export function getPeopleListScope(viewer: DemoAccount): PeopleListScope {
   if (role === "manager" || role === "hiring_manager") return "team";
   if (role === "recruiter") return "org"; // directory for hiring context — profiles still gated
   if (isAdminPlatform(role)) return "org"; // limited directory for admin ops
-  if (accountHasNavAccess(viewer, "people") || accountHasNavAccess(viewer, "team")) return "team";
+  // Everyone else with People access gets the basic company directory (see directoryFieldLevel).
+  if (accountHasNavAccess(viewer, "people")) return "org";
+  if (accountHasNavAccess(viewer, "team")) return "team";
   return "self";
+}
+
+/**
+ * Which directory columns the viewer gets. "basic" = name, title, department, country and work email only;
+ * "full" adds employee ID, status, manager, location and the other filters.
+ */
+export function directoryFieldLevel(viewer: DemoAccount): "basic" | "full" {
+  const role = viewer.role;
+  if (isHr(role) || isExecutive(role) || isAdminPlatform(role)) return "full";
+  if (role === "manager" || role === "hiring_manager" || role === "compensation_admin") return "full";
+  return "basic";
 }
 
 export function canManagePeopleRecords(viewer: DemoAccount): boolean {
@@ -207,7 +220,7 @@ export function canViewCompStructures(viewer: DemoAccount): boolean {
 }
 
 export function canApproveCompReviews(viewer: DemoAccount): boolean {
-  return viewer.role === "compensation_admin" || isHr(viewer.role) || viewer.role === "finance";
+  return viewer.role === "compensation_admin";
 }
 
 /* ───────────── Reports ───────────── */
@@ -289,7 +302,7 @@ export function rbacPolicySummary(viewer: DemoAccount): string {
     viewer.role === "executive"
       ? flags.salaryAuthorized
         ? "Salary access explicitly authorized."
-        : "Salary / payslips not authorized for this executive demo."
+        : "Salary / payslips not authorized for this executive."
       : viewer.role === "admin" || viewer.role === "it_admin"
         ? "Admin manages settings — no automatic salary access."
         : viewer.role === "manager" || viewer.role === "recruiter" || viewer.role === "hiring_manager"

@@ -1,31 +1,43 @@
 import { TIMEZ_COUNTRIES } from "../model.ts";
+import { getBasePeople } from "./peopleData.ts";
+import { PERF_CYCLES } from "./talentData.ts";
+import { cycleCompletion, getTalentState } from "./talentLocal.ts";
 
-/** Canonical Infotech workforce numbers — keep dashboards consistent. */
+const BASE_PEOPLE = getBasePeople().filter((p) => p.employmentStatus !== "Terminated");
+const MAIN_DEPARTMENTS = ["Engineering", "Product", "Sales", "People", "Finance", "Operations", "Customer Success", "Legal"];
+const REGION_BY_COUNTRY: Record<string, string> = {
+  IN: "Infotech India",
+  US: "Infotech Americas",
+  CA: "Infotech Americas",
+  GB: "Infotech EMEA",
+  DE: "Infotech EMEA",
+  AE: "Infotech EMEA",
+  SA: "Infotech EMEA",
+  AU: "Infotech APAC (ex-IN)",
+};
+const count = (test: (p: (typeof BASE_PEOPLE)[number]) => boolean) => BASE_PEOPLE.filter(test).length;
+
+/** Canonical Infotech workforce numbers, counted from the directory so every dashboard agrees. */
 export const TZ_HEADCOUNT = {
-  global: 500,
+  global: BASE_PEOPLE.length,
   byCountry: TIMEZ_COUNTRIES.map((c) => ({
     code: c.code,
     name: c.name,
-    headcount: c.headcount,
+    headcount: count((p) => p.countryCode === c.code),
     currency: c.currency,
   })),
   byDepartment: [
-    { name: "Engineering", headcount: 168 },
-    { name: "Product", headcount: 54 },
-    { name: "Sales", headcount: 72 },
-    { name: "People", headcount: 38 },
-    { name: "Finance", headcount: 41 },
-    { name: "Operations", headcount: 65 },
-    { name: "Customer Success", headcount: 42 },
-    { name: "Other", headcount: 20 },
+    ...MAIN_DEPARTMENTS.map((name) => ({ name, headcount: count((p) => p.department === name) })),
+    { name: "Other", headcount: count((p) => !MAIN_DEPARTMENTS.includes(p.department)) },
   ],
-  byBusinessUnit: [
-    { name: "Infotech India", headcount: 200 },
-    { name: "Infotech Americas", headcount: 135 },
-    { name: "Infotech EMEA", headcount: 100 },
-    { name: "Infotech APAC (ex-IN)", headcount: 65 },
-  ],
-} as const;
+  byBusinessUnit: ["Infotech India", "Infotech Americas", "Infotech EMEA", "Infotech APAC (ex-IN)"].map((name) => ({
+    name,
+    headcount: count((p) => REGION_BY_COUNTRY[String(p.countryCode)] === name),
+  })),
+};
+
+const RAM_DIRECTS = count((p) => p.managerId === "emp-ram");
+const INDIA_ENGINEERING = count((p) => p.countryCode === "IN" && p.department === "Engineering");
 
 export const TZ_MOVEMENT = {
   joiners30d: 18,
@@ -53,7 +65,7 @@ export const TZ_RECRUITING = {
   offersAccepted: 5,
   avgTimeToHireDays: 34,
   myOpenReqs: [
-    { id: "JOB-221", title: "Senior React Engineer", openings: 3, stage: "Interviewing", owner: "Daniel Ortiz" },
+    { id: "JOB-221", title: "Senior React Engineer", openings: 3, stage: "Interviewing", owner: "Ram Krishnan" },
     { id: "JOB-218", title: "HR Business Partner", openings: 1, stage: "Offer", owner: "Sophie Clark" },
     { id: "JOB-210", title: "Talent Sourcer", openings: 2, stage: "Screen", owner: "Sophie Clark" },
     { id: "JOB-205", title: "Finance Analyst", openings: 1, stage: "On hold", owner: "Victor Lang" },
@@ -71,7 +83,7 @@ export const TZ_RECRUITING = {
 } as const;
 
 export const TZ_TEAM = {
-  managerTeamSize: 12,
+  managerTeamSize: RAM_DIRECTS,
   presentToday: 9,
   wfhToday: 2,
   onLeaveToday: 1,
@@ -85,10 +97,10 @@ export const TZ_TEAM = {
   openRoles: 2,
   directReports: [
     { name: "Babu Menon", code: "EMP1184", role: "Software Engineer", status: "Present" },
-    { name: "Priya Nair", code: "LRN6001", role: "L&D Lead", status: "WFH" },
-    { name: "Anu Rao", code: "PRF6101", role: "Performance Mgr", status: "Present" },
-    { name: "Kabir Sharma", code: "TZ0042", role: "Senior Engineer", status: "Leave" },
-    { name: "Diya Patel", code: "TZ0055", role: "QA Analyst", status: "Present" },
+    { name: "Priya Nair", code: "EMP1203", role: "Senior Engineer", status: "WFH" },
+    { name: "Anu Rao", code: "EMP1204", role: "Software Engineer", status: "Present" },
+    { name: "Kabir Sharma", code: "EMP1201", role: "Senior Engineer", status: "Leave" },
+    { name: "Diya Patel", code: "EMP1202", role: "QA Analyst", status: "Present" },
   ],
   upcomingLeave: [
     { name: "Kabir Sharma", type: "PTO", from: "14 Oct", to: "16 Oct", coverage: "Diya + Babu" },
@@ -98,7 +110,6 @@ export const TZ_TEAM = {
   reviewDeadlines: [
     { name: "Priya Nair", item: "Mid-year check-in", due: "18 Oct", status: "Due soon" },
     { name: "Anu Rao", item: "Skills feedback", due: "22 Oct", status: "Scheduled" },
-    { name: "Riya Kapoor", item: "30-day probation", due: "05 Nov", status: "On track" },
   ],
   oneOnOnes: [
     { name: "Babu Menon", last: "07 Oct", next: "16 Oct", status: "Booked" },
@@ -112,10 +123,10 @@ export const TZ_TEAM = {
   attritionSignals: [
     { name: "Kabir Sharma", signal: "Low engagement pulse · high OT", risk: "Watch" },
   ],
-  newJoiners: [
-    { name: "Riya Kapoor", start: "06 Oct", role: "Engineer" },
-    { name: "Noah Garcia", start: "13 Oct", role: "Designer" },
-  ],
+  newJoiners: BASE_PEOPLE.filter((p) => p.countryCode === "IN" && p.department === "Engineering")
+    .sort((a, b) => b.dateOfJoining.localeCompare(a.dateOfJoining))
+    .slice(0, 2)
+    .map((p) => ({ name: p.fullName, start: p.dateOfJoining, role: p.designation })),
   skills: [
     { name: "React / TypeScript", cover: 7, gap: "Need 2 more" },
     { name: "QA automation", cover: 3, gap: "Stretch" },
@@ -135,41 +146,23 @@ export const TZ_TEAM = {
 } as const;
 
 export const TZ_HR = {
-  pendingHrActions: 27,
   openCases: 14,
   policyAckPending: 63,
-  performanceCycle: { name: "H2 2026 Mid-year", completionPct: 61, due: "31 Oct" },
-  learningCompletionPct: 74,
-  leaveTrend: [
-    { label: "Jul", days: 420 },
-    { label: "Aug", days: 510 },
-    { label: "Sep", days: 480 },
-    { label: "Oct", days: 390 },
-  ],
-  attendanceTrend: [
-    { label: "Jul", pct: 94 },
-    { label: "Aug", pct: 93 },
-    { label: "Sep", pct: 95 },
-    { label: "Oct", pct: 94 },
-  ],
+  /** Live from the performance store, so it matches the Performance module. */
+  get performanceCycle() {
+    const cycle = PERF_CYCLES.find((c) => c.id === "cyc-h2") ?? PERF_CYCLES[0];
+    const due = new Date(`${cycle.end}T00:00:00`).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+    return { name: cycle.name, completionPct: cycleCompletion(getTalentState(), cycle.id), due };
+  },
   hrbpScope: {
     org: "Engineering — India Delivery",
-    employees: 86,
+    employees: INDIA_ENGINEERING,
     cases: 9,
-    movements: [
-      { type: "Transfer", who: "Ravi Menon", detail: "Platform → Shared Services", date: "01 Oct" },
-      { type: "Promotion", who: "Anita Joseph", detail: "QA → Senior QA", date: "08 Oct" },
-      { type: "Exit", who: "Sample Contractor", detail: "Contract end", date: "20 Oct" },
-    ],
+    movements: [] as { type: string; who: string; detail: string; date: string }[],
   },
 } as const;
 
 export const TZ_EXEC = {
-  criticalSkillGaps: [
-    { skill: "AI / ML engineering", gap: "High", countries: "IN, US" },
-    { skill: "Cybersecurity", gap: "Medium", countries: "GB, DE" },
-    { skill: "Revenue operations", gap: "Medium", countries: "US" },
-  ],
   capacity: { utilizedPct: 87, benchPct: 6, hiringPressure: "Elevated" },
   strategicAlerts: [
     { text: "India engineering utilization above 90% for 3 weeks", tone: "warn" as const },
@@ -183,7 +176,7 @@ export const TZ_EXEC = {
 } as const;
 
 export const TZ_ADMIN = {
-  users: 512,
+  users: BASE_PEOPLE.length,
   activeRoles: 8,
   legalEntities: 8,
   integrations: [
@@ -193,7 +186,7 @@ export const TZ_ADMIN = {
     { name: "Document store", status: "Healthy" },
   ],
   auditEvents: [
-    { at: "14 Oct 09:12", actor: "kai.nakamura@infotech.com", action: "Updated role binding", target: "HRBP" },
+    { at: "14 Oct 09:12", actor: "alex.morgan@infotech.com", action: "Updated role binding", target: "Manager" },
     { at: "13 Oct 18:40", actor: "alex.morgan@infotech.com", action: "Rotated API key", target: "Payroll connector" },
     { at: "13 Oct 11:05", actor: "farhan.ali@infotech.com", action: "Published policy", target: "Leave Policy" },
   ],

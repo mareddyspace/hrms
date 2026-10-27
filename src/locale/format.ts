@@ -38,6 +38,7 @@ export function formatDateInTimeZone(iso: string, timeZone: string): string {
   return formatInTimeZone(iso, timeZone, { dateStyle: "medium" });
 }
 
+/** @deprecated No screen shows a sample salary any more. */
 export function demoSampleSalary(settings: CountrySettings): string {
   const samples: Record<string, number> = {
     INR: 1850000,

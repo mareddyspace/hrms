@@ -6218,3 +6218,152 @@ p.profile-left-chip { display: inline-flex; align-items: center; margin: 4px 0; 
 .side-brand .mark,
 .sidebar .side-brand .mark { opacity: 1; color: #fff; margin-top: 0; font-size: 13px; }
 html[data-theme="night"] .sidebar .side-brand .mark { color: var(--accent-fill); }
+
+
+/* Personalisation: text size, density and motion chosen by each person. */
+html {
+  zoom: var(--ui-scale, 1);
+}
+html[data-density="compact"] .card,
+html[data-density="compact"] .panel {
+  padding: 12px 14px;
+}
+html[data-density="compact"] .page-head {
+  margin-bottom: 10px;
+}
+html[data-density="compact"] table.data td,
+html[data-density="compact"] table.data th {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+html[data-density="compact"] .side-nav a,
+html[data-density="compact"] .group-toggle {
+  min-height: 32px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+html[data-motion="reduced"] *,
+html[data-motion="reduced"] *::before,
+html[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+.pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.pref-row:last-child {
+  border-bottom: 0;
+}
+.pref-row .muted {
+  font-size: 12.5px;
+}
+.pref-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pref-choices button[aria-pressed="true"] {
+  background: var(--accent-fill);
+  color: #fff;
+  border-color: var(--accent-fill);
+}
+.pref-order {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pref-order li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.pref-order li span {
+  flex: 1;
+}
+.pref-order li.hidden-section span {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* Icon menu: one icon per section in the sidebar; the chosen section's pages run as tabs above the page. */
+.app.sidebar-collapsed .side-group.selected .group-toggle {
+  background: var(--sidebar-active);
+  color: #e0f7fb;
+}
+.section-tabs {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 24px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.section-tabs-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.section-tabs-title svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+.section-tabs-row {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.section-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 13px 14px 11px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.section-tab:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+.section-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+@media (max-width: 760px) {
+  .section-tabs {
+    padding: 0 16px;
+  }
+  .section-tabs-title {
+    display: none;
+  }
+}
+.app.sidebar-collapsed .sidebar,
+.app.sidebar-collapsed .side-nav {
+  overflow-x: hidden;
+}
+.section-tabs-row {
+  scrollbar-width: none;
+}
+.section-tabs-row::-webkit-scrollbar {
+  display: none;
+}

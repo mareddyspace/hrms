@@ -58,9 +58,8 @@ import { countWaitingOnMe } from "../pages/ApprovalsCenter.tsx";
 import { CopilotPopup } from "./CopilotPopup.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Banner, Dropdown, Field } from "./ui.tsx";
+import { updatePreferences, useApplyPreferences } from "../data/preferences.ts";
 
-const SIDEBAR_KEY = "timez.sidebar.collapsed";
-const THEME_KEY = "kastech.ess.theme";
 
 const groupIcons: Record<NavGroupKey, ReactNode> = {
   me: <UserRound size={18} strokeWidth={1.75} />,
@@ -170,7 +169,7 @@ function WelcomeLoginDialog() {
             </div>
           </dl>
         )}
-        {!stamp && !stale && <p className="note">No previous successful login is recorded on this device.</p>}
+        {!stamp && !stale && <p className="note">No previous login recorded.</p>}
 
         {stale ? (
           <form onSubmit={submitPassword}>
@@ -279,37 +278,31 @@ function usePasswordPolicyPrompt() {
   return { visible, due, label, openPrompt: () => setOpen(true), modal };
 }
 
-function readTheme(): "light" | "night" {
-  return localStorage.getItem(THEME_KEY) === "night" ? "night" : "light";
-}
-
-function applyTheme(theme: "light" | "night") {
-  document.documentElement.dataset.theme = theme;
-  localStorage.setItem(THEME_KEY, theme);
-}
-
 export function Shell() {
   const { employee, demoProfile, demoAccounts, signOut, switchDemoPersona, counts, state, canDecideFor, canVerifyProofs } =
     usePortal();
   const { regionCode, setRegionCode, language, setLanguage, countries, t, languageLabels, activeCountry } = useLocale();
   const passwordPrompt = usePasswordPolicyPrompt();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === "1");
+  /** Icon menu: the section whose pages are shown as tabs above the page. */
+  const [tabGroup, setTabGroup] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [headerSearch, setHeaderSearch] = useState("");
-  const [theme, setTheme] = useState<"light" | "night">(readTheme);
+  const prefs = useApplyPreferences(employee.id);
+  const collapsed = prefs.menuStyle === "icons";
+  const theme = document.documentElement.dataset.theme === "night" ? "night" : "light";
   const [openGroups, setOpenGroups] = useState<string[]>(["Me", "Time & pay"]);
   const location = useLocation();
   const navigate = useNavigate();
   const persona = demoProfile.personaLabel || roleLabel(employee.role);
 
+  // The tabs follow the page you're on: opening a page from anywhere selects its section.
   useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
-
-  useEffect(() => {
-    localStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0");
-  }, [collapsed]);
+    const owner = navGroups.find((group) =>
+      group.links.some((link) => location.pathname === link.to || (link.to !== "/" && location.pathname.startsWith(`${link.to}/`))),
+    );
+    setTabGroup(owner ? owner.key : null);
+  }, [location.pathname]);
 
   const [collabTick, setCollabTick] = useState(0);
   useEffect(() => subscribeCollab(() => setCollabTick((n) => n + 1)), []);
@@ -338,7 +331,14 @@ export function Shell() {
   }, [counts, employee.id, state, collabTick, demoProfile.role, talent, canDecideFor, canVerifyProofs]);
 
   const needle = query.trim().toLowerCase();
-  const pinned = filterPinnedForAccount(demoProfile);
+  const allowedLinks = [...filterPinnedForAccount(demoProfile), ...filterNavForAccount(demoProfile).flatMap((group) => group.links)];
+  // Home first, then the person's favourite pages in the order they chose.
+  const pinned = [
+    ...filterPinnedForAccount(demoProfile),
+    ...prefs.favourites
+      .map((id) => allowedLinks.find((link) => link.id === id))
+      .filter((link): link is SideNavLink => Boolean(link) && link!.to !== "/"),
+  ];
   const roleNav = filterNavForAccount(demoProfile);
   const filteredGroups = roleNav
     .map((group) => ({
@@ -418,7 +418,7 @@ export function Shell() {
           <button
             type="button"
             className="side-collapse"
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={() => updatePreferences(employee.id, { menuStyle: collapsed ? "full" : "icons" })}
             aria-pressed={collapsed}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
@@ -443,16 +443,25 @@ export function Shell() {
           )}
 
           {filteredGroups.map((group) => {
-            const expanded = Boolean(needle) || openGroups.includes(group.label) || collapsed;
+            const expanded = collapsed ? false : Boolean(needle) || openGroups.includes(group.label);
+            const selected = collapsed && tabGroup === group.key;
             const sectionBadges = groupBadgeTotal(group.links);
             return (
-              <div key={group.key} className={expanded ? "side-group open" : "side-group"}>
+              <div key={group.key} className={`side-group${expanded ? " open" : ""}${selected ? " selected" : ""}`}>
                 <button
                   type="button"
                   className="group-toggle"
-                  aria-expanded={expanded}
+                  aria-expanded={collapsed ? selected : expanded}
+                  title={collapsed ? group.label : undefined}
                   onClick={() => {
-                    if (needle || collapsed) return;
+                    if (collapsed) {
+                      // Open the section: its pages appear as tabs above the page.
+                      setTabGroup(group.key);
+                      const here = group.links.some((link) => location.pathname === link.to);
+                      if (!here && group.links[0]) navigate(group.links[0].to);
+                      return;
+                    }
+                    if (needle) return;
                     toggleGroup(group.label);
                   }}
                 >
@@ -492,7 +501,7 @@ export function Shell() {
             />
           </form>
 
-          <label className="topbar-locale" title={t("locale.disclaimer")}>
+          <label className="topbar-locale" title={t("locale.region")}>
             <span className="sr-only">{t("locale.region")}</span>
             <select
               value={regionCode}
@@ -550,7 +559,7 @@ export function Shell() {
               type="button"
               className="top-icon-btn"
               aria-label={theme === "night" ? "Switch to light theme" : "Switch to night theme"}
-              onClick={() => setTheme((current) => (current === "night" ? "light" : "night"))}
+              onClick={() => updatePreferences(employee.id, { theme: theme === "night" ? "light" : "night" })}
             >
               {theme === "night" ? <Sun size={18} strokeWidth={1.75} /> : <Moon size={18} strokeWidth={1.75} />}
             </button>
@@ -570,6 +579,7 @@ export function Shell() {
               }
               items={[
                 { id: "profile", label: "My profile", to: "/info" },
+                { id: "personalise", label: "Personalisation", to: "/settings/personalisation" },
                 {
                   id: "org-context",
                   label: `Home: ${employee.countryName ?? "—"} · ${employee.legalEntity ?? "Infotech"}`,
@@ -589,7 +599,7 @@ export function Shell() {
                   ? [
                       {
                         id: "switcher-label",
-                        label: "—— Switch persona (development only) ——",
+                        label: "—— Switch account (development only) ——",
                       },
                     ]
                   : []),
@@ -625,6 +635,33 @@ export function Shell() {
           </div>
         </header>
 
+        {collapsed &&
+          (() => {
+            const group = roleNav.find((g) => g.key === tabGroup);
+            if (!group) return null;
+            return (
+              <nav className="section-tabs" aria-label={group.label}>
+                <span className="section-tabs-title">
+                  {groupIcons[group.key]}
+                  {group.label}
+                </span>
+                <div className="section-tabs-row">
+                  {group.links.map((link) => (
+                    <NavLink
+                      key={link.id}
+                      to={link.to}
+                      end={link.to === "/"}
+                      className={({ isActive }) => (isActive ? "section-tab active" : "section-tab")}
+                    >
+                      {link.label}
+                      <Badge count={link.badgeKey ? badges[link.badgeKey] ?? 0 : 0} />
+                    </NavLink>
+                  ))}
+                </div>
+              </nav>
+            );
+          })()}
+
         <main className="main">
           {/* Keyed by path so a crashed page recovers as soon as you navigate elsewhere. */}
           <ErrorBoundary key={location.pathname}>
@@ -639,7 +676,6 @@ export function Shell() {
           <nav aria-label="Footer">
             <Link to="/terms">Terms</Link>
             <Link to="/help">Help</Link>
-            <Link to="/version">Version</Link>
           </nav>
         </footer>
       </div>

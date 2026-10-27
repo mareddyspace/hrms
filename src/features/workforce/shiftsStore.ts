@@ -17,7 +17,7 @@ import {
   type WorkforceResult,
 } from "./workforceShared.ts";
 
-const KEY = "kastech.shifts.v1";
+const KEY = "kastech.shifts.v2";
 const ROUTE = "/workforce/shifts";
 
 export const MIN_REST_HOURS = 11;
@@ -144,14 +144,14 @@ function defaults(): ShiftState {
     swaps: [
       {
         id: "sw-priya-babu",
-        date: "2026-10-22",
+        date: addDaysISO(todayISO(), 3),
         requesterId: "emp-priya",
         teammateId: "emp-mahesh",
         requesterShiftId: "sh-evening",
         teammateShiftId: "sh-general",
         reason: "Doctor appointment in the evening",
         status: "awaiting_teammate",
-        requestedOn: "2026-10-15",
+        requestedOn: addDaysISO(todayISO(), -1),
       },
     ],
     credits: [
@@ -164,6 +164,16 @@ function defaults(): ShiftState {
         grantedByName: "Ram Krishnan",
         grantedOn: "2026-10-05",
         expiresOn: addDaysISO("2026-10-03", COMP_OFF_VALID_DAYS),
+      },
+      {
+        id: "co-babu-0411",
+        personId: "emp-mahesh",
+        workedDate: "2026-04-11",
+        reason: "Weekly off (Saturday)",
+        grantedById: "emp-ram",
+        grantedByName: "Ram Krishnan",
+        grantedOn: "2026-04-13",
+        expiresOn: addDaysISO("2026-04-11", COMP_OFF_VALID_DAYS),
       },
       {
         id: "co-babu-0627",
@@ -616,7 +626,7 @@ export function compOffCandidates(actor: WorkforceActor, ctx: RosterContext, sta
 }
 
 export function grantCompOff(actor: WorkforceActor, ctx: RosterContext, personId: string, date: string): WorkforceResult {
-  if (!canDecideFor(actor, personId)) return "Only their manager or HR can grant comp-off — never for yourself.";
+  if (!canDecideFor(actor, personId)) return "Only someone above them in the reporting line can grant comp-off.";
   const today = todayISO();
   if (date >= today) return "Comp-off can be granted only after the day has passed.";
   if (addDaysISO(date, COMP_OFF_VALID_DAYS) < today) return `Too late — that day is more than ${COMP_OFF_VALID_DAYS} days ago.`;
@@ -651,12 +661,18 @@ export function isCreditExpired(credit: CompOffCredit, today = todayISO()): bool
 }
 
 /**
- * Non-expired comp-off credits granted for days worked in `year`.
- * Does not subtract comp-off leave already taken — the leave module owns usage.
+ * Comp-off days earned in `year`: credits already used before they expired, plus credits still valid.
+ * `takenDates` are the person's comp-off leave days (approved or pending); each uses the oldest valid credit.
  */
-export function compOffCreditsFor(employeeId: string, year: number): number {
+export function compOffCreditsFor(employeeId: string, year: number, takenDates: string[] = []): number {
   const today = todayISO();
-  return getShiftState().credits.filter(
-    (c) => c.personId === employeeId && Number(c.workedDate.slice(0, 4)) === year && c.expiresOn >= today,
-  ).length;
+  const credits = getShiftState()
+    .credits.filter((c) => c.personId === employeeId && Number(c.workedDate.slice(0, 4)) === year)
+    .sort((a, b) => a.workedDate.localeCompare(b.workedDate));
+  const used = new Set<string>();
+  for (const day of [...takenDates].sort()) {
+    const credit = credits.find((c) => !used.has(c.id) && c.workedDate < day && day <= c.expiresOn);
+    if (credit) used.add(credit.id);
+  }
+  return credits.filter((c) => used.has(c.id) || c.expiresOn >= today).length;
 }

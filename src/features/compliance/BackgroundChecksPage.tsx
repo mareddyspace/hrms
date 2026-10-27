@@ -10,9 +10,11 @@ import {
   canReadAllBgv,
   getBgvState,
   isSubject,
+  outcomeLabel,
   overallResult,
   recordConsent,
   removeVerification,
+  seesOutcomeOnly,
   startVerification,
   subscribeBgv,
   updateCheck,
@@ -48,7 +50,7 @@ export function BackgroundChecksPage() {
       <Page title="Background verification">
         <Card title="My verification">
           {own.length === 0 ? (
-            <EmptyState title="No verification on record" description="HR will contact you if a background check is needed." />
+            <EmptyState title="No verification on record" />
           ) : (
             <ul className="cmp-list">
               {own.map((r) => {
@@ -71,6 +73,27 @@ export function BackgroundChecksPage() {
           )}
         </Card>
         <Banner message={msg} />
+      </Page>
+    );
+  }
+
+  if (seesOutcomeOnly(actor.role)) {
+    return (
+      <Page title="Background verification">
+        <Card title="Results">
+          <DataTable
+            headers={["Name", "Role", "Result"]}
+            empty={<EmptyState title="No verifications" />}
+            rows={state.records.map((r) => {
+              const outcome = outcomeLabel(r);
+              return [
+                r.subjectName,
+                r.role,
+                <StatusBadge key="o" status={outcome} tone={outcome === "Clear" ? "ok" : outcome === "Not clear" ? "danger" : "neutral"} literal />,
+              ];
+            })}
+          />
+        </Card>
       </Page>
     );
   }
@@ -181,25 +204,19 @@ export function BackgroundChecksPage() {
 }
 
 function ConsentForm({ actor, record, onResult }: { actor: ComplianceActor; record: BgvRecord; onResult: (msg: Msg) => void }) {
-  const [date, setDate] = useState(todayISO());
-  const self = isSubject(actor, record);
+  if (!isSubject(actor, record)) return <p className="muted">Waiting for {record.subjectName} to give consent.</p>;
   return (
     <div className="cmp-form">
-      {!self && (
-        <Field label="Consent given on">
-          <input type="date" value={date} max={todayISO()} onChange={(e) => setDate(e.target.value)} />
-        </Field>
-      )}
       <div style={{ alignSelf: "end" }}>
         <button
           className="btn"
           type="button"
           onClick={() => {
-            const err = recordConsent(actor, record.id, self ? todayISO() : date);
+            const err = recordConsent(actor, record.id, todayISO());
             onResult(err ? { tone: "err", text: err } : { tone: "ok", text: "Consent recorded." });
           }}
         >
-          {self ? "I consent to background verification" : "Record consent"}
+          I consent to background verification
         </button>
       </div>
     </div>
@@ -247,13 +264,13 @@ function RecordDialog({ record, actor, onClose, onRemoved }: { record: BgvRecord
             <span>{record.subjectKind === "joiner" ? "Joiner" : "Employee"}</span>
             <span>
               {record.consent
-                ? `Consent ${formatShortDate(record.consent.givenOn)} · recorded by ${personName(record.consent.recordedById)}`
+                ? `Consent given ${formatShortDate(record.consent.givenOn)}`
                 : "No consent on record"}
             </span>
           </span>
           <StatusBadge status={overall} tone={toneFor(overall)} literal />
         </div>
-        {!record.consent && (editable ? <ConsentForm actor={actor} record={record} onResult={setMsg} /> : <p className="muted">Checks start once consent is recorded.</p>)}
+        {!record.consent && <ConsentForm actor={actor} record={record} onResult={setMsg} />}
         <div className="cmp-checks">
           {record.checks.map((c) => (
             <CheckCard key={c.type} record={record} item={c} actor={actor} editable={editable} onResult={setMsg} />

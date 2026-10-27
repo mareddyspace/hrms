@@ -1,11 +1,17 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
-import { addDaysISO, EXPENSE_CATEGORIES, EXPENSE_CLAIM_WINDOW_DAYS, inr, todayISO } from "../model.ts";
+import { claimLimitsFor, itemCurrency, money, moneyTotals, payRulesFor, receiptThresholdFor } from "../countryPay.ts";
+import { addDaysISO, EXPENSE_CATEGORIES, EXPENSE_CLAIM_WINDOW_DAYS, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
 export function ExpensesPage() {
-  const { state, employee, currentProjects, addExpense } = usePortal();
+  const { state, employee, currentProjects, addExpense, hasApprover } = usePortal();
+  const currency = payRulesFor(employee.countryCode).currency;
+  const receiptAbove = receiptThresholdFor(employee.countryCode);
+  const { maxClaim } = claimLimitsFor(employee.countryCode);
+  const [receipt, setReceipt] = useState("");
+  const [fileKey, setFileKey] = useState(0);
   const [date, setDate] = useState("");
   const [category, setCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
   const [amount, setAmount] = useState("");
@@ -16,23 +22,36 @@ export function ExpensesPage() {
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
+    const value = Number(amount);
+    if (value > receiptAbove && !receipt) {
+      setMessage({ tone: "err", text: `Attach a receipt for claims over ${money(receiptAbove, currency)}.` });
+      return;
+    }
+    // Expense records have no attachment field, so the receipt file name is kept with the description.
+    const text = receipt && description.trim() ? `${description.trim()}\nReceipt: ${receipt}` : description;
     const error = addExpense({
       date,
       category,
-      amount: Number(amount),
-      description,
+      amount: value,
+      description: text,
       projectId,
     });
-    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Expense submitted." });
+    setMessage(
+      error
+        ? { tone: "err", text: error }
+        : { tone: "ok", text: hasApprover ? "Expense submitted for approval." : "Expense approved automatically." },
+    );
     if (!error) {
       setAmount("");
       setDescription("");
       setDate("");
+      setReceipt("");
+      setFileKey((key) => key + 1);
     }
   }
 
   return (
-    <Page title="Claim expenses" subtitle="Submit a claim against a project. It stays here until it is approved.">
+    <Page title="Claim expenses">
       <section className="summary-row" aria-label="Claim summary">
         <div className="summary">
           <span>Claims</span>
@@ -44,7 +63,7 @@ export function ExpensesPage() {
         </div>
         <div className="summary lilac">
           <span>Amount claimed</span>
-          <strong className="summary-text">{inr(mine.reduce((total, item) => total + item.amount, 0))}</strong>
+          <strong className="summary-text">{moneyTotals(mine.map((item) => ({ amount: item.amount, currency: itemCurrency(item) })))}</strong>
         </div>
       </section>
       <div className="split">
@@ -68,8 +87,16 @@ export function ExpensesPage() {
                   ))}
                 </select>
               </Field>
-              <Field label="Amount (INR)">
+              <Field label={`Amount (${currency}, up to ${money(maxClaim, currency)})`}>
                 <input type="number" min={1} value={amount} onChange={(event) => setAmount(event.target.value)} />
+              </Field>
+              <Field label={`Receipt (required over ${money(receiptAbove, currency)})`}>
+                <input
+                  key={fileKey}
+                  type="file"
+                  accept="image/*,application/pdf"
+                  onChange={(event) => setReceipt(event.target.files?.[0]?.name ?? "")}
+                />
               </Field>
               <Field label="Project">
                 <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
@@ -111,9 +138,9 @@ export function ExpensesPage() {
                     <td>{expense.date}</td>
                     <td>
                       {expense.category}
-                      <div className="muted">{expense.description}</div>
+                      <div className="muted" style={{ whiteSpace: "pre-line" }}>{expense.description}</div>
                     </td>
-                    <td className="num">{inr(expense.amount)}</td>
+                    <td className="num">{money(expense.amount, itemCurrency(expense))}</td>
                     <td>
                       <StatusPill status={expense.status} />
                     </td>

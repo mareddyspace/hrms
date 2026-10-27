@@ -2,11 +2,6 @@ import { COMPANY_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from "../brand.ts";
 import type { DemoAccount, NavAccessId } from "../demoAccounts.ts";
 import type { CountryCode, UserRole } from "../model.ts";
 import { TIMEZ_COUNTRIES } from "../model.ts";
-import { TZ_HEADCOUNT, TZ_HR, TZ_MOVEMENT, TZ_RECRUITING, TZ_EXEC } from "./dashboardMock.ts";
-
-/** Demo-only banner copy shared across AI / integrations / payroll. */
-export const DEMO_ONLY =
-  "Demo-only frontend simulation — not connected to live AI, payroll, or third-party services.";
 
 export type AnalyticsRange = "7d" | "30d" | "90d" | "ytd";
 
@@ -17,225 +12,6 @@ export const ANALYTICS_RANGES: { id: AnalyticsRange; label: string }[] = [
   { id: "ytd", label: "Year to date" },
 ];
 
-export const ANALYTICS_DEPARTMENTS = [
-  "All departments",
-  ...TZ_HEADCOUNT.byDepartment.map((d) => d.name),
-] as const;
-
-/** Scale factors by date range for responsive mock charts. */
-const RANGE_FACTOR: Record<AnalyticsRange, number> = {
-  "7d": 0.22,
-  "30d": 1,
-  "90d": 2.6,
-  ytd: 5.2,
-};
-
-export function scaleCount(base: number, range: AnalyticsRange): number {
-  return Math.max(0, Math.round(base * RANGE_FACTOR[range]));
-}
-
-export function filterHeadcountByCountry(code: CountryCode | "ALL") {
-  if (code === "ALL") return [...TZ_HEADCOUNT.byCountry];
-  return TZ_HEADCOUNT.byCountry.filter((c) => c.code === code);
-}
-
-export function filterHeadcountByDept(dept: string) {
-  if (dept === "All departments") return [...TZ_HEADCOUNT.byDepartment];
-  return TZ_HEADCOUNT.byDepartment.filter((d) => d.name === dept);
-}
-
-export function workforceMetrics(range: AnalyticsRange, country: CountryCode | "ALL", dept: string) {
-  const countries = filterHeadcountByCountry(country);
-  const rawDepts = filterHeadcountByDept(dept);
-  const countryShare =
-    country === "ALL" ? 1 : (countries[0]?.headcount ?? 0) / TZ_HEADCOUNT.global;
-  const deptShare =
-    dept === "All departments"
-      ? 1
-      : (rawDepts[0]?.headcount ?? 0) / TZ_HEADCOUNT.global;
-  const share = countryShare * (dept === "All departments" ? 1 : Math.max(0.15, deptShare / countryShare || deptShare));
-
-  const headcount = Math.round(
-    (country === "ALL" ? TZ_HEADCOUNT.global : countries[0]?.headcount ?? 0) *
-      (dept === "All departments" ? 1 : Math.max(0.08, (rawDepts[0]?.headcount ?? 0) / TZ_HEADCOUNT.global / countryShare || 0.2)),
-  );
-
-  // Scale department bars to the filtered country headcount so totals stay coherent.
-  const depts =
-    country === "ALL"
-      ? rawDepts
-      : rawDepts.map((d) => ({
-          ...d,
-          headcount: Math.max(1, Math.round(d.headcount * countryShare)),
-        }));
-
-  return {
-    headcount: Math.max(1, headcount),
-    hiring: scaleCount(Math.round(TZ_MOVEMENT.hiringYtd * share), range),
-    exits: scaleCount(Math.round(TZ_MOVEMENT.exitsYtd * share), range),
-    attritionPct: Number((TZ_MOVEMENT.attritionYtdPct * (country === "ALL" ? 1 : 0.95 + share * 0.1)).toFixed(1)),
-    joiners: scaleCount(Math.round(TZ_MOVEMENT.joinersYtd * share), range),
-    countries,
-    departments: depts,
-  };
-}
-
-export const PIPELINE_BY_COUNTRY: Record<string, { stage: string; count: number }[]> = {
-  ALL: TZ_RECRUITING.byStage.map((s) => ({ ...s })),
-  IN: [
-    { stage: "Screen", count: 22 },
-    { stage: "HM interview", count: 16 },
-    { stage: "Technical", count: 14 },
-    { stage: "Offer", count: 8 },
-    { stage: "Hired", count: 6 },
-  ],
-  US: [
-    { stage: "Screen", count: 12 },
-    { stage: "HM interview", count: 9 },
-    { stage: "Technical", count: 7 },
-    { stage: "Offer", count: 5 },
-    { stage: "Hired", count: 3 },
-  ],
-  GB: [
-    { stage: "Screen", count: 6 },
-    { stage: "HM interview", count: 4 },
-    { stage: "Technical", count: 3 },
-    { stage: "Offer", count: 2 },
-    { stage: "Hired", count: 1 },
-  ],
-  AU: [
-    { stage: "Screen", count: 3 },
-    { stage: "HM interview", count: 2 },
-    { stage: "Technical", count: 2 },
-    { stage: "Offer", count: 1 },
-    { stage: "Hired", count: 1 },
-  ],
-  CA: [
-    { stage: "Screen", count: 2 },
-    { stage: "HM interview", count: 2 },
-    { stage: "Technical", count: 1 },
-    { stage: "Offer", count: 1 },
-    { stage: "Hired", count: 0 },
-  ],
-  AE: [
-    { stage: "Screen", count: 1 },
-    { stage: "HM interview", count: 1 },
-    { stage: "Technical", count: 1 },
-    { stage: "Offer", count: 0 },
-    { stage: "Hired", count: 0 },
-  ],
-  SA: [
-    { stage: "Screen", count: 1 },
-    { stage: "HM interview", count: 1 },
-    { stage: "Technical", count: 0 },
-    { stage: "Offer", count: 0 },
-    { stage: "Hired", count: 0 },
-  ],
-  DE: [
-    { stage: "Screen", count: 1 },
-    { stage: "HM interview", count: 1 },
-    { stage: "Technical", count: 0 },
-    { stage: "Offer", count: 1 },
-    { stage: "Hired", count: 1 },
-  ],
-};
-
-export function attendanceSeries(range: AnalyticsRange) {
-  const base = TZ_HR.attendanceTrend;
-  if (range === "7d") {
-    return [
-      { label: "Mon", pct: 95 },
-      { label: "Tue", pct: 94 },
-      { label: "Wed", pct: 96 },
-      { label: "Thu", pct: 93 },
-      { label: "Fri", pct: 92 },
-    ];
-  }
-  if (range === "90d" || range === "ytd") {
-    return [
-      { label: "Q1", pct: 93 },
-      { label: "Q2", pct: 94 },
-      { label: "Q3", pct: 95 },
-      { label: "Q4*", pct: 94 },
-    ];
-  }
-  return [...base];
-}
-
-export function leaveSeries(range: AnalyticsRange) {
-  const base = TZ_HR.leaveTrend;
-  if (range === "7d") {
-    return [
-      { label: "Mon", days: 18 },
-      { label: "Tue", days: 22 },
-      { label: "Wed", days: 15 },
-      { label: "Thu", days: 20 },
-      { label: "Fri", days: 28 },
-    ];
-  }
-  if (range === "ytd") {
-    return [
-      { label: "Q1", days: 1280 },
-      { label: "Q2", days: 1410 },
-      { label: "Q3", days: 1520 },
-      { label: "Q4*", days: 390 },
-    ];
-  }
-  return [...base];
-}
-
-export function overtimeSeries(range: AnalyticsRange) {
-  const factor = RANGE_FACTOR[range];
-  return [
-    { label: "Engineering", hours: Math.round(420 * factor) },
-    { label: "Operations", hours: Math.round(180 * factor) },
-    { label: "Sales", hours: Math.round(95 * factor) },
-    { label: "Customer Success", hours: Math.round(70 * factor) },
-  ];
-}
-
-export const PERFORMANCE_CYCLE = {
-  name: TZ_HR.performanceCycle.name,
-  due: TZ_HR.performanceCycle.due,
-  completionPct: TZ_HR.performanceCycle.completionPct,
-  byStage: [
-    { stage: "Self review", pct: 88 },
-    { stage: "Manager review", pct: 71 },
-    { stage: "Calibration", pct: 42 },
-    { stage: "Closed", pct: 18 },
-  ],
-};
-
-export const LEARNING_METRICS = {
-  completionPct: TZ_HR.learningCompletionPct,
-  certificationsYtd: 186,
-  mandatoryPending: 63,
-  topCourses: [
-    { name: "Workplace safety", completionPct: 96 },
-    { name: "Secure coding", completionPct: 71 },
-    { name: "Manager essentials", completionPct: 64 },
-    { name: "Data privacy (sample)", completionPct: 58 },
-  ],
-};
-
-export const SKILLS_CAPACITY = {
-  ...TZ_EXEC.capacity,
-  skills: TZ_EXEC.criticalSkillGaps,
-  benchByCountry: [
-    { country: "India", bench: 14 },
-    { country: "United States", bench: 6 },
-    { country: "United Kingdom", bench: 4 },
-    { country: "Germany", bench: 2 },
-  ],
-};
-
-export const COMP_REVIEW_STATUS = {
-  cycle: "FY26 Mid-year compensation review (sample)",
-  submittedPct: 54,
-  pendingManagers: 18,
-  budgetUsedPct: 41,
-  note: "Visible only to personas with Compensation nav access. Figures are fictional demo data.",
-};
 
 /* —— AI Copilot —— */
 
@@ -261,45 +37,45 @@ export function copilotPersonaFromRole(role: UserRole): CopilotPersona {
 export const COPILOT_SUGGESTIONS: Record<CopilotPersona, string[]> = {
   employee: [
     "How do I apply for leave?",
-    "What is my leave balance this year?",
-    "Where can I find the attendance policy?",
-    "Summarize workforce holidays for my country",
+    "What is my leave balance?",
+    "What are my working hours?",
+    "Which holidays are coming up?",
   ],
   manager: [
-    "Which leave requests are waiting for my approval?",
-    "Show my team's skills coverage gaps",
-    "What are attendance trends for my team?",
-    "Draft a note about overtime policy for my team",
+    "What is waiting on my approval?",
+    "Who in my team took the most leave?",
+    "Summarise Babu Menon",
+    "What is my leave balance?",
   ],
   hr: [
-    "Summarize attrition for the last 90 days",
-    "Which policies have pending acknowledgements?",
-    "Show leave trends by department",
-    "List open HR cases needing review",
+    "Give me a headcount snapshot",
+    "What is waiting on my approval?",
+    "Summarise Ram Krishnan",
+    "What is my leave balance?",
   ],
   recruiter: [
-    "What is average time-to-hire this quarter?",
-    "Summarize the recruiting pipeline by stage",
-    "Which requisitions are in Offer stage?",
-    "Draft interview kit outline for Senior React Engineer",
+    "Where do I see the recruiting pipeline?",
+    "What is my leave balance?",
+    "Which holidays are coming up?",
+    "How do I apply for leave?",
   ],
   executive: [
-    "Give me a workforce headcount and attrition snapshot",
-    "Where are the critical skill gaps?",
-    "Summarize hiring vs exits year to date",
-    "What is capacity utilization across regions?",
+    "Give me a headcount snapshot",
+    "What is waiting on my approval?",
+    "Summarise Ram Krishnan",
+    "Which holidays are coming up?",
   ],
   admin: [
-    "Which integrations are degraded?",
-    "Show recent audit-log events",
-    "What is SSO connection status?",
-    "List demo personas with Administration access",
+    "Where do I retry an integration?",
+    "What is my leave balance?",
+    "Which holidays are coming up?",
+    "How do I apply for leave?",
   ],
   other: [
     "How do I apply for leave?",
     "Where are company policies?",
-    "Show learning completion trends",
-    "Explain Info Tech AI Copilot demo limits",
+    "Which holidays are coming up?",
+    "What can Copilot do?",
   ],
 };
 
@@ -323,6 +99,101 @@ function hasAll(q: string, words: string[]) {
 
 /** Who is asking — answers and links are trimmed to what this persona may open. */
 export type CopilotViewer = Pick<DemoAccount, "role" | "navAccess">;
+
+/**
+ * Live, already-scoped data the page hands to Copilot. Everything here is either the viewer's own
+ * record or people below them in the reporting line — Copilot never reads anything wider.
+ */
+export interface CopilotContext {
+  viewer: CopilotViewer;
+  firstName: string;
+  countryName: string;
+  timeZone: string;
+  shiftHours: string;
+  managerName?: string;
+  leaveRows: { name: string; code: string; available: number; pending: number }[];
+  holidays: { date: string; name: string }[];
+  /** Items the viewer decides — same rules and total as countWaitingOnMe. */
+  approvals: { who: string; kind: string; detail: string; date: string }[];
+  approvalsCount: number;
+  teamSize: number;
+  /** Approved leave days this year for people below the viewer. */
+  teamLeave: { name: string; days: number }[];
+  /** True when the viewer may see company-wide workforce numbers. */
+  orgWide: boolean;
+  workforce?: { headcount: number; joiners: number; exits: number; attritionPct: number };
+  /** Set when no live data was supplied. */
+  limited?: boolean;
+  /**
+   * "AI Employee 360": finds a colleague by name and returns their summary only when the viewer is HR,
+   * the person themselves, or above them in the reporting line. Never includes pay.
+   */
+  summarisePerson?: (query: string) => CopilotPersonLookup;
+}
+
+/** Result of an Employee 360 lookup. Denied results carry no data about the person. */
+export type CopilotPersonLookup =
+  | {
+      status: "ok";
+      id: string;
+      name: string;
+      headline: string;
+      metrics: { label: string; value: string }[];
+      table?: { headers: string[]; rows: string[][] };
+      notes: string[];
+    }
+  | { status: "denied" }
+  | { status: "not_found" }
+  | { status: "ambiguous"; names: string[] };
+
+const SUMMARY_INTENT =
+  /^(?:please |can you |could you )?(?:summari[sz]e|give me (?:a )?summary of|summary of|summary for|employee 360 (?:for|of)|ai employee 360 (?:for|of)|360 (?:view )?(?:for|of))\s+(.+)$/;
+
+/** The name asked about in "summarise <name>" style questions, or null. */
+export function summaryTarget(question: string): string | null {
+  const q = question.toLowerCase().replace(/[?!.,'"]/g, " ").replace(/\s+/g, " ").trim();
+  const match = q.match(SUMMARY_INTENT);
+  const name = match?.[1]?.replace(/^(?:of|for|about)\s+/, "").replace(/\s+(?:please|profile|record)$/, "").trim();
+  if (!name || name.length < 2 || /^(?:my|our|the|this|these|all|team|leave|approvals?)\b/.test(name)) return null;
+  return name;
+}
+
+function personSummaryAnswer(target: string, ctx: CopilotContext): RawCopilotAnswer {
+  if (!ctx.summarisePerson) {
+    return {
+      kind: "text",
+      summary: "Open the full Copilot page to get a colleague summary.",
+      links: [{ label: "AI Copilot", to: "/ai/copilot" }],
+    };
+  }
+  const found = ctx.summarisePerson(target);
+  if (found.status === "denied") {
+    return {
+      kind: "text",
+      summary: "I can only summarise people below you in the reporting line. HR can summarise anyone.",
+      links: [{ label: "Directory", to: "/directory" }],
+    };
+  }
+  if (found.status === "not_found") {
+    return { kind: "text", summary: `I couldn't find anyone called "${target}". Try their full name.`, links: [{ label: "Directory", to: "/directory" }] };
+  }
+  if (found.status === "ambiguous") {
+    return {
+      kind: "text",
+      summary: `More than one person matches "${target}": ${found.names.join(", ")}. Which one did you mean?`,
+    };
+  }
+  return {
+    kind: "metrics",
+    summary: [found.headline, ...found.notes].join(" "),
+    metrics: found.metrics,
+    table: found.table,
+    links: [
+      { label: "Open profile", to: `/people/${found.id}` },
+      { label: "Performance", to: "/evaluations" },
+    ],
+  };
+}
 
 /** Internal: an answer may name the module whose data it reveals. */
 type RawCopilotAnswer = CopilotAnswer & { requires?: NavAccessId };
@@ -370,9 +241,41 @@ function viewerHas(viewer: CopilotViewer, id: NavAccessId): boolean {
   return viewer.navAccess.includes("*") || viewer.navAccess.includes(id);
 }
 
-/** Rule-based demo Copilot, filtered to what the viewer is allowed to see. */
-export function answerCopilot(question: string, viewer: CopilotViewer): CopilotAnswer {
-  const { requires, ...raw } = rawCopilotAnswer(question);
+const NO_DECISIONS = "I can't approve, reject or change anything — decisions are made in Approvals.";
+
+/** Rule-based Copilot over the viewer's own, already-scoped data. */
+export function answerCopilot(question: string, input: CopilotContext | CopilotViewer): CopilotAnswer {
+  // Callers that only pass the viewer get no personal data: answers point to the right page instead.
+  const ctx: CopilotContext =
+    "viewer" in input
+      ? input
+      : {
+          viewer: input,
+          firstName: "",
+          countryName: "your country",
+          timeZone: "",
+          shiftHours: "",
+          leaveRows: [],
+          holidays: [],
+          approvals: [],
+          approvalsCount: 0,
+          teamSize: 0,
+          teamLeave: [],
+          orgWide: false,
+          limited: true,
+        };
+  const { viewer } = ctx;
+  if (ctx.limited) {
+    const q = question.toLowerCase();
+    if (/(leave|balance|holiday|approv|waiting|pending|shift|hours|team|headcount|attrition)/.test(q)) {
+      return {
+        kind: "text",
+        summary: `Open the full Copilot page for answers from your own data. ${NO_DECISIONS}`,
+        links: [{ label: "AI Copilot", to: "/ai/copilot" }],
+      };
+    }
+  }
+  const { requires, ...raw } = rawCopilotAnswer(question, ctx);
   const allowedLink = (l: { to: string }) => {
     const id = COPILOT_LINK_ACCESS[l.to];
     return !id || viewerHas(viewer, id);
@@ -380,8 +283,7 @@ export function answerCopilot(question: string, viewer: CopilotViewer): CopilotA
   if (requires && !viewerHas(viewer, requires)) {
     return {
       kind: "text",
-      summary:
-        "You don't have access to that information with your current role. Ask your manager or HR if you need it.",
+      summary: "That isn't available with your current access. Ask your manager or HR if you need it.",
       links: [{ label: "Help", to: "/help" }].filter(allowedLink),
     };
   }
@@ -389,15 +291,23 @@ export function answerCopilot(question: string, viewer: CopilotViewer): CopilotA
   return { ...raw, links: links?.length ? links : undefined };
 }
 
-/** Broad keyword matchers so short natural questions still get answers. */
-function rawCopilotAnswer(question: string): RawCopilotAnswer {
+function fmtDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function rawCopilotAnswer(question: string, ctx: CopilotContext): RawCopilotAnswer {
   const q = question.toLowerCase().replace(/[?!.,'"]/g, " ").replace(/\s+/g, " ").trim();
+  const balances = ctx.leaveRows.filter((r) => r.code !== "unpaid");
+
+  const target = summaryTarget(question);
+  if (target) return personSummaryAnswer(target, ctx);
 
   if (hasAny(q, ["company name", "organisation name", "organization name", "who are we", "brand name"]) ||
       (hasAny(q, ["company", "organisation", "organization", "employer"]) && hasAny(q, ["name", "called", "brand"]))) {
     return {
       kind: "text",
-      summary: `This demo portal is for ${COMPANY_NAME} (${PRODUCT_TAGLINE}). Legal entities include Infotech India Pvt Ltd, Infotech Inc, and regional affiliates in the sample directory.`,
+      summary: `You work for ${COMPANY_NAME} (${PRODUCT_TAGLINE}).`,
       links: [
         { label: "My profile", to: "/info" },
         { label: "Organization", to: "/organization" },
@@ -406,47 +316,31 @@ function rawCopilotAnswer(question: string): RawCopilotAnswer {
   }
 
   if (hasAny(q, ["product name", "app name", "portal name", "what is this app", "what is this portal"])) {
+    return { kind: "text", summary: `${PRODUCT_NAME} is the ${COMPANY_NAME} employee portal.`, links: [{ label: "Home", to: "/" }] };
+  }
+
+  if (hasAny(q, ["copilot", "how do you work", "are you real", "llm", "chatgpt", "what can you do"])) {
     return {
       kind: "text",
-      summary: `${PRODUCT_NAME} is the ${PRODUCT_TAGLINE} employee portal demo. Screens use mock data only — not a live HRIS.`,
-      links: [{ label: "Home", to: "/" }],
+      summary: `I answer from your own portal data and your team's, within your access. Ask "Summarise <name>" for a colleague below you. ${NO_DECISIONS}`,
+      links: [{ label: "Help", to: "/help" }],
     };
   }
 
-  // Working hours / shift / office hours (covers "working hours", "shift", "when do I start")
   if (
-    hasAny(q, [
-      "working hours",
-      "work hours",
-      "office hours",
-      "shift hours",
-      "shift timing",
-      "shift time",
-      "my shift",
-      "shift",
-      "business hours",
-      "start time",
-      "end time",
-      "what time do i",
-      "when do i work",
-      "working time",
-      "duty hours",
-    ]) ||
-    (hasAny(q, ["hours", "timing", "timings"]) && hasAny(q, ["work", "working", "office", "shift", "day"]))
+    hasAny(q, ["working hours", "work hours", "office hours", "shift", "business hours", "start time", "end time", "what time do i", "when do i work", "working time", "duty hours"]) ||
+    (hasAny(q, ["hours", "timing", "timings"]) && hasAny(q, ["work", "working", "office", "day"]))
   ) {
     return {
       kind: "metrics",
-      summary:
-        "In this demo, most India Engineering personas use the General Shift 09:30 AM to 06:30 PM (Asia/Kolkata). US/UK personas use regional day shifts. Open Timesheet to log hours against projects for the current week.",
+      summary: `Your shift is ${ctx.shiftHours} (${ctx.timeZone}).`,
       metrics: [
-        { label: "Typical shift (IN)", value: "09:30 AM – 06:30 PM" },
-        { label: "Work week", value: "Mon–Fri" },
-        { label: "Break", value: "Not tracked in prototype" },
+        { label: "Shift", value: ctx.shiftHours },
+        { label: "Time zone", value: ctx.timeZone },
       ],
       links: [
-        { label: "Timesheet", to: "/timesheet" },
         { label: "Attendance", to: "/attendance" },
-        { label: "My profile", to: "/info" },
+        { label: "Timesheet", to: "/timesheet" },
       ],
     };
   }
@@ -455,38 +349,24 @@ function rawCopilotAnswer(question: string): RawCopilotAnswer {
     hasAny(q, ["most holiday", "most leave", "most pto", "most vacation", "took most", "who took", "top leave", "highest leave"]) ||
     (hasAny(q, ["who", "which"]) && hasAny(q, ["holiday", "leave", "pto", "vacation", "absence"]) && hasAny(q, ["most", "highest", "top", "max"]))
   ) {
+    if (!ctx.teamSize) {
+      return { kind: "text", summary: "You can only see your own leave. Nobody reports to you.", links: [{ label: "Leave", to: "/leave" }] };
+    }
+    const rows = ctx.teamLeave.filter((r) => r.days > 0).slice(0, 5);
     return {
-      kind: "table",
-      summary:
-        "From the demo leave ledger (mock YTD days taken), Kabir Sharma used the most holiday/PTO. Figures are fictional sample data for manager review demos.",
-      requires: "team",
-      table: {
-        headers: ["Employee", "Type", "Days taken YTD", "Department"],
-        rows: [
-          ["Kabir Sharma", "PTO / Holiday", "18", "Engineering"],
-          ["Diya Patel", "PTO / Holiday", "14", "Engineering"],
-          ["Noah Garcia", "PTO / Holiday", "11", "Product"],
-          ["Riya Kapoor", "PTO / Holiday", "9", "Engineering"],
-          ["Anita Joseph", "PTO / Holiday", "8", "Quality"],
-        ],
-      },
-      metrics: [
-        { label: "Team leave days (Oct)", value: String(TZ_HR.leaveTrend.find((r) => r.label === "Oct")?.days ?? 390) },
-        { label: "Pending leave approvals", value: "3" },
-      ],
-      links: [
-        { label: "Leave & Absence", to: "/leave" },
-        { label: "Approvals", to: "/approvals" },
-        { label: "Holidays", to: "/holidays" },
-      ],
+      kind: rows.length ? "table" : "text",
+      summary: rows.length ? "Approved leave this year for people in your reporting line." : "No approved leave yet this year in your team.",
+      table: rows.length ? { headers: ["Person", "Days"], rows: rows.map((r) => [r.name, String(r.days)]) } : undefined,
+      links: [{ label: "Leave", to: "/leave" }],
     };
   }
 
   if (hasAny(q, ["org chart", "orgchart", "organisation chart", "organization chart", "reporting tree", "who is my manager", "my manager", "reports to"])) {
     return {
       kind: "text",
-      summary:
-        "Open Org chart under Me to see the demo reporting tree (Jordan → Ram → Babu, etc.). Reporting drives leave approvals; recruiting/compensation/admin access still comes from role.",
+      summary: ctx.managerName
+        ? `You report to ${ctx.managerName}. Your requests are decided by people above you in the line.`
+        : "Nobody is above you in the reporting line, so your requests are approved automatically.",
       links: [
         { label: "Org chart", to: "/org-chart" },
         { label: "My profile", to: "/info" },
@@ -497,79 +377,60 @@ function rawCopilotAnswer(question: string): RawCopilotAnswer {
   if (hasAny(q, ["calendar", "schedule", "meeting", "meetings", "reminder", "reminders", "ip day", "ip days", "in-person"])) {
     return {
       kind: "text",
-      summary: `Open My calendar to see ${COMPANY_NAME} IP (in-person) days, meetings, reminders, leave, and holidays. Every role has access. You can also add personal reminders stored in this browser.`,
+      summary: "My calendar shows in-person days, meetings, reminders, leave and holidays.",
       links: [
         { label: "My calendar", to: "/calendar" },
-        { label: "Holiday calendar", to: "/holidays" },
+        { label: "Holidays", to: "/holidays" },
       ],
     };
   }
 
   if (hasAny(q, ["holiday", "holidays", "festival", "closure", "public holiday"])) {
     return {
-      kind: "table",
-      summary: `Upcoming company holidays in the active demo region for ${COMPANY_NAME}. Use the holiday calendar to plan leave around office closures.`,
-      table: {
-        headers: ["Date", "Holiday", "Region"],
-        rows: [
-          ["20 Oct 2026", "Dussehra (Vijayadashami)", "India"],
-          ["24 Oct 2026", "Diwali (sample)", "India"],
-          ["26 Nov 2026", "Thanksgiving (sample)", "United States"],
-          ["25 Dec 2026", "Christmas Day", "Global sample"],
-        ],
-      },
+      kind: ctx.holidays.length ? "table" : "text",
+      summary: ctx.holidays.length ? `Upcoming holidays in ${ctx.countryName}.` : `No more holidays this year in ${ctx.countryName}.`,
+      table: ctx.holidays.length
+        ? { headers: ["Date", "Holiday"], rows: ctx.holidays.map((h) => [fmtDate(h.date), h.name]) }
+        : undefined,
       links: [
-        { label: "Holiday calendar", to: "/holidays" },
-        { label: "Leave & Absence", to: "/leave" },
+        { label: "Holidays", to: "/holidays" },
+        { label: "Leave", to: "/leave" },
       ],
     };
   }
 
-  if (hasAny(q, ["payslip", "payslips", "salary slip", "pay stub", "paycheck", "net pay", "my pay", "salary slip"])) {
+  if (hasAny(q, ["payslip", "payslips", "salary slip", "pay stub", "paycheck", "net pay", "my pay"])) {
     return {
       kind: "text",
-      summary: `Open My payslips to view your own ${COMPANY_NAME} demo slips (Jul–Sep 2026). Managers can see their own slips; colleagues' pay stays RBAC-restricted. Admin does not auto-get payslips.`,
+      summary: "Open My payslips to view and download your own slips. I don't read or share anyone's pay.",
       links: [{ label: "My payslips", to: "/payslips" }],
     };
   }
 
-  if (hasAny(q, ["compensation", "salary band", "pay band", "ctc", "bonus cycle"])) {
+  if (hasAny(q, ["compensation", "salary band", "pay band", "ctc", "bonus cycle", "salary"])) {
     return {
       kind: "text",
       requires: "compensation",
-      summary:
-        "Compensation is role-gated. Helen (Compensation) and authorized HR can open Compensation; Jordan needs salaryAuthorized; Alex (Admin) does not get pay access from the Admin role alone.",
-      links: [
-        { label: "Compensation", to: "/compensation" },
-        { label: "Payslips", to: "/payslips" },
-      ],
+      summary: "Pay details are in Compensation. I don't show other people's pay here.",
+      links: [{ label: "Compensation", to: "/compensation" }],
     };
   }
 
   if (hasAny(q, ["benefit", "benefits", "medical", "insurance", "dependents", "pf", "provident"])) {
-    return {
-      kind: "text",
-      summary: "Benefits shows country plans, eligibility, enrollment, and dependents for the active demo region. Plan documents are sample PDFs only.",
-      links: [{ label: "Benefits", to: "/benefits" }],
-    };
+    return { kind: "text", summary: `Benefits shows the plans for ${ctx.countryName}, your enrolment and dependents.`, links: [{ label: "Benefits", to: "/benefits" }] };
   }
 
   if (hasAny(q, ["profile", "my info", "my details", "employee id", "who am i", "my email", "contact"])) {
-    return {
-      kind: "text",
-      summary: "Open My profile for your Employee 360 card — personal, employment, organization, skills, and (by permission) compensation tabs.",
-      links: [{ label: "My profile", to: "/info" }],
-    };
+    return { kind: "text", summary: "Open My profile to see and update your details.", links: [{ label: "My profile", to: "/info" }] };
   }
 
   if (
-    hasAny(q, ["timesheet", "time sheet", "log hours", "fill hours", "submit timesheet", "project hours", "billable"]) ||
-    (hasAny(q, ["hours"]) && hasAny(q, ["log", "enter", "fill", "submit", "project", "timesheet"]))
+    hasAny(q, ["timesheet", "time sheet", "log hours", "fill hours", "submit timesheet", "project hours", "billable"]) &&
+    !hasAny(q, ["approv", "waiting", "pending"])
   ) {
     return {
       kind: "text",
-      summary:
-        "Open Timesheet to log project hours for Mon–Fri of the current week, then submit for manager approval. Weekend and holiday cells stay locked. Your demo shift is shown on Attendance and Home check-in.",
+      summary: "Log project hours for the week in Timesheet, then submit. Your manager reviews it.",
       links: [
         { label: "Timesheet", to: "/timesheet" },
         { label: "Attendance", to: "/attendance" },
@@ -578,112 +439,64 @@ function rawCopilotAnswer(question: string): RawCopilotAnswer {
   }
 
   if (hasAny(q, ["task", "tasks", "to-do", "todo", "my tasks"])) {
-    return {
-      kind: "text",
-      summary: "Tasks lists your open, scheduled, and closed work items. Managers also see team assignment views.",
-      links: [{ label: "Tasks", to: "/tasks" }],
-    };
+    return { kind: "text", summary: "Tasks lists your open, scheduled and closed work.", links: [{ label: "Tasks", to: "/tasks" }] };
   }
 
   if (hasAny(q, ["notification", "notifications", "alert", "alerts"])) {
-    return {
-      kind: "text",
-      summary: "Notification Center holds payslip, policy, and project alerts for your persona. Unread counts appear on the sidebar badge.",
-      links: [{ label: "Notifications", to: "/notifications" }],
-    };
+    return { kind: "text", summary: "Notifications holds your payslip, policy and project alerts.", links: [{ label: "Notifications", to: "/notifications" }] };
   }
 
   if (hasAny(q, ["announcement", "announcements", "company news"])) {
-    return {
-      kind: "text",
-      summary: "Announcements shows company-wide demo posts. Everyone can read them from Me → Announcements.",
-      links: [{ label: "Announcements", to: "/announcements" }],
-    };
+    return { kind: "text", summary: "Company announcements are under Announcements.", links: [{ label: "Announcements", to: "/announcements" }] };
   }
 
-  if (hasAny(q, ["message", "messages", "chat", "inbox message", "dm"])) {
-    return {
-      kind: "text",
-      summary: "Messages is an internal chat demo stored in browser localStorage — not real-time and not emailed.",
-      links: [{ label: "Messages", to: "/chat" }],
-    };
+  if (hasAny(q, ["message", "messages", "chat", "dm"])) {
+    return { kind: "text", summary: "Use Messages to chat with colleagues.", links: [{ label: "Messages", to: "/chat" }] };
   }
 
   if (hasAny(q, ["document", "documents", "letter", "offer letter", "forms"])) {
-    return {
-      kind: "text",
-      summary: "Documents & Letters holds your ESS library, letter templates, and request history. Previews are metadata-only in this prototype.",
-      links: [{ label: "Documents", to: "/documents" }],
-    };
+    return { kind: "text", summary: "Documents holds your letters, forms and requests.", links: [{ label: "Documents", to: "/documents" }] };
   }
 
   if (hasAny(q, ["password", "change password", "reset password", "login"])) {
     return {
       kind: "text",
-      summary:
-        "Use the profile menu → Change password when prompted, or Forgot password on the login page (OTP demo). Demo passwords are listed on the login cards.",
-      links: [
-        { label: "Login", to: "/login" },
-        { label: "Help", to: "/help" },
-      ],
+      summary: "Change your password from the profile menu, or use Forgot password on the sign-in page. I never see or share passwords.",
+      links: [{ label: "Help", to: "/help" }],
     };
   }
 
   if (hasAny(q, ["onboarding", "new joiner", "day 0", "joining"])) {
-    return {
-      kind: "text",
-      summary: "Onboarding shows Day-0 to Day-30 checklist cases for recruiters, hiring managers, and HR. Tasks are demo-only.",
-      links: [{ label: "Onboarding", to: "/onboarding" }],
-    };
+    return { kind: "text", summary: "Onboarding tracks joiner checklists.", links: [{ label: "Onboarding", to: "/onboarding" }] };
   }
 
   if (hasAny(q, ["performance", "evaluation", "appraisal", "goals", "okr"])) {
     return {
       kind: "text",
-      summary: "Performance / Evaluations holds cycle status and goal samples. Completion % on dashboards is mock workforce data.",
+      summary: "Your goals and reviews are in Performance.",
       links: [
-        { label: "Evaluations", to: "/evaluations" },
-        { label: "Skills & Career", to: "/skills" },
+        { label: "Performance", to: "/evaluations" },
+        { label: "Skills", to: "/skills" },
       ],
     };
   }
 
   if (
-    (hasAny(q, ["leave", "pto", "wfh", "absence"]) && hasAny(q, ["approv", "waiting", "pending", "queue"])) ||
+    (hasAny(q, ["leave", "pto", "wfh", "absence", "timesheet", "expense"]) && hasAny(q, ["approv", "waiting", "pending", "queue"])) ||
     hasAll(q, ["waiting", "approval"]) ||
-    hasAny(q, ["approvals", "approve leave", "inbox"])
+    hasAny(q, ["approvals", "approve", "inbox"])
   ) {
+    if (!ctx.approvalsCount) {
+      return { kind: "text", summary: `Nothing is waiting on you. ${NO_DECISIONS}`, links: [{ label: "Approvals", to: "/approvals" }] };
+    }
     return {
       kind: "table",
-      summary: "Simulated approval queue from frontend mock data (not a live workflow engine). Ram can approve Babu's leave because Babu reports to him.",
-      requires: "inbox",
+      summary: `${ctx.approvalsCount} item${ctx.approvalsCount === 1 ? " is" : "s are"} waiting on you. ${NO_DECISIONS}`,
       table: {
-        headers: ["Employee", "Type", "From", "To", "Status"],
-        rows: [
-          ["Kabir Sharma", "PTO", "20 Oct", "22 Oct", "Pending"],
-          ["Diya Patel", "WFH", "16 Oct", "16 Oct", "Pending"],
-          ["Noah Garcia", "Sick", "14 Oct", "15 Oct", "Pending"],
-        ],
+        headers: ["Person", "Type", "Detail", "Date"],
+        rows: ctx.approvals.slice(0, 8).map((a) => [a.who, a.kind, a.detail, a.date ? fmtDate(a.date) : "—"]),
       },
-      links: [{ label: "Open Inbox & Approvals", to: "/approvals" }],
-    };
-  }
-
-  if (
-    hasAny(q, ["leave", "pto", "absence", "this year", "ytd"]) &&
-    hasAny(q, ["balance", "remaining", "left", "how many", "what is my", "whats my", "what's my"])
-  ) {
-    return {
-      kind: "metrics",
-      summary:
-        "Your leave balance this year: Annual leave 12 days left, Sick leave 6 days left, and WFH 8 days left. Comp-off and casual balances are on Leave & Absence.",
-      metrics: [
-        { label: "Annual leave left", value: "12 days" },
-        { label: "Sick leave left", value: "6 days" },
-        { label: "WFH left", value: "8 days" },
-        { label: "Privilege leave left", value: "14 days" },
-      ],
-      links: [{ label: "Leave & Absence", to: "/leave" }],
+      links: [{ label: "Open Approvals", to: "/approvals" }],
     };
   }
 
@@ -693,115 +506,84 @@ function rawCopilotAnswer(question: string): RawCopilotAnswer {
   ) {
     return {
       kind: "text",
-      summary:
-        "To apply for leave in this prototype: open Leave & Absence, choose a leave type, select dates, and submit. Approvals appear in Inbox for managers/HR. Holidays in the active demo region are skipped in working-day counts.",
+      summary: ctx.managerName
+        ? `Open Leave, pick the type and dates, and submit. ${ctx.managerName} or someone above them decides it.`
+        : "Open Leave, pick the type and dates, and submit. Your leave is approved automatically.",
       links: [
-        { label: "Leave & Absence", to: "/leave" },
+        { label: "Leave", to: "/leave" },
         { label: "Holidays", to: "/holidays" },
       ],
     };
   }
 
-  if (hasAny(q, ["leave", "pto", "wfh", "absence", "comp off", "casual"]) && !hasAny(q, ["policy"])) {
+  if (hasAny(q, ["leave", "pto", "wfh", "absence", "comp off", "casual", "balance"]) && !hasAny(q, ["policy"])) {
     return {
       kind: "metrics",
-      summary: `Your leave overview: Annual 12 days left · Sick 6 · WFH 8 · Privilege 14. Team leave days in October: ${TZ_HR.leaveTrend.find((r) => r.label === "Oct")?.days ?? 390}.`,
-      metrics: [
-        { label: "Annual left", value: "12 days" },
-        { label: "Sick left", value: "6 days" },
-        { label: "WFH left", value: "8 days" },
-        { label: "Privilege left", value: "14 days" },
-      ],
-      links: [
-        { label: "Leave & Absence", to: "/leave" },
-        { label: "Approvals", to: "/approvals" },
-      ],
+      summary: balances.length
+        ? `Your leave this year: ${balances.map((r) => `${r.name} ${r.available}`).join(" · ")} days available.`
+        : "No leave balances found.",
+      metrics: balances.slice(0, 6).map((r) => ({
+        label: r.name,
+        value: `${r.available} day${r.available === 1 ? "" : "s"}${r.pending ? ` (${r.pending} pending)` : ""}`,
+      })),
+      links: [{ label: "Leave", to: "/leave" }],
     };
   }
 
   if (hasAny(q, ["policy", "policies", "acknowledg", "handbook"])) {
-    return {
-      kind: "table",
-      summary: "Policy catalogue excerpt. Acknowledgements are not enforced by a live engine.",
-      table: {
-        headers: ["Policy", "Audience", "Ack pending"],
-        rows: [
-          ["Leave policy (sample)", "Global", "63"],
-          ["Attendance policy (sample)", "Global", "41"],
-          ["Information security (sample)", "All staff", "28"],
-        ],
-      },
-      links: [{ label: "Policies", to: "/policies" }],
-    };
+    return { kind: "text", summary: "Company policies and your acknowledgements are under Policies.", links: [{ label: "Policies", to: "/policies" }] };
   }
 
-  if (hasAny(q, ["skill", "skills", "capacity", "gap", "coverage", "career"])) {
+  if (hasAny(q, ["team", "direct report", "my reports", "who reports", "my team"])) {
     return {
-      kind: "table",
-      summary: "Critical skill gaps from shared workforce mock (executive/manager demo view).",
-      requires: "analytics",
-      table: {
-        headers: ["Skill", "Gap", "Countries"],
-        rows: TZ_EXEC.criticalSkillGaps.map((s) => [s.skill, s.gap, s.countries]),
-      },
-      metrics: [
-        { label: "Utilized", value: `${TZ_EXEC.capacity.utilizedPct}%` },
-        { label: "Bench", value: `${TZ_EXEC.capacity.benchPct}%` },
-        { label: "Hiring pressure", value: TZ_EXEC.capacity.hiringPressure },
+      kind: "text",
+      summary: ctx.teamSize
+        ? `${ctx.teamSize} ${ctx.teamSize === 1 ? "person is" : "people are"} below you in the reporting line.`
+        : "Nobody reports to you.",
+      links: [
+        { label: "Team", to: "/team" },
+        { label: "Org chart", to: "/org-chart" },
       ],
-      links: [{ label: "Skills & Career", to: "/skills" }],
     };
   }
 
-  if (hasAny(q, ["attrition", "workforce", "headcount", "hiring", "exit", "exits", "turnover", "analytics", "dashboard"])) {
+  if (hasAny(q, ["attrition", "workforce", "headcount", "hiring", "exit", "exits", "turnover", "analytics", "skill", "skills", "capacity", "gap"])) {
+    if (!ctx.orgWide || !ctx.workforce) {
+      return {
+        kind: "text",
+        summary: ctx.teamSize
+          ? `You can see your own team only: ${ctx.teamSize} ${ctx.teamSize === 1 ? "person" : "people"}. Company-wide numbers need HR or executive access.`
+          : "Company-wide numbers need HR or executive access.",
+        links: [{ label: "Team", to: "/team" }],
+      };
+    }
     return {
       kind: "metrics",
-      summary: `Workforce snapshot from shared ${COMPANY_NAME} analytics mock. Filter Analytics for country/department detail.`,
       requires: "analytics",
+      summary: "Workforce snapshot from the people directory (year to date).",
       metrics: [
-        { label: "Global headcount", value: String(TZ_HEADCOUNT.global) },
-        { label: "Hiring YTD", value: String(TZ_MOVEMENT.hiringYtd) },
-        { label: "Exits YTD", value: String(TZ_MOVEMENT.exitsYtd) },
-        { label: "Attrition YTD", value: `${TZ_MOVEMENT.attritionYtdPct}%` },
+        { label: "Headcount", value: String(ctx.workforce.headcount) },
+        { label: "Joiners", value: String(ctx.workforce.joiners) },
+        { label: "Exits", value: String(ctx.workforce.exits) },
+        { label: "Attrition", value: `${ctx.workforce.attritionPct}%` },
       ],
-      links: [{ label: "Open Analytics", to: "/analytics" }],
+      links: [{ label: "Analytics", to: "/analytics" }],
     };
   }
 
   if (hasAny(q, ["pipeline", "time-to-hire", "time to hire", "recruit", "requisition", "interview", "candidate", "offer", "ats"])) {
-    return {
-      kind: "table",
-      requires: "recruiting",
-      summary: `Recruiting pipeline demo · avg time-to-hire ${TZ_RECRUITING.avgTimeToHireDays} days (mock). Sophie gets candidate access via Recruiter role.`,
-      table: {
-        headers: ["Stage", "Candidates"],
-        rows: TZ_RECRUITING.byStage.map((s) => [s.stage, String(s.count)]),
-      },
-      metrics: [
-        { label: "Open reqs", value: String(TZ_RECRUITING.openRequisitions) },
-        { label: "Offers out", value: String(TZ_RECRUITING.offersOut) },
-      ],
-      links: [{ label: "Recruiting", to: "/recruiting" }],
-    };
+    return { kind: "text", requires: "recruiting", summary: "Requisitions, candidates and interviews are in Recruiting.", links: [{ label: "Recruiting", to: "/recruiting" }] };
   }
 
   if (hasAny(q, ["attendance", "overtime", "check in", "check-in", "check out", "check-out", "present", "punch", "clock in"])) {
-    return {
-      kind: "table",
-      summary: "Attendance trend (sample %). Use Home or Attendance for the frontend check-in demo. Overtime figures are fictional.",
-      table: {
-        headers: ["Period", "Attendance %"],
-        rows: TZ_HR.attendanceTrend.map((r) => [r.label, String(r.pct)]),
-      },
-      links: [{ label: "Time & Attendance", to: "/attendance" }],
-    };
+    return { kind: "text", summary: "Check in and out from Home or Attendance. Corrections go to your manager.", links: [{ label: "Attendance", to: "/attendance" }] };
   }
 
   if (hasAny(q, ["integration", "sso", "audit", "connector", "admin", "administration"])) {
     return {
       kind: "text",
-      summary:
-        "Integration Center and Administration show connection status, last-sync placeholders, and an audit-log table. Alex manages accounts as Admin without automatic payslip access.",
+      requires: "integrations",
+      summary: "Connector status and retries are in Integration Center; the audit log is in Administration.",
       links: [
         { label: "Integration Center", to: "/integrations" },
         { label: "Administration", to: "/admin" },
@@ -810,34 +592,13 @@ function rawCopilotAnswer(question: string): RawCopilotAnswer {
   }
 
   if (hasAny(q, ["learning", "certif", "training", "course", "lms", "program"])) {
-    return {
-      kind: "metrics",
-      summary: "Learning completion from shared HR mock data.",
-      metrics: [
-        { label: "Completion", value: `${TZ_HR.learningCompletionPct}%` },
-        { label: "Certifications YTD", value: "186" },
-        { label: "Mandatory pending", value: "63" },
-      ],
-      links: [{ label: "Learning", to: "/programs" }],
-    };
-  }
-
-  if (hasAny(q, ["team", "direct report", "my reports", "who reports", "my team"])) {
-    return {
-      kind: "text",
-      summary: "Managers can open Team overview and People for authorized direct reports. Individual salaries stay hidden unless you switch to a compensation-authorized persona.",
-      links: [
-        { label: "Team overview", to: "/team" },
-        { label: "People", to: "/directory" },
-        { label: "Org chart", to: "/org-chart" },
-      ],
-    };
+    return { kind: "text", summary: "Your courses and certifications are in Learning.", links: [{ label: "Learning", to: "/programs" }] };
   }
 
   if (hasAny(q, ["expense", "expenses", "reimbursement", "claim"])) {
     return {
       kind: "text",
-      summary: "Expenses and reimbursement screens hold sample claims. Submit for manager/finance review in this frontend demo.",
+      summary: "Submit claims in Expenses. They go to someone above you in the reporting line.",
       links: [
         { label: "Expenses", to: "/expenses" },
         { label: "Reimbursement", to: "/reimbursement" },
@@ -846,43 +607,15 @@ function rawCopilotAnswer(question: string): RawCopilotAnswer {
   }
 
   if (hasAny(q, ["help", "hr request", "support", "ticket", "faq"])) {
-    return {
-      kind: "text",
-      summary: "Use Help & HR Requests to raise a demo service ticket, browse FAQ, or open policies.",
-      links: [{ label: "Help", to: "/help" }],
-    };
-  }
-
-  if (hasAny(q, ["copilot", "ai", "how do you work", "are you real", "llm", "model", "chatgpt"])) {
-    return {
-      kind: "text",
-      summary: `${PRODUCT_NAME} Copilot is a frontend prototype. Answers are rule-based simulations over mock ${COMPANY_NAME} data — not a live LLM, RAG index, or gateway.`,
-      links: [
-        { label: "AI Agents", to: "/ai/agents" },
-        { label: "Analytics", to: "/analytics" },
-      ],
-    };
-  }
-
-  // Soft fallback: pick closest module from keywords instead of a dead-end message
-  if (hasAny(q, ["hour", "hours", "time", "week", "day"])) {
-    return {
-      kind: "text",
-      summary:
-        "For time-related questions: General Shift is 09:30 AM–06:30 PM in the India demo. Log daily project hours on Timesheet, and use Attendance for check-in status.",
-      links: [
-        { label: "Timesheet", to: "/timesheet" },
-        { label: "Attendance", to: "/attendance" },
-      ],
-    };
+    return { kind: "text", summary: "Raise a ticket or browse FAQs in Help.", links: [{ label: "Help", to: "/help" }] };
   }
 
   return {
     kind: "text",
-    summary: `I can help with ${COMPANY_NAME} demo topics — try: working hours, timesheet, leave balance, apply leave, payslips, holidays, org chart, attendance, approvals, policies, recruiting, skills, benefits, or analytics.`,
+    summary: "Try asking about your leave balance, holidays, approvals, timesheet, payslips or working hours.",
     links: [
+      { label: "Leave", to: "/leave" },
       { label: "Timesheet", to: "/timesheet" },
-      { label: "Leave & Absence", to: "/leave" },
       { label: "Help", to: "/help" },
     ],
   };
@@ -906,31 +639,31 @@ export const AI_AGENTS: AiAgentCard[] = [
     id: "employee",
     name: "Employee agent",
     audience: "Employees",
-    purpose: "Answers leave, policy, payslip navigation, and self-service how-to questions from sample content.",
-    availability: "In-app Copilot suggestions · demo hours",
+    purpose: "Answers leave, policy, payslip and self-service questions.",
+    availability: "Copilot",
     demoStatus: "Demo ready",
   },
   {
     id: "manager",
     name: "Manager agent",
     audience: "Managers",
-    purpose: "Surfaces pending approvals, team attendance summaries, and skill-coverage reminders (mock).",
-    availability: "Manager personas · Inbox shortcuts",
+    purpose: "Pending approvals, team attendance and skill coverage.",
+    availability: "Managers · Approvals",
     demoStatus: "Demo ready",
   },
   {
     id: "hr",
     name: "HR agent",
     audience: "HR / HRBP",
-    purpose: "Triages sample HR cases, policy ack queues, and workforce movement digests.",
-    availability: "HR personas · Administration-linked views",
+    purpose: "HR cases, policy acknowledgements and workforce movements.",
+    availability: "HR",
     demoStatus: "Demo beta",
   },
   {
     id: "recruiter",
     name: "Recruiter agent",
     audience: "Recruiters",
-    purpose: "Summarizes pipeline stages, drafts interview-kit outlines, and flags offer SLA samples.",
+    purpose: "Pipeline stages, interview kits and offer deadlines.",
     availability: "Recruiting module · Copilot prompts",
     demoStatus: "Demo beta",
   },
@@ -946,7 +679,7 @@ export const AI_AGENTS: AiAgentCard[] = [
     id: "analytics",
     name: "Analytics agent",
     audience: "Leaders & HR",
-    purpose: "Narrates headcount, attrition, and capacity charts from Analytics mock series.",
+    purpose: "Headcount, attrition and capacity from Analytics.",
     availability: "Analytics page · Copilot",
     demoStatus: "Demo ready",
   },
@@ -954,7 +687,7 @@ export const AI_AGENTS: AiAgentCard[] = [
     id: "document",
     name: "Document agent",
     audience: "HR & employees",
-    purpose: "Helps locate sample letters and document checklists; does not generate legal documents.",
+    purpose: "Finds letters and document checklists.",
     availability: "Documents & Letters",
     demoStatus: "Demo beta",
   },
@@ -1024,12 +757,12 @@ export const INTEGRATION_SEED: IntegrationCard[] = [
     id: "slack",
     name: "Slack",
     category: "Collaboration",
-    description: "Workspace notifications and approval shortcuts (mock).",
+    description: "Workspace notifications and approval shortcuts.",
     status: "Not configured",
     lastSync: "—",
     recordsProcessed: 0,
     errorCount: 0,
-    logs: [{ at: "—", level: "info", message: "Connector not configured in this demo tenant" }],
+    logs: [{ at: "—", level: "info", message: "Connector not configured" }],
   },
   {
     id: "attendance",
@@ -1060,7 +793,7 @@ export const INTEGRATION_SEED: IntegrationCard[] = [
     id: "benefits",
     name: "Benefits carrier",
     category: "Rewards",
-    description: "Eligibility and enrollment file exchange (mock).",
+    description: "Eligibility and enrollment file exchange.",
     status: "Degraded",
     lastSync: "2026-10-12 18:20 IST",
     recordsProcessed: 210,
@@ -1089,19 +822,32 @@ export const INTEGRATION_SEED: IntegrationCard[] = [
 /* —— Payroll —— */
 
 export const PAYROLL_STATUS = {
-  provider: "Infotech External Payroll Adapter",
-  country: "Depends on active demo region",
-  legalEntity: "Depends on active demo region",
-  period: "October 2026 (sample)",
-  lastSync: "2026-10-10 21:00 IST",
-  integrationStatus: "Connected" as IntegrationStatus,
   notImplemented: [
-    "Payroll processing / run calculation",
+    "Payroll runs and calculation",
     "Tax calculation and filing",
-    "Payslip generation engine (employee payslip UI uses seed data only)",
-    "Payment / bank disbursement processing",
+    "Bank payments",
   ],
 };
+
+/** Outbound payroll file handoff, one provider per country / legal entity. */
+export interface PayrollProviderRow {
+  country: CountryCode;
+  provider: string;
+  status: IntegrationStatus;
+  lastHandoff: string;
+  note: string;
+}
+
+export const PAYROLL_PROVIDERS: PayrollProviderRow[] = [
+  { country: "IN", provider: "Local payroll bureau (IN)", status: "Connected", lastHandoff: "2026-10-10", note: "October file accepted" },
+  { country: "US", provider: "US payroll provider", status: "Connected", lastHandoff: "2026-10-09", note: "Bi-weekly file accepted" },
+  { country: "GB", provider: "UK payroll bureau", status: "Degraded", lastHandoff: "2026-10-08", note: "2 records rejected — missing NI number" },
+  { country: "AU", provider: "AU payroll provider", status: "Connected", lastHandoff: "2026-10-07", note: "Fortnightly file accepted" },
+  { country: "CA", provider: "CA payroll provider", status: "Disconnected", lastHandoff: "2026-09-25", note: "Credentials expired — renew with provider" },
+  { country: "AE", provider: "GCC payroll partner", status: "Connected", lastHandoff: "2026-10-05", note: "WPS file accepted" },
+  { country: "SA", provider: "GCC payroll partner", status: "Degraded", lastHandoff: "2026-10-05", note: "GOSI field mapping warning" },
+  { country: "DE", provider: "DE payroll bureau", status: "Not configured", lastHandoff: "—", note: "Handoff not set up yet" },
+];
 
 /* —— Administration —— */
 
@@ -1141,50 +887,14 @@ export interface AuditLogRow {
   actor: string;
   action: string;
   target: string;
-  outcome: "Recorded" | "Pending review" | "Simulated";
+  outcome: "Recorded" | "Success" | "Failed";
 }
 
 export const AUDIT_LOG_SEED: AuditLogRow[] = [
-  {
-    id: "aud-1",
-    at: "2026-10-14 09:12",
-    actor: "kai.nakamura@infotech.com",
-    action: "Updated role binding",
-    target: "HRBP",
-    outcome: "Recorded",
-  },
-  {
-    id: "aud-2",
-    at: "2026-10-13 18:40",
-    actor: "alex.morgan@infotech.com",
-    action: "Rotated API key",
-    target: "Payroll connector",
-    outcome: "Simulated",
-  },
-  {
-    id: "aud-3",
-    at: "2026-10-13 11:05",
-    actor: "farhan.ali@infotech.com",
-    action: "Published policy",
-    target: "Leave Policy",
-    outcome: "Recorded",
-  },
-  {
-    id: "aud-4",
-    at: "2026-10-12 16:30",
-    actor: "priya.nair@infotech.com",
-    action: "Retry integration sync",
-    target: "SSO / Identity",
-    outcome: "Simulated",
-  },
-  {
-    id: "aud-5",
-    at: "2026-10-11 10:02",
-    actor: "maya.chen@infotech.com",
-    action: "Viewed compensation analytics",
-    target: "Analytics",
-    outcome: "Recorded",
-  },
+  { id: "aud-1", at: "2026-10-14 09:12", actor: "Alex Morgan", action: "Updated notification preference", target: "integrations", outcome: "Success" },
+  { id: "aud-2", at: "2026-10-13 18:40", actor: "Alex Morgan", action: "Retry integration sync", target: "Benefits carrier", outcome: "Failed" },
+  { id: "aud-3", at: "2026-10-13 11:05", actor: "Farhan Ali", action: "Published policy", target: "Leave Policy", outcome: "Recorded" },
+  { id: "aud-4", at: "2026-10-12 16:30", actor: "Alex Morgan", action: "Retry integration sync", target: "SSO / Identity", outcome: "Success" },
 ];
 
 export interface NotificationPref {

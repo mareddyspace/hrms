@@ -1,8 +1,9 @@
-import type { DemoAccount } from "../../demoAccounts.ts";
+import { DEMO_ACCOUNTS, type DemoAccount } from "../../demoAccounts.ts";
 import type { PersonRecord } from "../../data/peopleData.ts";
 import { getPerson, listPeople } from "../../data/peopleLocal.ts";
 import { addLetterRequest } from "../../data/rewardLocal.ts";
 import { addDaysISO, todayISO } from "../../model.ts";
+import { startCompanyExit } from "./exitStore.ts";
 import {
   addMonthsISO,
   baseProbationEnd,
@@ -10,13 +11,17 @@ import {
   isAboveInLine,
   isContractor,
   isHrRole,
-  joiningForProbationEnd,
+  lineManagerId,
+  noticeDaysFor,
+  personName,
   seedCandidates,
   type LifecycleActor,
   type LifecycleResult,
 } from "./lifecycleShared.ts";
 
 const KEY = "kastech.probation.v1";
+/** HR personas (People department sign-ins). */
+const HR_IDS = new Set(DEMO_ACCOUNTS.filter((a) => isHrRole(a.role)).map((a) => a.id));
 
 export type Recommendation = "Confirm" | "Extend" | "Not confirm";
 export type ProbationStatus = "In probation" | "Review pending HR" | "Confirmed" | "Not confirmed";
@@ -50,7 +55,7 @@ export interface ProbationExtension {
 
 export interface ProbationRecord {
   employeeId: string;
-  /** Overrides the directory joining date (seeded joiners only). */
+  /** @deprecated Ignored — the directory joining date is always used. */
   joiningDate?: string;
   status: ProbationStatus;
   extensions: ProbationExtension[];
@@ -61,39 +66,47 @@ export interface ProbationRecord {
 type ProbationState = { records: ProbationRecord[] };
 
 function defaults(): ProbationState {
-  const people = seedCandidates();
+  // Seed from real joiners: pick people whose directory joining date puts their probation end in each window.
   const today = todayISO();
-  const records: ProbationRecord[] = [];
-  const seed = (person: PersonRecord | undefined, endISO: string, extra: Partial<ProbationRecord> = {}) => {
-    if (!person) return;
-    records.push({
-      employeeId: person.id,
-      joiningDate: joiningForProbationEnd(endISO, String(person.countryCode)),
-      status: "In probation",
-      extensions: [],
-      reviews: [],
-      ...extra,
+  const people = seedCandidates();
+  const used = new Set<string>();
+  const pick = (min: number, max: number) => {
+    const person = people.find((p) => {
+      if (used.has(p.id)) return false;
+      const left = daysBetween(today, baseProbationEnd(p.dateOfJoining, String(p.countryCode)));
+      return left >= min && left <= max;
     });
+    if (person) used.add(person.id);
+    return person;
+  };
+  const records: ProbationRecord[] = [];
+  const seed = (person: PersonRecord | undefined, extra: Partial<ProbationRecord> = {}) => {
+    if (!person) return;
+    records.push({ employeeId: person.id, status: "In probation", extensions: [], reviews: [], ...extra });
   };
   // Ends soon, no review yet.
-  seed(people[0], addDaysISO(today, 18));
+  seed(pick(1, 30));
   // Overdue — the review was missed.
-  seed(people[1], addDaysISO(today, -9));
-  // Review already submitted, waiting for HR.
-  seed(people[2], addDaysISO(today, 35), {
+  seed(pick(-30, -1));
+  // Review already submitted by the line manager, waiting for HR.
+  const pending = pick(31, DUE_WINDOW_DAYS);
+  const reviewerId = pending ? lineManagerId(pending.id) : undefined;
+  seed(pending, {
     status: "Review pending HR",
-    reviews: [
-      {
-        id: "prb-seed-review",
-        recommendation: "Confirm",
-        reason: "",
-        rating: 4,
-        comments: "Settled in quickly and owns the release checklist.",
-        submittedBy: "Ram Krishnan",
-        submittedById: "emp-ram",
-        submittedOn: addDaysISO(today, -2),
-      },
-    ],
+    reviews: reviewerId
+      ? [
+          {
+            id: "prb-seed-review",
+            recommendation: "Confirm",
+            reason: "",
+            rating: 4,
+            comments: "Settled in quickly and owns the release checklist.",
+            submittedBy: personName(reviewerId),
+            submittedById: reviewerId,
+            submittedOn: addDaysISO(today, -2),
+          },
+        ]
+      : [],
   });
   return { records };
 }
@@ -124,7 +137,7 @@ function write(state: ProbationState): LifecycleResult {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch {
-    return "Could not save — browser storage is full or unavailable.";
+    return "Could not save. Please try again.";
   }
   cache = state;
   listeners.forEach((fn) => fn());
@@ -161,11 +174,12 @@ export interface ProbationView {
 }
 
 export function probationViewFor(person: PersonRecord, record = findRecord(person.id), today = todayISO()): ProbationView {
-  const joiningDate = record?.joiningDate ?? person.dateOfJoining;
+  const joiningDate = person.dateOfJoining;
   const baseEnd = baseProbationEnd(joiningDate, String(person.countryCode));
   const extraMonths = (record?.extensions ?? []).reduce((sum, e) => sum + e.months, 0);
   const endDate = extraMonths ? addMonthsISO(baseEnd, extraMonths) : baseEnd;
-  const status: ProbationStatus = record?.status ?? (endDate < addDaysISO(today, -365) ? "Confirmed" : "In probation");
+  // Without a record, anyone more than 30 days past their end date is treated as confirmed.
+  const status: ProbationStatus = record?.status ?? (endDate < addDaysISO(today, -30) ? "Confirmed" : "In probation");
   const daysLeft = daysBetween(today, endDate);
   const open = status === "In probation" || status === "Review pending HR";
   const pendingReview = status === "Review pending HR" ? record?.reviews.find((r) => !r.outcome) : undefined;
@@ -264,6 +278,22 @@ export function submitProbationReview(
   });
 }
 
+/**
+ * Who finalises a submitted review: HR — unless the reviewer is HR themselves, in which case the
+ * reviewer's own manager decides (nobody approves their own recommendation).
+ */
+export function canFinaliseProbation(actor: LifecycleActor, view: Pick<ProbationView, "person" | "pendingReview" | "status">): boolean {
+  const review = view.pendingReview;
+  if (view.status !== "Review pending HR" || !review) return false;
+  if (actor.id === view.person.id || actor.id === review.submittedById) return false;
+  if (isHrPersona(review.submittedById)) return isAboveInLine(actor.id, review.submittedById);
+  return isHrRole(actor.role);
+}
+
+function isHrPersona(id: string): boolean {
+  return HR_IDS.has(id);
+}
+
 /** HR approves the manager's recommendation, or returns it for rework. */
 export function finaliseProbation(
   actor: DemoAccount,
@@ -272,14 +302,18 @@ export function finaliseProbation(
   note: string,
   onWarning?: (text: string) => void,
 ): LifecycleResult {
-  if (!isHrRole(actor.role)) return "Only HR can finalise probation.";
   if (actor.id === employeeId) return "You cannot finalise your own probation.";
   const person = getPerson(employeeId);
   if (!person) return "This person is not in the directory.";
   const record = findRecord(employeeId);
   const review = record?.reviews.find((r) => !r.outcome);
-  if (!record || record.status !== "Review pending HR" || !review) return "There is no review waiting for HR.";
-  if (review.submittedById === actor.id) return "Another HR colleague must finalise a review you submitted.";
+  if (!record || record.status !== "Review pending HR" || !review) return "There is no review waiting for a decision.";
+  if (review.submittedById === actor.id) return "You cannot finalise a review you submitted.";
+  if (!canFinaliseProbation(actor, { person, pendingReview: review, status: record.status })) {
+    return isHrPersona(review.submittedById)
+      ? "This review was written by HR, so the reviewer's manager finalises it."
+      : "Only HR can finalise probation.";
+  }
   const trimmed = note.trim();
   if (decision === "return" && !trimmed) return "Add a note explaining why the review is returned.";
   if (decision === "approve" && review.recommendation === "Extend" && record.extensions.length >= MAX_EXTENSIONS) {
@@ -310,6 +344,13 @@ export function finaliseProbation(
     return null;
   });
   if (error) return error;
+  if (decision === "approve" && review.recommendation === "Not confirm") {
+    const exitError = startCompanyExit(actor, employeeId, {
+      reason: review.reason || "Probation not confirmed",
+      lastWorkingDay: addDaysISO(today, Math.min(noticeDaysFor(employeeId), 30)),
+    });
+    if (exitError) onWarning?.(`Marked not confirmed, but the exit was not started: ${exitError}`);
+  }
   if (decision === "approve" && review.recommendation === "Confirm") {
     const letterError = addLetterRequest(actor, {
       employeeId,

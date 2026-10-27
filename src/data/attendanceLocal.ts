@@ -287,7 +287,7 @@ export function submitCorrection(input: {
 /** Decide a correction. Only someone above the employee in their reporting line may decide — never self. */
 export function decideCorrection(
   id: string,
-  approver: { id: string; role: string },
+  approver: { id: string; role: string; fullName?: string },
   status: Extract<CorrectionStatus, "Approved" | "Rejected">,
   note?: string,
 ): string | null {
@@ -303,7 +303,28 @@ export function decideCorrection(
     if (!target) return;
     target.status = status;
     target.decidedAt = new Date().toISOString();
+    target.decidedById = approver.id;
+    target.decidedByName = approver.fullName;
     target.decisionNote = note?.trim() || undefined;
+    if (status !== "Approved") return;
+    // An approved correction fixes the day itself: close the open session with the agreed times.
+    const session = s.sessions.find((x) => x.employeeId === target.employeeId && x.date === target.date);
+    const at = (hm?: string) => (hm ? new Date(`${target.date}T${hm}:00`).toISOString() : undefined);
+    if (session) {
+      session.checkIn = at(target.requestedCheckIn) ?? session.checkIn;
+      session.checkOut = at(target.requestedCheckOut) ?? session.checkOut;
+      session.breaks = session.breaks.map((b) => (b.end ? b : { ...b, end: session.checkOut ?? b.start }));
+      if (session.checkOut) session.phase = "checked_out";
+    } else if (target.requestedCheckIn || target.requestedCheckOut) {
+      s.sessions.push({
+        employeeId: target.employeeId,
+        date: target.date,
+        phase: target.requestedCheckOut ? "checked_out" : "checked_in",
+        checkIn: at(target.requestedCheckIn),
+        checkOut: at(target.requestedCheckOut),
+        breaks: [],
+      });
+    }
   });
   return null;
 }

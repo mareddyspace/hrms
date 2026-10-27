@@ -3,8 +3,11 @@ import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricG
 import { usePortal } from "../../store.tsx";
 import { todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
 import { findDemoById } from "../../demoAccounts.ts";
+import { money } from "../../countryPay.ts";
 import {
   assignableManagers,
+  canDecideExtension,
+  extensionApproverId,
   canManageVendors,
   cancelExtension,
   contractorStatus,
@@ -62,9 +65,6 @@ const EXT_LABEL: Record<ExtensionRequest["status"], string> = {
   cancelled: "Cancelled",
 };
 
-function money(amount: number, currency: string) {
-  return `${currency} ${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-}
 
 const managerName = (id: string) => findDemoById(id)?.fullName ?? id;
 
@@ -73,13 +73,12 @@ export function ContractorsPage() {
   const actor: WorkforceActor = demoProfile;
   const data = useContractors();
   const admin = canManageVendors(actor.role);
-  const hr = isHrRole(actor.role);
   const mine = visibleContractors(actor, data);
-  const pendingForHr = hr ? data.extensions.filter((e) => e.status === "pending" && e.requestedById !== actor.id).length : 0;
+  const pendingForMe = data.extensions.filter((e) => canDecideExtension(actor, e, data)).length;
   const tabs = [
     { id: "contractors", label: "Contractors" },
     ...(admin ? [{ id: "vendors", label: "Vendors" }] : []),
-    { id: "extensions", label: pendingForHr ? `Extensions (${pendingForHr})` : "Extensions" },
+    { id: "extensions", label: pendingForMe ? `Extensions (${pendingForMe})` : "Extensions" },
   ];
   const [tab, setTab] = useState("contractors");
   const active = tabs.some((t) => t.id === tab) ? tab : "contractors";
@@ -146,7 +145,11 @@ function ContractorList({ actor }: { actor: WorkforceActor }) {
     if (!extendFor) return;
     const error = requestExtension(actor, extendFor.id, newEnd, reason);
     if (error) return setFormError(error);
-    setMsg({ tone: "ok", text: `Extension for ${extendFor.name} sent to HR.` });
+    const approver = extensionApproverId(actor.id);
+    setMsg({
+      tone: "ok",
+      text: approver ? `Extension for ${extendFor.name} sent to ${managerName(approver)}.` : `${extendFor.name} extended.`,
+    });
     setExtendFor(null);
   }
 
@@ -290,7 +293,7 @@ function ContractorList({ actor }: { actor: WorkforceActor }) {
               Cancel
             </button>
             <button className="btn" type="submit" form="wf-extension-form">
-              Send to HR
+              Send for approval
             </button>
           </>
         }
@@ -439,14 +442,14 @@ function Extensions({ actor }: { actor: WorkforceActor }) {
   const [msg, setMsg] = useState<Msg>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const name = (e: ExtensionRequest) => data.contractors.find((c) => c.id === e.contractorId)?.name ?? "Removed contractor";
-  const pending = hr ? data.extensions.filter((e) => e.status === "pending" && e.requestedById !== actor.id) : [];
-  const history = data.extensions.filter((e) => (hr ? true : e.requestedById === actor.id));
+  const pending = data.extensions.filter((e) => canDecideExtension(actor, e, data));
+  const history = data.extensions.filter((e) => hr || e.requestedById === actor.id || canDecideExtension(actor, e, data) || e.decidedByName === actor.fullName);
 
   return (
     <>
       <Banner message={msg} />
-      {hr && (
-        <Card title="Waiting for HR">
+      {pending.length > 0 && (
+        <Card title="Waiting for you">
           {pending.length === 0 ? (
             <EmptyState title="Nothing to decide" />
           ) : (
@@ -478,7 +481,7 @@ function Extensions({ actor }: { actor: WorkforceActor }) {
           )}
         </Card>
       )}
-      <Card title={hr ? "All requests" : "My requests"}>
+      <Card title={hr ? "All requests" : "Requests"}>
         <DataTable
           headers={["Contractor", "Current end", "New end", "Requested", "Status", ""]}
           rows={history.map((e) => [

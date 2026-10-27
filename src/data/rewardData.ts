@@ -1,7 +1,7 @@
 /** Compensation, benefits, and documents & letters — fictional Infotech demo data only. */
 
 export const LEGAL_DISCLAIMER =
-  "Templates and figures are illustrative only. Official employment, tax and legal documents are issued by HR.";
+  "Official employment, tax and legal documents are issued by HR.";
 
 export interface GradeBand {
   id: string;
@@ -47,9 +47,16 @@ export interface CompReviewItem {
   proposedBase: string;
   proposedIncreasePct: number;
   currency: string;
-  status: "Draft" | "Pending approval" | "Approved" | "Rejected";
+  /**
+   * Draft → Pending approval (someone above the employee in their line, not the proposer)
+   * → Pending final approval (Compensation) → Approved. Either step can reject.
+   */
+  status: "Draft" | "Pending approval" | "Pending final approval" | "Approved" | "Rejected";
   bonusProposal: string;
-  /** Set when an approver decides the row */
+  /** First step: line approval. */
+  lineApprover?: string;
+  lineApprovedOn?: string;
+  /** Final decision (approve or reject). */
   approver?: string;
   decidedOn?: string;
 }
@@ -76,6 +83,8 @@ export interface BenefitPlan {
   documents: string[];
   /** Statutory plans: enrollment is compulsory and can never be waived. */
   mandatory?: boolean;
+  /** Everyone in the country is enrolled automatically (no request needed). */
+  autoEnrolled?: boolean;
 }
 
 export interface BenefitEnrollment {
@@ -87,6 +96,20 @@ export interface BenefitEnrollment {
   country: string;
   status: "Eligible" | "Enrolled" | "Waived" | "Pending";
   effective: string;
+}
+
+/** An employee asks HR to change an enrolled plan; the enrollment itself stays as it is. */
+export interface BenefitChangeRequest {
+  id: string;
+  enrollmentId: string;
+  employeeId: string;
+  employeeName: string;
+  planName: string;
+  note: string;
+  status: "Pending" | "Done" | "Declined";
+  requestedOn: string;
+  decidedBy?: string;
+  decidedOn?: string;
 }
 
 export interface Dependent {
@@ -181,11 +204,12 @@ export const COMP_CYCLES: CompCycle[] = [
 ];
 
 export const COMP_HISTORY: CompHistoryRow[] = [
-  { id: "ch-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", effective: "2026-04-01", event: "Annual increment", grade: "L4", base: "₹18,50,000", currency: "INR", managerId: "emp-ram" },
+  { id: "ch-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", effective: "2026-04-01", event: "Annual increment", grade: "L4", base: "₹17,40,000", currency: "INR", managerId: "emp-ram" },
   { id: "ch-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", effective: "2025-04-01", event: "Annual increment", grade: "L4", base: "₹16,20,000", currency: "INR", managerId: "emp-ram" },
   { id: "ch-3", employeeId: "emp-ram", employeeName: "Ram Krishnan", effective: "2026-04-01", event: "Promotion + increment", grade: "M1", base: "₹34,00,000", currency: "INR", managerId: "demo-ceo" },
   { id: "ch-4", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", effective: "2026-04-01", event: "Annual increment", grade: "L6", base: "$178,000", currency: "USD", managerId: "demo-ceo" },
-  { id: "ch-5", employeeId: "demo-learning", employeeName: "Priya Nair", effective: "2026-04-01", event: "Annual increment", grade: "L5", base: "₹22,00,000", currency: "INR", managerId: "emp-ram" },
+  { id: "ch-5", employeeId: "emp-priya", employeeName: "Priya Nair", effective: "2026-04-01", event: "Annual increment", grade: "L5", base: "₹22,00,000", currency: "INR", managerId: "emp-ram" },
+  { id: "ch-6", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", effective: "2026-10-15", event: "FY2026 annual compensation review", grade: "L6", base: "$186,000", currency: "USD", managerId: "demo-ceo" },
 ];
 
 export const COMP_REVIEWS: CompReviewItem[] = [
@@ -198,9 +222,9 @@ export const COMP_REVIEWS: CompReviewItem[] = [
     managerName: "Ram Krishnan",
     currentGrade: "L4",
     proposedGrade: "L5",
-    currentBase: "₹18,50,000",
-    proposedBase: "₹21,00,000",
-    proposedIncreasePct: 13.5,
+    currentBase: "₹17,40,000",
+    proposedBase: "₹19,50,000",
+    proposedIncreasePct: 12.1,
     currency: "INR",
     status: "Pending approval",
     bonusProposal: "₹1,50,000",
@@ -208,7 +232,7 @@ export const COMP_REVIEWS: CompReviewItem[] = [
   {
     id: "cr-2",
     cycleId: "cc-2026",
-    employeeId: "demo-learning",
+    employeeId: "emp-priya",
     employeeName: "Priya Nair",
     managerId: "emp-ram",
     managerName: "Ram Krishnan",
@@ -236,6 +260,8 @@ export const COMP_REVIEWS: CompReviewItem[] = [
     currency: "USD",
     status: "Approved",
     bonusProposal: "$18,000",
+    approver: "Helen Brooks",
+    decidedOn: "2026-10-15",
   },
 ];
 
@@ -244,6 +270,7 @@ export const BONUSES: BonusRecord[] = [
   { id: "bn-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", type: "Spot award", period: "Q2 2026", amount: "₹25,000", currency: "INR", status: "Accrued" },
   { id: "bn-3", employeeId: "emp-ram", employeeName: "Ram Krishnan", type: "Annual incentive", period: "FY2025", amount: "₹3,00,000", currency: "INR", status: "Paid" },
   { id: "bn-4", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", type: "Annual incentive", period: "FY2025", amount: "$22,000", currency: "USD", status: "Paid" },
+  { id: "bn-5", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", type: "Annual incentive", period: "FY2026", amount: "$18,000", currency: "USD", status: "Accrued" },
 ];
 
 export const BENEFIT_PLANS: BenefitPlan[] = [
@@ -255,7 +282,7 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     provider: "Northwind Health India",
     summary: "Employee + family floater cover",
     employeeCost: "Employer paid",
-    documents: ["India Medical SPD.pdf"],
+    documents: ["India Medical SPD"],
   },
   {
     id: "bp-in-pf",
@@ -263,10 +290,11 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     name: "Provident Fund",
     category: "Retirement",
     provider: "EPFO",
-    summary: "Statutory PF contribution",
-    employeeCost: "12% employee share",
-    documents: ["PF FAQ.pdf"],
+    summary: "Statutory PF. Every employee is enrolled from day one.",
+    employeeCost: "12% of basic",
+    documents: ["PF FAQ"],
     mandatory: true,
+    autoEnrolled: true,
   },
   {
     id: "bp-us-med",
@@ -276,7 +304,7 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     provider: "Northwind Care US",
     summary: "PPO network · open enrollment Nov",
     employeeCost: "$120 / paycheck",
-    documents: ["US Medical SBC.pdf"],
+    documents: ["US Medical SBC"],
   },
   {
     id: "bp-us-401",
@@ -286,7 +314,7 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     provider: "Harbor Retirement Services",
     summary: "4% employer match",
     employeeCost: "Elective deferral",
-    documents: ["401k Summary.pdf"],
+    documents: ["401k Summary"],
   },
   {
     id: "bp-uk-med",
@@ -296,7 +324,18 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     provider: "Northwind Health UK",
     summary: "Employee + optional dependents",
     employeeCost: "£45 / month",
-    documents: ["UK PMI guide.pdf"],
+    documents: ["UK PMI guide"],
+  },
+  {
+    id: "bp-uk-pen",
+    country: "United Kingdom",
+    name: "Workplace Pension",
+    category: "Retirement",
+    provider: "Harbor Pensions UK",
+    summary: "Auto-enrolment pension · 3% employer contribution. You can opt out.",
+    employeeCost: "5% of qualifying earnings",
+    documents: ["UK Pension guide"],
+    autoEnrolled: true,
   },
   {
     id: "bp-ae-med",
@@ -306,7 +345,7 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     provider: "Gulf Shield Care",
     summary: "Mandatory medical insurance (DHA)",
     employeeCost: "Employer paid",
-    documents: ["UAE Medical.pdf"],
+    documents: ["UAE Medical"],
     mandatory: true,
   },
 ];
@@ -316,7 +355,7 @@ export const BENEFIT_ENROLLMENTS: BenefitEnrollment[] = [
   { id: "be-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", planId: "bp-in-pf", planName: "Provident Fund", country: "India", status: "Enrolled", effective: "2024-11-04" },
   { id: "be-3", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", planId: "bp-us-med", planName: "Medical PPO", country: "United States", status: "Enrolled", effective: "2026-01-01" },
   { id: "be-4", employeeId: "demo-hiring-manager", employeeName: "Daniel Ortiz", planId: "bp-us-401", planName: "401(k)", country: "United States", status: "Enrolled", effective: "2025-03-01" },
-  { id: "be-5", employeeId: "demo-hrbp", employeeName: "Meera Iyer", planId: "bp-in-med", planName: "Group Medical (India)", country: "India", status: "Enrolled", effective: "2026-01-01" },
+  { id: "be-5", employeeId: "demo-hr-admin", employeeName: "Farhan Ali", planId: "bp-in-med", planName: "Group Medical (India)", country: "India", status: "Enrolled", effective: "2026-01-01" },
   { id: "be-6", employeeId: "demo-ceo", employeeName: "Jordan Blake", planId: "bp-us-med", planName: "Medical PPO", country: "United States", status: "Eligible", effective: "2026-11-01" },
 ];
 
@@ -375,7 +414,7 @@ export const LETTER_REQUESTS: LetterRequest[] = [
   },
   {
     id: "ltr-3",
-    employeeId: "demo-learning",
+    employeeId: "emp-priya",
     employeeName: "Priya Nair",
     type: "Promotion",
     status: "Draft",

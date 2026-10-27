@@ -47,7 +47,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
               type="button"
               className="btn-ghost"
               onClick={() => {
-                if (!window.confirm("Reset saved data? Your local changes in this browser will be cleared and you'll be signed out.")) return;
+                if (!window.confirm("Reset saved data? Your local changes will be cleared and you'll be signed out.")) return;
                 clearSavedData();
                 window.location.assign("/");
               }}

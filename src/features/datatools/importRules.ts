@@ -201,7 +201,7 @@ export function validateImport(rows: RawImportRow[], people: readonly PersonReco
     const existing = v.employeeCode ? byCode.get(v.employeeCode) : undefined;
     if (existing) v.employeeCode = existing.employeeCode;
     if (v.employmentStatus === "Terminated" && existing?.employmentStatus !== "Terminated") {
-      errors.push("Terminating needs an exit date and reason. Use mass update instead.");
+      errors.push("Terminations go through the exit workflow, not import.");
     }
     if (existing?.employmentStatus === "Terminated" && v.employmentStatus && v.employmentStatus !== "Terminated") {
       warnings.push("Reactivates a terminated employee.");

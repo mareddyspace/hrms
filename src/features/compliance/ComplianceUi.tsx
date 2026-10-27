@@ -26,6 +26,7 @@ const TONES: Record<string, Tone> = {
   "Needs review": "danger",
   "Unable to verify": "warn",
   Overdue: "danger",
+  "Closed (manual)": "ok",
 };
 
 export function toneFor(status: string): Tone {

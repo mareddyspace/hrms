@@ -4,6 +4,7 @@ import {
   Banner,
   Card,
   DataTable,
+  Dialog,
   EmptyState,
   Field,
   FilterBar,
@@ -18,19 +19,64 @@ import {
   LEARNING_PATHS,
   LEVEL_RANK,
   PERF_CYCLES,
+  CLOSED_STAGES,
   PIPELINE_STAGES,
+  RATINGS,
   SKILL_LIBRARY,
   TARGET_ROLES,
+  starterSkillsFor,
   type Certification,
   type Enrollment,
+  type OfferRecord,
+  type OfferStatus,
+  type OnboardingJoiner,
+  type OnboardingTask,
+  type Requisition,
+  type PerfGoal,
+  type PerfReview,
   type PipelineStage,
 } from "../data/talentData.ts";
 import {
+  advanceCycle,
   allowedStageMoves,
+  approveOffer,
+  averageTimeToHire,
+  bandFor,
+  canActOnRequisition,
+  canApproveOffer,
+  isHiringManagerOf,
+  isTaskOwner,
+  needsCompApproval,
+  offerApprovalNeeded,
+  requisitionApprovers,
   canAcknowledgePolicies,
   canEditGoal,
+  canViewReview,
+  canWriteManagerReview,
+  courseOpenTo,
+  cycleCompletion,
+  cycleStatusOf,
+  earnedCertificate,
+  goalOwnerOptions,
+  goalWeightTotal,
+  inReviewCycle,
+  isAboveInChain,
+  isCertExpired,
+  isHrRole,
+  nextCycleStatus,
+  PASS_MARK,
+  releaseRating,
+  saveGoal,
+  saveManagerAssessment,
+  saveSelfAssessment,
+  set360Status,
+  setDevelopmentPlan,
+  setRating,
+  verifyCertification,
+  visibleRating,
+  type GoalInput,
+  type TalentActor,
   canEditOnboarding,
-  canEditOnboardingTask,
   canEditRecruiting,
   canSubmitInterviewFeedback,
   completeEnrollment,
@@ -53,14 +99,15 @@ import {
   updateEmployeeSkill,
   updateEnrollmentProgress,
   updateGoalProgress,
-  updateReview,
   verifyCertificationRenewal,
 } from "../data/talentLocal.ts";
 import { accountHasNavAccess } from "../demoAccounts.ts";
 import { candidateAccess } from "../data/rbac.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
-import { maskEmail, todayISO } from "../model.ts";
+import { TIMEZ_COUNTRIES, maskEmail, todayISO } from "../model.ts";
+import { money } from "../countryPay.ts";
+import { GRADE_BANDS } from "../data/rewardData.ts";
 import { usePortal } from "../store.tsx";
 import { Award, Download, Eye } from "lucide-react";
 import {
@@ -141,12 +188,12 @@ export function RecruitingPage() {
   const [fbInterview, setFbInterview] = useState("");
   const [fbScore, setFbScore] = useState("4");
   const [fbText, setFbText] = useState("");
-  const [offerCand, setOfferCand] = useState("");
-  const [offerNote, setOfferNote] = useState("");
+  const [offerForm, setOfferForm] = useState({ candidateId: "", grade: "", baseSalary: "", startDate: "", packageNote: "" });
+  const [reqNote, setReqNote] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
 
-  // Recruiter, HR and hiring managers edit; others with nav access (admin, executive…) read only.
-  const canEdit = canEditRecruiting(actor.role);
+  // Recruiters, HR and hiring managers work here; others with nav access read only.
+  const canEdit = canEditRecruiting(actor.role) || talent.requisitions.some((r) => isHiringManagerOf(actor, r));
   const canOpen = canEdit || accountHasNavAccess(actor, "recruiting");
 
   const candAccess = candidateAccess(demoProfile, true);
@@ -170,22 +217,28 @@ export function RecruitingPage() {
 
   if (!canOpen) return <NotAuthorized module="Recruiting" />;
 
+  const reqById = (id: string) => talent.requisitions.find((r) => r.id === id);
   const candidate = candidates.find((c) => c.id === selectedCand) ?? candidates[0];
   const requisition = regionReqs.find((r) => r.id === selectedReq) ?? regionReqs[0];
-  const reqMoves = requisition && canEdit ? requisitionMoves(actor, requisition) : [];
+  const reqMoves = requisition ? requisitionMoves(actor, requisition) : [];
   const feedbackInterviews = talent.interviews.filter(
     (i) => i.feedbackStatus === "Pending" && canSubmitInterviewFeedback(actor, i),
   );
-  const offerCandidates = canEdit ? offerEligibleCandidates(talent) : [];
+  const offerCandidates = offerEligibleCandidates(talent, actor);
+  const offerCandidate = offerCandidates.find((c) => c.id === offerForm.candidateId);
+  const offerReq = offerCandidate ? reqById(offerCandidate.requisitionId) : undefined;
+  const offerCurrency = TIMEZ_COUNTRIES.find((c) => c.name === offerReq?.country)?.currency ?? "";
+  const offerBand = offerReq && offerForm.grade ? bandFor({ grade: offerForm.grade }, offerReq) : undefined;
 
   const stageCounts = PIPELINE_STAGES.map((stage) => ({
     label: stage.replace("Final Review", "Final"),
     value: candidates.filter((c) => c.stage === stage).length,
   }));
 
-  const openReqs = regionReqs.filter((r) => r.approvalStatus === "Approved").length;
+  const openReqs = regionReqs.filter((r) => r.approvalStatus === "Approved" && r.stageSummary !== "Filled").length;
   const pendingFeedback = talent.interviews.filter((i) => i.feedbackStatus === "Pending").length;
-  const offersOut = talent.offers.filter((o) => o.status === "Sent" || o.status === "Preparing").length;
+  const offersOut = talent.offers.filter((o) => ["Preparing", "Pending approval", "Approved", "Sent"].includes(o.status)).length;
+  const timeToHire = averageTimeToHire(talent);
 
   function submitFeedback() {
     const score = Number(fbScore);
@@ -198,21 +251,25 @@ export function RecruitingPage() {
   }
 
   function prepareOffer() {
-    const error = createOffer(actor, offerCand, offerNote);
-    setNotice(noticeFor(error, "Offer created in Preparing."));
-    if (!error) {
-      setOfferCand("");
-      setOfferNote("");
-    }
+    const error = createOffer(actor, {
+      candidateId: offerForm.candidateId,
+      grade: offerForm.grade,
+      baseSalary: Number(offerForm.baseSalary),
+      startDate: offerForm.startDate,
+      packageNote: offerForm.packageNote,
+    });
+    setNotice(noticeFor(error, "Offer created."));
+    if (!error) setOfferForm({ candidateId: "", grade: "", baseSalary: "", startDate: "", packageNote: "" });
   }
 
   return (
     <Page title="Recruiting">
-      <p className="note">
-        Candidate access for {demoProfile.personaLabel}: <strong>{candAccess}</strong>
-        {maskCandidates ? " · contact details masked" : ""}
-        {!canEdit ? " · read-only" : ""}
-      </p>
+      {(maskCandidates || !canEdit) && (
+        <p className="note">
+          {maskCandidates ? "Contact details are masked for your role." : ""}
+          {!canEdit ? " Read-only." : ""}
+        </p>
+      )}
       <Banner message={notice} />
       <MetricGrid>
         <MetricCard label="Open approved reqs" value={openReqs} />
@@ -268,15 +325,10 @@ export function RecruitingPage() {
                 <StatusBadge
                   key={r.id}
                   status={r.approvalStatus}
-                  tone={
-                    r.approvalStatus === "Approved"
-                      ? "ok"
-                      : r.approvalStatus === "Rejected" || r.approvalStatus === "On hold"
-                        ? "warn"
-                        : "info"
-                  }
+                  literal
+                  tone={r.approvalStatus === "Approved" ? "ok" : r.approvalStatus === "Rejected" || r.approvalStatus === "On hold" ? "warn" : "info"}
                 />,
-                <button key={`${r.id}-v`} type="button" className="quiet-link" onClick={() => { setSelectedReq(r.id); }}>
+                <button key={`${r.id}-v`} type="button" className="quiet-link" onClick={() => { setSelectedReq(r.id); setReqNote(""); }}>
                   Details
                 </button>,
               ])}
@@ -289,32 +341,57 @@ export function RecruitingPage() {
                 <div className="info-fact"><dt>Hiring manager</dt><dd>{requisition.hiringManager}</dd></div>
                 <div className="info-fact"><dt>Recruiter</dt><dd>{requisition.recruiter}</dd></div>
                 <div className="info-fact"><dt>Created</dt><dd>{requisition.created}</dd></div>
-                <div className="info-fact"><dt>Summary</dt><dd>{requisition.stageSummary}</dd></div>
-                <div className="info-fact"><dt>Approval</dt><dd>{requisition.approvalStatus}</dd></div>
+                <div className="info-fact"><dt>Status</dt><dd>{requisition.stageSummary}</dd></div>
+                <div className="info-fact">
+                  <dt>Approval</dt>
+                  <dd>
+                    {requisition.approvalStatus}
+                    {requisition.approver ? ` · ${requisition.approver}, ${requisition.decidedOn ?? ""}` : ""}
+                  </dd>
+                </div>
               </dl>
               {reqMoves.length > 0 ? (
-                <div className="row-gap">
-                  {reqMoves.map((next) => (
-                    <button
-                      key={next}
-                      type="button"
-                      className={next === "Approved" || next === "Pending approval" ? "btn btn-tiny" : "btn-ghost btn-tiny"}
-                      onClick={() =>
-                        setNotice(noticeFor(setRequisitionApproval(actor, requisition.id, next), `${requisition.id} → ${next}.`))
-                      }
-                    >
-                      {next === "Pending approval" ? "Submit for approval" : next === "On hold" ? "Put on hold" : next === "Approved" ? "Approve" : "Reject"}
-                    </button>
-                  ))}
+                <div className="stack">
+                  {reqMoves.some((m) => m !== "Pending approval") && (
+                    <input value={reqNote} maxLength={200} onChange={(e) => setReqNote(e.target.value)} placeholder="Note (optional)" />
+                  )}
+                  <div className="row-gap">
+                    {reqMoves.map((next) => (
+                      <button
+                        key={next}
+                        type="button"
+                        className={next === "Approved" || next === "Pending approval" ? "btn btn-tiny" : "btn-ghost btn-tiny"}
+                        onClick={() => {
+                          setNotice(noticeFor(setRequisitionApproval(actor, requisition.id, next, reqNote), `${requisition.id}: ${next}.`));
+                          setReqNote("");
+                        }}
+                      >
+                        {next === "Pending approval" ? "Submit for approval" : next === "On hold" ? "Put on hold" : next === "Approved" ? "Approve" : "Reject"}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <p className="muted">
-                  {!canEdit
-                    ? "Read-only."
-                    : requisition.approvalStatus === "Approved" || requisition.approvalStatus === "Rejected"
-                      ? "This requisition has been decided."
-                      : "Waiting for an HR approver other than the hiring manager."}
+                  {requisition.approvalStatus === "Pending approval" || requisition.approvalStatus === "On hold"
+                    ? `Waiting for ${requisitionApprovers(requisition).map((a) => a.fullName).join(" or ") || "an approver"}.`
+                    : requisition.approvalStatus === "Draft"
+                      ? "Draft."
+                      : ""}
                 </p>
+              )}
+              {(requisition.history ?? []).length > 0 && (
+                <>
+                  <h3 style={{ fontSize: 14, marginTop: 12 }}>History</h3>
+                  <ul className="todo">
+                    {requisition.history.map((h, i) => (
+                      <li key={i}>
+                        {h.on} · {h.action} by {h.by}
+                        {h.note ? ` · ${h.note}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </>
               )}
             </Card>
           )}
@@ -326,35 +403,45 @@ export function RecruitingPage() {
           <Card title="Recruitment pipeline">
             <MiniBars items={stageCounts} />
           </Card>
-          <Card title="Move candidate stage (human-controlled)">
+          <Card title="Move candidate stage">
             {candidates.length === 0 ? (
-              <EmptyState title="No candidates" description="Adjust filters to see pipeline rows." />
+              <EmptyState title="No candidates" description="Try adjusting filters." />
             ) : (
               <DataTable
                 headers={["Candidate", "Role", "Stage", "Advance"]}
                 rows={candidates.map((c) => {
-                  const moves = canEdit ? allowedStageMoves(c, talent.offers) : [];
+                  const req = reqById(c.requisitionId);
+                  const moves = req && canActOnRequisition(actor, req) ? allowedStageMoves(c, talent.offers, req) : [];
                   return [
                     c.name,
                     c.role,
-                    <StatusBadge key={c.id} status={c.stage} tone={c.stage === "Rejected" || c.stage === "Withdrawn" ? "warn" : "info"} />,
-                    <select
-                      key={`${c.id}-stage`}
-                      value={c.stage}
-                      disabled={moves.length === 0}
-                      onChange={(e) =>
-                        setNotice(noticeFor(setCandidateStage(actor, c.id, e.target.value as PipelineStage), `${c.name} → ${e.target.value}.`))
-                      }
-                    >
-                      {[c.stage, ...moves].map((s) => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>,
+                    <StatusBadge key={c.id} status={c.stage} literal tone={c.stage === "Rejected" || c.stage === "Withdrawn" ? "warn" : "info"} />,
+                    req && req.approvalStatus !== "Approved" && !CLOSED_STAGES.includes(c.stage) ? (
+                      <span key={`${c.id}-stage`} className="muted">{req.id} {req.approvalStatus.toLowerCase()}</span>
+                    ) : (
+                      <select
+                        key={`${c.id}-stage`}
+                        value={c.stage}
+                        disabled={moves.length === 0}
+                        onChange={(e) =>
+                          setNotice(
+                            noticeFor(
+                              setCandidateStage(actor, c.id, e.target.value as PipelineStage),
+                              e.target.value === "Hired" ? `${c.name} hired. Onboarding started.` : `${c.name} → ${e.target.value}.`,
+                            ),
+                          )
+                        }
+                      >
+                        {[c.stage, ...moves].map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    ),
                   ];
                 })}
               />
             )}
-            {canEdit && <p className="muted">Move one stage forward, or to Rejected / Withdrawn. Hired needs an accepted offer.</p>}
+            {canEdit && <p className="muted">One stage at a time, or Rejected / Withdrawn. Hired needs an accepted offer.</p>}
           </Card>
         </div>
       )}
@@ -395,12 +482,7 @@ export function RecruitingPage() {
               <p className="note">{maskCandidates ? "Resume details limited for this role." : candidate.resumeNote}</p>
             </Card>
           )}
-          {!canSeeCandidates && (
-            <EmptyState
-              title="Candidates restricted"
-              description={`${demoProfile.personaLabel} cannot view candidate profiles under current RBAC rules.`}
-            />
-          )}
+          {!canSeeCandidates && <EmptyState title="Candidates restricted" description="Your role can't view candidate profiles." />}
         </div>
       )}
 
@@ -414,16 +496,13 @@ export function RecruitingPage() {
                 i.candidateName,
                 i.role,
                 i.panel,
-                <StatusBadge key={i.id} status={i.feedbackStatus} tone={i.feedbackStatus === "Submitted" ? "ok" : "warn"} />,
+                <StatusBadge key={i.id} status={i.feedbackStatus} literal tone={i.feedbackStatus === "Submitted" ? "ok" : "warn"} />,
               ])}
             />
           </Card>
           <Card title="Submit interview feedback">
             {feedbackInterviews.length === 0 ? (
-              <EmptyState
-                title="Nothing to submit"
-                description="Feedback can be submitted by the interview panel, recruiters or HR for pending interviews."
-              />
+              <EmptyState title="Nothing to submit" description="No pending interviews for you." />
             ) : (
               <>
                 <Field label="Interview">
@@ -453,34 +532,23 @@ export function RecruitingPage() {
 
       {tab === "offers" && (
         <div className="stack">
-          <Card title="Offer preparation status">
+          <Card title="Offers">
             <DataTable
-              headers={["Candidate", "Role", "Status", "Package", "Sent", "Actions"]}
+              headers={["Candidate", "Role", "Grade", "Base", "Start", "Status", "Approvals", "Actions"]}
               rows={talent.offers.map((o) => {
-                const moves = canEdit ? offerMoves(o) : [];
+                const req = reqById(o.requisitionId);
                 return [
                   o.candidateName,
                   o.role,
-                  <StatusBadge key={o.id} status={o.status} />,
-                  o.packageNote,
-                  o.sentOn ?? "—",
-                  <select
-                    key={`${o.id}-st`}
-                    value={o.status}
-                    disabled={moves.length === 0}
-                    onChange={(e) =>
-                      setNotice(
-                        noticeFor(
-                          setOfferStatus(actor, o.id, e.target.value as typeof o.status),
-                          `${o.candidateName}'s offer → ${e.target.value}.`,
-                        ),
-                      )
-                    }
-                  >
-                    {[o.status, ...moves].map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>,
+                  o.grade,
+                  money(o.baseSalary, o.currency),
+                  o.startDate,
+                  <span key={o.id} className="stack">
+                    <StatusBadge status={o.status} literal />
+                    {o.responseNote && <span className="muted">{o.responseNote} ({o.responseRecordedBy}, {o.respondedOn})</span>}
+                  </span>,
+                  o.approvals.length ? o.approvals.map((a) => `${a.role}: ${a.by}, ${a.on}`).join(" · ") : "—",
+                  <OfferActions key={`${o.id}-a`} offer={o} req={req} actor={actor} onResult={setNotice} />,
                 ];
               })}
               empty={<EmptyState title="No offers" description="Create offers from Final Review candidates." />}
@@ -489,11 +557,11 @@ export function RecruitingPage() {
           {canEdit && (
             <Card title="Prepare an offer">
               {offerCandidates.length === 0 ? (
-                <EmptyState title="No eligible candidates" description="Offers can be prepared for candidates at Final Review or Offer without an open offer." />
+                <EmptyState title="No eligible candidates" description="Needs a Final Review or Offer candidate." />
               ) : (
                 <div className="form-grid-2">
                   <Field label="Candidate">
-                    <select value={offerCand} onChange={(e) => setOfferCand(e.target.value)}>
+                    <select value={offerForm.candidateId} onChange={(e) => setOfferForm((f) => ({ ...f, candidateId: e.target.value }))}>
                       <option value="">Select…</option>
                       {offerCandidates.map((c) => (
                         <option key={c.id} value={c.id}>
@@ -502,11 +570,38 @@ export function RecruitingPage() {
                       ))}
                     </select>
                   </Field>
-                  <Field label="Package note">
-                    <input value={offerNote} onChange={(e) => setOfferNote(e.target.value)} placeholder="Level, band, location…" />
+                  <Field label="Grade">
+                    <select value={offerForm.grade} onChange={(e) => setOfferForm((f) => ({ ...f, grade: e.target.value }))}>
+                      <option value="">Select…</option>
+                      {[...new Set(GRADE_BANDS.map((b) => b.grade))].map((g) => (
+                        <option key={g} value={g}>{g}</option>
+                      ))}
+                    </select>
                   </Field>
+                  <Field label={`Annual base${offerCurrency ? ` (${offerCurrency})` : ""}`}>
+                    <input type="number" min={0} value={offerForm.baseSalary} onChange={(e) => setOfferForm((f) => ({ ...f, baseSalary: e.target.value }))} />
+                  </Field>
+                  <Field label="Start date">
+                    <input type="date" min={todayISO()} value={offerForm.startDate} onChange={(e) => setOfferForm((f) => ({ ...f, startDate: e.target.value }))} />
+                  </Field>
+                  <Field label="Note" wide>
+                    <input value={offerForm.packageNote} onChange={(e) => setOfferForm((f) => ({ ...f, packageNote: e.target.value }))} placeholder="Location, benefits…" />
+                  </Field>
+                  {offerReq && offerForm.grade && (
+                    <p className="note">
+                      {offerBand ? `Band ${offerBand.min} – ${offerBand.max}.` : "No band for this grade and country."}
+                      {offerForm.baseSalary && needsCompApproval({ grade: offerForm.grade, baseSalary: Number(offerForm.baseSalary) }, offerReq)
+                        ? " Compensation must also approve."
+                        : ""}
+                    </p>
+                  )}
                   <div>
-                    <button type="button" className="btn" disabled={!offerCand || !offerNote.trim()} onClick={prepareOffer}>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={!offerForm.candidateId || !offerForm.grade || !offerForm.baseSalary || !offerForm.startDate}
+                      onClick={prepareOffer}
+                    >
                       Create offer
                     </button>
                   </div>
@@ -518,25 +613,141 @@ export function RecruitingPage() {
       )}
 
       {tab === "analytics" && (
-        <div className="mgr-home-grid">
-          <Card title="Candidates by stage">
-            <MiniBars items={stageCounts} />
-          </Card>
-          <Card title="Recruitment analytics">
-            <ul className="todo">
-              <li>Avg time-to-hire: 34 days</li>
-              <li>Interviews this week: {talent.interviews.length}</li>
-              <li>Offers accepted: {talent.offers.filter((o) => o.status === "Accepted").length}</li>
-              <li>Reqs pending approval: {talent.requisitions.filter((r) => r.approvalStatus === "Pending approval").length}</li>
-            </ul>
-          </Card>
-        </div>
+        <Card title="Recruitment analytics">
+          <ul className="todo">
+            <li>Average time to hire: {timeToHire === null ? "—" : `${timeToHire} days`} (approval to accepted offer)</li>
+            <li>Interviews awaiting feedback: {pendingFeedback}</li>
+            <li>Offers accepted: {talent.offers.filter((o) => o.status === "Accepted").length}</li>
+            <li>Reqs pending approval: {talent.requisitions.filter((r) => r.approvalStatus === "Pending approval").length}</li>
+          </ul>
+        </Card>
       )}
     </Page>
   );
 }
 
+const OFFER_ACTION_LABEL: Partial<Record<OfferStatus, string>> = {
+  "Pending approval": "Submit for approval",
+  Preparing: "Send back",
+  Sent: "Mark as sent",
+  Withdrawn: "Withdraw",
+};
+
+function OfferActions({
+  offer,
+  req,
+  actor,
+  onResult,
+}: {
+  offer: OfferRecord;
+  req: Requisition | undefined;
+  actor: TalentActor;
+  onResult: (n: Notice) => void;
+}) {
+  const [answer, setAnswer] = useState<"Accepted" | "Declined" | null>(null);
+  const [note, setNote] = useState("");
+  const moves = offerMoves(actor, offer, req);
+  const canApprove = canApproveOffer(actor, offer, req);
+  const step = offer.status === "Pending approval" ? offerApprovalNeeded(offer, req) : null;
+
+  if (answer) {
+    return (
+      <span className="stack">
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="How was the answer received?" />
+        <span className="row-gap">
+          <button
+            type="button"
+            className="btn btn-tiny"
+            disabled={note.trim().length < 5}
+            onClick={() => {
+              const error = setOfferStatus(actor, offer.id, answer, note);
+              onResult(noticeFor(error, `${offer.candidateName}'s answer recorded.`));
+              if (!error) setAnswer(null);
+            }}
+          >
+            Save
+          </button>
+          <button type="button" className="btn-ghost btn-tiny" onClick={() => setAnswer(null)}>
+            Cancel
+          </button>
+        </span>
+      </span>
+    );
+  }
+
+  const buttons = moves.filter((m) => m !== "Accepted" && m !== "Declined");
+  const canRecord = moves.includes("Accepted");
+  if (!canApprove && buttons.length === 0 && !canRecord) {
+    return <span className="muted">{step ? `Waiting for ${step === "Line" ? "line" : "Compensation"} approval` : "—"}</span>;
+  }
+  return (
+    <span className="row-gap">
+      {canApprove && (
+        <button type="button" className="btn btn-tiny" onClick={() => onResult(noticeFor(approveOffer(actor, offer.id), `Offer for ${offer.candidateName} approved.`))}>
+          Approve
+        </button>
+      )}
+      {buttons.map((m) => (
+        <button
+          key={m}
+          type="button"
+          className={m === "Withdrawn" || m === "Preparing" ? "btn-ghost btn-tiny" : "btn btn-tiny"}
+          onClick={() => onResult(noticeFor(setOfferStatus(actor, offer.id, m), `${offer.candidateName}'s offer: ${m}.`))}
+        >
+          {OFFER_ACTION_LABEL[m] ?? m}
+        </button>
+      ))}
+      {canRecord && (
+        <>
+          <button type="button" className="btn-ghost btn-tiny" onClick={() => setAnswer("Accepted")}>
+            Record candidate's acceptance
+          </button>
+          <button type="button" className="btn-ghost btn-tiny" onClick={() => setAnswer("Declined")}>
+            Record decline
+          </button>
+        </>
+      )}
+    </span>
+  );
+}
+
 /* ───────────────────────────── ONBOARDING ── */
+
+function TaskStatusCell({
+  task,
+  joiner,
+  actor,
+  onResult,
+}: {
+  task: OnboardingTask;
+  joiner: OnboardingJoiner;
+  actor: TalentActor;
+  onResult: (n: Notice) => void;
+}) {
+  const owner = isTaskOwner(actor, task, joiner);
+  const [reason, setReason] = useState("");
+  if (!owner && !isHrRole(actor.role)) return <span className="muted">{task.owner}</span>;
+  return (
+    <span className="stack">
+      <select
+        value={task.status}
+        disabled={!owner && reason.trim().length < 5}
+        title={!owner ? "Add a reason first" : undefined}
+        onChange={(e) => {
+          const error = setOnboardingTaskStatus(actor, task.id, e.target.value as OnboardingTask["status"], reason);
+          onResult(noticeFor(error));
+          if (!error) setReason("");
+        }}
+      >
+        {(["Pending", "In progress", "Done"] as const).map((s) => (
+          <option key={s} value={s}>{s}</option>
+        ))}
+      </select>
+      {!owner && <input value={reason} maxLength={120} onChange={(e) => setReason(e.target.value)} placeholder={`Reason (owner: ${task.owner})`} />}
+      {task.overrideNote && <span className="muted">{task.overrideNote}</span>}
+    </span>
+  );
+}
 
 export function OnboardingPage() {
   const talent = useTalent();
@@ -559,23 +770,14 @@ export function OnboardingPage() {
     <Page title="Onboarding">
       <Banner message={notice} />
       <MetricGrid>
-        <MetricCard label="Active joiners" value={talent.joiners.length} />
-        <MetricCard
-          label="Pre-boarding"
-          value={talent.joiners.filter((j) => j.overallStatus === "Pre-boarding").length}
-        />
-        <MetricCard
-          label="Open tasks"
-          value={talent.tasks.filter((t) => t.status !== "Done").length}
-        />
-        <MetricCard
-          label="Policy pending"
-          value={talent.joiners.filter((j) => j.policyAck === "Pending").length}
-        />
+        <MetricCard label="Joiners" value={talent.joiners.filter((j) => j.overallStatus !== "Completed").length} />
+        <MetricCard label="Pre-boarding" value={talent.joiners.filter((j) => j.overallStatus === "Pre-boarding").length} />
+        <MetricCard label="Open tasks" value={talent.tasks.filter((t) => t.status !== "Done").length} />
+        <MetricCard label="Policy pending" value={talent.joiners.filter((j) => j.policyAck === "Pending").length} />
       </MetricGrid>
 
       <div className="mgr-home-grid">
-        <Card title="New joiner list">
+        <Card title="New joiners">
           <DataTable
             headers={["Name", "Role", "Start", "Country", "Status", ""]}
             rows={talent.joiners.map((j) => [
@@ -583,7 +785,7 @@ export function OnboardingPage() {
               j.role,
               j.startDate,
               j.country,
-              <StatusBadge key={j.id} status={j.overallStatus} />,
+              <StatusBadge key={j.id} status={j.overallStatus} literal />,
               <button key={`${j.id}-o`} type="button" className="quiet-link" onClick={() => setSelected(j.id)}>
                 Open
               </button>,
@@ -595,8 +797,10 @@ export function OnboardingPage() {
           <Card title={`${joiner.name} · onboarding`}>
             <dl className="info-grid">
               <div className="info-fact"><dt>Manager</dt><dd>{joiner.manager}</dd></div>
+              <div className="info-fact"><dt>Requisition</dt><dd>{joiner.requisitionId ?? "—"}</dd></div>
               <div className="info-fact"><dt>Documents</dt><dd>{joiner.docsStatus}</dd></div>
               <div className="info-fact"><dt>Policy acknowledgement</dt><dd>{joiner.policyAck}</dd></div>
+              <div className="info-fact"><dt>Directory</dt><dd>{joiner.personId ? "Added" : "Added when onboarding completes"}</dd></div>
             </dl>
             <Progress value={joiner.preboardingPct} label="Checklist complete" />
             <div className="row-gap" style={{ marginTop: 8 }}>
@@ -605,20 +809,16 @@ export function OnboardingPage() {
                   type="button"
                   className="btn"
                   disabled={joiner.policyAck === "Complete"}
-                  onClick={() =>
-                    setNotice(noticeFor(setJoinerPolicyAck(actor, joiner.id, "Complete"), "Policies acknowledged."))
-                  }
+                  onClick={() => setNotice(noticeFor(setJoinerPolicyAck(actor, joiner.id, "Complete"), "Policies acknowledged."))}
                 >
-                  {sameName(joiner.name, actor.fullName) ? "Acknowledge policies" : "Record acknowledgement (HR)"}
+                  Acknowledge policies
                 </button>
               )}
               <Link to="/policies" className="btn-ghost">
                 View policies
               </Link>
             </div>
-            {!canAck && joiner.policyAck === "Pending" && (
-              <p className="muted">Policies are acknowledged by the joiner (or HR on their behalf).</p>
-            )}
+            {!canAck && joiner.policyAck === "Pending" && <p className="muted">Waiting for {joiner.name} to acknowledge.</p>}
           </Card>
         )}
       </div>
@@ -629,7 +829,7 @@ export function OnboardingPage() {
           <label className="filter-label">
             Owner
             <select value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)}>
-              <option value="">All (HR / IT / Manager / Employee)</option>
+              <option value="">All</option>
               {(["HR", "IT", "Manager", "Employee"] as const).map((o) => (
                 <option key={o} value={o}>{o}</option>
               ))}
@@ -638,7 +838,7 @@ export function OnboardingPage() {
         }
       >
         {!joiner ? (
-          <EmptyState title="Select a joiner" description="Choose someone from the list above." />
+          <EmptyState title="Select a joiner" />
         ) : (
           <DataTable
             headers={["Task", "Owner", "Category", "Due", "Status", "Update"]}
@@ -647,19 +847,8 @@ export function OnboardingPage() {
               t.owner,
               t.category,
               t.due,
-              <StatusBadge key={t.id} status={t.status} tone={t.status === "Done" ? "ok" : "warn"} />,
-              <select
-                key={`${t.id}-u`}
-                value={t.status}
-                disabled={!canEditOnboardingTask(actor, t, joiner)}
-                onChange={(e) =>
-                  setNotice(noticeFor(setOnboardingTaskStatus(actor, t.id, e.target.value as typeof t.status)))
-                }
-              >
-                {(["Pending", "In progress", "Done"] as const).map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>,
+              <StatusBadge key={t.id} status={t.status} literal tone={t.status === "Done" ? "ok" : "warn"} />,
+              <TaskStatusCell key={`${t.id}-u`} task={t} joiner={joiner} actor={actor} onResult={setNotice} />,
             ])}
             empty={<EmptyState title="No tasks" description="No checklist items for this filter." />}
           />
@@ -669,26 +858,152 @@ export function OnboardingPage() {
   );
 }
 
-function sameName(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
-}
-
 /* ───────────────────────────── PERFORMANCE ── */
 
+const GOAL_TYPES = ["Goal", "OKR", "KPI"] as const;
+
+function AssessmentEditor({
+  text,
+  status,
+  editable,
+  onSave,
+}: {
+  text?: string;
+  status: PerfReview["selfStatus"];
+  editable: boolean;
+  onSave: (text: string, submit: boolean) => void;
+}) {
+  const [draft, setDraft] = useState(text ?? "");
+  if (!editable) return <p className="muted">{text || "—"}</p>;
+  return (
+    <div className="stack">
+      <textarea rows={3} maxLength={1000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Summary…" />
+      <div className="row-gap">
+        <button type="button" className="btn-ghost btn-tiny" onClick={() => onSave(draft, false)}>
+          Save draft
+        </button>
+        <button type="button" className="btn btn-tiny" disabled={draft.trim().length < 10} onClick={() => onSave(draft, true)}>
+          Submit
+        </button>
+        {status === "Draft" && <span className="muted">Draft saved</span>}
+      </div>
+    </div>
+  );
+}
+
+function DevPlanInput({ value, editable, onSave }: { value?: string; editable: boolean; onSave: (plan: string) => void }) {
+  const [draft, setDraft] = useState(value ?? "");
+  if (!editable) return <span>{value || "—"}</span>;
+  return (
+    <input
+      value={draft}
+      maxLength={300}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => draft !== (value ?? "") && onSave(draft)}
+      placeholder="Development plan…"
+      style={{ minWidth: 160 }}
+    />
+  );
+}
+
+function GoalDialog({
+  initial,
+  actor,
+  onClose,
+}: {
+  initial: GoalInput;
+  actor: TalentActor;
+  onClose: (message?: string) => void;
+}) {
+  const [form, setForm] = useState(initial);
+  const [error, setError] = useState("");
+  const owners = goalOwnerOptions(actor);
+  const set = (patch: Partial<GoalInput>) => setForm((f) => ({ ...f, ...patch }));
+  const talent = useTalent();
+  const others = goalWeightTotal(talent.goals, form.ownerId, form.cycleId, form.id);
+
+  function save() {
+    const err = saveGoal(actor, form);
+    if (err) setError(err);
+    else onClose(form.id ? "Goal updated." : "Goal added.");
+  }
+
+  return (
+    <Dialog open title={form.id ? "Edit goal" : "Add goal"} onClose={() => onClose()}>
+      <div className="form-grid-2">
+        <Field label="Owner">
+          <select value={form.ownerId} disabled={!!form.id} onChange={(e) => set({ ownerId: e.target.value })}>
+            {owners.map((o) => (
+              <option key={o.id} value={o.id}>{o.name}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Type">
+          <select value={form.type} onChange={(e) => set({ type: e.target.value as PerfGoal["type"] })}>
+            {GOAL_TYPES.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Title" wide>
+          <input value={form.title} maxLength={120} onChange={(e) => set({ title: e.target.value })} />
+        </Field>
+        <Field label="Target">
+          <input value={form.target} maxLength={60} onChange={(e) => set({ target: e.target.value })} placeholder="e.g. ≥ 85%" />
+        </Field>
+        <Field label="Period">
+          <input value={form.period} maxLength={40} onChange={(e) => set({ period: e.target.value })} />
+        </Field>
+        <Field label={`Weight % (others: ${others}%)`}>
+          <input type="number" min={1} max={100} value={form.weight} onChange={(e) => set({ weight: Number(e.target.value) })} />
+        </Field>
+      </div>
+      {error && <Banner message={{ tone: "err", text: error }} />}
+      <div className="dialog-actions">
+        <button type="button" className="btn-ghost" onClick={() => onClose()}>
+          Cancel
+        </button>
+        <button type="button" className="btn" onClick={save}>
+          Save
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 export function PerformancePage() {
-  const { employee, demoProfile, demoAccounts, canApproveLeaveFor } = usePortal();
+  const { demoProfile, demoAccounts } = usePortal();
   const actor = demoProfile;
   const talent = useTalent();
   const [tab, setTab] = useState("goals");
   const [cycleId, setCycleId] = useState(PERF_CYCLES[0]?.id ?? "");
   const [notice, setNotice] = useState<Notice>(null);
+  const [goalForm, setGoalForm] = useState<GoalInput | null>(null);
   const cycle = PERF_CYCLES.find((c) => c.id === cycleId) ?? PERF_CYCLES[0];
+  const status = cycleStatusOf(talent, cycleId);
+  const next = nextCycleStatus(status);
+  const closed = status === "Closed";
+  const hr = isHrRole(actor.role);
+  const inCycle = inReviewCycle(actor.id);
 
-  // Yourself, anyone below you in the reporting line, or everyone for HR.
-  const canView = (employeeId: string) => employeeId === actor.id || canApproveLeaveFor(employeeId);
-  const myGoals = talent.goals.filter((g) => g.cycleId === cycleId && canView(g.ownerId));
-  const reviews = talent.reviews.filter((r) => r.cycleId === cycleId && canView(r.employeeId));
-  const review = (id: string, patch: Parameters<typeof updateReview>[2]) => setNotice(noticeFor(updateReview(actor, id, patch)));
+  const goals = talent.goals.filter((g) => g.cycleId === cycleId && canViewReview(actor, g.ownerId));
+  const reviews = talent.reviews.filter((r) => r.cycleId === cycleId && canViewReview(actor, r.employeeId));
+  const run = (error: string | null, okText?: string) => setNotice(noticeFor(error, okText));
+
+  const owners = [...new Map(goals.map((g) => [g.ownerId, g.ownerName])).entries()];
+  const offWeight = owners
+    .map(([id, name]) => ({ name, total: goalWeightTotal(talent.goals, id, cycleId) }))
+    .filter((o) => o.total !== 100);
+
+  const newGoal = (): GoalInput => ({
+    ownerId: actor.id,
+    type: "Goal",
+    title: "",
+    target: "",
+    weight: Math.max(1, 100 - goalWeightTotal(talent.goals, actor.id, cycleId)),
+    period: cycle ? `${cycle.start} – ${cycle.end}` : "",
+    cycleId,
+  });
 
   return (
     <Page title="Performance">
@@ -698,18 +1013,23 @@ export function PerformancePage() {
           <select value={cycleId} onChange={(e) => setCycleId(e.target.value)}>
             {PERF_CYCLES.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.name} · {c.status}
+                {c.name} · {cycleStatusOf(talent, c.id)}
               </option>
             ))}
           </select>
         </label>
+        {hr && next && (
+          <button type="button" className="btn-ghost" onClick={() => run(advanceCycle(actor, cycleId), `Cycle moved to ${next}.`)}>
+            Move to {next}
+          </button>
+        )}
       </FilterBar>
 
       {cycle && (
         <MetricGrid>
           <MetricCard label="Cycle" value={cycle.name} hint={`${cycle.start} → ${cycle.end}`} />
-          <MetricCard label="Status" value={cycle.status} />
-          <MetricCard label="Completion" value={`${cycle.completionPct}%`} />
+          <MetricCard label="Status" value={status} />
+          <MetricCard label="Completion" value={`${cycleCompletion(talent, cycleId)}%`} hint="Assessments submitted" />
           <MetricCard label="Reviews in view" value={reviews.length} />
         </MetricGrid>
       )}
@@ -734,77 +1054,152 @@ export function PerformancePage() {
       <Banner message={notice} />
 
       {tab === "goals" && (
-        <Card title="Goals, OKRs and KPIs">
+        <Card
+          title="Goals, OKRs and KPIs"
+          action={
+            !closed ? (
+              <button type="button" className="btn btn-tiny" onClick={() => setGoalForm(newGoal())}>
+                Add goal
+              </button>
+            ) : undefined
+          }
+        >
+          {offWeight.length > 0 && (
+            <Banner
+              message={{
+                tone: "warn",
+                text: `Weights should total 100%: ${offWeight.map((o) => `${o.name} ${o.total}%`).join(", ")}.`,
+              }}
+            />
+          )}
           <DataTable
-            headers={["Owner", "Type", "Title", "Progress", "Adjust"]}
-            rows={myGoals.map((g) => [
-              g.ownerName,
-              g.type,
-              g.title,
-              <Progress key={g.id} value={g.progress} />,
-              <input
-                key={`${g.id}-p`}
-                type="range"
-                min={0}
-                max={100}
-                value={g.progress}
-                disabled={!canEditGoal(actor, g)}
-                onChange={(e) => setNotice(noticeFor(updateGoalProgress(actor, g.id, Number(e.target.value))))}
-              />,
-            ])}
-            empty={<EmptyState title="No goals" description="No goals for this cycle and persona." />}
+            headers={["Owner", "Type", "Title", "Target", "Weight", "Period", "Progress", "Adjust", ""]}
+            rows={goals.map((g) => {
+              const editable = canEditGoal(actor, g) && !closed;
+              return [
+                g.ownerName,
+                g.type,
+                g.title,
+                g.target || "—",
+                `${g.weight ?? 0}%`,
+                g.period || "—",
+                <Progress key={g.id} value={g.progress} />,
+                <input
+                  key={`${g.id}-p`}
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={g.progress}
+                  disabled={!editable}
+                  onChange={(e) => run(updateGoalProgress(actor, g.id, Number(e.target.value)))}
+                />,
+                editable ? (
+                  <button
+                    key={`${g.id}-e`}
+                    type="button"
+                    className="btn-ghost btn-tiny"
+                    onClick={() =>
+                      setGoalForm({
+                        id: g.id,
+                        ownerId: g.ownerId,
+                        type: g.type,
+                        title: g.title,
+                        target: g.target ?? "",
+                        weight: g.weight ?? 0,
+                        period: g.period ?? "",
+                        cycleId: g.cycleId,
+                      })
+                    }
+                  >
+                    Edit
+                  </button>
+                ) : (
+                  ""
+                ),
+              ];
+            })}
+            empty={<EmptyState title="No goals" description="No goals in this cycle yet." />}
           />
         </Card>
       )}
 
-      {tab === "feedback" && <FeedbackPanel me={employee} people={demoAccounts} feedback={talent.feedback} />}
+      {goalForm && (
+        <GoalDialog
+          initial={goalForm}
+          actor={actor}
+          onClose={(message) => {
+            setGoalForm(null);
+            if (message) setNotice({ tone: "ok", text: message });
+          }}
+        />
+      )}
+
+      {tab === "feedback" && <FeedbackPanel me={actor} people={demoAccounts} feedback={talent.feedback} />}
 
       {tab === "checkins" && <OneOnOnePanel me={actor} people={demoAccounts} meetings={talent.oneOnOnes} />}
 
       {tab === "self" && (
         <Card title="Self-assessment">
-          <DataTable
-            headers={["Employee", "Status", "Action"]}
-            rows={reviews.map((r) => [
-              r.employeeName,
-              <StatusBadge key={r.id} status={r.selfStatus} literal />,
-              <select
-                key={`${r.id}-self`}
-                value={r.selfStatus}
-                disabled={r.employeeId !== actor.id}
-                title={r.employeeId !== actor.id ? "Only the employee can update their self-assessment" : undefined}
-                onChange={(e) => review(r.id, { selfStatus: e.target.value as typeof r.selfStatus })}
-              >
-                {(["Not started", "Draft", "Submitted"] as const).map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>,
-            ])}
-            empty={<EmptyState title="No reviews" description="No reviews in view for this cycle." />}
-          />
+          {!inCycle && <p className="muted">You are not in this review cycle.</p>}
+          {reviews.length === 0 ? (
+            <EmptyState title="No reviews" description="No reviews in view for this cycle." />
+          ) : (
+            <ul className="feedback-list">
+              {reviews.map((r) => (
+                <li key={r.id} className="feedback-item">
+                  <div className="row-between">
+                    <strong>{r.employeeName}</strong>
+                    <StatusBadge status={r.selfStatus} literal />
+                  </div>
+                  <AssessmentEditor
+                    key={`${r.id}-${r.selfStatus}`}
+                    text={r.selfText}
+                    status={r.selfStatus}
+                    editable={r.employeeId === actor.id && r.selfStatus !== "Submitted" && status === "Active"}
+                    onSave={(text, submit) =>
+                      run(saveSelfAssessment(actor, r.id, text, submit), submit ? "Self-assessment submitted." : "Draft saved.")
+                    }
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       )}
 
       {tab === "manager" && (
         <Card title="Manager assessment">
-          <DataTable
-            headers={["Employee", "Status", "Action"]}
-            rows={reviews.map((r) => [
-              r.employeeName,
-              <StatusBadge key={r.id} status={r.managerStatus} literal />,
-              <select
-                key={`${r.id}-mgr`}
-                value={r.managerStatus}
-                disabled={!canApproveLeaveFor(r.employeeId)}
-                onChange={(e) => review(r.id, { managerStatus: e.target.value as typeof r.managerStatus })}
-              >
-                {(["Not started", "Draft", "Submitted"] as const).map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>,
-            ])}
-            empty={<EmptyState title="No reviews" description="No reviews in view for this cycle." />}
-          />
+          {reviews.length === 0 ? (
+            <EmptyState title="No reviews" description="No reviews in view for this cycle." />
+          ) : (
+            <ul className="feedback-list">
+              {reviews.map((r) => {
+                const isOwn = r.employeeId === actor.id;
+                const writer = canWriteManagerReview(actor, r.employeeId);
+                return (
+                  <li key={r.id} className="feedback-item">
+                    <div className="row-between">
+                      <strong>{r.employeeName}</strong>
+                      <StatusBadge status={r.managerStatus} literal />
+                    </div>
+                    {isOwn && !r.released ? (
+                      <p className="muted">Shared when your rating is released.</p>
+                    ) : (
+                      <AssessmentEditor
+                        key={`${r.id}-${r.managerStatus}`}
+                        text={r.managerText}
+                        status={r.managerStatus}
+                        editable={writer && r.managerStatus !== "Submitted" && status === "Active"}
+                        onSave={(text, submit) =>
+                          run(saveManagerAssessment(actor, r.id, text, submit), submit ? "Manager assessment submitted." : "Draft saved.")
+                        }
+                      />
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </Card>
       )}
 
@@ -818,8 +1213,8 @@ export function PerformancePage() {
               <select
                 key={`${r.id}-360`}
                 value={r.feedback360Status}
-                disabled={!canApproveLeaveFor(r.employeeId)}
-                onChange={(e) => review(r.id, { feedback360Status: e.target.value as typeof r.feedback360Status })}
+                disabled={!canWriteManagerReview(actor, r.employeeId) || status !== "Active"}
+                onChange={(e) => run(set360Status(actor, r.id, e.target.value as PerfReview["feedback360Status"]))}
               >
                 {(["Not started", "In progress", "Complete"] as const).map((s) => (
                   <option key={s} value={s}>{s}</option>
@@ -832,36 +1227,50 @@ export function PerformancePage() {
       )}
 
       {tab === "reviews" && (
-        <Card title="Review status, ratings and development plans">
+        <Card title="Ratings and development plans">
           <DataTable
-            headers={["Employee", "Self", "Manager", "360", "Rating", "Dev plan"]}
+            headers={["Employee", "Self", "Manager", "360", "Rating", "Released", "Dev plan"]}
             rows={reviews.map((r) => {
-              const canManage = canApproveLeaveFor(r.employeeId);
-              const canRate = canManage && r.managerStatus === "Submitted";
+              const writer = canWriteManagerReview(actor, r.employeeId);
+              const canRate = writer && !r.released && (status === "Active" || status === "Calibration");
+              const ready = r.selfStatus === "Submitted" && r.managerStatus === "Submitted";
+              const shown = visibleRating(actor, r);
+              const canRelease = hr && status === "Calibration" && !!r.rating && !r.released && r.employeeId !== actor.id;
               return [
                 r.employeeName,
                 r.selfStatus,
                 r.managerStatus,
                 r.feedback360Status,
-                <select
-                  key={`${r.id}-rate`}
-                  value={r.rating ?? ""}
-                  disabled={!canRate}
-                  title={canManage && !canRate ? "Submit the manager assessment first" : undefined}
-                  onChange={(e) => review(r.id, { rating: e.target.value || undefined })}
-                >
-                  <option value="">— Select (human) —</option>
-                  {["Needs improvement", "Solid", "Strong", "Exceptional"].map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>,
-                <input
+                canRate ? (
+                  <select
+                    key={`${r.id}-rate`}
+                    value={r.rating ?? ""}
+                    disabled={!ready}
+                    title={!ready ? "Needs both assessments submitted" : undefined}
+                    onChange={(e) => run(setRating(actor, r.id, e.target.value || undefined))}
+                  >
+                    <option value="">Select…</option>
+                    {RATINGS.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                ) : (
+                  shown ?? (r.employeeId === actor.id && r.rating ? "Not released" : "—")
+                ),
+                r.released ? (
+                  `${r.releasedOn ?? ""}`
+                ) : canRelease ? (
+                  <button key={`${r.id}-rel`} type="button" className="btn btn-tiny" onClick={() => run(releaseRating(actor, r.id), `Rating released to ${r.employeeName}.`)}>
+                    Release
+                  </button>
+                ) : (
+                  "No"
+                ),
+                <DevPlanInput
                   key={`${r.id}-dp`}
-                  value={r.developmentPlan ?? ""}
-                  readOnly={!canManage}
-                  onChange={(e) => review(r.id, { developmentPlan: e.target.value })}
-                  placeholder="Development plan…"
-                  style={{ minWidth: 160 }}
+                  value={r.developmentPlan}
+                  editable={writer && !closed}
+                  onSave={(plan) => run(setDevelopmentPlan(actor, r.id, plan), "Plan saved.")}
                 />,
               ];
             })}
@@ -894,11 +1303,23 @@ function dueStatus(e: Enrollment, today: string): { label: string; tone: "ok" | 
 }
 
 function certStatus(c: Certification, today: string): { label: string; tone: "ok" | "warn" | "danger" | "neutral" } {
+  if (isCertExpired(c, today)) return { label: `Expired ${c.expiresOn}`, tone: "danger" };
   if (!c.expiresOn) return { label: "No expiry", tone: "ok" };
   const days = daysUntil(c.expiresOn, today);
-  if (days < 0) return { label: "Expired", tone: "danger" };
   if (days <= CERT_EXPIRY_WARNING_DAYS) return { label: `Expires in ${days} days`, tone: "warn" };
   return { label: "Valid", tone: "ok" };
+}
+
+function ScoreCompletion({ onSubmit }: { onSubmit: (score: number) => void }) {
+  const [score, setScore] = useState("");
+  return (
+    <span className="row-gap">
+      <input type="number" min={0} max={100} value={score} onChange={(e) => setScore(e.target.value)} placeholder="Score" aria-label="Assessment score" style={{ width: 72 }} />
+      <button type="button" className="btn btn-tiny" disabled={score === ""} onClick={() => onSubmit(Number(score))}>
+        Record score
+      </button>
+    </span>
+  );
 }
 
 export function LearningPage() {
@@ -906,13 +1327,13 @@ export function LearningPage() {
   const talent = useTalent();
   const [tab, setTab] = useState("catalog");
   const [viewing, setViewing] = useState<CertificateDoc | null>(null);
-  // Certificates are personal records: employees see their own, HR sees everyone's.
-  const seesAllCertificates = canManagePeople(demoProfile.role);
+  const hr = canManagePeople(demoProfile.role);
   const [q, setQ] = useState("");
   const [mandatoryOnly, setMandatoryOnly] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   // New expiry dates typed for renewals of certifications without a fixed validity.
   const [renewExpiry, setRenewExpiry] = useState<Record<string, string>>({});
+  const [credIds, setCredIds] = useState<Record<string, string>>({});
 
   const catalog = COURSES.filter((c) => {
     if (mandatoryOnly && !c.mandatory) return false;
@@ -921,13 +1342,13 @@ export function LearningPage() {
   });
 
   const today = todayISO();
-  const mine = talent.enrollments.filter((e) => e.employeeId === employee.id || e.employeeName === employee.fullName);
+  const mine = talent.enrollments.filter((e) => e.employeeId === employee.id);
   const enrolledCourseIds = new Set(mine.map((e) => e.courseId));
   const overdue = mine.filter((e) => e.status !== "Completed" && e.due && e.due < today);
   const myCerts = talent.certifications.filter((c) => c.employeeId === employee.id);
-  const visibleCerts = seesAllCertificates ? talent.certifications : myCerts;
+  const visibleCerts = hr ? talent.certifications : myCerts;
   const courseCertificates: CertificateDoc[] = talent.enrollments
-    .filter((e) => e.status === "Completed" && (seesAllCertificates || e.employeeId === employee.id))
+    .filter((e) => earnedCertificate(e) && (hr || e.employeeId === employee.id))
     .map((e) => {
       const course = COURSES.find((c) => c.id === e.courseId);
       return {
@@ -950,10 +1371,16 @@ export function LearningPage() {
     issuer: c.issuer,
     issuedOn: c.earnedOn,
     expiresOn: c.expiresOn,
-    credentialId: `${c.issuer.replace(/[^A-Za-z]/g, "").slice(0, 3).toUpperCase()}-${credentialCode(c.id + c.employeeId)}`,
+    credentialId: c.verifiedBy ? c.credentialId : undefined,
+    verified: !!c.verifiedBy,
+    expired: isCertExpired(c, today),
   });
   const certsNeedingRenewal = myCerts.filter((c) => certStatus(c, today).tone !== "ok" && !c.renewalStatus);
-  const teamEnrollments = seesAllCertificates ? talent.enrollments.filter((e) => e.employeeId !== employee.id) : [];
+  // HR sees everyone; managers see the people below them.
+  const teamEnrollments = talent.enrollments.filter(
+    (e) => e.employeeId !== employee.id && (hr || isAboveInChain(demoProfile.id, e.employeeId)),
+  );
+  const showTeam = hr || teamEnrollments.length > 0;
 
   return (
     <Page title="Learning">
@@ -962,7 +1389,7 @@ export function LearningPage() {
         <MetricCard label="My enrollments" value={mine.length} />
         <MetricCard label="Completed" value={mine.filter((e) => e.status === "Completed").length} />
         <MetricCard label="Mandatory open" value={mine.filter((e) => e.status !== "Completed" && COURSES.find((c) => c.id === e.courseId)?.mandatory).length} />
-        <MetricCard label="Overdue" value={overdue.length} hint={overdue.length ? "Finish these first" : "Nothing overdue"} />
+        <MetricCard label="Overdue" value={overdue.length} />
       </MetricGrid>
 
       {(overdue.length > 0 || certsNeedingRenewal.length > 0) && (
@@ -971,13 +1398,9 @@ export function LearningPage() {
             tone: "warn",
             text: [
               overdue.length
-                ? `${overdue.length} course${overdue.length > 1 ? "s are" : " is"} overdue: ${overdue
-                    .map((e) => COURSES.find((c) => c.id === e.courseId)?.title ?? e.courseId)
-                    .join(", ")}.`
+                ? `Overdue: ${overdue.map((e) => COURSES.find((c) => c.id === e.courseId)?.title ?? e.courseId).join(", ")}.`
                 : "",
-              certsNeedingRenewal.length
-                ? `${certsNeedingRenewal.length} certification${certsNeedingRenewal.length > 1 ? "s need" : " needs"} renewal (see Certifications).`
-                : "",
+              certsNeedingRenewal.length ? `${certsNeedingRenewal.length} certification${certsNeedingRenewal.length > 1 ? "s need" : " needs"} renewal.` : "",
             ]
               .filter(Boolean)
               .join(" "),
@@ -1002,7 +1425,7 @@ export function LearningPage() {
           { id: "paths", label: "Learning paths" },
           { id: "mine", label: "My learning" },
           { id: "certs", label: "Certifications" },
-          ...(seesAllCertificates ? [{ id: "team", label: "Team completions" }] : []),
+          ...(showTeam ? [{ id: "team", label: "Team completions" }] : []),
         ]}
         value={tab}
         onChange={(id) => {
@@ -1016,28 +1439,33 @@ export function LearningPage() {
       {tab === "catalog" && (
         <Card title="Course catalog">
           <DataTable
-            headers={["Course", "Category", "Hours", "Mandatory", "Level", ""]}
-            rows={catalog.map((c) => [
-              c.title,
-              c.category,
-              String(c.durationHours),
-              c.mandatory ? "Yes" : "No",
-              c.level,
-              enrolledCourseIds.has(c.id) ? (
-                <button key={c.id} type="button" className="btn-ghost" disabled>
-                  Enrolled
-                </button>
-              ) : (
-                <button
-                  key={c.id}
-                  type="button"
-                  className="btn-ghost"
-                  onClick={() => enrollInCourse(c.id, employee.id, employee.fullName)}
-                >
-                  Enroll
-                </button>
-              ),
-            ])}
+            headers={["Course", "Category", "Hours", "Mandatory", "For", ""]}
+            rows={catalog.map((c) => {
+              const open = courseOpenTo(c, demoProfile);
+              return [
+                c.title,
+                c.category,
+                String(c.durationHours),
+                c.mandatory ? "Yes" : "No",
+                c.audience,
+                enrolledCourseIds.has(c.id) ? (
+                  <button key={c.id} type="button" className="btn-ghost" disabled>
+                    Enrolled
+                  </button>
+                ) : !open ? (
+                  <span key={c.id} className="muted">Not for your role</span>
+                ) : (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => setNotice(noticeFor(enrollInCourse(demoProfile, c.id), `Enrolled in ${c.title}.`))}
+                  >
+                    Enroll
+                  </button>
+                ),
+              ];
+            })}
             empty={<EmptyState title="No courses" description="No catalog rows match filters." />}
           />
         </Card>
@@ -1075,40 +1503,38 @@ export function LearningPage() {
                   (a.due ?? "9999").localeCompare(b.due ?? "9999"),
               )
               .map((e) => {
-              const course = COURSES.find((c) => c.id === e.courseId);
-              const due = dueStatus(e, today);
-              return [
-                <span key={`${e.id}-t`}>
-                  {course?.title ?? e.courseId}
-                  {course?.mandatory && (
-                    <span className="pill pill-mandatory" style={{ marginLeft: 6 }}>
-                      Mandatory
+                const course = COURSES.find((c) => c.id === e.courseId);
+                const due = dueStatus(e, today);
+                return [
+                  <span key={`${e.id}-t`}>
+                    {course?.title ?? e.courseId}
+                    {course?.mandatory && (
+                      <span className="pill pill-mandatory" style={{ marginLeft: 6 }}>
+                        Mandatory
+                      </span>
+                    )}
+                  </span>,
+                  <StatusBadge key={e.id} status={e.status} literal />,
+                  <StatusBadge key={`${e.id}-due`} status={due.label} tone={due.tone} literal />,
+                  <Progress key={`${e.id}-p`} value={e.progress} />,
+                  e.status === "Completed" ? (
+                    <span key={`${e.id}-r`} className="muted">Completed</span>
+                  ) : (
+                    <span key={`${e.id}-r`} className="learning-progress-input">
+                      <input
+                        type="range"
+                        min={0}
+                        max={SELF_PROGRESS_CAP}
+                        value={Math.min(e.progress, SELF_PROGRESS_CAP)}
+                        aria-label="Progress"
+                        onChange={(ev) => setNotice(noticeFor(updateEnrollmentProgress(demoProfile, e.id, Number(ev.target.value))))}
+                      />
+                      {e.progress >= SELF_PROGRESS_CAP && <span className="muted">Waiting for HR to confirm</span>}
                     </span>
-                  )}
-                </span>,
-                <StatusBadge key={e.id} status={e.status} literal />,
-                <StatusBadge key={`${e.id}-due`} status={due.label} tone={due.tone} literal />,
-                <Progress key={`${e.id}-p`} value={e.progress} />,
-                e.status === "Completed" ? (
-                  <span key={`${e.id}-r`} className="muted">Completed</span>
-                ) : (
-                  <span key={`${e.id}-r`} className="learning-progress-input">
-                    <input
-                      type="range"
-                      min={0}
-                      max={SELF_PROGRESS_CAP}
-                      value={Math.min(e.progress, SELF_PROGRESS_CAP)}
-                      aria-label="Self-reported progress"
-                      onChange={(ev) =>
-                        setNotice(noticeFor(updateEnrollmentProgress(employee, e.id, Number(ev.target.value))))
-                      }
-                    />
-                    {e.progress >= SELF_PROGRESS_CAP && <span className="muted">Final assessment pending — HR confirms completion</span>}
-                  </span>
-                ),
-              ];
-            })}
-            empty={<EmptyState title="No enrollments" description="Enroll from the catalog to track progress." />}
+                  ),
+                ];
+              })}
+            empty={<EmptyState title="No enrollments" description="Enroll from the catalog." />}
           />
         </Card>
       )}
@@ -1117,7 +1543,7 @@ export function LearningPage() {
         <div className="stack">
           <Card title={`Course certificates${courseCertificates.length ? ` (${courseCertificates.length})` : ""}`}>
             {courseCertificates.length === 0 ? (
-              <EmptyState title="No certificates yet" description="Finish a course to earn its completion certificate." />
+              <EmptyState title="No certificates yet" description="Finish a course to earn its certificate." />
             ) : (
               <ul className="cert-grid">
                 {courseCertificates.map((doc) => (
@@ -1127,7 +1553,7 @@ export function LearningPage() {
                     </span>
                     <strong>{doc.title}</strong>
                     <span className="muted">
-                      {seesAllCertificates ? `${doc.recipient} · ` : ""}Completed {doc.issuedOn}
+                      {hr ? `${doc.recipient} · ` : ""}Completed {doc.issuedOn}
                     </span>
                     {doc.details && <span className="muted">{doc.details}</span>}
                     <span className="cert-tile-id">{doc.credentialId}</span>
@@ -1147,28 +1573,22 @@ export function LearningPage() {
 
           <Card title="Professional certifications">
             <DataTable
-              headers={[
-                ...(seesAllCertificates ? ["Employee"] : []),
-                "Certification",
-                "Issuer",
-                "Earned",
-                "Expires",
-                "Status",
-                "",
-              ]}
+              headers={[...(hr ? ["Employee"] : []), "Certification", "Issuer", "Earned", "Expires", "Status", ""]}
               rows={[...visibleCerts]
                 .sort((a, b) => (a.expiresOn ?? "9999").localeCompare(b.expiresOn ?? "9999"))
                 .map((c) => {
                   const status = certStatus(c, today);
                   const doc = certificateFor(c);
+                  const expired = isCertExpired(c, today);
                   return [
-                    ...(seesAllCertificates ? [c.employeeName] : []),
+                    ...(hr ? [c.employeeName] : []),
                     c.name,
                     c.issuer,
                     c.earnedOn,
                     c.expiresOn ?? "—",
                     <span key={c.id} className="row-gap">
                       <StatusBadge status={status.label} tone={status.tone} literal />
+                      {!c.verifiedBy && <StatusBadge status="Not verified" tone="neutral" literal />}
                       {c.renewalStatus && (
                         <StatusBadge
                           status={`Renewal ${c.renewalStatus.toLowerCase()}${c.renewalRequestedOn ? ` · ${c.renewalRequestedOn}` : ""}`}
@@ -1181,9 +1601,11 @@ export function LearningPage() {
                       <button type="button" className="btn-ghost btn-tiny" onClick={() => setViewing(doc)}>
                         <Eye size={14} aria-hidden /> View
                       </button>
-                      <button type="button" className="btn-ghost btn-tiny" onClick={() => void downloadCertificatePng(doc)}>
-                        <Download size={14} aria-hidden /> Download
-                      </button>
+                      {!expired && (
+                        <button type="button" className="btn-ghost btn-tiny" onClick={() => void downloadCertificatePng(doc)}>
+                          <Download size={14} aria-hidden /> Download
+                        </button>
+                      )}
                       {c.employeeId === employee.id && status.tone !== "ok" && !c.renewalStatus && (
                         <>
                           {!c.validityYears && (
@@ -1202,8 +1624,8 @@ export function LearningPage() {
                             onClick={() =>
                               setNotice(
                                 noticeFor(
-                                  requestCertificationRenewal(employee, c.id, renewExpiry[c.id]),
-                                  "Renewal recorded — HR will verify it before the dates change.",
+                                  requestCertificationRenewal(demoProfile, c.id, renewExpiry[c.id]),
+                                  "Renewal recorded. HR will verify it.",
                                 ),
                               )
                             }
@@ -1212,27 +1634,45 @@ export function LearningPage() {
                           </button>
                         </>
                       )}
-                      {seesAllCertificates && c.employeeId !== employee.id && c.renewalStatus === "Pending verification" && (
+                      {hr && c.employeeId !== employee.id && c.renewalStatus === "Pending verification" && (
                         <button
                           type="button"
                           className="btn btn-tiny"
-                          onClick={() =>
-                            setNotice(noticeFor(verifyCertificationRenewal(employee, c.id), `Renewal verified for ${c.employeeName}.`))
-                          }
+                          onClick={() => setNotice(noticeFor(verifyCertificationRenewal(demoProfile, c.id), `Renewal verified for ${c.employeeName}.`))}
                         >
                           Verify renewal
                         </button>
                       )}
+                      {hr && c.employeeId !== employee.id && !c.verifiedBy && !expired && !c.renewalStatus && (
+                        <>
+                          <input
+                            value={credIds[c.id] ?? ""}
+                            onChange={(e) => setCredIds((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                            placeholder="Credential ID"
+                            aria-label="Credential ID"
+                            style={{ width: 120 }}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-tiny"
+                            onClick={() =>
+                              setNotice(noticeFor(verifyCertification(demoProfile, c.id, credIds[c.id] ?? ""), `${c.name} verified.`))
+                            }
+                          >
+                            Verify
+                          </button>
+                        </>
+                      )}
                     </span>,
                   ];
                 })}
-              empty={<EmptyState title="No certifications on file" description="Ask HR to add an external certification to your record." />}
+              empty={<EmptyState title="No certifications on file" description="Ask HR to add one." />}
             />
           </Card>
         </div>
       )}
 
-      {tab === "team" && seesAllCertificates && (
+      {tab === "team" && showTeam && (
         <Card title="Team course completions">
           <DataTable
             headers={["Employee", "Course", "Status", "Progress", ""]}
@@ -1242,22 +1682,33 @@ export function LearningPage() {
               <StatusBadge key={e.id} status={e.status} literal />,
               <Progress key={`${e.id}-p`} value={e.progress} />,
               e.status === "Completed" ? (
-                <span key={`${e.id}-a`} className="muted">Done {e.completedOn ?? ""}</span>
-              ) : (
+                <span key={`${e.id}-a`} className="muted">
+                  Done {e.completedOn ?? ""}
+                  {e.assessmentScore !== undefined ? ` · score ${e.assessmentScore}` : ""}
+                </span>
+              ) : !hr ? (
+                ""
+              ) : e.progress >= SELF_PROGRESS_CAP ? (
                 <button
                   key={`${e.id}-a`}
                   type="button"
                   className="btn btn-tiny"
-                  onClick={() =>
-                    setNotice(noticeFor(completeEnrollment(employee, e.id), `Course marked complete for ${e.employeeName}.`))
-                  }
+                  onClick={() => setNotice(noticeFor(completeEnrollment(demoProfile, e.id), `Course marked complete for ${e.employeeName}.`))}
                 >
                   Mark complete
                 </button>
+              ) : (
+                <ScoreCompletion
+                  key={`${e.id}-a`}
+                  onSubmit={(score) =>
+                    setNotice(noticeFor(completeEnrollment(demoProfile, e.id, score), `Passed. Course complete for ${e.employeeName}.`))
+                  }
+                />
               ),
             ])}
             empty={<EmptyState title="No enrollments" description="No one else is enrolled yet." />}
           />
+          {hr && <p className="note">Mark complete at {SELF_PROGRESS_CAP}% progress, or record a score (pass mark {PASS_MARK}).</p>}
         </Card>
       )}
 
@@ -1272,33 +1723,35 @@ export function SkillsCareerPage() {
   const { demoProfile } = usePortal();
   const talent = useTalent();
   const [tab, setTab] = useState("profile");
-  const [targetId, setTargetId] = useState(TARGET_ROLES[1]?.id ?? "");
+  const [notice, setNotice] = useState<Notice>(null);
+  const track = starterSkillsFor(demoProfile.id).track;
+  const roles = TARGET_ROLES.filter((t) => t.track === track);
+  const [targetId, setTargetId] = useState(roles[0]?.id ?? "");
   const skills = skillProfileFor(talent, demoProfile.id);
   const setSkill = (skillId: string, patch: { level?: string; targetLevel?: string }) =>
-    updateEmployeeSkill(demoProfile, demoProfile.id, skillId, patch);
-  const target = TARGET_ROLES.find((t) => t.id === targetId) ?? TARGET_ROLES[0];
+    setNotice(noticeFor(updateEmployeeSkill(demoProfile, demoProfile.id, skillId, patch)));
+  const target = roles.find((t) => t.id === targetId) ?? roles[0];
 
   const gaps = useMemo(() => {
     if (!target) return [];
     return Object.entries(target.required).map(([skillId, need]) => {
       const def = SKILL_LIBRARY.find((s) => s.id === skillId);
-      const current = skills.find((s) => s.skillId === skillId);
-      const have = current?.level ?? "Awareness";
+      const have = skills.find((s) => s.skillId === skillId)?.level ?? "None";
       const gap = (LEVEL_RANK[need] ?? 0) - (LEVEL_RANK[have] ?? 0);
-      return {
-        skillId,
-        name: def?.name ?? skillId,
-        have,
-        need,
-        gap,
-      };
+      return { skillId, name: def?.name ?? skillId, have, need, gap };
     });
   }, [target, skills]);
 
+  const myEnrollments = talent.enrollments.filter((e) => e.employeeId === demoProfile.id);
   const recommendations = useMemo(() => {
-    const needing = gaps.filter((g) => g.gap > 0).map((g) => g.name.toLowerCase());
-    return COURSES.filter((c) => needing.some((n) => c.title.toLowerCase().includes(n.split(" ")[0]) || c.category.toLowerCase().includes("engineering") || c.category.toLowerCase().includes("leadership"))).slice(0, 4);
-  }, [gaps]);
+    const needing = new Set(gaps.filter((g) => g.gap > 0).map((g) => g.skillId));
+    return COURSES.filter(
+      (c) =>
+        c.skills.some((s) => needing.has(s)) &&
+        courseOpenTo(c, demoProfile) &&
+        !myEnrollments.some((e) => e.courseId === c.id && e.status === "Completed"),
+    ).slice(0, 4);
+  }, [gaps, demoProfile, myEnrollments]);
 
   return (
     <Page title="Skills & Career">
@@ -1307,11 +1760,13 @@ export function SkillsCareerPage() {
           { id: "library", label: "Skills library" },
           { id: "profile", label: "My skills profile" },
           { id: "gap", label: "Target role & gaps" },
-          { id: "recs", label: "Recommended development" },
+          { id: "recs", label: "Recommended courses" },
         ]}
         value={tab}
         onChange={setTab}
       />
+
+      <Banner message={notice} />
 
       {tab === "library" && (
         <Card title="Skills library">
@@ -1323,97 +1778,81 @@ export function SkillsCareerPage() {
       )}
 
       {tab === "profile" && (
-        <Card title="Employee skills profile">
+        <Card title="My skills">
           <DataTable
             headers={["Skill", "Current level", "Personal target"]}
-            rows={skills.map((s) => [
-              s.skillName,
-              <select key={`${s.skillId}-c`} value={s.level} onChange={(e) => setSkill(s.skillId, { level: e.target.value })}>
-                {(SKILL_LIBRARY.find((x) => x.id === s.skillId)?.levels ?? []).map((lvl) => (
-                  <option key={lvl} value={lvl}>{lvl}</option>
-                ))}
-              </select>,
-              <select
-                key={`${s.skillId}-t`}
-                value={s.targetLevel}
-                onChange={(e) => setSkill(s.skillId, { targetLevel: e.target.value })}
-              >
-                {(SKILL_LIBRARY.find((x) => x.id === s.skillId)?.levels ?? []).map((lvl) => (
-                  <option key={lvl} value={lvl}>{lvl}</option>
-                ))}
-              </select>,
-            ])}
+            rows={skills.map((s) => {
+              const levels = SKILL_LIBRARY.find((x) => x.id === s.skillId)?.levels ?? [];
+              return [
+                s.skillName,
+                <select key={`${s.skillId}-c`} value={s.level} onChange={(e) => setSkill(s.skillId, { level: e.target.value })}>
+                  {levels.map((lvl) => (
+                    <option key={lvl} value={lvl}>{lvl}</option>
+                  ))}
+                </select>,
+                <select key={`${s.skillId}-t`} value={s.targetLevel} onChange={(e) => setSkill(s.skillId, { targetLevel: e.target.value })}>
+                  {levels.map((lvl) => (
+                    <option key={lvl} value={lvl}>{lvl}</option>
+                  ))}
+                </select>,
+              ];
+            })}
           />
         </Card>
       )}
 
-      {tab === "gap" && (
-        <div className="stack">
-          <FilterBar>
-            <label className="filter-label">
-              Target role
-              <select value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-                {TARGET_ROLES.map((t) => (
-                  <option key={t.id} value={t.id}>{t.title}</option>
-                ))}
-              </select>
-            </label>
-          </FilterBar>
-          <Card title={`Skill gap vs ${target?.title ?? "role"}`}>
-            <DataTable
-              headers={["Skill", "You have", "Role needs", "Gap"]}
-              rows={gaps.map((g) => [
-                g.name,
-                g.have,
-                g.need,
-                g.gap <= 0 ? (
-                  <StatusBadge key={g.skillId} status="On track" tone="ok" />
-                ) : (
-                  <StatusBadge key={g.skillId} status={`+${g.gap} level`} tone="warn" />
-                ),
-              ])}
-            />
+      {tab === "gap" &&
+        (!target ? (
+          <Card>
+            <EmptyState title="No target role" description="There is no next role set for your position." />
           </Card>
-        </div>
-      )}
+        ) : (
+          <div className="stack">
+            <FilterBar>
+              <label className="filter-label">
+                Target role
+                <select value={target.id} onChange={(e) => setTargetId(e.target.value)}>
+                  {roles.map((t) => (
+                    <option key={t.id} value={t.id}>{t.title}</option>
+                  ))}
+                </select>
+              </label>
+            </FilterBar>
+            <Card title={`Skill gap vs ${target.title}`}>
+              <DataTable
+                headers={["Skill", "You have", "Role needs", "Gap"]}
+                rows={gaps.map((g) => [
+                  g.name,
+                  g.have,
+                  g.need,
+                  g.gap <= 0 ? (
+                    <StatusBadge key={g.skillId} status="On track" tone="ok" />
+                  ) : (
+                    <StatusBadge key={g.skillId} status={`+${g.gap} level${g.gap > 1 ? "s" : ""}`} tone="warn" />
+                  ),
+                ])}
+              />
+            </Card>
+          </div>
+        ))}
 
       {tab === "recs" && (
-        <div className="mgr-home-grid">
-          <Card title="Recommended courses">
-            {recommendations.length === 0 ? (
-              <EmptyState title="No gaps" description="You meet the selected target role skill bar." />
-            ) : (
-              <ul className="todo">
-                {recommendations.map((c) => (
-                  <li key={c.id}>
-                    {c.title} · {c.category} · {c.durationHours}h{" "}
-                    <Link to="/programs">Open Learning</Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-          <Card title="Development activities">
+        <Card title={target ? `Courses for ${target.title}` : "Recommended courses"}>
+          {recommendations.length === 0 ? (
+            <EmptyState title="Nothing to suggest" description="No open courses match your skill gaps." />
+          ) : (
             <ul className="todo">
-              <li>Pair with a tech lead on a design review</li>
-              <li>Complete Manager essentials path (if leadership gap)</li>
-              <li>Shadow an interview panel</li>
-              <li>
-                Draft a career plan with <Link to="/ai/copilot">Copilot</Link>
-              </li>
+              {recommendations.map((c) => (
+                <li key={c.id}>
+                  {c.title} · {c.category} · {c.durationHours}h
+                  {myEnrollments.some((e) => e.courseId === c.id) ? " · Enrolled " : " "}
+                  <Link to="/programs">Open Learning</Link>
+                </li>
+              ))}
             </ul>
-          </Card>
-        </div>
+          )}
+        </Card>
       )}
     </Page>
   );
-}
-
-/** Aliases matching existing App routes */
-export function EvaluationsPage() {
-  return <PerformancePage />;
-}
-
-export function ProgramsPage() {
-  return <LearningPage />;
 }

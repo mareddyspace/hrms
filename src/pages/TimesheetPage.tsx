@@ -13,10 +13,10 @@ import {
   weekDates,
 } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { scheduleForEmployee } from "../data/workSchedule.ts";
 
 const DAY_TARGET = 8;
-const WEEK_TARGET = 40;
-const GRID_START = 9;
+const GRID_START = 8;
 const GRID_END = 20;
 const HOUR_PX = 56;
 
@@ -69,7 +69,13 @@ export function TimesheetPage() {
     if (!isManager && view === "company") setView("mine");
   }, [isManager, view]);
 
-  const workDates = weekDates(weekStart).slice(0, 5);
+  // The person's own working days (e.g. Sun–Thu in Saudi Arabia), not a fixed Mon–Fri.
+  const weeklyOffDays = scheduleForEmployee({
+    shiftName: employee.shiftName,
+    shiftHours: employee.shiftHours,
+    countryCode: employee.countryCode,
+  }).weeklyOffDays;
+  const workDates = weekDates(weekStart).filter((d) => !weeklyOffDays.includes(parseISODate(d).getDay()));
   const weekSheets = state.timesheets.filter((sheet) => sheet.employeeId === employee.id && sheet.weekStart === weekStart);
 
   const blocks = useMemo<CalendarBlock[]>(() => {
@@ -102,6 +108,8 @@ export function TimesheetPage() {
   const weekTotal = Object.values(dayTotals).reduce((sum, value) => sum + value, 0);
   const billableTotal = blocks.filter((block) => block.billable).reduce((sum, block) => sum + block.hours, 0);
   const nonBillableTotal = weekTotal - billableTotal;
+  // Capacity follows the person's own working days this week.
+  const weekCapacity = DAY_TARGET * workDates.length;
   const weekStatus = weekSheets.some((sheet) => sheet.status === "approved")
     ? "approved"
     : weekSheets.some((sheet) => sheet.status === "submitted")
@@ -160,11 +168,6 @@ export function TimesheetPage() {
   return (
     <Page
       title={view === "mine" ? "My timesheet" : "Company timesheet"}
-      subtitle={
-        view === "mine"
-          ? "Log project time on a week calendar. Company attendance stays under Attendance."
-          : "Organization view of team and company timesheet status. Visible actions depend on the signed-in user's permissions."
-      }
       action={view === "mine" ? <StatusPill status={weekStatus} /> : undefined}
     >
       <div className="ts-toolbar">
@@ -205,9 +208,6 @@ export function TimesheetPage() {
           </div>
           {view === "mine" && (
             <div className="form-actions">
-              <button className="btn-ghost" type="button" disabled={locked} onClick={() => openLog()}>
-                Start timer
-              </button>
               <button className="btn" type="button" disabled={locked} onClick={() => openLog()}>
                 Log time
               </button>
@@ -456,9 +456,10 @@ export function TimesheetPage() {
               <span>
                 <i className="dot nonbillable" /> Non-billable time: {formatHoursAmount(nonBillableTotal)}
               </span>
+              <span>Utilization: {weekCapacity ? Math.round((billableTotal / weekCapacity) * 100) : 0}%</span>
             </div>
             <strong>
-              Week total: {formatHoursAmount(weekTotal)} / {WEEK_TARGET}h
+              Week total: {formatHoursAmount(weekTotal)} / {weekCapacity}h
             </strong>
           </div>
         </div>
@@ -472,7 +473,6 @@ export function TimesheetPage() {
           <button className="modal-scrim" type="button" aria-label="Close" onClick={() => setLogOpen(false)} />
           <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="log-time-title">
             <h2 id="log-time-title">Log time</h2>
-            <p className="modal-lede">Add a timed block on a project for this week.</p>
             <form onSubmit={onLog}>
               <div className="stack" style={{ marginTop: 12 }}>
                 <Field label="Project">

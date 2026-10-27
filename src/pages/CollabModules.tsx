@@ -56,6 +56,7 @@ import {
   setAnnouncementState,
   setHrRequestStatus,
   setNotifPrefs,
+  notifPrefsFor,
   startDirectChat,
   subscribeCollab,
 } from "../data/collabLocal.ts";
@@ -154,10 +155,7 @@ export function InboxApprovalsPage() {
   }
 
   return (
-    <Page
-      title="Inbox and Approvals"
-      subtitle="Unified approval queue · leave, timesheet, attendance, recruiting & documents"
-    >
+    <Page title="Inbox and Approvals">
       <MetricGrid>
         <MetricCard label="Pending" value={collab.inbox.filter((t) => t.status === "Pending").length} />
         <MetricCard label="Approved" value={collab.inbox.filter((t) => t.status === "Approved").length} />
@@ -230,7 +228,7 @@ export function InboxApprovalsPage() {
 
           <Card title={selected ? selected.title : "Task detail"}>
             {!selected ? (
-              <EmptyState title="Select a task" description="Choose an item from the list to review timeline and act." />
+              <EmptyState title="Select a task" description="Choose an item from the list." />
             ) : (
               <div className="stack">
                 <dl className="info-grid">
@@ -376,7 +374,7 @@ export function MessagingPage() {
   function createGroup(event: FormEvent) {
     event.preventDefault();
     if (groupMemberIds.length === 0) {
-      setError("Select at least one colleague for the demo group.");
+      setError("Select at least one colleague.");
       return;
     }
     const members = CHAT_PEOPLE.filter((p) => groupMemberIds.includes(p.id));
@@ -394,7 +392,7 @@ export function MessagingPage() {
     setGroupTitle("");
     setGroupMemberIds([]);
     setError("");
-    setSentOk("Demo group created. Messages stay in this browser only.");
+    setSentOk("Group created.");
   }
 
   function send(event: FormEvent) {
@@ -404,7 +402,7 @@ export function MessagingPage() {
       return;
     }
     if (!text.trim() && !attachName) {
-      setError("Type a message or attach a demo file.");
+      setError("Type a message or attach a file.");
       return;
     }
     const failure = sendChatMessage(
@@ -489,7 +487,6 @@ export function MessagingPage() {
                   placeholder="e.g. Sprint sync"
                 />
               </Field>
-              <p className="note">Select colleagues to include.</p>
               <ul className="collab-list">
                 {CHAT_PEOPLE.filter((p) => p.id !== employee.id).map((p) => (
                   <li key={p.id} className="msg-person-row">
@@ -556,7 +553,7 @@ export function MessagingPage() {
             {conversations.length === 0 ? (
               <EmptyState
                 title="No conversations"
-                description="Use New message or the people directory to start a chat you participate in."
+                description="Start a chat with New message."
               />
             ) : (
               <ul className="collab-list">
@@ -636,7 +633,7 @@ export function MessagingPage() {
             <Card>
               <EmptyState
                 title="No conversation selected"
-                description="Pick a thread you participate in, or start a one-to-one chat from the directory."
+                description="Pick a conversation."
               />
             </Card>
           ) : (
@@ -689,7 +686,7 @@ export function MessagingPage() {
 
               <div className="msg-thread" role="log" aria-live="polite">
                 {(active.messages ?? []).length === 0 ? (
-                  <EmptyState title="No messages yet" description="Say hello — stored in local demo state only." />
+                  <EmptyState title="No messages yet" />
                 ) : (
                   (active.messages ?? []).map((m) => (
                     <div
@@ -778,7 +775,7 @@ export function AnnouncementsPage() {
   const selected = list.find((a) => a.id === selectedId) ?? list[0] ?? null;
 
   return (
-    <Page title="Announcements" subtitle="Company, country, department and team communications">
+    <Page title="Announcements">
       <FilterBar>
         <label className="filter-label">
           Scope
@@ -832,7 +829,7 @@ export function AnnouncementsPage() {
 
         <Card title="Details">
           {!selected ? (
-            <EmptyState title="Select an announcement" description="Open an item to read full details." />
+            <EmptyState title="Select an announcement" description="Open an item to read it." />
           ) : (
             <div className="stack">
               <h2 style={{ margin: 0, fontSize: 18 }}>{selected.title}</h2>
@@ -852,7 +849,7 @@ export function AnnouncementsPage() {
               </p>
               <p>{selected.body}</p>
               {canManage(selected) && (
-                <Field label="Demo publish controls">
+                <Field label="Publish state">
                   <select
                     value={selected.state}
                     onChange={(e) =>
@@ -897,13 +894,13 @@ export function NotificationCenterPage() {
   const managerView = isManagerNotifRole(role);
   const [category, setCategory] = useState("");
   const [prefsOpen, setPrefsOpen] = useState(false);
-  const [prefs, setPrefs] = useState(collab.prefs);
+  const savedPrefs = notifPrefsFor(employee.id, collab);
+  const [prefs, setPrefs] = useState(savedPrefs);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [actionFlash, setActionFlash] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
-    setPrefs(collab.prefs);
-  }, [collab.prefs]);
+    setPrefs(notifPrefsFor(employee.id, collab));
+  }, [collab.prefsByUser, employee.id]);
 
   const scoped = useMemo(
     () => listNotificationsForRole(role, employee.id),
@@ -918,10 +915,18 @@ export function NotificationCenterPage() {
     return !!task && task.status === "Pending" && canApproveLeaveFor(task.requesterId);
   }
 
+  /**
+   * Decisions are made in the Approvals center, which updates the real request. Notifications only link there —
+   * approving from a notification would change a copy and leave the request itself pending.
+   */
   function visibleActions(n: AppNotification): NotifAction[] {
-    return notificationActions(n).filter(
-      (a) => (a.kind !== "approve" && a.kind !== "reject") || canDecide(n),
-    );
+    const all = notificationActions(n);
+    const actions = all.filter((a) => a.kind !== "approve" && a.kind !== "reject");
+    const hadDecision = all.length !== actions.length || !!n.inboxTaskId;
+    if (hadDecision && canDecide(n) && !actions.some((a) => a.href === "/approvals")) {
+      actions.unshift({ id: "review", label: "Review in Approvals", kind: "link", href: "/approvals" });
+    }
+    return actions;
   }
 
   const list = scoped.filter((n) => {
@@ -957,23 +962,9 @@ export function NotificationCenterPage() {
       return;
     }
     if (kind === "approve" || kind === "reject") {
-      setSelectedId(n.id);
-      if (!n.inboxTaskId || !canDecide(n)) {
-        setActionFlash({ tone: "err", text: "This request is no longer pending or you can't decide it." });
-        return;
-      }
-      const result = decideInboxTask(
-        n.inboxTaskId,
-        kind === "approve" ? "Approved" : "Rejected",
-        employee.fullName,
-        kind === "reject" ? "Rejected from Notification Center" : undefined,
-      );
-      if (!result.ok) {
-        setActionFlash({ tone: "err", text: result.error });
-        return;
-      }
+      // Never decide from here — send the approver to the real request.
       markNotificationRead(n.id, employee.id);
-      setActionFlash({ tone: "ok", text: `${kind === "approve" ? "Approved" : "Rejected"} · ${n.title}` });
+      navigate("/approvals");
       return;
     }
     markNotificationRead(n.id, employee.id);
@@ -988,11 +979,6 @@ export function NotificationCenterPage() {
   return (
     <Page
       title="Notification Center"
-      subtitle={
-        managerView
-          ? "Team approvals, attendance, messages, holidays, learning, performance and HR updates · your reports only"
-          : "Approvals, messages, holidays, learning, performance and HR updates"
-      }
       action={
         <div className="row-gap">
           <button type="button" className="btn-ghost" onClick={() => setPrefsOpen((v) => !v)}>
@@ -1004,7 +990,6 @@ export function NotificationCenterPage() {
         </div>
       }
     >
-      {actionFlash && <Banner message={actionFlash} />}
 
       <MetricGrid>
         <MetricCard label="Unread" value={unread} />
@@ -1022,7 +1007,7 @@ export function NotificationCenterPage() {
       </MetricGrid>
 
       {prefsOpen && (
-        <Card title="Notification preferences (local demo)">
+        <Card title="Notification preferences">
           <div className="form-grid-2">
             {(
               [
@@ -1052,7 +1037,7 @@ export function NotificationCenterPage() {
             className="btn"
             style={{ marginTop: 12 }}
             onClick={() => {
-              setNotifPrefs(prefs);
+              setNotifPrefs(prefs, employee.id);
               setPrefsOpen(false);
             }}
           >
@@ -1078,7 +1063,7 @@ export function NotificationCenterPage() {
       <div className={selected ? "grid-2" : undefined}>
         <Card title="Notifications">
           {list.length === 0 ? (
-            <EmptyState title="No notifications" description="You're caught up, or preferences are filtering everything out." />
+            <EmptyState title="No notifications" description="You're all caught up." />
           ) : (
             <ul className="collab-list">
               {list.map((n) => {
@@ -1244,12 +1229,12 @@ export function HelpHrRequestsPage() {
     setSubject("");
     setDescription("");
     setFormError("");
-    setFormOk("Request submitted to local demo queue — HR will not receive a real email.");
+    setFormOk("Request submitted.");
     setTab("history");
   }
 
   return (
-    <Page title="Help & HR Requests" subtitle="FAQ, policies and request history">
+    <Page title="Help & HR Requests">
       <Tabs
         tabs={[
           { id: "request", label: "New request" },
@@ -1303,7 +1288,7 @@ export function HelpHrRequestsPage() {
         <div className="collab-split">
           <Card title={hrView ? "All requests" : "My requests"}>
             {requests.length === 0 ? (
-              <EmptyState title="No requests yet" description="Submit a service request from the New request tab." />
+              <EmptyState title="No requests yet" description="Use the New request tab." />
             ) : (
               <DataTable
                 headers={hrView ? ["Subject", "Requester", "Category", "Status", "Updated", ""] : ["Subject", "Category", "Status", "Updated", ""]}
@@ -1345,7 +1330,9 @@ export function HelpHrRequestsPage() {
                     >
                       {[selected.status, ...statusOptions].map((s) => (
                         <option key={s} value={s}>
-                          {!hrView && s === "In progress" && selected.status !== "In progress" ? "Reopen" : s}
+                          {(!hrView || selected.requesterId === employee.id) && s === "In progress" && selected.status !== "In progress"
+                            ? "Reopen"
+                            : s}
                         </option>
                       ))}
                     </select>
@@ -1353,7 +1340,11 @@ export function HelpHrRequestsPage() {
                 ) : (
                   <div className="row-gap">
                     <StatusBadge status={selected.status} />
-                    <span className="muted">HR updates the status of this request.</span>
+                    <span className="muted">
+                      {selected.requesterId === employee.id && hrView
+                        ? "You raised this request — another HR team member resolves it."
+                        : "HR updates the status of this request."}
+                    </span>
                   </div>
                 )}
                 <p>{selected.description}</p>

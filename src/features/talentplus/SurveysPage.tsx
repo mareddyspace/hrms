@@ -124,7 +124,7 @@ function OpenSurveys({ surveys }: { surveys: Survey[] }) {
           })}
         </ul>
       ) : (
-        <EmptyState title="No open surveys" description="You'll see surveys here when HR opens one for you." />
+        <EmptyState title="No open surveys" />
       )}
     </Card>
   );
@@ -210,11 +210,11 @@ function AnswerForm({ survey, onCancel, onDone }: { survey: Survey; onCancel: ()
 function Results({ surveys }: { surveys: Survey[] }) {
   const actor = useActor();
   const hr = isHr(actor.role);
-  const visible = surveys.filter((s) => s.published && surveyPhase(s) !== "Scheduled");
-  const [surveyId, setSurveyId] = useState(visible.find((s) => surveyPhase(s) === "Closed")?.id ?? visible[0]?.id ?? "");
+  const visible = surveys.filter((s) => s.published && surveyPhase(s) === "Closed");
+  const [surveyId, setSurveyId] = useState(visible[0]?.id ?? "");
   const survey = visible.find((s) => s.id === surveyId) ?? visible[0];
 
-  if (!survey) return <EmptyState title="No results yet" description="Results appear once a survey has opened." />;
+  if (!survey) return <EmptyState title="No results yet" description="Results show after a survey closes." />;
   const access = resultsFor(actor, survey.id);
 
   return (
@@ -224,7 +224,7 @@ function Results({ surveys }: { surveys: Survey[] }) {
           <select value={survey.id} onChange={(e) => setSurveyId(e.target.value)}>
             {visible.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.title} ({surveyPhase(s).toLowerCase()})
+                {s.title}
               </option>
             ))}
           </select>
@@ -234,7 +234,7 @@ function Results({ surveys }: { surveys: Survey[] }) {
         <Card>
           <EmptyState
             title={hr ? "No responses yet" : "No team results"}
-            description={hr ? "Nobody has answered this survey yet." : "There are no responses from your team for this survey."}
+            description={hr ? "Nobody has answered this survey yet." : "No team responses yet."}
           />
         </Card>
       )}

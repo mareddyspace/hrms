@@ -1,18 +1,22 @@
 import { useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
+import { claimLimitsFor, itemCurrency, money, moneyTotals, payRulesFor } from "../countryPay.ts";
 import { formatShortDate, inr, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
 export function EncashmentPage() {
-  const { leaveTable, state, employee, applyEncashment } = usePortal();
+  const { leaveTable, state, employee, applyEncashment, hasApprover } = usePortal();
   const pto = leaveTable.find((row) => row.code === "pto");
   const [days, setDays] = useState("1");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const mine = state.encashments.filter((item) => item.employeeId === employee.id);
 
   return (
-    <Page title="Leave encashment" subtitle="Only privilege leave can be encashed. Your manager approves the request; days update after approval.">
+    <Page
+      title="Leave encashment"
+      subtitle="Only privilege leave can be encashed."
+    >
       <section className="summary-row" aria-label="Privilege leave">
         <div className="summary">
           <span>Allowed</span>
@@ -33,7 +37,7 @@ export function EncashmentPage() {
             onSubmit={(event) => {
               event.preventDefault();
               const error = applyEncashment("pto", Number(days));
-              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Encashment submitted for manager approval." });
+              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Encashment submitted for manager approval." : "Encashment approved automatically." });
             }}
           >
             <Field label="Privilege leave days">
@@ -49,7 +53,7 @@ export function EncashmentPage() {
         </Card>
         <Card title="History">
           {mine.length === 0 ? (
-            <p className="empty">No encashment requests yet. Approved days are deducted from privilege leave.</p>
+            <p className="empty">No encashment requests yet.</p>
           ) : (
             <table className="data">
               <tbody>
@@ -81,22 +85,24 @@ const CASH_CATEGORIES = [
 ] as const;
 
 export function CashPage() {
-  const { state, employee, addCash } = usePortal();
+  const { state, employee, addCash, hasApprover } = usePortal();
+  const currency = payRulesFor(employee.countryCode).currency;
+  const { maxCashAdvance } = claimLimitsFor(employee.countryCode);
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
   const [purpose, setPurpose] = useState("");
   const [requiredBy, setRequiredBy] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const rows = state.cashAdvances.filter((item) => item.employeeId === employee.id);
-  const totalRequested = rows.reduce((sum, item) => sum + item.amount, 0);
+  const totalRequested = moneyTotals(rows.map((item) => ({ amount: item.amount, currency: itemCurrency(item) })));
   const pendingCount = rows.filter((item) => item.status === "pending").length;
 
   return (
-    <Page title="Cash advance" subtitle="Request money upfront for work expenses. Approved advances are recovered on a later payslip.">
+    <Page title="Cash advance" subtitle="Approved advances are recovered from a later payslip.">
       <section className="cash-summary" aria-label="Cash advance summary">
         <div className="cash-stat">
           <span>Total requested</span>
-          <strong>{inr(totalRequested)}</strong>
+          <strong>{totalRequested}</strong>
         </div>
         <div className="cash-stat">
           <span>Pending requests</span>
@@ -115,7 +121,7 @@ export function CashPage() {
               purpose,
               requiredBy,
             });
-            setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Cash advance submitted." });
+            setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Cash advance submitted for approval." : "Cash advance approved automatically." });
             if (!error) {
               setAmount("");
               setCategory("");
@@ -124,14 +130,13 @@ export function CashPage() {
             }
           }}
         >
-          <Field label="Amount (₹)">
+          <Field label={`Amount (${currency}, up to ${money(maxCashAdvance, currency)})`}>
             <input
               type="number"
               min={1}
               step={1}
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
-              placeholder="e.g. 5000"
             />
           </Field>
           <Field label="Expense category">
@@ -164,7 +169,7 @@ export function CashPage() {
 
       <Card title="My requests">
         {rows.length === 0 ? (
-          <p className="empty">No advance requested yet. Payroll recovers an approved advance from a later payslip.</p>
+          <p className="empty">No advance requested yet.</p>
         ) : (
           <div className="cash-request-list">
             {rows.map((item) => (
@@ -173,7 +178,7 @@ export function CashPage() {
                   <h3>{item.category || item.purpose}</h3>
                   <StatusPill status={item.status} />
                 </div>
-                <strong className="cash-request-amount">{inr(item.amount)}</strong>
+                <strong className="cash-request-amount">{money(item.amount, itemCurrency(item))}</strong>
                 {item.purpose && item.purpose !== item.category && <p className="muted cash-request-purpose">{item.purpose}</p>}
                 <p className="cash-request-meta">Submitted {formatShortDate(item.date)}</p>
                 {item.requiredBy && <p className="cash-request-meta">Needed by {formatShortDate(item.requiredBy)}</p>}
@@ -187,15 +192,18 @@ export function CashPage() {
 }
 
 export function AssetsPage() {
-  const { state, employee, addAssetRequest } = usePortal();
+  const { state, employee, addAssetRequest, hasApprover } = usePortal();
   const [item, setItem] = useState("");
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const assigned = state.assets.filter((asset) => asset.employeeId === employee.id);
   const requests = state.assetRequests.filter((request) => request.employeeId === employee.id);
   return (
-    <Page title="My Asset Request" subtitle="Assigned assets and new requests are separate lists.">
+    <Page title="My Asset Request">
       <Card title="Assigned to me">
+        {assigned.length === 0 ? (
+          <p className="empty">No assets are assigned to you.</p>
+        ) : (
         <table className="data">
           <thead>
             <tr>
@@ -216,6 +224,7 @@ export function AssetsPage() {
             ))}
           </tbody>
         </table>
+        )}
       </Card>
       <RequestSplit
         form={
@@ -223,7 +232,7 @@ export function AssetsPage() {
             onSubmit={(event) => {
               event.preventDefault();
               const error = addAssetRequest(item, reason);
-              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Asset request submitted." });
+              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Asset request submitted." : "Asset request approved automatically." });
               if (!error) {
                 setItem("");
                 setReason("");
@@ -272,7 +281,7 @@ export function AssetsPage() {
 }
 
 export function CabPage() {
-  const { state, employee, addCab } = usePortal();
+  const { state, employee, addCab, hasApprover } = usePortal();
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [from, setFrom] = useState("");
@@ -287,7 +296,7 @@ export function CabPage() {
             onSubmit={(event) => {
               event.preventDefault();
               const error = addCab({ date, time, from, to });
-              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Cab requested." });
+              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Cab requested." : "Cab booking approved automatically." });
               if (!error) {
                 setFrom("");
                 setTo("");
@@ -345,7 +354,7 @@ export function CabPage() {
 }
 
 export function SoftwarePage() {
-  const { state, employee, addSoftware } = usePortal();
+  const { state, employee, addSoftware, hasApprover } = usePortal();
   const [software, setSoftware] = useState("");
   const [justification, setJustification] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
@@ -358,7 +367,7 @@ export function SoftwarePage() {
             onSubmit={(event) => {
               event.preventDefault();
               const error = addSoftware(software, justification);
-              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Software request submitted." });
+              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Software request submitted." : "Software request approved automatically." });
               if (!error) {
                 setSoftware("");
                 setJustification("");
@@ -410,7 +419,7 @@ export function CafeteriaPage() {
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const orders = state.cafeteriaOrders.filter((order) => order.employeeId === employee.id);
   return (
-    <Page title="My Cafeteria" subtitle="Orders point at the menu. The price shown is the menu price.">
+    <Page title="My Cafeteria">
       <div className="menu-grid">
         {state.menu.map((item) => (
           <article key={item.id} className="menu-card">

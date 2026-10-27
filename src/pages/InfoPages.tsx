@@ -12,6 +12,9 @@ import { usePortal } from "../store.tsx";
 
 type ResetChannel = "email" | "mobile";
 
+/** Demo persona panel and on-screen OTP codes are local-development aids only. */
+const SHOW_DEV_ACCOUNTS = import.meta.env.DEV;
+
 export function LoginPage() {
   const {
     signedIn,
@@ -60,19 +63,23 @@ export function LoginPage() {
     else navigate("/");
   }
 
-  async function fillDemo(account: DemoAccount) {
+  function fillDemo(account: DemoAccount) {
+    // Fill only the email: the stored password may have been changed by the user.
     setEmail(account.email);
-    setPassword(account.password);
+    setPassword("");
     setFieldErrors({});
-    setMessage(null);
+    setMessage({ tone: "ok", text: "Enter your password to sign in." });
   }
 
   async function quickSignIn(account: DemoAccount) {
+    // One-click sign-in exists only in local development builds.
+    if (!SHOW_DEV_ACCOUNTS) return fillDemo(account);
     setEmail(account.email);
-    setPassword(account.password);
     const error = await signIn(account.email, account.password, remember);
-    if (error) setMessage({ tone: "err", text: error });
-    else navigate("/");
+    if (error) {
+      setPassword("");
+      setMessage({ tone: "err", text: "Password was changed for this account. Enter it to sign in." });
+    } else navigate("/");
   }
 
   function sendResetOtp() {
@@ -205,16 +212,17 @@ export function LoginPage() {
               <button className="btn" type="submit">
                 Sign in
               </button>
-              <button className="btn-ghost sso-demo" type="button" disabled title="SSO is a non-functional demo placeholder">
-                Continue with SSO (demo)
+              <button className="btn-ghost sso-demo" type="button" disabled title="Single sign-on is not enabled">
+                Continue with SSO
               </button>
             </div>
             <Banner message={message} />
           </form>
 
-          <aside className="login-demo-panel" aria-label="Prototype demo accounts">
+          {SHOW_DEV_ACCOUNTS && (
+          <aside className="login-demo-panel" aria-label="Development accounts">
             <div className="login-demo-head">
-              <h2>Demo role selection</h2>
+              <h2>Development accounts</h2>
             </div>
             <div className="login-demo-grid">
               {demoAccounts.map((account) => (
@@ -227,7 +235,7 @@ export function LoginPage() {
                       <br />
                       ID {account.employeeCode} · {account.countryName}
                       <br />
-                      Password: {account.password}
+                      Default password: {account.password}
                     </small>
                   </div>
                   <div className="login-demo-actions">
@@ -242,6 +250,7 @@ export function LoginPage() {
               ))}
             </div>
           </aside>
+          )}
         </div>
       ) : (
         <form className="login-card" onSubmit={onReset}>
@@ -306,10 +315,12 @@ export function LoginPage() {
                   <p className="note">
                     Delivered to your registered {sentChannel === "email" ? "email" : "mobile"}: <strong>{maskedDestination}</strong>
                   </p>
-                  <p className="note">
-                    Demo note: there is no SMS/email gateway here, so the code is also shown below for testing.
-                  </p>
-                  <p className="otp-code">{demoOtp}</p>
+                  {SHOW_DEV_ACCOUNTS && (
+                    <>
+                      <p className="note">Development build: no SMS/email gateway, so the code is shown here.</p>
+                      <p className="otp-code">{demoOtp}</p>
+                    </>
+                  )}
                 </div>
                 <Field label="OTP">
                   <input
@@ -379,49 +390,49 @@ const HELP_ARTICLES: HelpArticle[] = [
     topic: "Attendance",
     question: "How can I correct missing attendance?",
     answer:
-      "Open Leave & time → Attendance to review the company calendar. Weekends, holidays, leave, and WFH are marked there. For a missing day in this demo, raise a support ticket so HR can review it.",
+      "Open Leave & time → Attendance to review the company calendar. For a missing day, raise a support ticket so HR can review it.",
   },
   {
     id: "payslip-download",
     topic: "Payroll",
     question: "Where can I download my payslip?",
     answer:
-      "Open Pay → Payslips. The list keeps amounts private. Open a month to view the slip, then use Download or Print. Expense amounts on Home stay masked; open Pay → Expenses to see full claim amounts.",
+      "Open Pay → Payslips, open a month, then use Download or Print.",
   },
   {
     id: "timesheet-submit",
     topic: "Timesheets",
     question: "How do I submit a timesheet?",
     answer:
-      "Open Leave & time → Timesheet. Enter hours against your projects, save a draft if needed, then submit the week. Waiting-on-you counts the draft until a manager approves it.",
+      "Open Leave & time → Timesheet. Enter hours against your projects, then submit the week for manager approval.",
   },
   {
     id: "profile-update",
     topic: "Profile",
     question: "How do I update my profile?",
     answer:
-      "Open Documents → My details, or use Edit on the home profile card. Mobile and email stay masked on screen; change them in the edit form. A verification code is sent when you save contact changes.",
+      "Open Documents → My details, or use Edit on the home profile card. A verification code is sent when you save contact changes.",
   },
   {
     id: "leave-balance",
     topic: "Leave",
     question: "Why did my leave balance change?",
     answer:
-      "Allowed, used, pending, and left all read the same leave policy plus your requests. Encash leave and approved requests both update the balance shown on Home and Leave.",
+      "Approved requests and leave encashment both reduce your balance.",
   },
   {
     id: "payroll-expense",
     topic: "Payroll",
     question: "How do I claim an expense?",
     answer:
-      "Open Pay → Expenses. Submit a date, category, amount, project, and short note. Claims stay under My claims until approved. Home only shows a masked amount preview.",
+      "Open Pay → Expenses. Submit a date, category, amount, project, and short note for approval.",
   },
   {
     id: "profile-demo",
     topic: "Profile",
-    question: "Where does the demo data live?",
+    question: "How do I restore the original data?",
     answer:
-      "Everything in this portal is stored in this browser. Use Reset demo data under Help if you want the original sample records back.",
+      "Use Reset data under Help.",
   },
 ];
 
@@ -459,7 +470,7 @@ export function LegacyHelpPage() {
       setTicketMessage({ tone: "err", text: "Add a subject and a short description." });
       return;
     }
-    setTicketMessage({ tone: "ok", text: "Support ticket submitted. HR will follow up in this demo." });
+    setTicketMessage({ tone: "ok", text: "Support ticket submitted." });
     setTicketSubject("");
     setTicketBody("");
   }
@@ -561,9 +572,9 @@ export function LegacyHelpPage() {
               setResetDone(true);
             }}
           >
-            Reset demo data
+            Reset data
           </button>
-          {resetDone && <span className="note ok">Demo data restored.</span>}
+          {resetDone && <span className="note ok">Data restored.</span>}
         </div>
       </div>
 
@@ -572,7 +583,6 @@ export function LegacyHelpPage() {
           <button className="modal-scrim" type="button" aria-label="Close" onClick={() => setTicketOpen(false)} />
           <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="help-ticket-title">
             <h2 id="help-ticket-title">Raise a Support Ticket</h2>
-            <p className="modal-lede">Describe the issue. In this demo the ticket stays on this screen.</p>
             <form onSubmit={submitTicket}>
               <div className="form-grid">
                 <Field label="Subject" wide>
@@ -614,40 +624,8 @@ export function TermsPage() {
       <Card>
         <div className="prose">
           <p>{COMPANY_NAME} is your employee portal. It is not a payroll, tax, or attendance system of record until those records are connected.</p>
-          <p>Sample payslips, colleagues, and requests are here so the screens can be reviewed. They should be replaced when the live database is connected.</p>
-          <p>Do not treat downloaded payslip text from this demo as an official salary statement.</p>
+          <p>Downloaded payslip text is not an official salary statement.</p>
         </div>
-      </Card>
-    </Page>
-  );
-}
-
-export function VersionPage() {
-  return (
-    <Page title="Version" subtitle="Frontend 0.1 · database not connected">
-      <Card title="Stored once">
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Record</th>
-              <th>What the screens calculate from it</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Employee</td>
-              <td>Header, home profile, My Info, EMS, and your directory row</td>
-            </tr>
-            <tr>
-              <td>Leave policy + requests + encashment</td>
-              <td>Quota, utilized, pending, and balance</td>
-            </tr>
-            <tr>
-              <td>Tasks, timesheets, evaluations, programs</td>
-              <td>Waiting-on-you counts</td>
-            </tr>
-          </tbody>
-        </table>
       </Card>
     </Page>
   );

@@ -1,7 +1,43 @@
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import { TIMEZ_COUNTRIES, type CountryCode } from "../model.ts";
-import { buildTimezWorkforce } from "../workforce.ts";
-import { TZ_HEADCOUNT } from "./dashboardMock.ts";
+import {
+  COUNTRY_HEAD_TITLE,
+  DEPARTMENT_CODE,
+  DEPARTMENTS,
+  DIVISION_BY_DEPARTMENT,
+  DIVISION_ORDER,
+  FAMILY_BY_DEPARTMENT,
+  JOB_CATALOG,
+  TEAMMATE_MANAGER_ID,
+  TEAMMATES,
+  buildTimezWorkforce,
+  gradeForTitle,
+  headTitle,
+  type WorkforceRow,
+} from "../workforce.ts";
+import {
+  NATIONALITY_BY_COUNTRY,
+  profileDetailsFor,
+  type DependentRecord,
+  type EducationRecord,
+  type ExperienceRecord,
+  type PersonProfileDetails,
+  type WorkArrangement,
+} from "./personProfileSeed.ts";
+
+export {
+  NATIONALITIES,
+  NATIONALITY_BY_COUNTRY,
+  WORK_ARRANGEMENTS,
+  ageOn,
+  joinName,
+  splitName,
+  type DependentRecord,
+  type EducationRecord,
+  type ExperienceRecord,
+  type PersonProfileDetails,
+  type WorkArrangement,
+} from "./personProfileSeed.ts";
 
 export type EmploymentStatus = "Active" | "On Leave" | "Contractor" | "Terminated";
 
@@ -36,16 +72,86 @@ export interface PersonRecord {
   timeZone: string;
   currency: string;
   address: string;
+  /*
+   * Personal & background details (blueprint §8–9). Optional on the type so older stored records and
+   * other modules that build records still type-check; every record read through peopleLocal has them filled.
+   */
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  preferredName?: string;
+  dateOfBirth?: string;
+  nationality?: string;
+  workArrangement?: WorkArrangement;
+  education?: EducationRecord[];
+  experience?: ExperienceRecord[];
+  dependents?: DependentRecord[];
 }
+
+/** Fill any missing personal/background fields (older stored records, records built by other modules). */
+export function ensureProfileDetails<T extends PersonRecord>(person: T): T & PersonProfileDetails {
+  const has =
+    person.firstName !== undefined &&
+    person.lastName !== undefined &&
+    person.preferredName !== undefined &&
+    person.dateOfBirth !== undefined &&
+    person.nationality !== undefined &&
+    person.workArrangement !== undefined &&
+    Array.isArray(person.education) &&
+    Array.isArray(person.experience) &&
+    Array.isArray(person.dependents);
+  if (has) return person as T & PersonProfileDetails;
+  const seed = profileDetailsFor({
+    id: person.id,
+    fullName: person.fullName,
+    gender: person.gender,
+    dateOfJoining: person.dateOfJoining,
+    grade: person.grade,
+    department: person.department,
+    countryCode: String(person.countryCode),
+    availability: person.availability,
+  });
+  return {
+    ...person,
+    firstName: person.firstName ?? seed.firstName,
+    middleName: person.firstName !== undefined ? person.middleName : seed.middleName,
+    lastName: person.lastName ?? seed.lastName,
+    preferredName: person.preferredName ?? seed.preferredName,
+    dateOfBirth: person.dateOfBirth ?? seed.dateOfBirth,
+    nationality: person.nationality ?? seed.nationality,
+    workArrangement: person.workArrangement ?? seed.workArrangement,
+    education: Array.isArray(person.education) ? person.education : seed.education,
+    experience: Array.isArray(person.experience) ? person.experience : seed.experience,
+    dependents: Array.isArray(person.dependents) ? person.dependents : seed.dependents,
+  };
+}
+
+export type OrgNodeType =
+  | "company"
+  | "country"
+  | "legalEntity"
+  | "businessUnit"
+  | "division"
+  | "department"
+  | "costCenter"
+  | "location"
+  | "jobFamily"
+  | "jobProfile"
+  | "position"
+  | "grade"
+  | "supervisoryOrg"
+  | "employee";
 
 export interface OrgNode {
   id: string;
-  type: "company" | "country" | "legalEntity" | "businessUnit" | "division" | "department" | "costCenter" | "location";
+  type: OrgNodeType;
   name: string;
   code?: string;
   headcount?: number;
   children?: OrgNode[];
   managerName?: string;
+  /** Employee nodes link to the person's profile. */
+  personId?: string;
 }
 
 export interface JobFamily {
@@ -82,31 +188,7 @@ export interface PositionRecord {
   openings: number;
 }
 
-export interface Person360Extras {
-  skills: { name: string; level: string }[];
-  certifications: { name: string; issuer: string; year: string }[];
-  education: { school: string; degree: string; year: string }[];
-  experience: { company: string; title: string; from: string; to: string }[];
-  goals: { name: string; progress: number }[];
-  learning: { name: string; status: string; completed?: string }[];
-  attendanceSummary: { present: number; wfh: number; leave: number; absent: number };
-  leaveBalances: { type: string; balance: number }[];
-  timesheet: { period: string; status: string; hours: number };
-  documents: { name: string; category: string; updated: string }[];
-  lifecycle: { date: string; event: string; detail: string }[];
-  compensation: { currency: string; base: string; variable: string; grade: string; effective: string };
-  benefits: { plan: string; coverage: string; status: string }[];
-}
-
-export interface OrgChangeEvent {
-  id: string;
-  date: string;
-  type: string;
-  summary: string;
-  actor: string;
-}
-
-const LEGAL_BY_COUNTRY: Record<string, string> = {
+export const LEGAL_BY_COUNTRY: Record<string, string> = {
   IN: "Infotech India Pvt Ltd",
   US: "Infotech Inc",
   GB: "Infotech UK Ltd",
@@ -117,62 +199,132 @@ const LEGAL_BY_COUNTRY: Record<string, string> = {
   DE: "Infotech Germany GmbH",
 };
 
-const LOCATIONS: Record<string, string[]> = {
-  IN: ["Bengaluru", "Hyderabad", "Pune", "Chennai"],
-  US: ["San Francisco", "New York", "Austin"],
-  GB: ["London", "Manchester"],
-  AU: ["Sydney", "Melbourne"],
-  CA: ["Toronto", "Vancouver"],
-  AE: ["Dubai"],
-  SA: ["Riyadh"],
-  DE: ["Berlin", "Munich"],
+/* ───────────── Job catalog ───────────── */
+
+const FAMILY_CODE: Record<string, string> = {
+  Engineering: "ENG",
+  Product: "PRD",
+  People: "PPL",
+  Finance: "FIN",
+  Sales: "SAL",
+  Operations: "OPS",
+  "Customer Success": "CSM",
+  Legal: "LGL",
+  Executive: "EXE",
+  "Information Technology": "ITS",
 };
 
-const JOB_FAMILY_LIST = [
-  "Engineering",
-  "Product",
-  "People",
-  "Finance",
-  "Sales",
-  "Operations",
-  "Customer Success",
-  "Design",
-];
+const JOB_FAMILY_LIST = Object.keys(FAMILY_CODE);
 
-const GRADES = ["L3", "L4", "L5", "L6", "L7", "M1", "M2"];
+export const JOB_PROFILES: JobProfile[] = JOB_FAMILY_LIST.flatMap((family, fi) =>
+  JOB_CATALOG.filter((j) => j.family === family).map((j, pi) => ({
+    id: `JP-${FAMILY_CODE[family]}-${pi + 1}`,
+    familyId: `JF-${fi + 1}`,
+    familyName: family,
+    title: j.title,
+    gradeBand: j.grade,
+    description: `${j.title} in the ${family} family.`,
+  })),
+);
 
-function hash(str: string): number {
-  let h = 0;
-  for (let i = 0; i < str.length; i += 1) h = (h * 31 + str.charCodeAt(i)) | 0;
-  return Math.abs(h);
+export const JOB_FAMILIES: JobFamily[] = JOB_FAMILY_LIST.map((name, i) => ({
+  id: `JF-${i + 1}`,
+  name,
+  profiles: JOB_PROFILES.filter((p) => p.familyName === name).length,
+}));
+
+/** Job profile for a title (exact match), or the first profile in the family. */
+export function jobProfileFor(title: string, family: string): JobProfile | undefined {
+  const t = title.trim().toLowerCase();
+  return (
+    JOB_PROFILES.find((p) => p.title.toLowerCase() === t) ??
+    JOB_PROFILES.find((p) => p.familyName === family)
+  );
 }
 
-function countryForColleague(workingCountry: string) {
-  return TIMEZ_COUNTRIES.find((c) => c.name === workingCountry) ?? TIMEZ_COUNTRIES[0];
+/** Readable job profile, e.g. "Senior Engineer (JP-ENG-3)"; falls back to the raw id. */
+export function jobProfileLabel(jobProfileId: string): string {
+  if (!jobProfileId) return "";
+  const profile = JOB_PROFILES.find((p) => p.id === jobProfileId);
+  return profile ? `${profile.title} · ${profile.familyName}` : jobProfileId;
+}
+
+/** Readable position: the position title with its code, e.g. "Software Engineer · TIMEZ-ENG-IN-00012". */
+export function positionLabel(person: Pick<PersonRecord, "designation" | "positionId">): string {
+  if (!person.positionId) return person.designation;
+  return `${person.designation} · ${person.positionId}`;
+}
+
+export function familyForDepartment(department: string): string {
+  return FAMILY_BY_DEPARTMENT[department] ?? "Operations";
+}
+
+export function divisionForDepartment(department: string): string {
+  return DIVISION_BY_DEPARTMENT[department] ?? "Corporate Services";
+}
+
+export function costCenterFor(countryCode: string, department: string): string {
+  return `CC-${countryCode}-${DEPARTMENT_CODE[department] ?? "GEN"}`;
+}
+
+/* ───────────── Personas ───────────── */
+
+/** Gender and joining date for each named person (the CEO joined first, at founding). */
+const NAMED_PEOPLE: Record<string, { gender: string; dateOfJoining: string }> = {
+  "demo-ceo": { gender: "Male", dateOfJoining: "2012-03-01" },
+  "emp-ram": { gender: "Male", dateOfJoining: "2014-06-16" },
+  "demo-hr-admin": { gender: "Male", dateOfJoining: "2015-01-12" },
+  "demo-compensation": { gender: "Female", dateOfJoining: "2016-09-19" },
+  "demo-hiring-manager": { gender: "Male", dateOfJoining: "2017-08-07" },
+  "demo-recruiter": { gender: "Female", dateOfJoining: "2018-02-05" },
+  "emp-mahesh": { gender: "Male", dateOfJoining: "2019-05-13" },
+  "demo-admin": { gender: "Female", dateOfJoining: "2020-01-20" },
+};
+
+function countryByCode(code: string) {
+  return TIMEZ_COUNTRIES.find((c) => c.code === code) ?? TIMEZ_COUNTRIES[0];
+}
+
+/** Personas whose manager is another persona (team members below a persona department head). */
+const PERSONA_FIXED_MANAGER: Record<string, string> = {
+  "emp-mahesh": "emp-ram",
+  "demo-recruiter": "demo-hr-admin",
+  "demo-compensation": "demo-hr-admin",
+};
+const CEO_ID = "demo-ceo";
+
+/**
+ * Reporting line for personas: CEO → Country Manager → department head → team lead → staff.
+ * A persona department head (Ram, Farhan, Daniel) reports to their country's Country Manager; a persona in a
+ * department with a generated head reports to that head; otherwise to the Country Manager.
+ */
+function personaManagerId(account: (typeof DEMO_ACCOUNTS)[number], workforce: WorkforceRow[]): string {
+  if (account.id === CEO_ID) return "";
+  const fixed = PERSONA_FIXED_MANAGER[account.id];
+  if (fixed) return fixed;
+  const countryCode = account.countryCode ?? "IN";
+  const department = account.department ?? "";
+  const deptHead = workforce.find((w) => w.countryCode === countryCode && w.designation === headTitle(department));
+  if (deptHead) return deptHead.id;
+  const countryHead = workforce.find((w) => w.countryCode === countryCode && w.designation === COUNTRY_HEAD_TITLE);
+  return countryHead?.id ?? CEO_ID;
+}
+
+function positionIdFor(department: string, countryCode: string, employeeCode: string): string {
+  const num = employeeCode.replace(/\D/g, "").padStart(5, "0").slice(-5);
+  return `TIMEZ-${DEPARTMENT_CODE[department] ?? "GEN"}-${countryCode}-${num}`;
 }
 
 function buildBasePeople(): PersonRecord[] {
-  const workforce = buildTimezWorkforce(TZ_HEADCOUNT.global);
-  const managers = [
-    { id: "emp-ram", name: "Ram Krishnan" },
-    { id: "demo-hr-admin", name: "Farhan Ali" },
-    { id: "demo-hiring-manager", name: "Daniel Ortiz" },
-    { id: "demo-hrbp", name: "Meera Iyer" },
-  ];
+  const workforce = buildTimezWorkforce();
+  const nameById = new Map<string, string>([
+    ...DEMO_ACCOUNTS.map((a) => [a.id, a.fullName] as [string, string]),
+    ...workforce.map((w) => [w.id, w.name] as [string, string]),
+  ]);
 
-  const fromWorkforce: PersonRecord[] = workforce.map((row, index) => {
-    const country = countryForColleague(row.workingCountry);
-    const locs = LOCATIONS[country.code] ?? [country.name];
-    const location = locs[index % locs.length];
-    const family = JOB_FAMILY_LIST.includes(row.department) ? row.department : "Operations";
-    const grade = GRADES[index % GRADES.length];
-    const mgr = managers[index % managers.length];
-    const statusRoll = index % 23;
-    const employmentStatus: EmploymentStatus =
-      statusRoll === 0 ? "On Leave" : statusRoll === 1 ? "Contractor" : statusRoll === 2 ? "Terminated" : "Active";
-    const profileId = `JP-${family.slice(0, 3).toUpperCase()}-${(index % 8) + 1}`;
-    const positionId = `POS-${String(1000 + (index % 120)).padStart(4, "0")}`;
-
+  const fromWorkforce: PersonRecord[] = workforce.map((row) => {
+    const country = countryByCode(row.countryCode);
+    const family = familyForDepartment(row.department);
     return {
       id: row.id,
       employeeCode: row.employeeCode,
@@ -183,45 +335,36 @@ function buildBasePeople(): PersonRecord[] {
       photo: row.photo,
       gender: row.gender,
       dateOfJoining: row.dateOfJoining,
-      employmentType: employmentStatus === "Contractor" ? "Contract" : "Full Time",
-      employmentStatus,
+      employmentType: row.status === "Contractor" ? "Contract" : "Full Time",
+      employmentStatus: row.status,
       designation: row.designation,
       jobFamily: family,
-      jobProfileId: profileId,
-      positionId,
-      grade,
+      jobProfileId: jobProfileFor(row.designation, family)?.id ?? "",
+      positionId: row.positionId,
+      grade: row.grade,
       department: row.department,
-      division: `${row.department} Delivery`,
+      division: divisionForDepartment(row.department),
       businessUnit: row.businessUnit,
-      costCenter: `CC-${country.code}-${(index % 9) + 1}`,
-      location,
+      costCenter: costCenterFor(country.code, row.department),
+      location: row.location,
       countryCode: country.code,
       countryName: country.name,
       legalEntity: LEGAL_BY_COUNTRY[country.code] ?? "Infotech",
-      managerId: mgr.id,
-      managerName: mgr.name,
+      managerId: row.managerId,
+      managerName: nameById.get(row.managerId) ?? "",
       availability: row.availability,
       timeZone: country.timeZone,
       currency: country.currency,
-      address: `${location}, ${country.name}`,
+      address: `${row.location}, ${country.name}`,
     };
   });
 
-  const demoPeople: PersonRecord[] = DEMO_ACCOUNTS.map((account, index) => {
-    const country =
-      TIMEZ_COUNTRIES.find((c) => c.code === account.countryCode) ?? TIMEZ_COUNTRIES[0];
-    const family =
-      account.department === "Engineering"
-        ? "Engineering"
-        : account.department === "People" || account.department === "Learning"
-          ? "People"
-          : account.department === "Finance"
-            ? "Finance"
-            : account.department === "Product"
-              ? "Product"
-              : account.department === "Executive"
-                ? "Product"
-                : "Operations";
+  const personas: PersonRecord[] = DEMO_ACCOUNTS.map((account) => {
+    const country = countryByCode(account.countryCode ?? "IN");
+    const department = account.department ?? "Engineering";
+    const family = familyForDepartment(department);
+    const managerId = personaManagerId(account, workforce);
+    const facts = NAMED_PEOPLE[account.id] ?? { gender: "Unspecified", dateOfJoining: "2020-01-06" };
     return {
       id: account.id,
       employeeCode: account.employeeCode,
@@ -230,30 +373,25 @@ function buildBasePeople(): PersonRecord[] {
       personalEmail: account.email.replace("@infotech.com", "@mail.example"),
       mobile: account.mobile,
       photo: account.photo,
-      gender: index % 2 === 0 ? "Female" : "Male",
-      dateOfJoining: "2019-04-15",
+      gender: facts.gender,
+      dateOfJoining: facts.dateOfJoining,
       employmentType: account.employmentType,
       employmentStatus: "Active" as const,
       designation: account.designation,
       jobFamily: family,
-      jobProfileId: `JP-DEMO-${account.employeeCode}`,
-      positionId: `POS-DEMO-${account.employeeCode}`,
-      grade: account.role === "executive" || account.role === "founder" || account.role === "cofounder" ? "L7" : "L5",
-      department: account.department ?? "Engineering",
-      division: `${account.department ?? "Engineering"} Leadership`,
-      businessUnit: `Infotech ${account.countryName ?? "India"}`,
-      costCenter: `CC-${account.countryCode ?? "IN"}-1`,
+      jobProfileId: jobProfileFor(account.designation, family)?.id ?? "",
+      positionId: positionIdFor(department, country.code, account.employeeCode),
+      grade: gradeForTitle(account.designation),
+      department,
+      division: divisionForDepartment(department),
+      businessUnit: `Infotech ${country.name}`,
+      costCenter: costCenterFor(country.code, department),
       location: account.location ?? "Bengaluru",
-      countryCode: account.countryCode ?? "IN",
-      countryName: account.countryName ?? "India",
-      legalEntity: account.legalEntity ?? LEGAL_BY_COUNTRY.IN,
-      managerId: account.role === "employee" ? "emp-ram" : account.role === "manager" ? "demo-ceo" : "demo-ceo",
-      managerName:
-        account.role === "employee"
-          ? "Ram Krishnan"
-          : account.role === "manager"
-            ? "Jordan Blake"
-            : "Aanya Seth",
+      countryCode: country.code,
+      countryName: country.name,
+      legalEntity: account.legalEntity ?? LEGAL_BY_COUNTRY[country.code],
+      managerId,
+      managerName: managerId ? nameById.get(managerId) ?? "" : "",
       availability: "In Office",
       timeZone: account.timeZone,
       currency: account.currency ?? country.currency,
@@ -261,10 +399,43 @@ function buildBasePeople(): PersonRecord[] {
     };
   });
 
-  const byCode = new Map<string, PersonRecord>();
-  for (const person of fromWorkforce) byCode.set(person.employeeCode, person);
-  for (const person of demoPeople) byCode.set(person.employeeCode, person);
-  return [...byCode.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
+  const india = countryByCode("IN");
+  const teammates: PersonRecord[] = TEAMMATES.map((t) => ({
+    id: t.id,
+    employeeCode: t.employeeCode,
+    fullName: t.name,
+    email: `${t.name.toLowerCase().replace(" ", ".")}@infotech.com`,
+    personalEmail: `${t.name.toLowerCase().replace(" ", ".")}@mail.example`,
+    mobile: t.mobile,
+    photo: "/profile.svg",
+    gender: t.gender,
+    dateOfJoining: t.dateOfJoining,
+    employmentType: "Full Time",
+    employmentStatus: "Active",
+    designation: t.title,
+    jobFamily: "Engineering",
+    jobProfileId: jobProfileFor(t.title, "Engineering")?.id ?? "",
+    positionId: positionIdFor("Engineering", "IN", t.employeeCode),
+    grade: gradeForTitle(t.title),
+    department: "Engineering",
+    division: divisionForDepartment("Engineering"),
+    businessUnit: `Infotech ${india.name}`,
+    costCenter: costCenterFor("IN", "Engineering"),
+    location: "Bengaluru",
+    countryCode: "IN",
+    countryName: india.name,
+    legalEntity: LEGAL_BY_COUNTRY.IN,
+    managerId: TEAMMATE_MANAGER_ID,
+    managerName: nameById.get(TEAMMATE_MANAGER_ID) ?? "",
+    availability: "In Office",
+    timeZone: india.timeZone,
+    currency: india.currency,
+    address: `Bengaluru, ${india.name}`,
+  }));
+
+  const byId = new Map<string, PersonRecord>();
+  for (const person of [...fromWorkforce, ...personas, ...teammates]) byId.set(person.id, ensureProfileDetails(person));
+  return [...byId.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
 
 let cachedPeople: PersonRecord[] | null = null;
@@ -274,251 +445,200 @@ export function getBasePeople(): PersonRecord[] {
   return cachedPeople.map((p) => ({ ...p }));
 }
 
-export function getPerson360Extras(person: PersonRecord): Person360Extras {
-  const h = hash(person.id);
-  const skillPool = [
-    "React",
-    "TypeScript",
-    "People Ops",
-    "Recruiting",
-    "SQL",
-    "Leadership",
-    "Cloud",
-    "QA Automation",
-    "Negotiation",
-    "Payroll",
-  ];
-  return {
-    skills: [
-      { name: skillPool[h % skillPool.length], level: "Advanced" },
-      { name: skillPool[(h + 3) % skillPool.length], level: "Intermediate" },
-      { name: skillPool[(h + 5) % skillPool.length], level: "Working" },
-    ],
-    certifications: [
-      { name: "Professional Scrum Master", issuer: "Scrum.org", year: "2023" },
-      { name: "ISO 27001 Awareness", issuer: "Infotech L&D", year: "2025" },
-    ],
-    education: [
-      {
-        school: h % 2 === 0 ? "National Institute of Technology" : "University of London",
-        degree: "B.Tech / BSc Computer Science",
-        year: "2014",
-      },
-    ],
-    experience: [
-      {
-        company: "Infotech",
-        title: person.designation,
-        from: person.dateOfJoining.slice(0, 4),
-        to: "Present",
-      },
-      {
-        company: h % 2 === 0 ? "Nova Soft" : "Northwind Labs",
-        title: "Associate",
-        from: "2016",
-        to: person.dateOfJoining.slice(0, 4),
-      },
-    ],
-    goals: [
-      { name: "Deliver Q4 roadmap outcomes", progress: 55 + (h % 40) },
-      { name: "Complete leadership curriculum", progress: 30 + (h % 50) },
-    ],
-    learning: [
-      { name: "Workplace safety", status: "Completed", completed: "2026-03-12" },
-      { name: "Secure coding fundamentals", status: h % 3 === 0 ? "Completed" : "In progress" },
-      { name: "Manager essentials", status: "Assigned" },
-    ],
-    attendanceSummary: {
-      present: 18 + (h % 4),
-      wfh: 2 + (h % 3),
-      leave: h % 2,
-      absent: 0,
-    },
-    leaveBalances: [
-      { type: "Privilege leave", balance: 8 + (h % 6) },
-      { type: "WFH", balance: 4 + (h % 4) },
-      { type: "Sick leave", balance: 5 },
-    ],
-    timesheet: {
-      period: "Week of 13 Oct 2026",
-      status: h % 4 === 0 ? "Submitted" : "Draft",
-      hours: 36 + (h % 6),
-    },
-    documents: [
-      { name: "Offer letter", category: "Employment", updated: "2024-11-04" },
-      { name: "NDA", category: "Compliance", updated: "2024-11-04" },
-      { name: "ID proof", category: "Personal", updated: "2025-01-18" },
-    ],
-    lifecycle: [
-      { date: person.dateOfJoining, event: "Joined", detail: `${person.designation} · ${person.location}` },
-      { date: "2025-06-01", event: "Promotion", detail: `Moved to grade ${person.grade}` },
-      { date: "2026-02-15", event: "Transfer", detail: `Cost center ${person.costCenter}` },
-    ],
-    compensation: {
-      currency: person.currency,
-      base: person.currency === "INR" ? "₹18,50,000" : person.currency === "GBP" ? "£72,000" : "$95,000",
-      variable: person.currency === "INR" ? "₹2,00,000" : "$12,000",
-      grade: person.grade,
-      effective: "2026-04-01",
-    },
-    benefits: [
-      { plan: "Medical", coverage: "Employee + Family", status: "Enrolled" },
-      { plan: "Retirement", coverage: "Standard", status: "Enrolled" },
-      { plan: "Wellness", coverage: "Optional", status: "Eligible" },
-    ],
-  };
+/* ───────────── Positions ───────────── */
+
+const GRADE_RANK = ["L3", "L4", "L5", "L6", "M1", "M2", "M3", "E1"];
+export function gradeRank(grade: string): number {
+  return GRADE_RANK.indexOf(grade);
 }
 
-export const JOB_FAMILIES: JobFamily[] = JOB_FAMILY_LIST.map((name, i) => ({
-  id: `JF-${i + 1}`,
-  name,
-  profiles: 4 + (i % 3),
-}));
+/** The person at the top of a country's department (the one whose manager sits outside it). */
+export function departmentHead(people: PersonRecord[], countryCode: string, department: string): PersonRecord | undefined {
+  const group = people.filter(
+    (p) => p.countryCode === countryCode && p.department === department && p.employmentStatus !== "Terminated",
+  );
+  const ids = new Set(group.map((p) => p.id));
+  const tops = group.filter((p) => !p.managerId || !ids.has(p.managerId));
+  return tops.sort((a, b) => gradeRank(b.grade) - gradeRank(a.grade))[0];
+}
 
-export const JOB_PROFILES: JobProfile[] = JOB_FAMILIES.flatMap((family, fi) =>
-  Array.from({ length: family.profiles }, (_, pi) => ({
-    id: `JP-${family.name.slice(0, 3).toUpperCase()}-${pi + 1}`,
-    familyId: family.id,
-    familyName: family.name,
-    title:
-      pi === 0
-        ? `Junior ${family.name} Specialist`
-        : pi === 1
-          ? `${family.name} Specialist`
-          : pi === 2
-            ? `Senior ${family.name} Specialist`
-            : `${family.name} Manager`,
-    gradeBand: pi < 2 ? "L3–L4" : pi === 2 ? "L5–L6" : "M1–M2",
-    description: `Standard Infotech ${family.name.toLowerCase()} profile for global hiring and career paths.`,
-  })).concat(
-    fi === 0
-      ? [
-          {
-            id: "JP-ENG-SR",
-            familyId: family.id,
-            familyName: family.name,
-            title: "Senior React Engineer",
-            gradeBand: "L5–L6",
-            description: "Frontend engineering with React/TypeScript delivery focus.",
-          },
-        ]
-      : [],
-  ),
-);
+type OpenPositionSeed = {
+  id: string;
+  number: string;
+  title: string;
+  profileTitle: string;
+  department: string;
+  countryCode: string;
+  location: string;
+  status: "Open" | "Frozen";
+  requirements: string[];
+  openings: number;
+};
 
-export const POSITIONS: PositionRecord[] = [
-  {
-    id: "pos-221",
-    code: "POS-0221",
-    title: "Senior React Engineer",
-    jobProfileId: "JP-ENG-SR",
-    jobFamily: "Engineering",
-    grade: "L5",
-    country: "India",
-    location: "Bengaluru",
-    department: "Engineering",
-    legalEntity: LEGAL_BY_COUNTRY.IN,
-    managerName: "Ram Krishnan",
-    status: "Open",
-    requirements: ["5+ years React", "TypeScript", "Design systems"],
-    openings: 3,
-  },
-  {
-    id: "pos-218",
-    code: "POS-0218",
-    title: "HR Business Partner",
-    jobProfileId: "JP-PEO-3",
-    jobFamily: "People",
-    grade: "L5",
-    country: "United Kingdom",
-    location: "London",
-    department: "People",
-    legalEntity: LEGAL_BY_COUNTRY.GB,
-    managerName: "Farhan Ali",
-    status: "Open",
-    requirements: ["HRBP experience", "Employee relations", "Workforce planning"],
-    openings: 1,
-  },
-  {
-    id: "pos-210",
-    code: "POS-0210",
-    title: "Talent Sourcer",
-    jobProfileId: "JP-PEO-2",
-    jobFamily: "People",
-    grade: "L4",
-    country: "United States",
-    location: "New York",
-    department: "People",
-    legalEntity: LEGAL_BY_COUNTRY.US,
-    managerName: "Sophie Clark",
-    status: "Open",
-    requirements: ["Boolean search", "ATS proficiency", "Stakeholder management"],
-    openings: 2,
-  },
-  {
-    id: "pos-205",
-    code: "POS-0205",
-    title: "Finance Analyst",
-    jobProfileId: "JP-FIN-2",
-    jobFamily: "Finance",
-    grade: "L4",
-    country: "Canada",
-    location: "Toronto",
-    department: "Finance",
-    legalEntity: LEGAL_BY_COUNTRY.CA,
-    managerName: "Victor Lang",
-    status: "Frozen",
-    requirements: ["FP&A", "Excel / BI", "Month-end close"],
-    openings: 1,
-  },
-  {
-    id: "pos-filled-1",
-    code: "POS-1001",
-    title: "Software Engineer",
-    jobProfileId: "JP-ENG-2",
-    jobFamily: "Engineering",
-    grade: "L4",
-    country: "India",
-    location: "Bengaluru",
-    department: "Engineering",
-    legalEntity: LEGAL_BY_COUNTRY.IN,
-    managerName: "Ram Krishnan",
-    status: "Filled",
-    incumbentId: "emp-mahesh",
-    incumbentName: "Babu Menon",
-    requirements: ["JavaScript", "React", "Agile delivery"],
-    openings: 0,
-  },
-  {
-    id: "pos-filled-2",
-    code: "POS-1002",
-    title: "Engineering Manager",
-    jobProfileId: "JP-ENG-4",
-    jobFamily: "Engineering",
-    grade: "M1",
-    country: "India",
-    location: "Bengaluru",
-    department: "Engineering",
-    legalEntity: LEGAL_BY_COUNTRY.IN,
-    managerName: "Jordan Blake",
-    status: "Filled",
-    incumbentId: "emp-ram",
-    incumbentName: "Ram Krishnan",
-    requirements: ["Team leadership", "Delivery ownership", "Coaching"],
-    openings: 0,
-  },
+const OPEN_POSITION_SEEDS: OpenPositionSeed[] = [
+  { id: "pos-221", number: "90221", title: "Senior React Engineer", profileTitle: "Senior Engineer", department: "Engineering", countryCode: "IN", location: "Bengaluru", status: "Open", requirements: ["5+ years React", "TypeScript", "Design systems"], openings: 3 },
+  { id: "pos-218", number: "90218", title: "HR Business Partner", profileTitle: "HR Business Partner", department: "People", countryCode: "GB", location: "London", status: "Open", requirements: ["HRBP experience", "Employee relations", "Workforce planning"], openings: 1 },
+  { id: "pos-210", number: "90210", title: "Talent Sourcer", profileTitle: "Talent Acquisition Specialist", department: "People", countryCode: "US", location: "New York", status: "Open", requirements: ["Boolean search", "ATS proficiency", "Stakeholder management"], openings: 2 },
+  { id: "pos-205", number: "90205", title: "Finance Analyst", profileTitle: "Finance Analyst", department: "Finance", countryCode: "CA", location: "Toronto", status: "Frozen", requirements: ["FP&A", "Excel / BI", "Month-end close"], openings: 1 },
 ];
 
+/** Open positions plus one filled position per current employee (every person has their own). */
+export function buildPositions(people: PersonRecord[]): PositionRecord[] {
+  const open: PositionRecord[] = OPEN_POSITION_SEEDS.map((seed) => {
+    const country = countryByCode(seed.countryCode);
+    const family = familyForDepartment(seed.department);
+    const profile = jobProfileFor(seed.profileTitle, family);
+    const manager =
+      seed.id === "pos-210"
+        ? people.find((p) => p.id === "demo-recruiter")
+        : departmentHead(people, seed.countryCode, seed.department);
+    return {
+      id: seed.id,
+      code: `TIMEZ-${DEPARTMENT_CODE[seed.department]}-${seed.countryCode}-${seed.number}`,
+      title: seed.title,
+      jobProfileId: profile?.id ?? "",
+      jobFamily: family,
+      grade: profile?.gradeBand ?? gradeForTitle(seed.title),
+      country: country.name,
+      location: seed.location,
+      department: seed.department,
+      legalEntity: LEGAL_BY_COUNTRY[seed.countryCode],
+      managerName: manager?.fullName ?? "",
+      status: seed.status,
+      requirements: seed.requirements,
+      openings: seed.openings,
+    };
+  });
+  const byId = new Map(people.map((p) => [p.id, p]));
+  const filled: PositionRecord[] = people
+    .filter((p) => p.employmentStatus !== "Terminated" && p.positionId)
+    .map((p) => ({
+      id: `pos-${p.id}`,
+      code: p.positionId,
+      title: p.designation,
+      jobProfileId: p.jobProfileId,
+      jobFamily: p.jobFamily,
+      grade: p.grade,
+      country: p.countryName,
+      location: p.location,
+      department: p.department,
+      legalEntity: p.legalEntity,
+      managerName: (p.managerId && byId.get(p.managerId)?.fullName) || p.managerName,
+      status: "Filled" as const,
+      incumbentId: p.id,
+      incumbentName: p.fullName,
+      requirements: [],
+      openings: 0,
+    }));
+  return [...open, ...filled];
+}
+
+/* ───────────── Organization tree ───────────── */
+
+const DEPARTMENT_ORDER: string[] = ["Executive", ...DEPARTMENTS, "IT", "Talent Acquisition", "Total Rewards"];
+function departmentSort(a: string, b: string): number {
+  const ia = DEPARTMENT_ORDER.indexOf(a);
+  const ib = DEPARTMENT_ORDER.indexOf(b);
+  return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+}
+
+function groupBy<T>(rows: T[], key: (row: T) => string): [string, T[]][] {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const k = key(row);
+    const list = map.get(k);
+    if (list) list.push(row);
+    else map.set(k, [row]);
+  }
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+}
+
+/**
+ * Below a location: Job family → Job profile → Position → Grade → Supervisory organization
+ * ("<Manager>'s team") → Employee. Built from the people at that location only.
+ */
+function jobLevels(people: PersonRecord[], parentId: string, nameById: Map<string, string>): OrgNode[] {
+  return groupBy(people, (p) => p.jobFamily || "Unassigned").map(([family, inFamily]) => {
+    const familyId = `${parentId}|jf-${family}`;
+    return {
+      id: familyId,
+      type: "jobFamily" as const,
+      name: family,
+      headcount: inFamily.length,
+      children: groupBy(inFamily, (p) => p.jobProfileId || "none").map(([profileId, inProfile]) => {
+        const profileNodeId = `${familyId}|jp-${profileId}`;
+        const profile = JOB_PROFILES.find((jp) => jp.id === profileId);
+        return {
+          id: profileNodeId,
+          type: "jobProfile" as const,
+          name: profile?.title ?? "No job profile",
+          code: profile?.id,
+          headcount: inProfile.length,
+          children: groupBy(inProfile, (p) => p.positionId || p.id).map(([positionCode, inPosition]) => {
+            const positionNodeId = `${profileNodeId}|pos-${positionCode}`;
+            return {
+              id: positionNodeId,
+              type: "position" as const,
+              name: inPosition[0].designation,
+              code: inPosition[0].positionId || undefined,
+              headcount: inPosition.length,
+              children: groupBy(inPosition, (p) => p.grade || "—").map(([grade, inGrade]) => {
+                const gradeNodeId = `${positionNodeId}|gr-${grade}`;
+                return {
+                  id: gradeNodeId,
+                  type: "grade" as const,
+                  name: grade,
+                  headcount: inGrade.length,
+                  children: groupBy(inGrade, (p) => p.managerId || "").map(([managerId, inTeam]) => {
+                    const teamNodeId = `${gradeNodeId}|sup-${managerId || "top"}`;
+                    const managerName = (managerId && nameById.get(managerId)) || inTeam[0].managerName;
+                    return {
+                      id: teamNodeId,
+                      type: "supervisoryOrg" as const,
+                      name: managerName ? `${managerName}'s team` : "Top of the company",
+                      headcount: inTeam.length,
+                      managerName: managerName || undefined,
+                      children: inTeam.map((p) => ({
+                        id: `${teamNodeId}|emp-${p.id}`,
+                        type: "employee" as const,
+                        name: p.fullName,
+                        code: p.employeeCode,
+                        headcount: 1,
+                        personId: p.id,
+                      })),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        };
+      }),
+    };
+  });
+}
+
+/**
+ * Company → Country → Legal entity → Business unit → Division → Department → Cost center → Location →
+ * Job family → Job profile → Position → Grade → Supervisory organization → Employee (blueprint §11).
+ * The page renders only expanded nodes, so the deep levels cost nothing until opened.
+ */
 export function buildOrgTree(people: PersonRecord[]): OrgNode {
-  const byCountry = TIMEZ_COUNTRIES.map((country) => {
-    const inCountry = people.filter((p) => p.countryCode === country.code && p.employmentStatus !== "Terminated");
-    const depts = [...new Set(inCountry.map((p) => p.department))];
+  const active = people.filter((p) => p.employmentStatus !== "Terminated");
+  const nameById = new Map(people.map((p) => [p.id, p.fullName]));
+  const byCountry: OrgNode[] = TIMEZ_COUNTRIES.map((country) => {
+    const inCountry = active.filter((p) => p.countryCode === country.code);
+    const divisions = [...new Set(inCountry.map((p) => p.division || divisionForDepartment(p.department)))].sort(
+      (a, b) => DIVISION_ORDER.indexOf(a) - DIVISION_ORDER.indexOf(b),
+    );
+    const countryHead = departmentHead(people, country.code, "Executive");
     return {
       id: `country-${country.code}`,
       type: "country" as const,
       name: country.name,
       code: country.code,
       headcount: inCountry.length,
+      managerName: countryHead?.fullName,
       children: [
         {
           id: `le-${country.code}`,
@@ -531,37 +651,46 @@ export function buildOrgTree(people: PersonRecord[]): OrgNode {
               type: "businessUnit" as const,
               name: `Infotech ${country.name}`,
               headcount: inCountry.length,
-              children: depts.slice(0, 6).map((dept) => {
-                const inDept = inCountry.filter((p) => p.department === dept);
-                const locations = [...new Set(inDept.map((p) => p.location))];
+              children: divisions.map((division) => {
+                const inDivision = inCountry.filter((p) => (p.division || divisionForDepartment(p.department)) === division);
+                const depts = [...new Set(inDivision.map((p) => p.department))].sort(departmentSort);
                 return {
-                  id: `dept-${country.code}-${dept}`,
-                  type: "department" as const,
-                  name: dept,
-                  headcount: inDept.length,
-                  managerName: inDept[0]?.managerName,
-                  children: [
-                    {
-                      id: `div-${country.code}-${dept}`,
-                      type: "division" as const,
-                      name: `${dept} Delivery`,
+                  id: `div-${country.code}-${division}`,
+                  type: "division" as const,
+                  name: division,
+                  headcount: inDivision.length,
+                  children: depts.map((dept) => {
+                    const inDept = inDivision.filter((p) => p.department === dept);
+                    const centers = [...new Set(inDept.map((p) => p.costCenter))].sort();
+                    return {
+                      id: `dept-${country.code}-${dept}`,
+                      type: "department" as const,
+                      name: dept,
                       headcount: inDept.length,
-                      children: [
-                        {
-                          id: `cc-${country.code}-${dept}`,
+                      managerName: departmentHead(people, country.code, dept)?.fullName,
+                      children: centers.map((cc) => {
+                        const inCc = inDept.filter((p) => p.costCenter === cc);
+                        const locations = [...new Set(inCc.map((p) => p.location))].sort();
+                        return {
+                          id: `cc-${country.code}-${dept}-${cc}`,
                           type: "costCenter" as const,
-                          name: inDept[0]?.costCenter ?? `CC-${country.code}`,
-                          headcount: inDept.length,
-                          children: locations.map((loc) => ({
-                            id: `loc-${country.code}-${dept}-${loc}`,
-                            type: "location" as const,
-                            name: loc,
-                            headcount: inDept.filter((p) => p.location === loc).length,
-                          })),
-                        },
-                      ],
-                    },
-                  ],
+                          name: cc,
+                          headcount: inCc.length,
+                          children: locations.map((loc) => {
+                            const inLoc = inCc.filter((p) => p.location === loc);
+                            const locId = `loc-${country.code}-${dept}-${cc}-${loc}`;
+                            return {
+                              id: locId,
+                              type: "location" as const,
+                              name: loc,
+                              headcount: inLoc.length,
+                              children: jobLevels(inLoc, locId, nameById),
+                            };
+                          }),
+                        };
+                      }),
+                    };
+                  }),
                 };
               }),
             },
@@ -575,47 +704,23 @@ export function buildOrgTree(people: PersonRecord[]): OrgNode {
     id: "company-timez",
     type: "company",
     name: "Infotech",
-    headcount: people.filter((p) => p.employmentStatus !== "Terminated").length,
+    headcount: active.length,
     children: byCountry,
   };
 }
 
-export const ORG_CHANGE_HISTORY: OrgChangeEvent[] = [
-  {
-    id: "oc-1",
-    date: "2026-10-01",
-    type: "Transfer",
-    summary: "Ravi Menon moved Platform → Shared Services (IN)",
-    actor: "Meera Iyer",
-  },
-  {
-    id: "oc-2",
-    date: "2026-09-18",
-    type: "Reorg",
-    summary: "Customer Success split under Americas BU",
-    actor: "Farhan Ali",
-  },
-  {
-    id: "oc-3",
-    date: "2026-08-12",
-    type: "New entity",
-    summary: "Infotech Germany GmbH cost centers activated",
-    actor: "Kai Nakamura",
-  },
-  {
-    id: "oc-4",
-    date: "2026-07-02",
-    type: "Manager change",
-    summary: "Engineering Bengaluru reporting line → Ram Krishnan",
-    actor: "Farhan Ali",
-  },
-];
-
 export const FILTER_OPTIONS = {
   countries: TIMEZ_COUNTRIES.map((c) => c.name),
-  legalEntities: Object.values(LEGAL_BY_COUNTRY),
+  legalEntities: TIMEZ_COUNTRIES.map((c) => LEGAL_BY_COUNTRY[c.code]),
   // Use the departments people actually belong to, so every employee can be found by the filter.
-  departments: [...new Set(getBasePeople().map((p) => p.department))].sort(),
+  departments: [...new Set(getBasePeople().map((p) => p.department))].sort(departmentSort),
   employmentStatuses: ["Active", "On Leave", "Contractor", "Terminated"] as EmploymentStatus[],
   jobFamilies: JOB_FAMILY_LIST,
+  businessUnits: TIMEZ_COUNTRIES.map((c) => `Infotech ${c.name}`),
+  grades: GRADE_RANK,
 };
+
+/** Nationality of someone working in this country (used as a form default). */
+export function nationalityForCountry(countryCode: string): string {
+  return NATIONALITY_BY_COUNTRY[countryCode] ?? "Other";
+}

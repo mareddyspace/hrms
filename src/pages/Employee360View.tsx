@@ -1,15 +1,23 @@
+import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { useState } from "react";
-import { Card, EmptyState, MetricCard, MetricGrid, StatusBadge, Tabs } from "../components/ui.tsx";
-import { getPerson360Extras, type PersonRecord } from "../data/peopleData.ts";
-import { getExitDetails, isTerminated } from "../data/peopleLocal.ts";
-import {
-  canViewSalaryAmount,
-  canViewSensitivePiiFor,
-  getProfileDepth,
-} from "../data/peoplePermissions.ts";
+import { Card, DataTable, EmptyState, MetricCard, MetricGrid, StatusBadge, Tabs } from "../components/ui.tsx";
+import { money, payRulesFor } from "../countryPay.ts";
+import { attendanceContextFor, buildAttendanceHistory, formatHm, kindLabel } from "../data/attendanceData.ts";
+import { getAttendanceState, listCorrectionsForEmployee, subscribeAttendance } from "../data/attendanceLocal.ts";
+import { careerTarget, skillsFor } from "../data/careerProfile.ts";
+import { getLifecycleHistory, isScheduled, subscribeLifecycleHistory, timelineFor, type LifecycleEvent } from "../data/lifecycleHistory.ts";
+import { ageOn, ensureProfileDetails, jobProfileLabel, positionLabel, type PersonRecord } from "../data/peopleData.ts";
+import { directReportIds, getExitDetails, isTerminated, listPeople, managerChainIds, subscribePeople } from "../data/peopleLocal.ts";
+import { profileAccessFor } from "../data/profileAccess.ts";
+import { useProfileExtras } from "../data/profileExtras.ts";
+import { DEPENDENTS } from "../data/rewardData.ts";
+import { getRewardState, subscribeReward } from "../data/rewardLocal.ts";
+import { COURSES, PERF_CYCLES } from "../data/talentData.ts";
+import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
+import { scheduleForEmployee } from "../data/workSchedule.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
-import { maskAddress, maskEmail, maskMobile } from "../model.ts";
+import { leaveRows, maskAddress, maskEmail, maskMobile, parseISODate, toISO, todayISO, type CountryCode } from "../model.ts";
+import { usePortal } from "../store.tsx";
 
 function Progress({ value, label }: { value: number; label: string }) {
   const pct = Math.max(0, Math.min(100, Math.round(value)));
@@ -26,17 +34,55 @@ function Progress({ value, label }: { value: number; label: string }) {
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
+function Fact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="info-fact">
       <dt>{label}</dt>
-      <dd>{value || "—"}</dd>
+      <dd>{value === "" || value === undefined || value === null ? "—" : value}</dd>
     </div>
   );
 }
 
+function shiftISO(iso: string, days: number): string {
+  const d = parseISODate(iso);
+  d.setDate(d.getDate() + days);
+  return toISO(d);
+}
+
+function tenureText(dateOfJoining: string, today: string): string {
+  const [y1, m1] = dateOfJoining.split("-").map(Number);
+  const [y2, m2] = today.split("-").map(Number);
+  const months = (y2 - y1) * 12 + (m2 - m1);
+  if (months < 1) return "under a month";
+  const years = Math.floor(months / 12);
+  const rest = months % 12;
+  return [years ? `${years} yr${years > 1 ? "s" : ""}` : "", rest ? `${rest} mo` : ""].filter(Boolean).join(" ");
+}
+
+const MASK = "••••••";
+
+type TabId =
+  | "personal"
+  | "employment"
+  | "org"
+  | "manager"
+  | "job"
+  | "attendance"
+  | "leave"
+  | "timesheet"
+  | "goals"
+  | "performance"
+  | "learning"
+  | "skills"
+  | "career"
+  | "comp"
+  | "benefits"
+  | "docs"
+  | "lifecycle";
+
+/** Employee 360: the full record, section by section, limited to what the viewer may see. */
 export function Employee360View({
-  person,
+  person: rawPerson,
   viewer,
   selfId,
   onEdit,
@@ -49,127 +95,377 @@ export function Employee360View({
   /** Skip the photo/name card when the page already shows a profile header. */
   hideHeader?: boolean;
 }) {
-  const isSelf = person.id === selfId || person.employeeCode === viewer.employeeCode;
-  const extras = getPerson360Extras(person);
+  const { state, employee } = usePortal();
+  const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+  const reward = useSyncExternalStore(subscribeReward, getRewardState, getRewardState);
+  const attendanceState = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
+  const history = useSyncExternalStore(subscribeLifecycleHistory, getLifecycleHistory, getLifecycleHistory);
+  const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
+  const person = useMemo(() => ensureProfileDetails(rawPerson), [rawPerson]);
+  const extras = useProfileExtras(person.id);
+  const today = todayISO();
+  const access = profileAccessFor(viewer, person.id, selfId);
+  const isSelf = access.isSelf;
   const terminated = isTerminated(person);
   const exit = getExitDetails(person);
-  const subjectCtx = {
-    subjectId: person.id,
-    selfId,
-    isDirectReport: person.managerId === viewer.id || person.managerName === viewer.fullName,
-    inHrScope: true,
-  };
-  const depth = getProfileDepth(viewer, subjectCtx);
-  const canSeePii = canViewSensitivePiiFor(viewer, subjectCtx);
-  const showFullHr = depth === "full_hr" || depth === "own";
-  const showTeamExtras = depth === "team" || showFullHr;
-  const compAccess = canViewSalaryAmount(viewer, person.id, {
-    selfId,
-    isDirectReport: subjectCtx.isDirectReport,
-  });
-  const [tab, setTab] = useState("personal");
-  // Sensitive contact / pay details stay masked on-screen; reveal only when authorized and toggled.
+  const [tab, setTab] = useState<TabId>("personal");
   const [revealPii, setRevealPii] = useState(false);
   const [revealPay, setRevealPay] = useState(false);
-  const showPii = canSeePii && revealPii;
-  const showPayAmounts = compAccess === "full" && revealPay;
+  const show = access.personal && revealPii;
+  const firstName = person.preferredName || person.firstName || person.fullName.split(" ")[0];
 
-  const tabs = [
-    { id: "personal", label: "Personal" },
-    { id: "employment", label: "Employment" },
-    { id: "org", label: "Organization" },
-    ...(showTeamExtras ? [{ id: "skills", label: "Skills & career" }] : []),
-    ...(showTeamExtras ? [{ id: "time", label: "Time & leave" }] : []),
-    ...(showTeamExtras ? [{ id: "goals", label: "Goals & learning" }] : []),
-    ...(showFullHr || isSelf ? [{ id: "docs", label: "Documents & lifecycle" }] : []),
-    ...(compAccess !== "hidden" ? [{ id: "comp", label: "Compensation & benefits" }] : []),
+  // Self-maintained details (preferred name, personal email, emergency contact) win over the HR record.
+  const preferredName = extras.preferredName || person.preferredName;
+  const personalEmail = extras.personalEmail || person.personalEmail;
+  const mobile = isSelf ? employee.mobile || person.mobile : person.mobile;
+  const address = isSelf ? employee.address || person.address : person.address;
+  const emergency = extras.emergencyName
+    ? [extras.emergencyName, extras.emergencyRelation, extras.emergencyPhone].filter(Boolean).join(" · ")
+    : "";
+
+  /* ───── Reporting line ───── */
+  const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
+  const manager = person.managerId ? byId.get(person.managerId) : undefined;
+  const chain = managerChainIds(person.id).map((id) => byId.get(id)).filter((p): p is PersonRecord => Boolean(p));
+  const reports = directReportIds(person.id).map((id) => byId.get(id)).filter((p): p is PersonRecord => Boolean(p));
+
+  /* ───── Schedule, attendance, leave, timesheets ───── */
+  const schedule = scheduleForEmployee({
+    shiftName: isSelf ? employee.shiftName : undefined,
+    shiftHours: isSelf ? employee.shiftHours : undefined,
+    countryCode: String(person.countryCode),
+  });
+  const attendance = useMemo(() => {
+    if (!access.work) return [];
+    const ctx = attendanceContextFor({ id: person.id, countryCode: String(person.countryCode) }, state.holidays, state.leaveRequests);
+    return buildAttendanceHistory({
+      employeeId: person.id,
+      employeeName: person.fullName,
+      from: shiftISO(today, -29),
+      to: today,
+      holidays: ctx.holidays,
+      leaveRequests: state.leaveRequests,
+      absences: isSelf ? state.absences : [],
+      shiftHours: schedule.hoursLabel,
+      corrections: listCorrectionsForEmployee(person.id),
+      weeklyOffDays: schedule.weeklyOffDays,
+      sessions: attendanceState.sessions,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [access.work, person.id, person.countryCode, state.holidays, state.leaveRequests, state.absences, attendanceState, today, isSelf, schedule.hoursLabel]);
+  const worked = attendance.filter((d) => ["present", "wfh", "missing_punch", "pending_correction"].includes(d.kind));
+  const attendanceStats = {
+    present: worked.length,
+    absent: attendance.filter((d) => d.kind === "absent").length,
+    leave: attendance.filter((d) => d.kind === "leave").length,
+    late: attendance.filter((d) => d.lateMinutes > 0).length,
+    avgHours: worked.length ? worked.reduce((s, d) => s + d.hoursWorked, 0) / worked.length : 0,
+  };
+  const attendanceExceptions = attendance
+    .filter((d) => d.kind === "absent" || d.kind === "missing_punch" || d.kind === "pending_correction" || d.lateMinutes > 0)
+    .slice(-8)
+    .reverse();
+
+  const leaveBalances = access.work
+    ? leaveRows(
+        state.leavePolicies,
+        state.leaveRequests,
+        state.encashments,
+        state.holidays,
+        person.id,
+        schedule.weeklyOffDays,
+        Number(today.slice(0, 4)),
+      )
+    : [];
+  const leaveRequests = state.leaveRequests.filter((l) => l.employeeId === person.id).slice(0, 6);
+
+  const timesheetWeeks = useMemo(() => {
+    const weeks = new Map<string, { week: string; hours: number; status: string; projects: string }>();
+    for (const row of state.orgTimesheets.filter((r) => r.personId === person.id)) {
+      weeks.set(row.weekStart, { week: row.weekStart, hours: row.hours, status: row.status, projects: row.projectSummary });
+    }
+    for (const sheet of state.timesheets.filter((t) => t.employeeId === person.id)) {
+      const hours = Object.values(sheet.hours).reduce((s, h) => s + h, 0);
+      const project = state.projects.find((p) => p.id === sheet.projectId)?.name ?? "";
+      const row = weeks.get(sheet.weekStart);
+      if (row && state.orgTimesheets.some((r) => r.personId === person.id && r.weekStart === sheet.weekStart)) continue;
+      if (row) {
+        row.hours += hours;
+        row.projects = [row.projects, project].filter(Boolean).join(", ");
+      } else {
+        weeks.set(sheet.weekStart, { week: sheet.weekStart, hours, status: sheet.status, projects: project });
+      }
+    }
+    return [...weeks.values()].sort((a, b) => b.week.localeCompare(a.week)).slice(0, 8);
+  }, [state.orgTimesheets, state.timesheets, state.projects, person.id]);
+
+  /* ───── Talent ───── */
+  const goals = talent.goals.filter((g) => g.ownerId === person.id);
+  const goalWeight = goals.reduce((s, g) => s + (g.weight || 0), 0);
+  const goalProgress = goals.length
+    ? goalWeight
+      ? goals.reduce((s, g) => s + g.progress * (g.weight || 0), 0) / goalWeight
+      : goals.reduce((s, g) => s + g.progress, 0) / goals.length
+    : 0;
+  const reviews = talent.reviews.filter((r) => r.employeeId === person.id);
+  const ratingFor = (r: (typeof reviews)[number]): string | undefined =>
+    isSelf ? (r.released ? r.rating : undefined) : access.unreleasedRatings ? r.rating : undefined;
+  const praise = talent.feedback.filter((f) => f.kind === "Praise" && f.toId === person.id);
+  const learning = talent.enrollments.filter((e) => e.employeeId === person.id);
+  const certifications = talent.certifications.filter((c) => c.employeeId === person.id);
+  const skills = skillsFor(talent.skillProfiles, person);
+  const career = careerTarget(person, skills);
+  const openGaps = career ? career.gaps.filter((g) => g.gap > 0).sort((a, b) => b.gap - a.gap) : [];
+  const courseFor = (skillId: string) => COURSES.find((c) => c.skills.includes(skillId));
+
+  /* ───── Reward ───── */
+  const compHistory = reward.history
+    .filter((h) => h.employeeId === person.id)
+    .sort((a, b) => b.effective.localeCompare(a.effective));
+  const bonuses = reward.bonuses.filter((b) => b.employeeId === person.id);
+  const enrolments = reward.enrollments.filter((e) => e.employeeId === person.id);
+  const coverage = DEPENDENTS.filter((d) => d.employeeId === person.id);
+  const rules = payRulesFor(String(person.countryCode) as CountryCode);
+  const monthly = rules.earnings.reduce((sum, line) => sum + line.amount, 0);
+  const showPay = revealPay;
+
+  const documents = state.documents.filter((d) => d.employeeId === person.id);
+
+  /* ───── Lifecycle (compensation changes only for viewers who may see pay) ───── */
+  const timeline: LifecycleEvent[] = useMemo(() => {
+    const events = timelineFor({ ...person, ...exit }, history);
+    if (!access.compensation) return events.filter((e) => e.type !== "Compensation change");
+    const compEvents: LifecycleEvent[] = compHistory.map((h) => ({
+      id: `comp-${h.id}`,
+      personId: person.id,
+      personName: person.fullName,
+      type: "Compensation change",
+      effectiveDate: h.effective,
+      before: "",
+      after: `${h.event} · ${h.grade}`,
+      by: "Compensation",
+      byId: "",
+      recordedOn: h.effective,
+      derived: true,
+    }));
+    return [...events, ...compEvents].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [person, history, access.compensation, reward.history]);
+
+  const tabs: { id: TabId; label: string }[] = [
+    { id: "personal", label: "Personal information" },
+    { id: "employment", label: "Employment information" },
+    { id: "org", label: "Org structure" },
+    { id: "manager", label: "Manager" },
+    { id: "job", label: "Job" },
+    ...(access.work
+      ? ([
+          { id: "attendance", label: "Attendance" },
+          { id: "leave", label: "Leave" },
+          { id: "timesheet", label: "Timesheet" },
+          { id: "goals", label: "Goals" },
+          { id: "performance", label: "Performance" },
+          { id: "learning", label: "Learning" },
+          { id: "skills", label: "Skills" },
+          { id: "career", label: "Career" },
+        ] as { id: TabId; label: string }[])
+      : []),
+    ...(access.compensation ? [{ id: "comp" as const, label: "Compensation" }] : []),
+    ...(access.benefits ? [{ id: "benefits" as const, label: "Benefits" }] : []),
+    ...(access.documents ? [{ id: "docs" as const, label: "Documents" }] : []),
+    ...(access.work ? [{ id: "lifecycle" as const, label: "Lifecycle history" }] : []),
   ];
+  const activeTab = tabs.some((t) => t.id === tab) ? tab : "personal";
+
+  /* ───── AI summary: built only from what this viewer can see above ───── */
+  const summary = useMemo(() => {
+    const lines: string[] = [];
+    const tenure = tenureText(person.dateOfJoining, today);
+    lines.push(
+      terminated
+        ? `${firstName} was a ${person.designation} in ${person.department} and left${exit.exitDate ? ` on ${exit.exitDate}` : ""}.`
+        : `${firstName} is a ${person.designation} (${person.grade}) in ${person.department}, ${person.location}, with ${tenure} at Infotech.`,
+    );
+    if (manager) {
+      lines.push(
+        `Reports to ${manager.fullName}${manager.designation ? `, ${manager.designation}` : ""}${
+          reports.length ? `, and leads ${reports.length} direct report${reports.length > 1 ? "s" : ""}` : ""
+        }.`,
+      );
+    } else if (reports.length) {
+      lines.push(`Leads ${reports.length} direct report${reports.length > 1 ? "s" : ""}.`);
+    }
+    if (access.work) {
+      if (goals.length) {
+        const lowest = [...goals].sort((a, b) => a.progress - b.progress)[0];
+        lines.push(
+          `Goal progress is ${Math.round(goalProgress)}% across ${goals.length} goal${goals.length > 1 ? "s" : ""}; "${lowest.title}" is lowest at ${lowest.progress}%.`,
+        );
+      }
+      const rated = reviews.map((r) => ({ r, rating: ratingFor(r) })).find((x) => x.rating);
+      if (rated) {
+        const cycle = PERF_CYCLES.find((c) => c.id === rated.r.cycleId)?.name ?? "latest cycle";
+        lines.push(`Rated ${rated.rating} in the ${cycle}${rated.r.released ? "" : " (not yet released)"}.`);
+      }
+      const top = [...skills].sort((a, b) => rank(b.level) - rank(a.level)).slice(0, 2);
+      if (top.length) {
+        lines.push(
+          `Strongest skills: ${top.map((s) => `${s.skillName} (${s.level})`).join(", ")}${
+            career && openGaps.length
+              ? `; for ${career.role.title} the gaps are ${openGaps.map((g) => g.name).join(", ")}`
+              : ""
+          }.`,
+        );
+      }
+      const recent = timeline.find((e) => e.type !== "Hire" && !isScheduled(e, today) && e.type !== "Compensation change");
+      if (recent) lines.push(`Last change: ${recent.type.toLowerCase()} on ${recent.effectiveDate} (${recent.after}).`);
+      const ideas: string[] = [];
+      for (const g of openGaps.slice(0, 2)) {
+        const course = courseFor(g.skillId);
+        ideas.push(course ? `${g.name} through "${course.title}"` : `${g.name} (${g.have} → ${g.need})`);
+      }
+      if (!ideas.length && goals.length) {
+        const lowest = [...goals].sort((a, b) => a.progress - b.progress)[0];
+        if (lowest.progress < 60) ideas.push(`closing out "${lowest.title}"`);
+      }
+      if (ideas.length) lines.push(`Suggested development: ${ideas.join("; ")}.`);
+    }
+    return lines.slice(0, 6);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [person, manager, reports.length, access.work, goals, reviews, skills, career, timeline, today, terminated]);
 
   return (
     <div className="stack">
       {!hideHeader && (
-      <Card>
-        <div className="who row-between" style={{ alignItems: "flex-start", gap: 16 }}>
-          <div className="who" style={{ margin: 0 }}>
-            <img className="identity-photo who-photo" src={person.photo} alt="" />
-            <div className="who-copy">
-              <h2>{person.fullName}</h2>
-              {terminated && (
-                <p className="profile-left-chip">
-                  No longer with the company{exit.exitDate ? ` · left ${exit.exitDate}` : ""}
+        <Card>
+          <div className="who row-between" style={{ alignItems: "flex-start", gap: 16 }}>
+            <div className="who" style={{ margin: 0 }}>
+              <img className="identity-photo who-photo" src={person.photo} alt="" />
+              <div className="who-copy">
+                <h2>{person.fullName}</h2>
+                {terminated && (
+                  <p className="profile-left-chip">
+                    No longer with the company{exit.exitDate ? ` · left ${exit.exitDate}` : ""}
+                  </p>
+                )}
+                <p className="role">{person.designation}</p>
+                <p className="muted">
+                  {person.department} · {person.location}, {person.countryName}
                 </p>
-              )}
-              <p className="muted">
-                {person.employeeCode} · {person.employmentType} · {person.employmentStatus}
-              </p>
-              <p className="role">{person.designation}</p>
-              <p className="muted">
-                {person.department} · {person.location}, {person.countryName}
-              </p>
+              </div>
             </div>
-          </div>
-          <div className="row-gap">
             {onEdit && (
               <button type="button" className="btn" onClick={onEdit}>
                 Edit employee
               </button>
             )}
-            {!isSelf && (
-              <Link className="btn-ghost" to={`/directory`}>
-                Back to People
-              </Link>
-            )}
           </div>
-        </div>
-      </Card>
+        </Card>
       )}
 
-      <Tabs tabs={tabs} value={tab} onChange={setTab} />
+      <Tabs tabs={tabs} value={activeTab} onChange={(id) => setTab(id as TabId)} />
 
-      {tab === "personal" && (
+      {activeTab === "personal" && (
         <Card
           title="Personal information"
           action={
-            canSeePii ? (
+            access.personal ? (
               <button type="button" className="btn-ghost" onClick={() => setRevealPii((v) => !v)}>
-                {revealPii ? "Hide details" : "Reveal details"}
+                {revealPii ? "Hide details" : "Show details"}
               </button>
             ) : undefined
           }
         >
           <dl className="info-grid">
-            <Fact label="Full name" value={person.fullName} />
-            <Fact label="Gender" value={person.gender} />
-            <Fact label="Work email" value={isSelf || showPii ? person.email : maskEmail(person.email)} />
-            <Fact label="Personal email" value={showPii ? person.personalEmail : maskEmail(person.personalEmail)} />
-            <Fact label="Mobile" value={showPii ? person.mobile : maskMobile(person.mobile)} />
-            <Fact label="Address" value={showPii ? person.address : maskAddress(person.address)} />
-            <Fact label="Time zone" value={person.timeZone} />
+            {access.personal && <Fact label="Employee ID" value={person.employeeCode} />}
+            <Fact label="First name" value={person.firstName} />
+            {access.personal && <Fact label="Middle name" value={person.middleName ?? ""} />}
+            <Fact label="Last name" value={person.lastName} />
+            <Fact label="Preferred name" value={preferredName} />
+            <Fact label="Work email" value={person.email} />
+            {access.personal && (
+              <>
+                <Fact
+                  label="Date of birth"
+                  value={show ? `${person.dateOfBirth} · ${ageOn(person.dateOfBirth, today)} yrs` : MASK}
+                />
+                <Fact label="Gender" value={person.gender} />
+                <Fact label="Nationality" value={person.nationality} />
+                <Fact label="Personal email" value={show ? personalEmail : maskEmail(personalEmail)} />
+                <Fact label="Phone" value={show ? mobile : maskMobile(mobile)} />
+                <Fact label="Address" value={show ? address : maskAddress(address)} />
+                <Fact label="Emergency contact" value={emergency ? (show ? emergency : MASK) : "Not provided"} />
+                <Fact label="Time zone" value={person.timeZone} />
+              </>
+            )}
           </dl>
+          {!access.personal && <p className="muted">Visible to {firstName}, their managers and HR.</p>}
         </Card>
       )}
 
-      {tab === "employment" && (
+      {activeTab === "personal" && access.personal && (
+        <div className="mgr-home-grid">
+          <Card title="Education">
+            {person.education.length === 0 ? (
+              <EmptyState title="None recorded" />
+            ) : (
+              <ul className="todo">
+                {person.education.map((e) => (
+                  <li key={`${e.degree}-${e.year}`}>
+                    <strong>{e.degree}</strong> · {e.institution} · {e.year}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+          <Card title="Experience">
+            {person.experience.length === 0 ? (
+              <EmptyState title="None before Infotech" />
+            ) : (
+              <ul className="todo">
+                {person.experience.map((x) => (
+                  <li key={`${x.employer}-${x.from}`}>
+                    <strong>{x.title}</strong> · {x.employer} · {x.from.slice(0, 7)} to {x.to.slice(0, 7)}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+          <Card title="Dependents">
+            {person.dependents.length === 0 ? (
+              <EmptyState title="None recorded" />
+            ) : (
+              <ul className="todo">
+                {person.dependents.map((d) => (
+                  <li key={d.name}>
+                    <strong>{d.name}</strong> · {d.relation} · {show ? d.dateOfBirth : MASK}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {activeTab === "employment" && (
         <Card title="Employment information">
           <dl className="info-grid">
             <Fact label="Employee ID" value={person.employeeCode} />
             <Fact label="Status" value={person.employmentStatus} />
             {terminated && <Fact label="Exit date" value={exit.exitDate ?? ""} />}
-            {terminated && showFullHr && <Fact label="Exit reason" value={exit.exitReason ?? ""} />}
+            {terminated && access.isHr && <Fact label="Exit reason" value={exit.exitReason ?? ""} />}
             <Fact label="Employment type" value={person.employmentType} />
-            <Fact label="Date of joining" value={person.dateOfJoining} />
-            <Fact label="Job title" value={person.designation} />
-            <Fact label="Job family" value={person.jobFamily} />
-            <Fact label="Job profile" value={person.jobProfileId} />
-            <Fact label="Position" value={person.positionId} />
-            <Fact label="Grade" value={person.grade} />
-            <Fact label="Availability" value={person.availability} />
+            <Fact label="Joining date" value={`${person.dateOfJoining} · ${tenureText(person.dateOfJoining, today)}`} />
+            <Fact label="Work location" value={`${person.location}, ${person.countryName}`} />
+            <Fact label="Work arrangement" value={person.workArrangement} />
+            <Fact label="Working hours" value={schedule.hoursLabel} />
+            <Fact label="Time zone" value={person.timeZone} />
           </dl>
         </Card>
       )}
 
-      {tab === "org" && (
-        <Card title="Organization & reporting">
+      {activeTab === "org" && (
+        <Card title="Org structure">
           <dl className="info-grid">
             <Fact label="Legal entity" value={person.legalEntity} />
             <Fact label="Business unit" value={person.businessUnit} />
@@ -178,162 +474,340 @@ export function Employee360View({
             <Fact label="Cost center" value={person.costCenter} />
             <Fact label="Location" value={person.location} />
             <Fact label="Country" value={person.countryName} />
-            <Fact label="Manager" value={person.managerName} />
+            <Fact label="Supervisory org" value={manager ? `${manager.fullName}'s team` : "Top of the company"} />
           </dl>
-          {person.managerId && (
-            <p className="note">
-              Manager record:{" "}
-              <Link to={`/directory/${person.managerId}`}>{person.managerName}</Link>
-            </p>
-          )}
         </Card>
       )}
 
-      {tab === "skills" && (
+      {activeTab === "manager" && (
         <div className="mgr-home-grid">
-          <Card title="Skills">
-            <ul className="todo">
-              {extras.skills.map((s) => (
-                <li key={s.name}>
-                  {s.name} · <StatusBadge status={s.level} tone="info" />
-                </li>
-              ))}
-            </ul>
+          <Card title="Manager">
+            {manager ? (
+              <dl className="info-grid">
+                <Fact label="Name" value={<Link to={`/people/${manager.id}`}>{manager.fullName}</Link>} />
+                <Fact label="Title" value={manager.designation} />
+                <Fact label="Department" value={manager.department} />
+                <Fact label="Location" value={`${manager.location}, ${manager.countryName}`} />
+              </dl>
+            ) : (
+              <EmptyState title="Top of the company" />
+            )}
+            {chain.length > 1 && (
+              <p className="muted">
+                Reporting line: {[...chain].reverse().map((p) => p.fullName).join(" › ")} › {person.fullName}
+              </p>
+            )}
           </Card>
-          <Card title="Certifications">
-            <ul className="todo">
-              {extras.certifications.map((c) => (
-                <li key={c.name}>
-                  {c.name} · {c.issuer} · {c.year}
-                </li>
-              ))}
-            </ul>
-          </Card>
-          <Card title="Education">
-            <ul className="todo">
-              {extras.education.map((e) => (
-                <li key={e.school}>
-                  {e.degree} · {e.school} · {e.year}
-                </li>
-              ))}
-            </ul>
-          </Card>
-          <Card title="Experience">
-            <ul className="todo">
-              {extras.experience.map((e) => (
-                <li key={`${e.company}-${e.from}`}>
-                  {e.title} @ {e.company} · {e.from}–{e.to}
-                </li>
-              ))}
-            </ul>
+          <Card title={`Direct reports (${reports.length})`}>
+            {reports.length === 0 ? (
+              <EmptyState title="No direct reports" />
+            ) : (
+              <ul className="todo">
+                {reports.slice(0, 10).map((r) => (
+                  <li key={r.id}>
+                    <Link to={`/people/${r.id}`}>{r.fullName}</Link> · {r.designation}
+                  </li>
+                ))}
+                {reports.length > 10 && <li className="muted">+{reports.length - 10} more</li>}
+              </ul>
+            )}
           </Card>
         </div>
       )}
 
-      {tab === "time" && (
-        <div className="stack">
+      {activeTab === "job" && (
+        <Card title="Job">
+          <dl className="info-grid">
+            <Fact label="Job title" value={person.designation} />
+            <Fact label="Job family" value={person.jobFamily} />
+            <Fact label="Job profile" value={jobProfileLabel(person.jobProfileId)} />
+            <Fact label="Position" value={positionLabel(person)} />
+            <Fact label="Grade" value={person.grade} />
+          </dl>
+        </Card>
+      )}
+
+      {activeTab === "attendance" && access.work && (
+        <Card title="Attendance · last 30 days" to={isSelf ? "/attendance" : undefined}>
           <MetricGrid>
-            <MetricCard label="Present (30d)" value={extras.attendanceSummary.present} />
-            <MetricCard label="WFH" value={extras.attendanceSummary.wfh} />
-            <MetricCard label="Leave" value={extras.attendanceSummary.leave} />
-            <MetricCard label="Absent" value={extras.attendanceSummary.absent} />
+            <MetricCard label="Days worked" value={attendanceStats.present} />
+            <MetricCard label="Absent" value={attendanceStats.absent} />
+            <MetricCard label="On leave" value={attendanceStats.leave} />
+            <MetricCard label="Late arrivals" value={attendanceStats.late} />
+            <MetricCard label="Avg hours / day" value={attendanceStats.avgHours.toFixed(1)} />
           </MetricGrid>
-          <div className="mgr-home-grid">
-            <Card title="Leave balances" to="/leave">
+          <DataTable
+            headers={["Date", "Status", "In", "Out", "Note"]}
+            rows={attendanceExceptions.map((d) => [
+              d.date,
+              kindLabel(d.kind) + (d.lateMinutes > 0 && d.kind === "present" ? ` · late ${d.lateMinutes} min` : ""),
+              d.checkIn ? formatHm(d.checkIn) : "—",
+              d.checkOut ? formatHm(d.checkOut) : "—",
+              d.note ?? "",
+            ])}
+            empty={<EmptyState title="No exceptions" />}
+          />
+        </Card>
+      )}
+
+      {activeTab === "leave" && access.work && (
+        <div className="mgr-home-grid">
+          <Card title={`Leave balances ${today.slice(0, 4)}`} to={isSelf ? "/leave" : undefined}>
+            <DataTable
+              headers={["Type", "Entitled", "Used", "Pending", "Available"]}
+              rows={leaveBalances.map((r) => [r.name, r.quota, r.utilized, r.pending, r.available])}
+              empty={<EmptyState title="No leave policies" />}
+            />
+          </Card>
+          <Card title="Recent requests">
+            {leaveRequests.length === 0 ? (
+              <EmptyState title="No leave requests" />
+            ) : (
               <ul className="todo">
-                {extras.leaveBalances.map((b) => (
-                  <li key={b.type}>
-                    {b.type}: <strong>{b.balance}</strong>
+                {leaveRequests.map((l) => (
+                  <li key={l.id}>
+                    {l.code} · {l.from}
+                    {l.to !== l.from ? ` to ${l.to}` : ""} · <StatusBadge status={l.status} />
                   </li>
                 ))}
               </ul>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {activeTab === "timesheet" && access.work && (
+        <Card title="Timesheets · recent weeks" to={isSelf ? "/timesheet" : undefined}>
+          <DataTable
+            headers={["Week of", "Hours", "Status", "Projects"]}
+            rows={timesheetWeeks.map((w) => [w.week, w.hours.toFixed(1), <StatusBadge key={w.week} status={w.status} />, w.projects || "—"])}
+            empty={<EmptyState title="No timesheets" />}
+          />
+        </Card>
+      )}
+
+      {activeTab === "goals" && access.work && (
+        <Card title={goals.length ? `Goals · ${Math.round(goalProgress)}% overall` : "Goals"}>
+          {goals.length === 0 ? (
+            <EmptyState title="No goals this cycle" />
+          ) : (
+            goals.map((g) => <Progress key={g.id} value={g.progress} label={`${g.title} · ${g.weight}%`} />)
+          )}
+        </Card>
+      )}
+
+      {activeTab === "performance" && access.work && (
+        <div className="mgr-home-grid">
+          <Card title="Reviews">
+            <DataTable
+              headers={["Cycle", "Self", "Manager", "Rating"]}
+              rows={reviews.map((r) => [
+                PERF_CYCLES.find((c) => c.id === r.cycleId)?.name ?? r.cycleId,
+                r.selfStatus,
+                r.managerStatus,
+                ratingFor(r) ? `${ratingFor(r)}${r.released ? "" : " (not released)"}` : isSelf && r.rating ? "Not released yet" : "Not rated",
+              ])}
+              empty={<EmptyState title="No reviews yet" />}
+            />
+          </Card>
+          <Card title={`Recognition (${praise.length})`}>
+            {praise.length === 0 ? (
+              <EmptyState title="No praise yet" />
+            ) : (
+              <ul className="todo">
+                {praise.slice(0, 6).map((p) => (
+                  <li key={p.id}>
+                    {p.badge ? `${p.badge} · ` : ""}from {p.fromName} · {p.createdOn}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {activeTab === "learning" && access.work && (
+        <div className="mgr-home-grid">
+          <Card title="Courses">
+            {learning.length === 0 ? (
+              <EmptyState title="No courses" />
+            ) : (
+              <ul className="todo">
+                {learning.map((l) => (
+                  <li key={l.id}>
+                    {COURSES.find((c) => c.id === l.courseId)?.title ?? "Course"} · <StatusBadge status={l.status} literal />
+                    {l.completedOn ? ` · ${l.completedOn}` : ` · ${l.progress}%`}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+          <Card title="Certifications">
+            {certifications.length === 0 ? (
+              <EmptyState title="No certifications" />
+            ) : (
+              <ul className="todo">
+                {certifications.map((c) => (
+                  <li key={c.id}>
+                    {c.name} · {c.issuer} · {c.earnedOn}
+                    {c.expiresOn ? ` · expires ${c.expiresOn}` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {activeTab === "skills" && access.work && (
+        <Card title="Skills">
+          <DataTable
+            headers={["Skill", "Level", "Target"]}
+            rows={skills.map((s) => [s.skillName, <StatusBadge key={s.skillId} status={s.level} tone="info" literal />, s.targetLevel])}
+            empty={<EmptyState title="No skills recorded" />}
+          />
+        </Card>
+      )}
+
+      {activeTab === "career" && access.work && (
+        <Card title={career ? `Career · next role: ${career.role.title}` : "Career"}>
+          {!career ? (
+            <EmptyState title="No career path defined" />
+          ) : (
+            <DataTable
+              headers={["Skill", "Current", "Needed", "Gap", "Suggested course"]}
+              rows={career.gaps.map((g) => [
+                g.name,
+                g.have,
+                g.need,
+                g.gap > 0 ? <StatusBadge key={g.skillId} status={`${g.gap} level${g.gap > 1 ? "s" : ""}`} tone="warn" literal /> : "Met",
+                g.gap > 0 ? courseFor(g.skillId)?.title ?? "—" : "—",
+              ])}
+            />
+          )}
+        </Card>
+      )}
+
+      {activeTab === "comp" && access.compensation && (
+        <div className="stack">
+          <Card
+            title="Compensation history"
+            action={
+              <button type="button" className="btn-ghost" onClick={() => setRevealPay((v) => !v)}>
+                {revealPay ? "Hide amounts" : "Show amounts"}
+              </button>
+            }
+          >
+            <DataTable
+              headers={["Effective", "Change", "Grade", "Base pay"]}
+              rows={compHistory.map((h) => [h.effective, h.event, h.grade, showPay ? h.base : MASK])}
+              empty={<EmptyState title="No changes on file" />}
+            />
+          </Card>
+          <div className="mgr-home-grid">
+            <Card title="Standard pay">
+              <dl className="info-grid">
+                <Fact label="Currency" value={rules.currency} />
+                <Fact label="Grade" value={person.grade} />
+                <Fact label="Monthly gross" value={showPay ? money(monthly, rules.currency) : MASK} />
+                <Fact label="Yearly gross" value={showPay ? money(monthly * 12, rules.currency) : MASK} />
+              </dl>
             </Card>
-            <Card title="Timesheet" to="/timesheet">
-              <p>
-                {extras.timesheet.period} · <StatusBadge status={extras.timesheet.status} /> · {extras.timesheet.hours}h
-              </p>
+            <Card title="Bonuses">
+              {bonuses.length === 0 ? (
+                <EmptyState title="No bonuses" />
+              ) : (
+                <ul className="todo">
+                  {bonuses.map((b) => (
+                    <li key={b.id}>
+                      {b.type} · {b.period} · {showPay ? b.amount : MASK} · <StatusBadge status={b.status} literal />
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Card>
           </div>
         </div>
       )}
 
-      {tab === "goals" && (
+      {activeTab === "benefits" && access.benefits && (
         <div className="mgr-home-grid">
-          <Card title="Goals" to="/evaluations">
-            {extras.goals.map((g) => (
-              <Progress key={g.name} value={g.progress} label={g.name} />
-            ))}
+          <Card title="Enrolments" to={isSelf ? "/benefits" : undefined}>
+            <DataTable
+              headers={["Plan", "Status", "Effective"]}
+              rows={enrolments.map((e) => [e.planName, <StatusBadge key={e.id} status={e.status} literal />, e.effective])}
+              empty={<EmptyState title="No enrolments" />}
+            />
           </Card>
-          <Card title="Learning history" to="/programs">
-            <ul className="todo">
-              {extras.learning.map((l) => (
-                <li key={l.name}>
-                  {l.name} · <StatusBadge status={l.status} /> {l.completed ? `· ${l.completed}` : ""}
-                </li>
-              ))}
-            </ul>
-          </Card>
-        </div>
-      )}
-
-      {tab === "docs" && (
-        <div className="mgr-home-grid">
-          <Card title="Documents" to="/documents">
-            <ul className="todo">
-              {extras.documents.map((d) => (
-                <li key={d.name}>
-                  {d.name} · {d.category} · {d.updated}
-                </li>
-              ))}
-            </ul>
-          </Card>
-          <Card title="Employment lifecycle">
-            <ul className="todo">
-              {extras.lifecycle.map((e) => (
-                <li key={`${e.date}-${e.event}`}>
-                  <strong>{e.date}</strong> · {e.event} — {e.detail}
-                </li>
-              ))}
-            </ul>
-          </Card>
-        </div>
-      )}
-
-      {tab === "comp" && compAccess !== "hidden" && (
-        <div className="mgr-home-grid">
-          <Card
-            title="Compensation"
-            action={
-              compAccess === "full" ? (
-                <button type="button" className="btn-ghost" onClick={() => setRevealPay((v) => !v)}>
-                  {revealPay ? "Hide amounts" : "Reveal amounts"}
-                </button>
-              ) : undefined
-            }
-          >
-            <dl className="info-grid">
-              <Fact label="Currency" value={extras.compensation.currency} />
-              <Fact label="Base" value={showPayAmounts ? extras.compensation.base : "••••••"} />
-              <Fact label="Variable" value={showPayAmounts ? extras.compensation.variable : "••••"} />
-              <Fact label="Grade" value={extras.compensation.grade} />
-              <Fact label="Effective" value={extras.compensation.effective} />
-            </dl>
-          </Card>
-          <Card title="Benefits">
-            {extras.benefits.length ? (
-              <ul className="todo">
-                {extras.benefits.map((b) => (
-                  <li key={b.plan}>
-                    {b.plan} · {showPayAmounts ? b.coverage : "Coverage hidden"} · {b.status}
-                  </li>
-                ))}
-              </ul>
+          <Card title="Dependents">
+            {person.dependents.length === 0 ? (
+              <EmptyState title="None recorded" />
             ) : (
-              <EmptyState title="No benefits" description="No benefit enrollments on file." />
+              <ul className="todo">
+                {person.dependents.map((d) => {
+                  const covered = coverage.find((c) => c.name === d.name)?.coveredPlans ?? [];
+                  return (
+                    <li key={d.name}>
+                      <strong>{d.name}</strong> · {d.relation}
+                      {covered.length ? ` · covered: ${covered.join(", ")}` : " · not covered"}
+                    </li>
+                  );
+                })}
+              </ul>
             )}
           </Card>
         </div>
       )}
+
+      {activeTab === "docs" && access.documents && (
+        <Card title="Documents">
+          {documents.length === 0 ? (
+            <EmptyState title="No documents" />
+          ) : (
+            <ul className="todo">
+              {documents.map((d) => (
+                <li key={d.id}>
+                  {d.name} · {d.category} · {d.uploadedAt.slice(0, 10)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
+
+      {activeTab === "lifecycle" && access.work && (
+        <Card title="Lifecycle history">
+          <DataTable
+            headers={["Effective", "Change", "From", "To", "By"]}
+            rows={timeline.map((e) => [
+              <span key={e.id}>
+                {e.effectiveDate}
+                {isScheduled(e, today) ? (
+                  <>
+                    {" "}
+                    <StatusBadge status="Scheduled" tone="info" literal />
+                  </>
+                ) : null}
+              </span>,
+              e.type,
+              e.before || "—",
+              e.after || "—",
+              e.by,
+            ])}
+          />
+        </Card>
+      )}
+
+      {summary.length > 0 && (
+        <Card title="AI summary">
+          <p>{summary.join(" ")}</p>
+          <p className="muted">Generated from this profile; review before acting.</p>
+        </Card>
+      )}
     </div>
   );
+}
+
+function rank(level: string): number {
+  return ["Awareness", "Working", "Intermediate", "Advanced", "Expert"].indexOf(level);
 }

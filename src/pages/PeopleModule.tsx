@@ -1,40 +1,15 @@
-import { useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
-import {
-  Banner,
-  Card,
-  Dialog,
-  EmptyState,
-  Field,
-  FilterBar,
-  Page,
-  StatusBadge,
-} from "../components/ui.tsx";
-import {
-  FILTER_OPTIONS,
-  type EmploymentStatus,
-  type PersonRecord,
-} from "../data/peopleData.ts";
-import {
-  getExitDetails,
-  getPerson,
-  isTerminated,
-  listPeople,
-  subscribePeople,
-  upsertPerson,
-  type LocalPersonRecord,
-} from "../data/peopleLocal.ts";
-import {
-  canManagePeople,
-  canViewPeopleDirectory,
-  getPeopleListScope,
-  getProfileDepth,
-} from "../data/peoplePermissions.ts";
+import { Card, EmptyState, FilterBar, Page, StatusBadge } from "../components/ui.tsx";
+import { FILTER_OPTIONS, type EmploymentStatus, type PersonRecord } from "../data/peopleData.ts";
+import { allReportIds, listPeople, subscribePeople } from "../data/peopleLocal.ts";
+import { canManagePeople, canViewPeopleDirectory, getPeopleListScope } from "../data/peoplePermissions.ts";
+import { directoryFieldLevel } from "../data/rbac.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
-import { maskEmail, TIMEZ_COUNTRIES } from "../model.ts";
 import { usePortal } from "../store.tsx";
-import { Employee360View } from "./Employee360View.tsx";
+import { EmployeeFormDialog, saveEmployee } from "./EmployeeFormDialog.tsx";
+import { PersonProfilePage } from "./PersonProfilePage.tsx";
 
 function usePeople(): PersonRecord[] {
   return useSyncExternalStore(subscribePeople, listPeople, listPeople);
@@ -43,85 +18,10 @@ function usePeople(): PersonRecord[] {
 type SortKey = "fullName" | "employeeCode" | "department" | "countryName" | "employmentStatus";
 type ViewMode = "list" | "grid";
 
-const EMPTY_FORM: Omit<PersonRecord, "id"> = {
-  employeeCode: "",
-  fullName: "",
-  email: "",
-  personalEmail: "",
-  mobile: "",
-  photo: "/profile.svg",
-  gender: "Unspecified",
-  dateOfJoining: new Date().toISOString().slice(0, 10),
-  employmentType: "Full Time",
-  employmentStatus: "Active",
-  designation: "",
-  jobFamily: "Engineering",
-  jobProfileId: "JP-NEW-1",
-  positionId: "POS-NEW",
-  grade: "L4",
-  department: "Engineering",
-  division: "Engineering Delivery",
-  businessUnit: "Infotech India",
-  costCenter: "CC-IN-1",
-  location: "Bengaluru",
-  countryCode: "IN",
-  countryName: "India",
-  legalEntity: "Infotech India Pvt Ltd",
-  managerId: "emp-ram",
-  managerName: "Ram Krishnan",
-  availability: "In Office",
-  timeZone: "Asia/Kolkata",
-  currency: "INR",
-  address: "Bengaluru, India",
-};
-
 function statusTone(status: EmploymentStatus): "ok" | "warn" | "danger" {
   if (status === "Active") return "ok";
   if (status === "Terminated") return "danger";
   return "warn";
-}
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/** A TZ code no one in the directory already uses. */
-function nextEmployeeCode(people: PersonRecord[]): string {
-  const taken = new Set(people.map((p) => p.employeeCode.trim().toUpperCase()));
-  let n = 8000 + Math.floor(Math.random() * 1000);
-  while (taken.has(`TZ${n}`)) n += 1;
-  return `TZ${n}`;
-}
-
-function validatePerson(draft: LocalPersonRecord, people: PersonRecord[]): string[] {
-  const errors: string[] = [];
-  const others = people.filter((p) => p.id !== draft.id);
-  const code = draft.employeeCode.trim().toUpperCase();
-  const email = draft.email.trim().toLowerCase();
-  if (!draft.fullName.trim()) errors.push("Full name is required.");
-  if (!code) errors.push("Employee ID is required.");
-  else if (others.some((p) => p.employeeCode.trim().toUpperCase() === code)) {
-    errors.push(`Employee ID ${code} is already used by someone else.`);
-  }
-  if (!EMAIL_PATTERN.test(email)) errors.push("Enter a valid work email (name@company.com).");
-  else if (others.some((p) => p.email.trim().toLowerCase() === email)) {
-    errors.push("That work email already belongs to another employee.");
-  }
-  if (!draft.designation.trim()) errors.push("Job title is required.");
-  if (!draft.department.trim()) errors.push("Department is required.");
-
-  // An empty manager means top of the organization.
-  if (draft.managerId) {
-    const manager = others.find((p) => p.id === draft.managerId);
-    if (draft.managerId === draft.id) errors.push("An employee cannot report to themselves.");
-    else if (!manager) errors.push("Pick a manager from the directory.");
-    else if (isTerminated(manager)) errors.push(`${manager.fullName} is no longer with the company — pick another manager.`);
-  }
-
-  if (draft.employmentStatus === "Terminated") {
-    if (!draft.exitDate) errors.push("Exit date is required for a terminated employee.");
-    else if (draft.dateOfJoining && draft.exitDate < draft.dateOfJoining) errors.push("Exit date cannot be before the joining date.");
-    if (!draft.exitReason?.trim()) errors.push("Exit reason is required for a terminated employee.");
-  }
-  return errors;
 }
 
 export function PeopleDirectoryPage() {
@@ -130,11 +30,9 @@ export function PeopleDirectoryPage() {
   const people = usePeople();
   const navigate = useNavigate();
   const canEdit = canManagePeople(demoProfile.role);
+  const basic = directoryFieldLevel(demoProfile) === "basic";
 
   const [q, setQ] = useState("");
-  const [employeeId, setEmployeeId] = useState("");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
   const [country, setCountry] = useState("");
   const [legalEntity, setLegalEntity] = useState("");
   const [department, setDepartment] = useState("");
@@ -142,56 +40,67 @@ export function PeopleDirectoryPage() {
   const [job, setJob] = useState("");
   const [location, setLocation] = useState("");
   const [status, setStatus] = useState<EmploymentStatus | "">("");
+  const [businessUnit, setBusinessUnit] = useState("");
+  const [position, setPosition] = useState("");
+  const [grade, setGrade] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("fullName");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [view, setView] = useState<ViewMode>("list");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(12);
 
-  const managers = useMemo(
-    () => [...new Set(people.map((p) => p.managerName))].sort(),
-    [people],
-  );
-  const locations = useMemo(
-    () => [...new Set(people.map((p) => p.location))].sort(),
-    [people],
-  );
-  const jobs = useMemo(
-    () => [...new Set(people.map((p) => p.designation))].sort().slice(0, 80),
-    [people],
+  const listScope = getPeopleListScope(demoProfile);
+  // Business unit, position and grade filters are for HR (company-wide scope) only.
+  const hrFilters = listScope === "global";
+  // Managers see the people below them in the reporting line (direct and indirect), plus themselves.
+  const teamIds = useMemo(
+    () => (listScope === "team" ? new Set([employee.id, ...allReportIds(employee.id)]) : null),
+    // `people` is listed so the team refreshes after edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [listScope, employee.id, people],
   );
 
-  const listScope = getPeopleListScope(demoProfile);
+  const scoped = useMemo(
+    () =>
+      people.filter((p) => {
+        if (!matchesRegion(String(p.countryCode), p.countryName)) return false;
+        if (listScope === "self") return p.id === employee.id;
+        if (teamIds && !teamIds.has(p.id)) return false;
+        // The basic directory lists current colleagues only.
+        if (basic && p.employmentStatus === "Terminated") return false;
+        return true;
+      }),
+    [people, matchesRegion, listScope, employee.id, teamIds, basic],
+  );
+
+  const managers = useMemo(() => [...new Set(scoped.map((p) => p.managerName).filter(Boolean))].sort(), [scoped]);
+  const locations = useMemo(() => [...new Set(scoped.map((p) => p.location))].sort(), [scoped]);
+  const jobs = useMemo(() => [...new Set(scoped.map((p) => p.designation))].sort(), [scoped]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    let rows = people.filter((p) => {
-      if (!matchesRegion(String(p.countryCode), p.countryName)) return false;
-
-      // RBAC people-list scope
-      if (listScope === "self") {
-        if (p.id !== employee.id && p.employeeCode !== employee.employeeCode) return false;
-      } else if (listScope === "team") {
-        const isSelf = p.id === employee.id || p.employeeCode === employee.employeeCode;
-        const isReport = p.managerId === employee.id || p.managerName === employee.fullName;
-        const sameDept = p.department === (employee.department ?? "");
-        if (!isSelf && !isReport && !sameDept) return false;
-      }
-      // org / global → all (still region-filtered)
-
-      if (employeeId && !p.employeeCode.toLowerCase().includes(employeeId.toLowerCase())) return false;
-      if (name && !p.fullName.toLowerCase().includes(name.toLowerCase())) return false;
-      if (email && !p.email.toLowerCase().includes(email.toLowerCase())) return false;
+    let rows = scoped.filter((p) => {
       if (country && p.countryName !== country) return false;
-      if (legalEntity && p.legalEntity !== legalEntity) return false;
       if (department && p.department !== department) return false;
-      if (manager && p.managerName !== manager) return false;
-      if (job && p.designation !== job) return false;
-      if (location && p.location !== location) return false;
-      if (status && p.employmentStatus !== status) return false;
+      if (!basic) {
+        if (legalEntity && p.legalEntity !== legalEntity) return false;
+        if (manager && p.managerName !== manager) return false;
+        if (job && p.designation !== job) return false;
+        if (location && p.location !== location) return false;
+        if (status && p.employmentStatus !== status) return false;
+      }
+      if (hrFilters) {
+        if (businessUnit && p.businessUnit !== businessUnit) return false;
+        if (grade && p.grade !== grade) return false;
+        if (position && !`${p.positionId} ${p.designation}`.toLowerCase().includes(position.trim().toLowerCase())) return false;
+      }
       if (needle) {
-        const blob = `${p.fullName} ${p.employeeCode} ${p.email} ${p.department} ${p.location}`.toLowerCase();
-        if (!blob.includes(needle)) return false;
+        const blob = basic
+          ? `${p.fullName} ${p.email} ${p.designation} ${p.department}`
+          : hrFilters
+            ? `${p.fullName} ${p.employeeCode} ${p.email} ${p.designation} ${p.department} ${p.location} ${p.businessUnit} ${p.positionId} ${p.grade}`
+            : `${p.fullName} ${p.employeeCode} ${p.email} ${p.designation} ${p.department} ${p.location}`;
+        if (!blob.toLowerCase().includes(needle)) return false;
       }
       return true;
     });
@@ -202,25 +111,7 @@ export function PeopleDirectoryPage() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return rows;
-  }, [
-    people,
-    q,
-    employeeId,
-    name,
-    email,
-    country,
-    legalEntity,
-    department,
-    manager,
-    job,
-    location,
-    status,
-    sortKey,
-    sortDir,
-    matchesRegion,
-    listScope,
-    employee,
-  ]);
+  }, [scoped, q, country, legalEntity, department, manager, job, location, status, businessUnit, grade, position, hrFilters, sortKey, sortDir, basic]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, pageCount - 1);
@@ -228,9 +119,6 @@ export function PeopleDirectoryPage() {
 
   function clearFilters() {
     setQ("");
-    setEmployeeId("");
-    setName("");
-    setEmail("");
     setCountry("");
     setLegalEntity("");
     setDepartment("");
@@ -238,6 +126,9 @@ export function PeopleDirectoryPage() {
     setJob("");
     setLocation("");
     setStatus("");
+    setBusinessUnit("");
+    setPosition("");
+    setGrade("");
     setPage(0);
   }
 
@@ -252,18 +143,29 @@ export function PeopleDirectoryPage() {
   if (!canViewPeopleDirectory(demoProfile)) {
     return (
       <Page title="People">
-        <EmptyState
-          title="Not authorized"
-          description="This demo persona does not include People directory access in navAccess."
-        />
+        <EmptyState title="Not available" description="No access." />
       </Page>
     );
   }
 
+  const sortable: [SortKey, string][] = basic
+    ? [
+        ["fullName", "Name"],
+        ["department", "Department"],
+        ["countryName", "Country"],
+      ]
+    : [
+        ["fullName", "Name"],
+        ["employeeCode", "Employee ID"],
+        ["department", "Department"],
+        ["countryName", "Country"],
+        ["employmentStatus", "Status"],
+      ];
+
   return (
     <Page
       title="People"
-      subtitle={`${filtered.length.toLocaleString()} ${filtered.length === 1 ? "employee" : "employees"}${
+      subtitle={`${filtered.length.toLocaleString()} ${filtered.length === 1 ? "person" : "people"}${
         listScope === "team" ? " in your team" : listScope === "self" ? " (your profile)" : ""
       }`}
       action={
@@ -278,35 +180,18 @@ export function PeopleDirectoryPage() {
         <FilterBar>
           <RegionalFilter label={t("locale.region")} />
           <label className="filter-label">
-            Quick search
-            <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Name, ID, email…" />
-          </label>
-          <label className="filter-label">
-            Employee ID
-            <input value={employeeId} onChange={(e) => { setEmployeeId(e.target.value); setPage(0); }} />
-          </label>
-          <label className="filter-label">
-            Name
-            <input value={name} onChange={(e) => { setName(e.target.value); setPage(0); }} />
-          </label>
-          <label className="filter-label">
-            Email
-            <input value={email} onChange={(e) => { setEmail(e.target.value); setPage(0); }} />
+            Search
+            <input
+              value={q}
+              onChange={(e) => { setQ(e.target.value); setPage(0); }}
+              placeholder={basic ? "Name, email or title" : hrFilters ? "Name, ID, position, grade…" : "Name, ID, email or title"}
+            />
           </label>
           <label className="filter-label">
             Country
             <select value={country} onChange={(e) => { setCountry(e.target.value); setPage(0); }}>
               <option value="">All</option>
               {FILTER_OPTIONS.countries.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </label>
-          <label className="filter-label">
-            Legal entity
-            <select value={legalEntity} onChange={(e) => { setLegalEntity(e.target.value); setPage(0); }}>
-              <option value="">All</option>
-              {FILTER_OPTIONS.legalEntities.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
@@ -320,42 +205,85 @@ export function PeopleDirectoryPage() {
               ))}
             </select>
           </label>
-          <label className="filter-label">
-            Manager
-            <select value={manager} onChange={(e) => { setManager(e.target.value); setPage(0); }}>
-              <option value="">All</option>
-              {managers.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </label>
-          <label className="filter-label">
-            Job
-            <select value={job} onChange={(e) => { setJob(e.target.value); setPage(0); }}>
-              <option value="">All</option>
-              {jobs.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </label>
-          <label className="filter-label">
-            Location
-            <select value={location} onChange={(e) => { setLocation(e.target.value); setPage(0); }}>
-              <option value="">All</option>
-              {locations.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </label>
-          <label className="filter-label">
-            Employment status
-            <select value={status} onChange={(e) => { setStatus(e.target.value as EmploymentStatus | ""); setPage(0); }}>
-              <option value="">All</option>
-              {FILTER_OPTIONS.employmentStatuses.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </label>
+          {!basic && (
+            <>
+              <label className="filter-label">
+                Legal entity
+                <select value={legalEntity} onChange={(e) => { setLegalEntity(e.target.value); setPage(0); }}>
+                  <option value="">All</option>
+                  {FILTER_OPTIONS.legalEntities.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="filter-label">
+                Manager
+                <select value={manager} onChange={(e) => { setManager(e.target.value); setPage(0); }}>
+                  <option value="">All</option>
+                  {managers.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="filter-label">
+                Job
+                <select value={job} onChange={(e) => { setJob(e.target.value); setPage(0); }}>
+                  <option value="">All</option>
+                  {jobs.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="filter-label">
+                Location
+                <select value={location} onChange={(e) => { setLocation(e.target.value); setPage(0); }}>
+                  <option value="">All</option>
+                  {locations.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="filter-label">
+                Status
+                <select value={status} onChange={(e) => { setStatus(e.target.value as EmploymentStatus | ""); setPage(0); }}>
+                  <option value="">All</option>
+                  {FILTER_OPTIONS.employmentStatuses.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
+          {hrFilters && (
+            <>
+              <label className="filter-label">
+                Business unit
+                <select value={businessUnit} onChange={(e) => { setBusinessUnit(e.target.value); setPage(0); }}>
+                  <option value="">All</option>
+                  {FILTER_OPTIONS.businessUnits.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="filter-label">
+                Position
+                <input
+                  value={position}
+                  onChange={(e) => { setPosition(e.target.value); setPage(0); }}
+                  placeholder="ID or title"
+                />
+              </label>
+              <label className="filter-label">
+                Grade
+                <select value={grade} onChange={(e) => { setGrade(e.target.value); setPage(0); }}>
+                  <option value="">All</option>
+                  {FILTER_OPTIONS.grades.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
         </FilterBar>
         <div className="row-between" style={{ marginTop: 8 }}>
           <div className="row-gap">
@@ -389,22 +317,14 @@ export function PeopleDirectoryPage() {
       </Card>
 
       {filtered.length === 0 ? (
-        <EmptyState title="No employees match" description="Try clearing filters or broadening search." />
+        <EmptyState title="No one matches" description="Try other filters." />
       ) : view === "list" ? (
         <Card>
           <div className="data-table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
-                  {(
-                    [
-                      ["fullName", "Name"],
-                      ["employeeCode", "Employee ID"],
-                      ["department", "Department"],
-                      ["countryName", "Country"],
-                      ["employmentStatus", "Status"],
-                    ] as [SortKey, string][]
-                  ).map(([key, label]) => (
+                  {sortable.map(([key, label]) => (
                     <th key={key}>
                       <button type="button" className="table-sort" onClick={() => toggleSort(key)}>
                         {label}
@@ -412,8 +332,8 @@ export function PeopleDirectoryPage() {
                       </button>
                     </th>
                   ))}
-                  <th>Email</th>
-                  <th>Manager</th>
+                  <th>Work email</th>
+                  {!basic && <th>Manager</th>}
                   <th />
                 </tr>
               </thead>
@@ -429,14 +349,16 @@ export function PeopleDirectoryPage() {
                         </div>
                       </div>
                     </td>
-                    <td>{person.employeeCode}</td>
+                    {!basic && <td>{person.employeeCode}</td>}
                     <td>{person.department}</td>
                     <td>{person.countryName}</td>
-                    <td>
-                      <StatusBadge status={person.employmentStatus} tone={statusTone(person.employmentStatus)} />
-                    </td>
-                    <td>{maskEmail(person.email)}</td>
-                    <td>{person.managerName}</td>
+                    {!basic && (
+                      <td>
+                        <StatusBadge status={person.employmentStatus} tone={statusTone(person.employmentStatus)} />
+                      </td>
+                    )}
+                    <td>{person.email}</td>
+                    {!basic && <td>{person.managerName || "—"}</td>}
                     <td>
                       <Link to={`/directory/${person.id}`}>Open</Link>
                     </td>
@@ -459,9 +381,9 @@ export function PeopleDirectoryPage() {
               <strong>{person.fullName}</strong>
               <span>{person.designation}</span>
               <span className="muted">
-                {person.employeeCode} · {person.location}
+                {basic ? `${person.department} · ${person.countryName}` : `${person.employeeCode} · ${person.location}`}
               </span>
-              <StatusBadge status={person.employmentStatus} tone={statusTone(person.employmentStatus)} />
+              {!basic && <StatusBadge status={person.employmentStatus} tone={statusTone(person.employmentStatus)} />}
             </button>
           ))}
         </div>
@@ -489,71 +411,10 @@ export function PeopleDirectoryPage() {
   );
 }
 
+/** /directory/:id — the same profile page as /people/:id (HR gets the Edit button there). */
 export function PeopleDetailPage() {
   const { id = "" } = useParams();
-  const { demoProfile, employee } = usePortal();
-  const people = usePeople();
-  const person = useMemo(() => getPerson(id) ?? people.find((p) => p.id === id), [id, people]);
-  const canEdit = canManagePeople(demoProfile.role);
-  const [editOpen, setEditOpen] = useState(false);
-
-  if (!person) {
-    return (
-      <Page title="Employee">
-        <EmptyState title="Employee not found" description="This ID is not in the Infotech demo directory." />
-        <Link to="/directory" className="btn">
-          Back to People
-        </Link>
-      </Page>
-    );
-  }
-
-  const depth = getProfileDepth(demoProfile, {
-    subjectId: person.id,
-    selfId: employee.id,
-    isDirectReport: person.managerId === employee.id || person.managerName === employee.fullName,
-    inHrScope: true,
-  });
-
-  if (depth === "none") {
-    return (
-      <Page title="Employee">
-        <EmptyState
-          title="Profile restricted"
-          description={`${demoProfile.personaLabel} cannot open this colleague's profile under current RBAC rules.`}
-        />
-        <Link to="/directory" className="btn">
-          Back to People
-        </Link>
-      </Page>
-    );
-  }
-
-  return (
-    <Page title="Employee 360" subtitle={`${person.fullName} · ${person.employeeCode}`}>
-      <Employee360View
-        person={person}
-        viewer={demoProfile}
-        selfId={employee.id}
-        onEdit={canEdit && depth === "full_hr" ? () => setEditOpen(true) : undefined}
-      />
-      {/* Mounted only while open (and keyed by person) so every open starts from the saved record. */}
-      {editOpen && (
-        <EmployeeFormDialog
-          key={person.id}
-          open
-          title="Edit employee"
-          initial={person}
-          people={people}
-          onClose={() => setEditOpen(false)}
-          onSave={(next) => {
-            upsertPerson(next);
-            setEditOpen(false);
-          }}
-        />
-      )}
-    </Page>
-  );
+  return <PersonProfilePage personId={id} key={id} />;
 }
 
 export function PeopleNewPage() {
@@ -572,236 +433,12 @@ export function PeopleNewPage() {
         initial={null}
         people={people}
         onClose={() => navigate("/directory")}
-        onSave={(next) => {
-          upsertPerson(next);
+        onSave={(next, effectiveDate) => {
+          saveEmployee(next, effectiveDate, null, demoProfile);
           navigate(`/directory/${next.id}`);
         }}
       />
     </Page>
-  );
-}
-
-function EmployeeFormDialog({
-  open,
-  title,
-  initial,
-  people,
-  onClose,
-  onSave,
-  embedded = false,
-}: {
-  open: boolean;
-  title: string;
-  initial: PersonRecord | null;
-  people: PersonRecord[];
-  onClose: () => void;
-  onSave: (person: LocalPersonRecord) => void;
-  embedded?: boolean;
-}) {
-  const freshDraft = (): LocalPersonRecord =>
-    initial
-      ? {
-          ...initial,
-          ...getExitDetails(initial),
-          // Seed data has the top executive "reporting" to themselves; treat that as no manager.
-          ...(initial.managerId === initial.id ? { managerId: "", managerName: "" } : null),
-        }
-      : { id: `local-${Date.now()}`, ...EMPTY_FORM, employeeCode: nextEmployeeCode(people) };
-  const [draft, setDraft] = useState<LocalPersonRecord>(freshDraft);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [managerQuery, setManagerQuery] = useState("");
-  const [wasOpen, setWasOpen] = useState(open);
-
-  // Re-opening always starts from the saved record, so discarded edits never come back.
-  if (open !== wasOpen) {
-    setWasOpen(open);
-    if (open) {
-      setDraft(freshDraft());
-      setErrors([]);
-      setManagerQuery("");
-    }
-  }
-
-  // Anyone still with the company can be picked as manager (never the person themselves).
-  const managerOptions = useMemo(() => {
-    const needle = managerQuery.trim().toLowerCase();
-    const eligible = people.filter(
-      (p) =>
-        p.id !== draft.id &&
-        !isTerminated(p) &&
-        (!needle || `${p.fullName} ${p.employeeCode} ${p.designation}`.toLowerCase().includes(needle)),
-    );
-    const shown = eligible.slice(0, 100);
-    const current = people.find((p) => p.id === draft.managerId);
-    if (current && !shown.includes(current)) shown.unshift(current);
-    return shown;
-  }, [people, managerQuery, draft.id, draft.managerId]);
-  const managerKnown = !draft.managerId || people.some((p) => p.id === draft.managerId);
-
-  if (!open) return null;
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    const nextErrors = validatePerson(draft, people);
-    setErrors(nextErrors);
-    if (nextErrors.length) return;
-    const terminated = draft.employmentStatus === "Terminated";
-    onSave({
-      ...draft,
-      fullName: draft.fullName.trim(),
-      employeeCode: draft.employeeCode.trim().toUpperCase(),
-      email: draft.email.trim().toLowerCase(),
-      exitDate: terminated ? draft.exitDate : undefined,
-      exitReason: terminated ? draft.exitReason?.trim() : undefined,
-    });
-  }
-
-  const form = (
-    <form className="stack" onSubmit={submit}>
-      {errors.length > 0 && (
-        <Banner message={{ tone: "err", text: errors.join(" ") }} />
-      )}
-      <div className="form-grid-2">
-        <Field label="Full name">
-          <input value={draft.fullName} onChange={(e) => setDraft({ ...draft, fullName: e.target.value })} required />
-        </Field>
-        <Field label="Employee ID">
-          <input
-            value={draft.employeeCode}
-            onChange={(e) => setDraft({ ...draft, employeeCode: e.target.value })}
-            required
-            disabled={!!initial}
-          />
-        </Field>
-        <Field label="Work email">
-          <input type="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} required />
-        </Field>
-        <Field label="Mobile">
-          <input value={draft.mobile} onChange={(e) => setDraft({ ...draft, mobile: e.target.value })} />
-        </Field>
-        <Field label="Job title">
-          <input value={draft.designation} onChange={(e) => setDraft({ ...draft, designation: e.target.value })} required />
-        </Field>
-        <Field label="Department">
-          <select value={draft.department} onChange={(e) => setDraft({ ...draft, department: e.target.value })}>
-            {FILTER_OPTIONS.departments.map((d) => (
-              <option key={d} value={d}>{d}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Country">
-          <select
-            value={draft.countryName}
-            onChange={(e) => {
-              const countryName = e.target.value;
-              const idx = FILTER_OPTIONS.countries.findIndex((c) => c === countryName);
-              const country = TIMEZ_COUNTRIES.find((c) => c.name === countryName);
-              setDraft({
-                ...draft,
-                countryName,
-                legalEntity: idx >= 0 ? FILTER_OPTIONS.legalEntities[idx] : draft.legalEntity,
-                ...(country
-                  ? { countryCode: country.code, timeZone: country.timeZone, currency: country.currency }
-                  : null),
-              });
-            }}
-          >
-            {FILTER_OPTIONS.countries.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Location">
-          <input value={draft.location} onChange={(e) => setDraft({ ...draft, location: e.target.value })} />
-        </Field>
-        <Field label="Legal entity">
-          <select value={draft.legalEntity} onChange={(e) => setDraft({ ...draft, legalEntity: e.target.value })}>
-            {FILTER_OPTIONS.legalEntities.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Employment status">
-          <select
-            value={draft.employmentStatus}
-            onChange={(e) => setDraft({ ...draft, employmentStatus: e.target.value as EmploymentStatus })}
-          >
-            {FILTER_OPTIONS.employmentStatuses.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </Field>
-        {draft.employmentStatus === "Terminated" && (
-          <>
-            <Field label="Exit date">
-              <input
-                type="date"
-                value={draft.exitDate ?? ""}
-                min={draft.dateOfJoining || undefined}
-                onChange={(e) => setDraft({ ...draft, exitDate: e.target.value })}
-                required
-              />
-            </Field>
-            <Field label="Exit reason">
-              <input
-                value={draft.exitReason ?? ""}
-                onChange={(e) => setDraft({ ...draft, exitReason: e.target.value })}
-                placeholder="e.g. Resignation, end of contract"
-                required
-              />
-            </Field>
-          </>
-        )}
-        <Field label="Manager">
-          <div className="people-manager-picker">
-            <input
-              type="search"
-              value={managerQuery}
-              onChange={(e) => setManagerQuery(e.target.value)}
-              placeholder="Search name or ID…"
-              aria-label="Search managers"
-            />
-            <select
-              value={draft.managerId}
-              onChange={(e) => {
-                const manager = people.find((p) => p.id === e.target.value);
-                setDraft({ ...draft, managerId: manager?.id ?? "", managerName: manager?.fullName ?? "" });
-              }}
-            >
-              <option value="">No manager (top of organization)</option>
-              {!managerKnown && (
-                <option value={draft.managerId}>{draft.managerName || draft.managerId} (not in directory)</option>
-              )}
-              {managerOptions.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.fullName} · {p.employeeCode}
-                  {isTerminated(p) ? " (terminated)" : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-        </Field>
-        <Field label="Grade">
-          <input value={draft.grade} onChange={(e) => setDraft({ ...draft, grade: e.target.value })} />
-        </Field>
-      </div>
-      <div className="dialog-actions" style={{ justifyContent: "flex-end" }}>
-        <button type="button" className="btn-ghost" onClick={onClose}>
-          Cancel
-        </button>
-        <button type="submit" className="btn">
-          Save
-        </button>
-      </div>
-    </form>
-  );
-
-  if (embedded) return <Card title={title}>{form}</Card>;
-
-  return (
-    <Dialog open={open} title={title} onClose={onClose}>
-      {form}
-    </Dialog>
   );
 }
 

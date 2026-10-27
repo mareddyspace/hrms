@@ -9,8 +9,7 @@ export type I18nKey =
   | "locale.region"
   | "locale.language"
   | "locale.currency"
-  | "locale.timezone"
-  | "locale.disclaimer"
+  | "locale.timezone"
   | "locale.viewOnly"
   | "common.search"
   | "common.filter"
@@ -32,9 +31,7 @@ const EN: Record<I18nKey, string> = {
   "locale.region": "Region",
   "locale.language": "Language",
   "locale.currency": "Currency",
-  "locale.timezone": "Time zone",
-  "locale.disclaimer":
-    "Region filters demo data only. They do not change your signed-in identity or permissions.",
+  "locale.timezone": "Time zone",
   "locale.viewOnly": "View context",
   "common.search": "Search",
   "common.filter": "Filter",
@@ -42,8 +39,8 @@ const EN: Record<I18nKey, string> = {
   "common.cancel": "Cancel",
   "country.all": "All countries",
   "holidays.title": "Holiday calendar",
-  "leave.policy": "Leave policy (sample)",
-  "working.time": "Working time (sample)",
+  "leave.policy": "Leave policy",
+  "working.time": "Working time",
   "benefits.country": "Country benefits",
   "documents.country": "Country documents",
   "admin.countries": "Country configuration",
@@ -55,12 +52,10 @@ const HI: Partial<Record<I18nKey, string>> = {
   "nav.home": "होम",
   "nav.people": "लोग",
   "nav.settings": "स्थानीय सेटिंग्स",
-  "locale.region": "डेमो क्षेत्र",
+  "locale.region": "क्षेत्र",
   "locale.language": "भाषा",
   "locale.currency": "मुद्रा",
-  "locale.timezone": "समय क्षेत्र",
-  "locale.disclaimer":
-    "क्षेत्र फ़िल्टर केवल डेमो डेटा बदलते हैं। आपकी पहचान या अनुमतियाँ नहीं बदलतीं।",
+  "locale.timezone": "समय क्षेत्र",
   "locale.viewOnly": "दृश्य संदर्भ",
   "common.search": "खोजें",
   "common.filter": "फ़िल्टर",
@@ -68,8 +63,8 @@ const HI: Partial<Record<I18nKey, string>> = {
   "common.cancel": "रद्द करें",
   "country.all": "सभी देश",
   "holidays.title": "अवकाश कैलेंडर",
-  "leave.policy": "छुट्टी नीति (नमूना)",
-  "working.time": "कार्य समय (नमूना)",
+  "leave.policy": "छुट्टी नीति",
+  "working.time": "कार्य समय",
   "benefits.country": "देश लाभ",
   "documents.country": "देश दस्तावेज़",
   "admin.countries": "देश विन्यास",
@@ -81,12 +76,10 @@ const DE: Partial<Record<I18nKey, string>> = {
   "nav.home": "Startseite",
   "nav.people": "Personen",
   "nav.settings": "Gebietseinstellungen",
-  "locale.region": "Demo-Region",
+  "locale.region": "Region",
   "locale.language": "Sprache",
   "locale.currency": "Währung",
-  "locale.timezone": "Zeitzone",
-  "locale.disclaimer":
-    "Regionsfilter betreffen nur Demodaten. Identität und Berechtigungen bleiben unverändert.",
+  "locale.timezone": "Zeitzone",
   "locale.viewOnly": "Ansichtskontext",
   "common.search": "Suchen",
   "common.filter": "Filter",
@@ -94,8 +87,8 @@ const DE: Partial<Record<I18nKey, string>> = {
   "common.cancel": "Abbrechen",
   "country.all": "Alle Länder",
   "holidays.title": "Feiertagskalender",
-  "leave.policy": "Urlaubsrichtlinie (Beispiel)",
-  "working.time": "Arbeitszeit (Beispiel)",
+  "leave.policy": "Urlaubsrichtlinie",
+  "working.time": "Arbeitszeit",
   "benefits.country": "Ländervorteile",
   "documents.country": "Länderdokumente",
   "admin.countries": "Länderkonfiguration",
@@ -107,12 +100,10 @@ const AR: Partial<Record<I18nKey, string>> = {
   "nav.home": "الرئيسية",
   "nav.people": "الأشخاص",
   "nav.settings": "إعدادات المنطقة",
-  "locale.region": "منطقة العرض التجريبية",
+  "locale.region": "المنطقة",
   "locale.language": "اللغة",
   "locale.currency": "العملة",
-  "locale.timezone": "المنطقة الزمنية",
-  "locale.disclaimer":
-    " عوامل تصفية المنطقة تؤثر على بيانات العرض التجريبية فقط ولا تغيّر هويتك أو صلاحياتك.",
+  "locale.timezone": "المنطقة الزمنية",
   "locale.viewOnly": "سياق العرض",
   "common.search": "بحث",
   "common.filter": "تصفية",
@@ -120,8 +111,8 @@ const AR: Partial<Record<I18nKey, string>> = {
   "common.cancel": "إلغاء",
   "country.all": "كل البلدان",
   "holidays.title": "تقويم العطل",
-  "leave.policy": "سياسة الإجازات (عينة)",
-  "working.time": "وقت العمل (عينة)",
+  "leave.policy": "سياسة الإجازات",
+  "working.time": "وقت العمل",
   "benefits.country": "مزايا البلد",
   "documents.country": "وثائق البلد",
   "admin.countries": "إعدادات البلدان",
@@ -134,17 +125,25 @@ const TABLES: Record<AppLanguage, Partial<Record<I18nKey, string>>> = {
   ar: AR,
 };
 
+/**
+ * Only English is complete. The others translate a handful of labels, so they are marked Preview;
+ * most screens stay in English.
+ */
 export const LANGUAGE_LABELS: Record<AppLanguage, string> = {
   en: "English",
-  hi: "हिन्दी (limited)",
-  de: "Deutsch (limited)",
-  ar: "العربية (limited)",
+  hi: "हिन्दी (Preview)",
+  de: "Deutsch (Preview)",
+  ar: "العربية (Preview)",
 };
+
+/** Languages whose UI is fully translated. Right-to-left layout is only used for these. */
+const FULLY_TRANSLATED: readonly AppLanguage[] = ["en"];
 
 export function translate(lang: AppLanguage, key: I18nKey): string {
   return TABLES[lang][key] ?? EN[key] ?? key;
 }
 
+/** Arabic previews keep left-to-right layout: almost all text is still English. */
 export function isRtl(lang: AppLanguage): boolean {
-  return lang === "ar";
+  return lang === "ar" && FULLY_TRANSLATED.includes(lang);
 }

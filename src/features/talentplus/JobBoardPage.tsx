@@ -107,7 +107,7 @@ function OpenRoles() {
         </ul>
       ) : (
         <Card>
-          <EmptyState title="No open roles" description="Approved openings will appear here." />
+          <EmptyState title="No open roles" />
         </Card>
       )}
       {applyFor && (
@@ -290,7 +290,7 @@ function MyActivity() {
             <StageBadge key="s" stage={r.status} />,
             <BonusCell key="b" referral={r} />,
           ])}
-          empty={<EmptyState title="No referrals" description="Know someone great? Refer them from Open roles." />}
+          empty={<EmptyState title="No referrals" description="Refer from Open roles." />}
         />
       </Card>
     </div>

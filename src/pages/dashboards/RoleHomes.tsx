@@ -1,29 +1,49 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { COMPANY_NAME } from "../../brand.ts";
-import {
-  Card,
-  DataTable,
-  LeaveTable,
-  MetricCard,
-  MetricGrid,
-  StatusBadge,
-  StatusPill,
-} from "../../components/ui.tsx";
-import {
-  TZ_ADMIN,
-  TZ_EMPLOYEE_DEFAULTS,
-  TZ_EXEC,
-  TZ_HEADCOUNT,
-  TZ_HR,
-  TZ_MOVEMENT,
-  TZ_RECRUITING,
-  TZ_TEAM,
-  type DateRangeKey,
-} from "../../data/dashboardMock.ts";
-import type { DemoAccount } from "../../demoAccounts.ts";
+import { Card, DataTable, LeaveTable, MetricCard, MetricGrid, StatusBadge, StatusPill } from "../../components/ui.tsx";
+import { DEMO_ACCOUNTS, accountHasNavAccess, type DemoAccount } from "../../demoAccounts.ts";
 import { COURSES } from "../../data/talentData.ts";
 import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
+import { listPeople, subscribePeople, getExitDetails } from "../../data/peopleLocal.ts";
+import { TASK_TEAM } from "../../data/taskTeam.ts";
+import {
+  COPILOT_SUGGESTIONS,
+  answerCopilot,
+  copilotPersonaFromRole,
+  type CopilotAnswer,
+} from "../../data/platformData.ts";
+import { getPlatformVersion, listAuditLog, listIntegrations, subscribePlatform } from "../../data/platformLocal.ts";
+import {
+  dayStatus,
+  personName,
+  rangeLabel,
+  rangeStart,
+  teamBelow,
+  tenureLabel,
+  upcomingHolidays,
+  waitingItems,
+  workforceInsights,
+  workforceStats,
+  type DayStatus,
+  type RangeKey,
+  type TeamMember,
+} from "../../data/workforceStats.ts";
+import {
+  attendanceTrend,
+  compReviewStatus,
+  criticalSkillGaps,
+  currentCycle,
+  goalProgressFor,
+  learningCompletion,
+  leaveTrend,
+  pipelineFunnel,
+  reviewStatusFor,
+  skillCoverage,
+  weightedProgress,
+} from "../../data/homeInsights.ts";
+import { useHomeLayout } from "../../data/preferences.ts";
+import { getRewardState, subscribeReward } from "../../data/rewardLocal.ts";
 import { attendanceContextFor, formatHm, nonWorkingReason, phaseLabel } from "../../data/attendanceData.ts";
 import {
   attendanceAction,
@@ -33,33 +53,42 @@ import {
   subscribeAttendance,
 } from "../../data/attendanceLocal.ts";
 import {
+  countUnreadNotifications,
+  getCollabState,
+  listNotificationsForRole,
+  notifPrefsFor,
+  subscribeCollab,
+} from "../../data/collabLocal.ts";
+import { notifPrefKey } from "../../data/collabData.ts";
+import { getExitState, subscribeExits } from "../../features/lifecycle/exitStore.ts";
+import { getProbationState, subscribeProbation, trackedProbations } from "../../features/lifecycle/probationStore.ts";
+import { getBgvState, overallResult, subscribeBgv } from "../../features/compliance/bgvStore.ts";
+import { docStatus, getImmigrationState, subscribeImmigration } from "../../features/compliance/immigrationStore.ts";
+import { useCopilotContext } from "../../features/copilot/copilotContext.ts";
+import {
+  TIMEZ_COUNTRIES,
+  addDaysISO,
   attendanceOn,
   dayGreeting,
   formatLongDate,
   formatShortDate,
+  mondayOf,
   todayISO,
+  type CountryCode,
 } from "../../model.ts";
+import { RegionalFilter } from "../../locale/RegionalFilter.tsx";
 import { useLocale } from "../../locale/LocaleContext.tsx";
 import { usePortal } from "../../store.tsx";
-import {
-  AuthShortcuts,
-  DashGreeting,
-  DateRangeFilter,
-  MiniBars,
-  PlaceholderPanel,
-  ProgressBar,
-  SoftTabs,
-  useDateRange,
-} from "./widgets.tsx";
+import { countWaitingOnMe } from "../ApprovalsCenter.tsx";
+import { AuthShortcuts, DashGreeting, DateRangeFilter, MiniBars, ProgressBar, useDateRange } from "./widgets.tsx";
 
-/** Map dashboard shortcut labels to real prototype routes. */
+/** Map dashboard shortcut labels to real routes. */
 const R = {
-  copilot: "/ai/copilot",
   performance: "/evaluations",
   learning: "/programs",
   skills: "/skills",
   admin: "/admin",
-  inbox: "/approvals",
+  approvals: "/approvals",
   notifications: "/notifications",
   payslips: "/payslips",
   leave: "/leave",
@@ -74,49 +103,285 @@ const R = {
   directory: "/directory",
   holidays: "/holidays",
   messages: "/chat",
+  copilot: "/ai/copilot",
+  onboarding: "/onboarding",
+  exits: "/people/exits",
+  bgv: "/talent/background-checks",
+  recruiting: "/recruiting",
+  probation: "/team/probation",
 } as const;
 
-function movementForRange(range: DateRangeKey) {
-  if (range === "7d") {
-    return { joiners: 4, exits: 1, net: 3, label: "Last 7 days" };
-  }
-  if (range === "90d") {
-    return { joiners: 48, exits: 19, net: 29, label: "Last 90 days" };
-  }
-  if (range === "ytd") {
-    return {
-      joiners: TZ_MOVEMENT.joinersYtd,
-      exits: TZ_MOVEMENT.exitsYtd,
-      net: TZ_MOVEMENT.joinersYtd - TZ_MOVEMENT.exitsYtd,
-      label: "Year to date",
-    };
-  }
-  return {
-    joiners: TZ_MOVEMENT.joiners30d,
-    exits: TZ_MOVEMENT.exits30d,
-    net: TZ_MOVEMENT.netGrowth30d,
-    label: "Last 30 days",
-  };
+const DAY_TONE: Record<DayStatus, "ok" | "info" | "warn" | "neutral"> = {
+  Working: "ok",
+  WFH: "info",
+  "On leave": "warn",
+  Holiday: "neutral",
+  "Weekly off": "neutral",
+};
+
+const VISA_TYPES = new Set(["Visa", "Work permit", "Residence ID/Iqama", "Emirates ID", "BRP/UK right-to-work", "Aufenthaltstitel"]);
+
+/* ───────────────────────────── shared building blocks ── */
+
+type Section = { id: string; label: string; node: ReactNode };
+
+/**
+ * Renders sections in the person's chosen order. useHomeLayout memoises on ids/labels only,
+ * so we map its order back onto this render's fresh nodes to keep the content live.
+ */
+function HomeSections({ userId, sections }: { userId: string; sections: Section[] }) {
+  const ordered = useHomeLayout(userId, sections);
+  const byId = new Map(sections.map((s) => [s.id, s]));
+  return (
+    <div className="mgr-home-grid">
+      {ordered.map((s) => {
+        const fresh = byId.get(s.id);
+        return fresh ? <div key={fresh.id} style={{ display: "contents" }}>{fresh.node}</div> : null;
+      })}
+    </div>
+  );
 }
 
-/** First holiday on or after `today`, regardless of the order holidays are stored in. */
-function nextHolidayFrom<T extends { date: string }>(holidays: T[], today: string): T | undefined {
-  return [...holidays].sort((a, b) => a.date.localeCompare(b.date)).find((h) => h.date >= today);
+function useTitle(title: string) {
+  useEffect(() => {
+    document.title = `${title} · ${COMPANY_NAME}`;
+  }, [title]);
 }
 
-/* ───────────────────────────────────────────── A. EMPLOYEE ── */
+/** Live data every home needs: people below me, what waits on me, my country's holidays. */
+function useHomeData() {
+  const { employee, state, canDecideFor, canVerifyProofs } = usePortal();
+  const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
+  const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+  const attState = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
+  const today = todayISO();
+  const team = useMemo(
+    () => teamBelow(employee.id, people, canDecideFor, TASK_TEAM.map((p) => p.id)),
+    [employee.id, people, canDecideFor],
+  );
+  const statuses = team.map((m) => ({ member: m, status: dayStatus(state, m.id, m.countryCode, today) }));
+  const waitingCount = countWaitingOnMe(state, employee.id, canDecideFor, canVerifyProofs);
+  const waiting = waitingItems(state, employee.id, canDecideFor, canVerifyProofs);
+  const holidays = upcomingHolidays(state.holidays, employee.countryCode, today, 3);
+  const teamNames = new Set([employee.fullName, ...team.map((m) => m.name)]);
+  const openReqs = talent.requisitions.filter((r) => r.approvalStatus === "Approved" && r.stageSummary !== "Hired" && r.stageSummary !== "Filled");
+  const teamReqs = openReqs.filter((r) => teamNames.has(r.hiringManager));
+  return { people, talent, attState, today, team, statuses, waitingCount, waiting, holidays, openReqs, teamReqs };
+}
+
+function MyApprovalsCard({ waiting, count, people }: { waiting: ReturnType<typeof waitingItems>; count: number; people: ReturnType<typeof listPeople> }) {
+  const byKind = [...waiting.reduce((m, w) => m.set(w.kind, (m.get(w.kind) ?? 0) + 1), new Map<string, number>())];
+  return (
+    <Card title={`My approvals · ${count}`} to={R.approvals}>
+      {count === 0 ? (
+        <p className="note">Nothing is waiting on you.</p>
+      ) : (
+        <>
+          <ul className="todo">
+            {byKind.map(([kind, n]) => (
+              <li key={kind}>
+                {kind} <StatusBadge status={String(n)} tone="warn" literal />
+              </li>
+            ))}
+          </ul>
+          <DataTable
+            headers={["Person", "Type", "Date"]}
+            rows={waiting.slice(0, 4).map((w) => [personName(w.employeeId, people), `${w.kind} · ${w.detail}`, w.date ? formatShortDate(w.date) : "—"])}
+          />
+        </>
+      )}
+      <Link to={R.approvals} className="quiet-link">
+        Open Approvals
+      </Link>
+    </Card>
+  );
+}
+
+/** Self-service strip for people whose home is mostly about others. */
+function MyDayCard() {
+  const { employee, leaveTable, state } = usePortal();
+  const attState = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
+  const today = todayISO();
+  const session = getCurrentSession(employee.id, attState);
+  const status = dayStatus(state, employee.id, employee.countryCode ?? "IN", today);
+  const next = upcomingHolidays(state.holidays, employee.countryCode, today, 1)[0];
+  const rows = leaveTable.filter((r) => r.code !== "unpaid" && r.quota > 0).slice(0, 3);
+  return (
+    <Card title="My day">
+      <p>
+        {session.phase !== "not_started" ? phaseLabel(session.phase) : status === "Working" ? "Not checked in" : status}
+        {session.checkIn ? ` · in ${formatHm(session.checkIn)}` : ""} · {employee.shiftHours}
+      </p>
+      <ul className="todo">
+        {rows.map((r) => (
+          <li key={r.code}>
+            {r.name}: <strong>{r.available}</strong> days available
+          </li>
+        ))}
+        <li>Next holiday: {next ? `${next.name} · ${formatShortDate(next.date)}` : "None this year"}</li>
+      </ul>
+      <div className="row-gap" style={{ marginTop: 10 }}>
+        <Link className="btn" to={R.attendance}>
+          {session.phase === "not_started" ? "Check in" : "Attendance"}
+        </Link>
+        <Link className="btn-ghost" to={R.leave}>
+          Apply for leave
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
+function TeamTodayCard({
+  statuses,
+  title = "Team today",
+  checkedIn,
+}: {
+  statuses: { member: TeamMember; status: DayStatus }[];
+  title?: string;
+  checkedIn?: Set<string>;
+}) {
+  const shown = statuses.slice(0, 10);
+  const count = (s: DayStatus) => statuses.filter((x) => x.status === s).length;
+  const expected = statuses.filter((x) => x.status === "Working" || x.status === "WFH");
+  return (
+    <Card title={title} to="/team">
+      {statuses.length > 0 && (
+        <p className="muted">
+          {count("Working")} in office · {count("WFH")} WFH · {count("On leave")} on leave
+          {checkedIn ? ` · ${expected.filter((x) => checkedIn.has(x.member.id)).length} of ${expected.length} checked in` : ""}
+        </p>
+      )}
+      <DataTable
+        headers={["Name", "Role", "Today"]}
+        rows={shown.map(({ member, status }) => [
+          <Link key={member.id} to={`/people/${member.id}`}>
+            {member.name}
+          </Link>,
+          member.designation,
+          <StatusBadge
+            key={`${member.id}-s`}
+            status={checkedIn?.has(member.id) && (status === "Working" || status === "WFH") ? `${status} · in` : status}
+            tone={DAY_TONE[status]}
+            literal
+          />,
+        ])}
+        empty={<p className="note">Nobody reports to you.</p>}
+      />
+      {statuses.length > shown.length && <p className="note">Showing {shown.length} of {statuses.length}.</p>}
+    </Card>
+  );
+}
+
+function HolidaysCard({ holidays, countryName }: { holidays: { id: string; date: string; name: string }[]; countryName?: string }) {
+  return (
+    <Card title={`Upcoming holidays${countryName ? ` · ${countryName}` : ""}`} to={R.holidays}>
+      <ul className="todo">
+        {holidays.length ? holidays.map((h) => <li key={h.id}>{h.name} · {formatShortDate(h.date)}</li>) : <li>None this year</li>}
+      </ul>
+    </Card>
+  );
+}
+
+function teamMetrics(team: TeamMember[], statuses: { status: DayStatus }[]) {
+  const working = statuses.filter((s) => s.status === "Working" || s.status === "WFH").length;
+  const onLeave = statuses.filter((s) => s.status === "On leave").length;
+  const wfh = statuses.filter((s) => s.status === "WFH").length;
+  return { direct: team.filter((m) => m.direct).length, working, onLeave, wfh };
+}
+
+/** Country filter for org-wide homes: the shared top-bar region. */
+function useRegionFilter(): CountryCode | "ALL" {
+  const { regionCode } = useLocale();
+  return regionCode === "ALL" ? "ALL" : (regionCode as CountryCode);
+}
+
+function countryNameOf(code: string | undefined): string | undefined {
+  return TIMEZ_COUNTRIES.find((c) => c.code === code)?.name;
+}
+
+/** Ask box on Home: answers inline from the same Copilot rules, with quick prompts. */
+function AssistantCard() {
+  const { demoProfile } = usePortal();
+  const buildContext = useCopilotContext();
+  const prompts = COPILOT_SUGGESTIONS[copilotPersonaFromRole(demoProfile.role)].slice(0, 3);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState<{ q: string; a: CopilotAnswer } | null>(null);
+  function ask(q: string) {
+    const text = q.trim();
+    if (!text) return;
+    setAnswer({ q: text, a: answerCopilot(text, buildContext()) });
+    setQuestion("");
+  }
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    ask(question);
+  }
+  return (
+    <Card title="AI Assistant" to={R.copilot}>
+      <form onSubmit={onSubmit} className="row-gap" style={{ alignItems: "center" }}>
+        <input
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          placeholder="Ask about leave, holidays, approvals…"
+          aria-label="Ask the assistant"
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <button type="submit" className="btn">
+          Ask
+        </button>
+      </form>
+      <div className="row-gap" style={{ marginTop: 8, flexWrap: "wrap" }}>
+        {prompts.map((p) => (
+          <button key={p} type="button" className="btn-ghost" onClick={() => ask(p)}>
+            {p}
+          </button>
+        ))}
+      </div>
+      {answer && (
+        <div style={{ marginTop: 10 }} aria-live="polite">
+          <p className="muted">{answer.q}</p>
+          <p>{answer.a.summary}</p>
+          {answer.a.metrics && (
+            <ul className="todo">
+              {answer.a.metrics.slice(0, 4).map((m) => (
+                <li key={m.label}>
+                  {m.label}: <strong>{m.value}</strong>
+                </li>
+              ))}
+            </ul>
+          )}
+          {answer.a.table && <DataTable headers={answer.a.table.headers} rows={answer.a.table.rows.slice(0, 4)} />}
+          {answer.a.links && (
+            <div className="row-gap" style={{ marginTop: 6 }}>
+              {answer.a.links.map((l) => (
+                <Link key={l.to} to={l.to} className="quiet-link">
+                  {l.label}
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <Link to={R.copilot} className="quiet-link">
+        Open Copilot
+      </Link>
+    </Card>
+  );
+}
+
+/* ───────────────────────────────────────────── EMPLOYEE ── */
+
+type OwnRequest = { id: string; type: string; detail: string; date: string; to: string };
 
 export function EmployeeHome() {
-  const { employee, leaveTable, counts, payslipViews, currentProjects, state, demoProfile, demoAccounts } = usePortal();
-  const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
-  // Same persisted sessions as the Attendance page, so both agree and survive refresh.
-  const attState = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
-  const { activeCountry } = useLocale();
+  const { employee, leaveTable, counts, payslipViews, currentProjects, state, demoProfile } = usePortal();
+  const data = useHomeData();
+  const { talent, attState, today } = data;
+  useSyncExternalStore(subscribeCollab, getCollabState, getCollabState);
   const [punchError, setPunchError] = useState<string | null>(null);
-  const today = todayISO();
   const pto = leaveTable.find((row) => row.code === "pto");
   const wfh = leaveTable.find((row) => row.code === "wfh");
-  const nextHoliday = nextHolidayFrom(state.holidays, today);
   const dayContext = useMemo(
     () => attendanceContextFor(employee, state.holidays, state.leaveRequests),
     [employee, state.holidays, state.leaveRequests],
@@ -124,33 +389,15 @@ export function EmployeeHome() {
   const session = getCurrentSession(employee.id, attState);
   const missingOut = missingCheckOutSessions(employee.id, attState);
   const offToday = session.phase === "not_started" ? nonWorkingReason(employee.id, today, dayContext) : null;
-  const personalPending = state.leaveRequests.filter(
-    (item) => item.employeeId === employee.id && item.status === "pending",
-  );
   const myOpenTasks = state.tasks.filter(
     (task) => task.employeeId === employee.id && (task.status === "open" || task.status === "progress"),
   );
   const urgentTask = myOpenTasks.find((t) => t.priority === "urgent" || t.priority === "high") ?? myOpenTasks[0];
-  const isOverdue = (due?: string) => Boolean(due && due < today);
-  // Learning comes from the same enrollments the Learning page shows.
-  const openCourses = talent.enrollments
-    .filter((e) => e.employeeId === employee.id && e.status !== "Completed")
-    .sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999"));
-  const myGoals = talent.goals.filter((g) => g.ownerId === employee.id);
-  const manager = demoAccounts.find((a) => a.id === demoProfile.reportsToId);
-  // Unpaid leave has no balance to show — it is only something you can apply for.
+  const me = data.people.find((p) => p.id === employee.id);
+  const managerId = demoProfile.reportsToId || me?.managerId;
+  const managerName = managerId ? personName(managerId, data.people) : undefined;
   const balanceRows = leaveTable.filter((row) => row.code !== "unpaid");
-  const timesheetNeedsAction = counts.timesheet > 0;
-  const todayAtt = attendanceOn(
-    today,
-    dayContext.holidays,
-    state.leaveRequests,
-    [],
-    employee.shiftHours,
-    today,
-    employee.id,
-    dayContext.weeklyOffDays,
-  );
+  const todayAtt = attendanceOn(today, dayContext.holidays, state.leaveRequests, [], employee.shiftHours, today, employee.id, dayContext.weeklyOffDays);
   const attendanceLabel =
     session.phase !== "not_started"
       ? phaseLabel(session.phase)
@@ -162,64 +409,341 @@ export function EmployeeHome() {
             ? "Weekly off"
             : "Not checked in";
 
+  // Own open requests across every self-service flow.
+  const mine = <T extends { employeeId: string }>(list: T[]) => list.filter((x) => x.employeeId === employee.id);
+  const requests: OwnRequest[] = [
+    ...mine(state.leaveRequests)
+      .filter((r) => r.status === "pending")
+      .map((r) => ({ id: r.id, type: "Leave", detail: `${r.code.toUpperCase()} · ${formatShortDate(r.from)}${r.to !== r.from ? ` → ${formatShortDate(r.to)}` : ""}`, date: r.appliedOn, to: R.leave })),
+    ...mine(state.backdatedPermissions)
+      .filter((r) => r.status === "pending")
+      .map((r) => ({ id: r.id, type: "Past-date leave", detail: "Permission request", date: (r as { from?: string }).from ?? "", to: R.leave })),
+    ...mine(state.encashments)
+      .filter((r) => r.status === "pending")
+      .map((r) => ({ id: r.id, type: "Encashment", detail: `${r.days} days`, date: r.appliedOn, to: R.leave })),
+    ...mine(state.expenses)
+      .filter((r) => r.status === "submitted")
+      .map((r) => ({ id: r.id, type: "Expense", detail: r.category, date: r.date, to: R.expenses })),
+    ...mine(state.reimbursements)
+      .filter((r) => r.status === "submitted")
+      .map((r) => ({ id: r.id, type: "Reimbursement", detail: r.category, date: r.date, to: "/reimbursement" })),
+    ...mine(state.cashAdvances)
+      .filter((r) => r.status === "pending")
+      .map((r) => ({ id: r.id, type: "Cash advance", detail: r.category, date: r.date, to: R.expenses })),
+    ...mine(state.assetRequests)
+      .filter((r) => r.status === "pending")
+      .map((r) => ({ id: r.id, type: "Asset", detail: r.item, date: r.date, to: R.help })),
+    ...mine(state.softwareRequests)
+      .filter((r) => r.status === "pending")
+      .map((r) => ({ id: r.id, type: "Software", detail: r.software, date: r.date, to: R.help })),
+    ...mine(state.cabBookings)
+      .filter((r) => r.status === "pending")
+      .map((r) => ({ id: r.id, type: "Cab", detail: r.to, date: r.date, to: R.help })),
+    ...mine(state.investmentProofs)
+      .filter((r) => r.status === "submitted")
+      .map((r) => ({ id: r.id, type: "Tax proof", detail: r.section, date: r.submittedOn, to: "/investment" })),
+  ].sort((a, b) => b.date.localeCompare(a.date));
+
+  // This week's timesheet.
+  const week = mondayOf(today);
+  const weekSheets = state.timesheets.filter((t) => t.employeeId === employee.id && t.weekStart === week);
+  const weekHours = weekSheets.reduce((n, t) => n + Object.values(t.hours).reduce((a, b) => a + b, 0), 0);
+  const weekStatus = !weekSheets.length
+    ? "Not started"
+    : weekSheets.some((t) => t.status === "draft")
+      ? "Draft"
+      : weekSheets.every((t) => t.status === "approved")
+        ? "Approved"
+        : "Submitted";
+  const olderDrafts = state.timesheets.filter((t) => t.employeeId === employee.id && t.weekStart < week && t.status === "draft").length;
+
+  // Goals and learning.
+  const cycle = currentCycle(talent);
+  const myGoals = talent.goals.filter((g) => g.ownerId === employee.id && g.cycleId === cycle.id);
+  const myEnrollments = talent.enrollments.filter((e) => e.employeeId === employee.id);
+  const openCourses = myEnrollments
+    .filter((e) => e.status !== "Completed")
+    .sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999"));
+  const learning = learningCompletion(myEnrollments, undefined, today);
+
+  // Documents and notifications.
+  const myDocs = state.documents
+    .filter((d) => d.employeeId === employee.id)
+    .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
+    .slice(0, 4);
+  const prefs = notifPrefsFor(employee.id);
+  const myNotes = listNotificationsForRole(demoProfile.role, employee.id)
+    .filter((n) => prefs[notifPrefKey(n.category)] !== false)
+    .sort((a, b) => b.at.localeCompare(a.at));
+  const unread = countUnreadNotifications(demoProfile.role, employee.id);
+
   function punch(action: "check_in" | "end_break" | "check_out") {
     setPunchError(attendanceAction(employee.id, action, dayContext));
   }
-  const actionItems = [
-    ...personalPending.map((req) => ({
-      id: req.id,
-      label: `Leave · ${req.code.toUpperCase()} · ${formatShortDate(req.from)}`,
-      status: "Pending",
-      next: "Awaiting manager approval",
-      to: R.leave,
-    })),
-    ...myOpenTasks.slice(0, 3).map((task) => ({
-      id: task.id,
-      label: `${task.code} · ${task.subject}`,
-      status: isOverdue(task.due)
-        ? "Overdue"
-        : task.blocked
-          ? "Action Required"
-          : task.status === "progress"
-            ? "In progress"
-            : "Open",
-      next: task.due ? `${isOverdue(task.due) ? "Was due" : "Due"} ${formatShortDate(task.due)}` : "Open task",
-      to: R.tasks,
-    })),
-    ...(timesheetNeedsAction
-      ? [
-          {
-            id: "ts-action",
-            label: TZ_EMPLOYEE_DEFAULTS.timesheetStatus,
-            status: "Action Required",
-            next: "Submit or correct this week’s timesheet",
-            to: R.timesheet,
-          },
-        ]
-      : []),
-    ...(openCourses.length > 0
-      ? [
-          {
-            id: "learn-action",
-            label: `${openCourses.length} course${openCourses.length > 1 ? "s" : ""} to finish`,
-            status: openCourses.some((e) => isOverdue(e.due)) ? "Overdue" : "Action Required",
-            next: openCourses[0]?.due ? `Next due ${formatShortDate(openCourses[0].due)}` : "Complete assigned courses",
-            to: R.learning,
-          },
-        ]
-      : []),
-  ];
-  const caughtUp = actionItems.length === 0 && !timesheetNeedsAction && todayAtt.kind !== "leave";
 
-  useEffect(() => {
-    document.title = `Home · ${COMPANY_NAME}`;
-  }, []);
+  useTitle("Home");
+
+  const sections: Section[] = [
+    ...(data.team.length > 0 || data.waitingCount > 0
+      ? [{ id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> }]
+      : []),
+    {
+      id: "profile",
+      label: "My profile",
+      node: (
+        <Card title="My profile" to={R.profile}>
+          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+            <img src={employee.photo} alt="" width={56} height={56} className="avatar" style={{ objectFit: "cover", flexShrink: 0 }} />
+            <div style={{ minWidth: 0 }}>
+              <strong>{employee.fullName}</strong>
+              <p className="muted">
+                {employee.designation}
+                {employee.department ? ` · ${employee.department}` : ""}
+              </p>
+              <p className="muted">
+                {employee.employeeCode} · {employee.location ? `${employee.location}, ` : ""}
+                {employee.countryName}
+              </p>
+            </div>
+          </div>
+          <ul className="todo" style={{ marginTop: 10 }}>
+            <li>Manager: {managerId && managerName ? <Link to={`/people/${managerId}`}>{managerName}</Link> : "—"}</li>
+            <li>Joined: {me?.dateOfJoining ? `${formatShortDate(me.dateOfJoining)} · ${tenureLabel(me.dateOfJoining, today)}` : "—"}</li>
+          </ul>
+          <Link className="btn-ghost" to={R.profile} style={{ marginTop: 8, display: "inline-flex" }}>
+            View profile
+          </Link>
+        </Card>
+      ),
+    },
+    {
+      id: "attendance",
+      label: "Today's attendance",
+      node: (
+        <Card title="Today's attendance" to={R.attendance}>
+          <p>
+            <StatusBadge status={attendanceLabel} tone={session.phase === "checked_in" ? "ok" : session.phase === "on_break" ? "warn" : undefined} literal />
+          </p>
+          <p className="muted">
+            {session.checkIn ? `In ${formatHm(session.checkIn)}` : "No check-in yet"}
+            {session.checkOut ? ` · Out ${formatHm(session.checkOut)}` : ""} · Shift {employee.shiftHours}
+          </p>
+          {missingOut.length > 0 && (
+            <p className="note warn" style={{ marginTop: 8 }}>
+              Missing check-out on {missingOut.map((s) => formatShortDate(s.date)).join(", ")} — <Link to={R.attendance}>request a correction</Link>.
+            </p>
+          )}
+          {offToday && <p className="note" style={{ marginTop: 8 }}>{offToday}</p>}
+          {punchError && (
+            <p className="note err" role="alert">
+              {punchError}
+            </p>
+          )}
+          <div className="row-gap" style={{ marginTop: 10 }}>
+            {session.phase === "not_started" && !offToday && (
+              <button type="button" className="btn" onClick={() => punch("check_in")}>
+                Check in
+              </button>
+            )}
+            {session.phase === "on_break" && (
+              <button type="button" className="btn" onClick={() => punch("end_break")}>
+                End break
+              </button>
+            )}
+            {session.phase === "checked_in" && (
+              <button type="button" className="btn" onClick={() => punch("check_out")}>
+                Check out
+              </button>
+            )}
+            <Link className="btn-ghost" to={R.attendance}>
+              History
+            </Link>
+          </div>
+        </Card>
+      ),
+    },
+    {
+      id: "leave",
+      label: "Leave balance",
+      node: (
+        <Card title="Leave balance" to={R.leave}>
+          <LeaveTable rows={balanceRows} />
+          <Link className="btn-ghost" to={R.leave} style={{ marginTop: 10, display: "inline-flex" }}>
+            Apply for leave
+          </Link>
+        </Card>
+      ),
+    },
+    { id: "holidays", label: "Upcoming holidays", node: <HolidaysCard holidays={data.holidays} countryName={employee.countryName} /> },
+    {
+      id: "requests",
+      label: "Pending requests",
+      node: (
+        <Card title={`Pending requests · ${requests.length}`}>
+          <DataTable
+            headers={["Type", "Detail", "Date"]}
+            rows={requests.slice(0, 5).map((r) => [
+              <Link key={r.id} to={r.to}>
+                {r.type}
+              </Link>,
+              r.detail,
+              r.date ? formatShortDate(r.date.slice(0, 10)) : "—",
+            ])}
+            empty={<p className="note">You have no open requests.</p>}
+          />
+          {requests.length > 5 && <p className="note">Showing 5 of {requests.length}.</p>}
+        </Card>
+      ),
+    },
+    {
+      id: "tasks",
+      label: "My tasks",
+      node: (
+        <Card title={`My tasks · ${myOpenTasks.length}`} to={R.tasks}>
+          <ul className="todo">
+            {myOpenTasks.length ? (
+              myOpenTasks.slice(0, 4).map((t) => (
+                <li key={t.id}>
+                  <Link to={R.tasks}>
+                    {t.code} · {t.subject}
+                  </Link>{" "}
+                  {t.due && t.due < today ? <StatusBadge status="Overdue" tone="danger" literal /> : null}
+                </li>
+              ))
+            ) : (
+              <li>No open tasks</li>
+            )}
+          </ul>
+        </Card>
+      ),
+    },
+    {
+      id: "timesheet",
+      label: "Timesheet",
+      node: (
+        <Card title="Timesheet" to={R.timesheet}>
+          <p>
+            Week of {formatShortDate(week)} · <strong>{weekHours} h</strong> <StatusBadge status={weekStatus} literal />
+          </p>
+          <p className="muted">Project: {currentProjects[0]?.name ?? "No active assignment"}</p>
+          {olderDrafts > 0 && <p className="note warn">{olderDrafts} earlier week{olderDrafts === 1 ? "" : "s"} still in draft.</p>}
+          <Link to={R.timesheet} className="btn" style={{ marginTop: 10, display: "inline-flex" }}>
+            Open timesheet
+          </Link>
+        </Card>
+      ),
+    },
+    {
+      id: "goals",
+      label: "Goals",
+      node: (
+        <Card title={`Goals · ${cycle.name}`} to={R.performance}>
+          {myGoals.length ? (
+            <>
+              <ProgressBar value={weightedProgress(myGoals)} label="Overall (weighted)" />
+              {myGoals.map((g) => (
+                <ProgressBar key={g.id} value={g.progress} label={`${g.title} · ${g.weight}%`} />
+              ))}
+            </>
+          ) : (
+            <p className="note">No goals set for this cycle.</p>
+          )}
+        </Card>
+      ),
+    },
+    {
+      id: "learning",
+      label: "Learning",
+      node: (
+        <Card title="Learning" to={R.learning}>
+          {learning.total ? (
+            <>
+              <ProgressBar value={learning.pct} label={`${learning.completed} of ${learning.total} completed`} />
+              <ul className="todo">
+                {openCourses.slice(0, 3).map((e) => (
+                  <li key={e.id}>
+                    <Link to={R.learning}>
+                      {COURSES.find((c) => c.id === e.courseId)?.title ?? "Course"} · {e.progress}%
+                    </Link>
+                    {e.due ? ` · due ${formatShortDate(e.due)}` : ""} {e.due && e.due < today ? <StatusBadge status="Overdue" tone="danger" literal /> : null}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="note">No courses assigned.</p>
+          )}
+        </Card>
+      ),
+    },
+    {
+      id: "documents",
+      label: "Documents",
+      node: (
+        <Card title="Documents & letters" to={R.documents}>
+          <DataTable
+            headers={["Document", "Type", "Added"]}
+            rows={myDocs.map((d) => [
+              <Link key={d.id} to={R.documents}>
+                {d.name}
+              </Link>,
+              d.docType || d.category,
+              formatShortDate(d.uploadedAt.slice(0, 10)),
+            ])}
+            empty={<p className="note">No documents yet.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "notifications",
+      label: "Notifications",
+      node: (
+        <Card title={`Notifications · ${unread} unread`} to={R.notifications}>
+          <ul className="todo">
+            {myNotes.length ? (
+              myNotes.slice(0, 3).map((n) => (
+                <li key={n.id}>
+                  <Link to={n.href || R.notifications}>
+                    {n.readBy.includes(employee.id) ? n.title : <strong>{n.title}</strong>}
+                  </Link>
+                  <span className="muted"> · {formatShortDate(n.at.slice(0, 10))}</span>
+                </li>
+              ))
+            ) : (
+              <li>No notifications</li>
+            )}
+          </ul>
+        </Card>
+      ),
+    },
+    { id: "assistant", label: "AI Assistant", node: <AssistantCard /> },
+    {
+      id: "pay",
+      label: "Pay & benefits",
+      node: (
+        <Card title="Pay & benefits" to={R.payslips}>
+          <ul className="todo">
+            <li>
+              <Link to={R.payslips}>Latest payslip · {payslipViews[0]?.label ?? "—"}</Link>
+            </li>
+            <li>
+              <Link to={R.benefits}>Benefits enrollment</Link>
+            </li>
+            <li>
+              <Link to={R.expenses}>Reimbursement claims</Link>
+            </li>
+          </ul>
+        </Card>
+      ),
+    },
+  ];
 
   return (
     <div className="stack">
       <DashGreeting
         title={dayGreeting(employee.fullName)}
-        subtitle={`${employee.designation} · ${formatLongDate(today)} · ${employee.timeZone} · ${activeCountry.name}`}
+        subtitle={`${employee.designation} · ${formatLongDate(today)} · ${employee.timeZone} · ${employee.countryName ?? ""}`}
       />
 
       <div className="emp-quick-actions" aria-label="Quick actions">
@@ -240,1204 +764,1146 @@ export function EmployeeHome() {
       <MetricGrid>
         <Link to={R.attendance} className="metric-card-link">
           <MetricCard
-            label="Today’s attendance"
+            label="Today's attendance"
             value={attendanceLabel}
             hint={
               session.checkIn
                 ? `In ${formatHm(session.checkIn)}${session.checkOut ? ` · Out ${formatHm(session.checkOut)}` : ""} · ${employee.shiftHours}`
-                : `${employee.shiftHours} · ${activeCountry.name}`
+                : employee.shiftHours
             }
           />
         </Link>
         <Link to={R.leave} className="metric-card-link">
-          <MetricCard
-            label="Leave balance"
-            value={pto?.available ?? "—"}
-            hint={`Privilege leave available · WFH ${wfh?.available ?? "—"}`}
-          />
+          <MetricCard label="Leave balance" value={pto?.available ?? "—"} hint={`${pto?.name ?? "Leave"} available · WFH ${wfh?.available ?? "—"}`} />
         </Link>
-        <Link to={urgentTask ? R.tasks : R.tasks} className="metric-card-link">
-          <MetricCard
-            label="Open tasks"
-            value={myOpenTasks.length}
-            hint={urgentTask ? urgentTask.subject : "You're all caught up"}
-          />
+        <Link to={R.tasks} className="metric-card-link">
+          <MetricCard label="Open tasks" value={myOpenTasks.length} hint={urgentTask ? urgentTask.subject : "You're all caught up"} />
         </Link>
         <Link to={R.timesheet} className="metric-card-link">
-          <MetricCard
-            label="Timesheet"
-            value={timesheetNeedsAction ? "Action Required" : "Draft"}
-            hint={TZ_EMPLOYEE_DEFAULTS.timesheetStatus}
-          />
+          <MetricCard label="Timesheet" value={counts.timesheet > 0 ? "Action needed" : "Up to date"} hint={`This week · ${weekHours} h`} />
         </Link>
       </MetricGrid>
 
-      <div className="mgr-home-grid">
-        <Card title="Today · prioritize">
-          {caughtUp ? (
-            <div className="empty-state">
-              <strong>You're all caught up</strong>
-              <p>No pending leave, urgent tasks, or timesheet actions for today.</p>
-            </div>
-          ) : (
-            <ul className="todo emp-action-list">
-              {actionItems.map((item) => (
-                <li key={item.id}>
-                  <Link to={item.to} className="emp-action-row">
-                    <span>
-                      <strong>{item.label}</strong>
-                      <span className="muted">{item.next}</span>
-                    </span>
-                    <StatusBadge status={item.status} tone={item.status === "Overdue" ? "danger" : undefined} />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-          {missingOut.length > 0 && (
-            <p className="note warn" style={{ marginTop: 12 }}>
-              Missing check-out on {missingOut.map((s) => formatShortDate(s.date)).join(", ")} —{" "}
-              <Link to={R.attendance}>request a correction</Link>.
-            </p>
-          )}
-          {offToday && <p className="note" style={{ marginTop: 12 }}>{offToday} No check-in needed.</p>}
-          {punchError && (
-            <p className="note err" role="alert">
-              {punchError}
-            </p>
-          )}
-          <div className="row-gap" style={{ marginTop: 12 }}>
-            {session.phase === "not_started" && !offToday && (
-              <button type="button" className="btn" onClick={() => punch("check_in")}>
-                Check in
-              </button>
-            )}
-            {session.phase === "on_break" && (
-              <button type="button" className="btn" onClick={() => punch("end_break")}>
-                End break
-              </button>
-            )}
-            {session.phase === "checked_in" && (
-              <button type="button" className="btn" onClick={() => punch("check_out")}>
-                Check out
-              </button>
-            )}
-            <Link className="btn-ghost" to={R.attendance}>
-              Attendance history
-            </Link>
-          </div>
-        </Card>
-
-        <Card title="Leave & holidays" to={R.leave}>
-          <LeaveTable rows={balanceRows} />
-          <p className="muted" style={{ marginTop: 10 }}>
-            Next holiday:{" "}
-            {nextHoliday ? (
-              <Link to={R.holidays}>
-                {nextHoliday.name} · {formatShortDate(nextHoliday.date)}
-              </Link>
-            ) : (
-              "None upcoming in your calendar"
-            )}
-          </p>
-        </Card>
-
-        <Card title="My timesheet" to={R.timesheet}>
-          <p>
-            <StatusBadge status={timesheetNeedsAction ? "Action Required" : "Draft"} />{" "}
-            {TZ_EMPLOYEE_DEFAULTS.timesheetStatus}
-          </p>
-          <p className="muted">Project: {currentProjects[0]?.name ?? "No active assignment"}</p>
-          <Link to={R.timesheet} className="btn" style={{ marginTop: 10, display: "inline-flex" }}>
-            Open timesheet
-          </Link>
-        </Card>
-
-        <Card title="Pay & benefits" to={R.payslips}>
-          <ul className="todo">
-            <li>
-              <Link to={R.payslips}>
-                Latest payslip · {payslipViews[0]?.label ?? "—"} <StatusBadge status="Paid" tone="ok" literal />
-              </Link>
-            </li>
-            <li>
-              <Link to={R.benefits}>Benefits enrollment</Link>
-            </li>
-            <li>
-              <Link to={R.expenses}>Reimbursement claims</Link>
-            </li>
-          </ul>
-        </Card>
-
-        <Card title="Documents & letters" to={R.documents}>
-          <ul className="todo">
-            {TZ_EMPLOYEE_DEFAULTS.recentDocs.map((doc) => (
-              <li key={doc.name}>
-                <Link to={doc.to}>{doc.name}</Link>
-              </li>
-            ))}
-          </ul>
-        </Card>
-
-        <Card title="Performance & learning" to={R.performance}>
-          <ul className="todo">
-            {myGoals.map((g) => (
-              <li key={g.id}>
-                <Link to={R.performance}>
-                  {g.title} · {g.progress}%
-                </Link>
-              </li>
-            ))}
-            {openCourses.map((e) => (
-              <li key={e.id}>
-                <Link to={R.learning}>
-                  {COURSES.find((c) => c.id === e.courseId)?.title ?? e.courseId} · {e.progress}%
-                </Link>
-              </li>
-            ))}
-            <li>
-              <Link to={R.skills}>Skills & career plan</Link>
-            </li>
-          </ul>
-        </Card>
-
-        <Card title="People & organization" to={R.directory}>
-          <p className="muted">
-            {employee.department} · Manager:{" "}
-            {manager ? <Link to={`/people/${manager.id}`}>{manager.fullName}</Link> : "—"} · {employee.location},{" "}
-            {employee.countryName}
-          </p>
-          <div className="row-gap" style={{ marginTop: 10 }}>
-            <Link className="btn-ghost" to={R.directory}>
-              Directory
-            </Link>
-            <Link className="btn-ghost" to="/org-chart">
-              Org chart
-            </Link>
-            <Link className="btn-ghost" to={R.profile}>
-              My profile
-            </Link>
-          </div>
-        </Card>
-
-        <Card title="Messages & helpdesk" to={R.notifications}>
-          <ul className="todo">
-            <li>
-              <Link to={R.notifications}>
-                Notification Center <StatusBadge status="Action Required" />
-              </Link>
-            </li>
-            <li>
-              <Link to={R.messages}>Messages</Link>
-            </li>
-            <li>
-              <Link to={R.help}>Helpdesk & HR requests</Link>
-            </li>
-          </ul>
-        </Card>
-      </div>
+      <HomeSections userId={employee.id} sections={sections} />
     </div>
   );
 }
 
-/* ───────────────────────────────────────────── B. MANAGER ── */
+/* ───────────────────────────────────────────── MANAGER ── */
 
 export function ManagerHome() {
-  const { employee, state, demoProfile, canDecideFor } = usePortal();
-  const [range, setRange] = useDateRange("30d");
-  const today = todayISO();
-  const access = demoProfile.navAccess;
+  const { employee, state, demoProfile } = usePortal();
+  const data = useHomeData();
+  const { talent, attState, today } = data;
+  const probation = useSyncExternalStore(subscribeProbation, getProbationState, getProbationState);
+  const immigration = useSyncExternalStore(subscribeImmigration, getImmigrationState, getImmigrationState);
+  const m = teamMetrics(data.team, data.statuses);
+  const teamIds = useMemo(() => new Set(data.team.map((t) => t.id)), [data.team]);
+  const peopleById = useMemo(() => new Map(data.people.map((p) => [p.id, p])), [data.people]);
+  const checkedIn = new Set(
+    attState.sessions.filter((s) => s.date === today && s.phase !== "not_started" && teamIds.has(s.employeeId)).map((s) => s.employeeId),
+  );
+  const leaveQueue = state.leaveRequests.filter((r) => r.status === "pending" && data.waiting.some((w) => w.id === r.id));
+  const timesheetQueue = data.waiting.filter((w) => w.kind === "Timesheet");
+  const upcomingLeave = state.leaveRequests
+    .filter((r) => teamIds.has(r.employeeId) && r.status === "approved" && r.to >= today)
+    .sort((a, b) => a.from.localeCompare(b.from))
+    .slice(0, 5);
+  const openings = data.teamReqs.reduce((n, r) => n + r.openings, 0);
 
-  // Only items this manager decides (people below them in the reporting line).
-  const leavePending = state.leaveRequests.filter((item) => item.status === "pending" && canDecideFor(item.employeeId));
-  const timesheetPending = state.orgTimesheets.filter((item) => item.status === "submitted" && canDecideFor(item.personId));
-  const expensePending = state.expenses.filter((item) => item.status === "submitted" && canDecideFor(item.employeeId));
-  const pendingApprovals = leavePending.length + timesheetPending.length + expensePending.length;
+  const cycle = currentCycle(talent);
+  const goals = goalProgressFor(talent.goals, teamIds, cycle, today);
+  const reviews = reviewStatusFor(talent.reviews, teamIds, cycle.id);
+  const skills = useMemo(() => skillCoverage(talent, data.team), [talent, data.team]);
+  const joinedFrom = addDaysISO(today, -90);
+  const joiners = data.team
+    .map((t) => ({ member: t, doj: peopleById.get(t.id)?.dateOfJoining ?? "" }))
+    .filter((x) => x.doj >= joinedFrom && x.doj <= today)
+    .sort((a, b) => b.doj.localeCompare(a.doj));
 
-  useEffect(() => {
-    document.title = `Manager Home · ${COMPANY_NAME}`;
-  }, []);
+  // Team alerts.
+  const threeDaysAgo = addDaysISO(today, -3);
+  const appliedOn = new Map(state.leaveRequests.map((r) => [r.id, r.appliedOn]));
+  const overdue = data.waiting.filter((w) => {
+    const since = (appliedOn.get(w.id) ?? w.date).slice(0, 10);
+    return Boolean(since) && since < threeDaysAgo;
+  });
+  const teamPeople = data.team.map((t) => peopleById.get(t.id)).filter((p): p is NonNullable<typeof p> => Boolean(p));
+  const probationDue = useMemo(
+    () => trackedProbations(teamPeople, today).filter((v) => v.due && v.status === "In probation"),
+    // probation snapshot changes when reviews are saved
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [teamPeople.length, data.people, probation, today],
+  );
+  const alerts: { id: string; text: string; to: string; tone: "warn" | "danger" }[] = [
+    ...data.team.flatMap((t) =>
+      missingCheckOutSessions(t.id, attState).map((s) => ({
+        id: `mo-${t.id}-${s.date}`,
+        text: `${t.name} · missing check-out on ${formatShortDate(s.date)}`,
+        to: R.attendance,
+        tone: "warn" as const,
+      })),
+    ),
+    ...(overdue.length
+      ? [{ id: "overdue", text: `${overdue.length} approval${overdue.length === 1 ? "" : "s"} waiting more than 3 days`, to: R.approvals, tone: "danger" as const }]
+      : []),
+    ...probationDue.map((v) => ({
+      id: `pb-${v.person.id}`,
+      text: `${v.person.fullName} · probation ${v.overdue ? "ended" : "ends"} ${formatShortDate(v.endDate)}`,
+      to: R.probation,
+      tone: v.overdue ? ("danger" as const) : ("warn" as const),
+    })),
+    ...immigration.documents
+      .filter((d) => teamIds.has(d.personId) && VISA_TYPES.has(d.type))
+      .map((d) => ({ d, status: docStatus(d, today) }))
+      .filter((x) => x.status === "Expiring" || x.status === "Expired")
+      .map(({ d, status }) => ({
+        id: `visa-${d.id}`,
+        text: `${personName(d.personId, data.people)} · ${d.type} ${status === "Expired" ? "expired" : "expires"} ${formatShortDate(d.expiryDate)}`,
+        to: "/team",
+        tone: status === "Expired" ? ("danger" as const) : ("warn" as const),
+      })),
+  ];
 
-  return (
-    <div className="stack">
-      <DashGreeting
-        title="Manager Home"
-        subtitle={`${dayGreeting(employee.fullName)} · ${employee.designation} · ${formatLongDate(today)}`}
-      />
-      <DateRangeFilter value={range} onChange={setRange} />
+  useTitle("Manager Home");
 
-      <MetricGrid>
-        <MetricCard label="Team headcount" value={TZ_TEAM.managerTeamSize} hint="Direct reports" />
-        <MetricCard
-          label="Team attendance"
-          value={`${TZ_TEAM.attendancePct}%`}
-          hint={`${TZ_TEAM.presentToday} present · ${TZ_TEAM.wfhToday} WFH · ${TZ_TEAM.onLeaveToday} leave`}
-        />
-        <MetricCard label="Pending approvals" value={pendingApprovals} hint="Leave, timesheet, expense" />
-        <MetricCard label="Open positions (team)" value={2} hint="Open roles on your team" />
-      </MetricGrid>
-
-      <div className="mgr-home-grid">
-        <Card title="Team attendance today">
-          <DataTable
-            headers={["Name", "Code", "Role", "Status"]}
-            rows={TZ_TEAM.directReports.map((r) => [
-              r.name,
-              r.code,
-              r.role,
-              <StatusBadge key={r.code} status={r.status} tone={r.status === "Leave" ? "warn" : "ok"} />,
-            ])}
-          />
-        </Card>
-
-        <Card title="Pending approvals" to="/approvals">
+  const sections: Section[] = [
+    { id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> },
+    { id: "myday", label: "My day", node: <MyDayCard /> },
+    { id: "team", label: "Team attendance today", node: <TeamTodayCard statuses={data.statuses} title="Team attendance today" checkedIn={checkedIn} /> },
+    {
+      id: "alerts",
+      label: "Team alerts",
+      node: (
+        <Card title={`Team alerts · ${alerts.length}`}>
           <ul className="todo">
-            <li>
-              Leave requests <StatusBadge status={`${leavePending.length}`} tone="warn" />
-            </li>
-            <li>
-              Timesheet approvals <StatusBadge status={`${timesheetPending.length}`} tone="warn" />
-            </li>
-            <li>
-              Expense claims <StatusBadge status={`${expensePending.length}`} tone="info" />
-            </li>
+            {alerts.length ? (
+              alerts.slice(0, 8).map((a) => (
+                <li key={a.id}>
+                  <Link to={a.to}>{a.text}</Link> <StatusBadge status={a.tone === "danger" ? "Overdue" : "Check"} tone={a.tone} literal />
+                </li>
+              ))
+            ) : (
+              <li>No alerts for your team</li>
+            )}
           </ul>
-          <Link to="/approvals" className="quiet-link">
-            Open approval queue
-          </Link>
         </Card>
-
-        <Card title="Leave requests" to="/leave">
+      ),
+    },
+    {
+      id: "leave",
+      label: "Leave requests",
+      node: (
+        <Card title={`Leave requests · ${leaveQueue.length}`} to={R.approvals}>
           <DataTable
-            headers={["Employee", "Type", "From", "Status"]}
-            rows={leavePending.slice(0, 5).map((req) => [
-              req.employeeId,
+            headers={["Person", "Type", "From", "Status"]}
+            rows={leaveQueue.slice(0, 5).map((req) => [
+              personName(req.employeeId, data.people),
               req.code.toUpperCase(),
               formatShortDate(req.from),
               <StatusPill key={req.id} status={req.status} />,
             ])}
-            empty={<p className="note">No pending leave from your team</p>}
+            empty={<p className="note">No leave waiting on you.</p>}
           />
         </Card>
-
-        <Card title="Timesheet approvals" to="/timesheet">
-          <p>
-            Submitted awaiting review: <strong>{timesheetPending.length}</strong>
-          </p>
-        </Card>
-
-        <Card title="Goal progress" to={R.performance}>
-          {TZ_TEAM.goals.map((g) => (
-            <ProgressBar key={g.name} value={g.progress} label={g.name} />
-          ))}
-        </Card>
-
-        <Card title="Performance review activities" to={R.performance}>
-          <ul className="todo">
-            <li>Priya · Mid-year check-in · 18 Oct</li>
-            <li>Babu · Strong rating · follow-up goals · Done</li>
-            <li>Anu · Skills feedback due · 22 Oct</li>
-          </ul>
-        </Card>
-
-        <Card title="Team skills" to="/skills">
+      ),
+    },
+    {
+      id: "timesheets",
+      label: "Timesheet approvals",
+      node: (
+        <Card title={`Timesheet approvals · ${timesheetQueue.length}`} to={R.approvals}>
           <DataTable
-            headers={["Skill", "Coverage", "Gap"]}
-            rows={TZ_TEAM.skills.map((s) => [s.name, String(s.cover), s.gap])}
+            headers={["Person", "Week of", "Hours"]}
+            rows={timesheetQueue.slice(0, 5).map((w) => [personName(w.employeeId, data.people), formatShortDate(w.date), w.detail])}
+            empty={<p className="note">No timesheets waiting on you.</p>}
           />
         </Card>
-
-        <Card title="New joiners">
+      ),
+    },
+    {
+      id: "goals",
+      label: "Team goal progress",
+      node: (
+        <Card title="Team goal progress" to={R.performance}>
+          {goals.people.length ? (
+            <>
+              <ProgressBar value={goals.avg} label={`Average · ${goals.people.length} people with goals`} />
+              <p className="muted">
+                {cycle.name} is {goals.elapsed}% through · {goals.behind.length} behind
+              </p>
+              <ul className="todo">
+                {goals.behind.slice(0, 4).map((p) => (
+                  <li key={p.id}>
+                    {p.name} · {p.progress}% <StatusBadge status="Behind" tone="warn" literal />
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="note">No team goals in {cycle.name}.</p>
+          )}
+        </Card>
+      ),
+    },
+    {
+      id: "performance",
+      label: "Performance activities",
+      node: (
+        <Card title={`Performance · ${cycle.name}`} to={R.performance}>
+          {reviews.total ? (
+            <>
+              <ProgressBar value={reviews.total ? (reviews.selfDone / reviews.total) * 100 : 0} label={`Self reviews · ${reviews.selfDone} of ${reviews.total}`} />
+              <ProgressBar value={reviews.total ? (reviews.managerDone / reviews.total) * 100 : 0} label={`Manager reviews · ${reviews.managerDone} of ${reviews.total}`} />
+              <DataTable
+                headers={["Person", "Self", "Manager"]}
+                rows={reviews.awaitingManager.slice(0, 4).map((r) => [r.employeeName, r.selfStatus, r.managerStatus])}
+                empty={<p className="note">All manager reviews are in.</p>}
+              />
+            </>
+          ) : (
+            <p className="note">No team reviews · {cycle.status}</p>
+          )}
+        </Card>
+      ),
+    },
+    {
+      id: "skills",
+      label: "Team skills",
+      node: (
+        <Card title="Team skills" to={R.skills}>
+          <DataTable
+            headers={["Top skill", "People", "Avg level"]}
+            rows={skills.top.map((s) => [s.name, String(s.people), `${s.avgLevel} / 5`])}
+            empty={<p className="note">No skill profiles yet.</p>}
+          />
+          {skills.gaps.length > 0 && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              Gaps: {skills.gaps.slice(0, 3).map((g) => `${g.name} (${g.gaps} below target)`).join(" · ")}
+            </p>
+          )}
+        </Card>
+      ),
+    },
+    {
+      id: "joiners",
+      label: "New joiners",
+      node: (
+        <Card title={`New joiners · ${joiners.length}`}>
+          <DataTable
+            headers={["Name", "Role", "Joined"]}
+            rows={joiners.slice(0, 5).map(({ member, doj }) => [
+              <Link key={member.id} to={`/people/${member.id}`}>
+                {member.name}
+              </Link>,
+              member.designation,
+              formatShortDate(doj),
+            ])}
+            empty={<p className="note">No joiners in 90 days.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "positions",
+      label: "Open positions",
+      node: (
+        <Card title={`Open positions · ${openings}`} to="/jobs">
           <ul className="todo">
-            {TZ_TEAM.newJoiners.map((j) => (
-              <li key={j.name}>
-                {j.name} · {j.role} · {j.start}
-              </li>
-            ))}
+            {data.teamReqs.length ? (
+              data.teamReqs.map((r) => (
+                <li key={r.id}>
+                  {r.title} · {r.openings} opening{r.openings === 1 ? "" : "s"} · {r.stageSummary}
+                </li>
+              ))
+            ) : (
+              <li>No open positions in your team</li>
+            )}
           </ul>
         </Card>
-
-        <Card title="Open positions" to="/jobs">
+      ),
+    },
+    {
+      id: "upcoming-leave",
+      label: "Upcoming team leave",
+      node: (
+        <Card title="Upcoming team leave" to={R.leave}>
           <ul className="todo">
-            <li>Senior Frontend Engineer · Engineering · 1 opening</li>
-            <li>QA Analyst · Quality · 1 opening</li>
+            {upcomingLeave.length ? (
+              upcomingLeave.map((r) => (
+                <li key={r.id}>
+                  {personName(r.employeeId, data.people)} · {r.code.toUpperCase()} · {formatShortDate(r.from)}
+                  {r.to !== r.from ? ` → ${formatShortDate(r.to)}` : ""}
+                </li>
+              ))
+            ) : (
+              <li>No approved leave coming up</li>
+            )}
           </ul>
         </Card>
-
-        <Card title="Team alerts">
-          <ul className="todo">
-            <li className="warn">1 team member on leave today</li>
-            <li className="info">Dussehra holiday calendar published</li>
-            <li className="ok">No critical compliance overdue items</li>
-          </ul>
-        </Card>
-
+      ),
+    },
+    { id: "holidays", label: "Upcoming holidays", node: <HolidaysCard holidays={data.holidays} countryName={employee.countryName} /> },
+    { id: "assistant", label: "AI Assistant", node: <AssistantCard /> },
+    {
+      id: "links",
+      label: "Quick links",
+      node: (
         <Card title="Quick links">
           <AuthShortcuts
-            allowed={access}
+            allowed={demoProfile.navAccess}
             items={[
-              { label: "Team directory", to: "/directory", access: "people" },
-              { label: "Approvals", to: "/approvals", access: "workflows" },
-              { label: "Attendance", to: "/attendance", access: "attendance" },
+              { label: "Team", to: "/team", access: "team" },
+              { label: "Approvals", to: R.approvals, access: "inbox" },
+              { label: "Attendance", to: R.attendance, access: "attendance" },
               { label: "Performance", to: R.performance, access: "performance" },
               { label: "Analytics", to: "/analytics", access: "analytics" },
             ]}
           />
         </Card>
-      </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="stack">
+      <DashGreeting title="Manager Home" subtitle={`${dayGreeting(employee.fullName)} · ${employee.designation} · ${formatLongDate(today)}`} />
+      <MetricGrid>
+        <MetricCard label="Team headcount" value={data.team.length} hint={`${m.direct} direct reports`} />
+        <MetricCard label="Working today" value={m.working} hint={`${checkedIn.size} checked in · ${m.wfh} WFH · ${m.onLeave} on leave`} />
+        <MetricCard label="Pending approvals" value={data.waitingCount} hint={overdue.length ? `${overdue.length} older than 3 days` : "Waiting on you"} />
+        <MetricCard label="Team goal progress" value={`${goals.avg}%`} hint={`${goals.behind.length} behind · ${cycle.name}`} />
+      </MetricGrid>
+      <HomeSections userId={employee.id} sections={sections} />
     </div>
   );
 }
 
-/* ───────────────────────────────────────────── C. HR ADMIN ── */
+/* ───────────────────────────────────────────── HR ── */
 
-export function HrAdminHome() {
-  const { employee, demoProfile } = usePortal();
+type HrAction = { id: string; kind: string; who: string; detail: string; date: string; to: string };
+
+/** HR home. HRBPs get the same home scoped to their own country. */
+export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
+  const { employee, demoProfile, state } = usePortal();
+  const data = useHomeData();
+  const { talent, attState, today } = data;
+  const exitState = useSyncExternalStore(subscribeExits, getExitState, getExitState);
+  const bgv = useSyncExternalStore(subscribeBgv, getBgvState, getBgvState);
+  const region = useRegionFilter();
+  const country: CountryCode | "ALL" = hrbp ? ((employee.countryCode ?? "IN") as CountryCode) : region;
+  const scopeName = country === "ALL" ? undefined : countryNameOf(country);
   const [range, setRange] = useDateRange("30d");
-  const [tab, setTab] = useState("workforce");
-  const move = movementForRange(range);
+  const stats = useMemo(
+    () => workforceStats(data.people, { country, range: range as RangeKey, today }),
+    [data.people, country, range, today],
+  );
+  const global = useMemo(() => workforceStats(data.people, { country: "ALL", range: range as RangeKey, today }), [data.people, range, today]);
+  const peopleById = useMemo(() => new Map(data.people.map((p) => [p.id, p])), [data.people]);
+  const countryOf = (id: string) =>
+    String(peopleById.get(id)?.countryCode ?? DEMO_ACCOUNTS.find((a) => a.id === id)?.countryCode ?? "IN");
+  const inScope = (id: string) => country === "ALL" || countryOf(id) === country;
+  const scopePeople = useMemo(
+    () => data.people.filter((p) => p.employmentStatus !== "Terminated" && (country === "ALL" || p.countryCode === country)),
+    [data.people, country],
+  );
+  const reqs = data.openReqs.filter((r) => !scopeName || r.country === scopeName);
+  const from = rangeStart(range as RangeKey, today);
+  const joiners = scopePeople.filter((p) => p.dateOfJoining >= from && p.dateOfJoining <= today).sort((a, b) => b.dateOfJoining.localeCompare(a.dateOfJoining));
+  const leavers = data.people
+    .filter((p) => p.employmentStatus === "Terminated" && (country === "ALL" || p.countryCode === country))
+    .map((p) => ({ p, ...getExitDetails(p) }))
+    .filter((x) => x.exitDate && x.exitDate >= from && x.exitDate <= today)
+    .sort((a, b) => (b.exitDate ?? "").localeCompare(a.exitDate ?? ""));
+  const openExits = exitState.cases.filter((c) => (c.status === "Submitted" || c.status === "Accepted") && inScope(c.employeeId));
+  const funnel = pipelineFunnel(talent.candidates, scopeName);
 
-  useEffect(() => {
-    document.title = `HR Admin Home · ${COMPANY_NAME}`;
-  }, []);
+  // Pending HR actions from the real queues.
+  const hrActions: HrAction[] = [
+    ...talent.tasks
+      .filter((t) => t.owner === "HR" && t.status !== "Done")
+      .map((t) => ({ t, j: talent.joiners.find((j) => j.id === t.joinerId) }))
+      .filter(({ j }) => !scopeName || j?.country === scopeName)
+      .map(({ t, j }) => ({ id: t.id, kind: "Onboarding", who: j?.name ?? "Joiner", detail: t.title, date: t.due, to: R.onboarding })),
+    ...state.investmentProofs
+      .filter((p) => p.status === "submitted" && inScope(p.employeeId))
+      .map((p) => ({ id: p.id, kind: "Tax proof", who: personName(p.employeeId, data.people), detail: p.section, date: p.submittedOn, to: R.approvals })),
+    ...exitState.cases
+      .filter((c) => c.status === "Accepted" && inScope(c.employeeId))
+      .map((c) => ({ c, open: c.clearance.filter((i) => i.owner === "hr" && !i.done).length }))
+      .filter(({ c, open }) => open > 0 || c.settlement !== "Paid")
+      .map(({ c, open }) => ({
+        id: c.id,
+        kind: "Exit clearance",
+        who: c.employeeName,
+        detail: open ? `${open} HR item${open === 1 ? "" : "s"} open` : `Settlement ${c.settlement.toLowerCase()}`,
+        date: c.lastWorkingDay,
+        to: R.exits,
+      })),
+    ...bgv.records
+      .map((r) => ({ r, result: overallResult(r) }))
+      .filter(({ result }) => result !== "Clear")
+      .filter(({ r }) => {
+        if (!scopeName) return true;
+        if (r.subjectKind === "employee") return inScope(r.subjectId);
+        return talent.joiners.find((j) => j.id === r.subjectId)?.country === scopeName;
+      })
+      .map(({ r, result }) => ({ id: r.id, kind: "Background check", who: r.subjectName, detail: result, date: r.createdOn, to: R.bgv })),
+  ].sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
+  const actionKinds = [...hrActions.reduce((mm, a) => mm.set(a.kind, (mm.get(a.kind) ?? 0) + 1), new Map<string, number>())];
 
-  return (
-    <div className="stack">
-      <DashGreeting
-        title="HR Admin Home"
-        subtitle={`${dayGreeting(employee.fullName)} · Global people operations`}
-      />
-      <DateRangeFilter
-        value={range}
-        onChange={setRange}
-        extras={
-          <label className="filter-label">
-            Country
-            <select defaultValue="ALL">
-              <option value="ALL">All countries</option>
-              {TZ_HEADCOUNT.byCountry.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        }
-      />
+  const leaveSeries = useMemo(
+    () => leaveTrend(state.leaveRequests, state.holidays, countryOf, country, today, 6),
+    // countryOf reads peopleById
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.leaveRequests, state.holidays, peopleById, country, today],
+  );
+  const onLeaveNow = scopePeople.filter((p) => p.employmentStatus === "On Leave").length;
+  const attendanceSeries = useMemo(
+    () => attendanceTrend(scopePeople, state, attState, today, 6),
+    // state slices used: holidays, leaveRequests, absences
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopePeople, state.holidays, state.leaveRequests, state.absences, attState, today],
+  );
+  const cycle = currentCycle(talent);
+  const scopeIds = useMemo(() => (country === "ALL" ? null : new Set(scopePeople.map((p) => p.id))), [country, scopePeople]);
+  const reviews = reviewStatusFor(talent.reviews, scopeIds, cycle.id);
+  const learning = learningCompletion(talent.enrollments, scopeIds ?? undefined, today);
+  const insights = useMemo(() => workforceInsights(data.people, country, today), [data.people, country, today]);
 
-      <MetricGrid>
-        <MetricCard label="Global headcount" value={TZ_HEADCOUNT.global} hint="All legal entities" />
-        <MetricCard label={`Joiners (${move.label})`} value={move.joiners} hint={`Net +${move.net}`} />
-        <MetricCard label={`Exits (${move.label})`} value={move.exits} />
-        <MetricCard label="Open positions" value={TZ_RECRUITING.openRequisitions} hint={`${TZ_RECRUITING.candidates} candidates`} />
-      </MetricGrid>
+  const title = hrbp ? "HRBP Home" : "HR Home";
+  useTitle(title);
 
-      <SoftTabs
-        tabs={[
-          { id: "workforce", label: "Workforce" },
-          { id: "pipeline", label: "Recruitment" },
-          { id: "cycles", label: "Cycles" },
-        ]}
-        active={tab}
-        onChange={setTab}
-      />
-
-      {tab === "workforce" && (
-        <div className="mgr-home-grid">
-          <Card title="Headcount by country">
-            <MiniBars items={TZ_HEADCOUNT.byCountry.map((c) => ({ label: c.code, value: c.headcount }))} />
-          </Card>
-          <Card title="Pending HR actions" to="/workflows">
-            <MetricCard label="Actions in queue" value={TZ_HR.pendingHrActions} hint="Cases, acknowledgments, onboarding" />
-            <p className="note">Policy acknowledgments pending: {TZ_HR.policyAckPending}</p>
-          </Card>
-          <Card title="Leave trend">
-            <MiniBars items={TZ_HR.leaveTrend.map((r) => ({ label: r.label, value: r.days }))} valueSuffix="d" />
-          </Card>
-          <Card title="Attendance trend">
-            <MiniBars items={TZ_HR.attendanceTrend.map((r) => ({ label: r.label, value: r.pct }))} valueSuffix="%" />
-          </Card>
-        </div>
-      )}
-
-      {tab === "pipeline" && (
-        <div className="mgr-home-grid">
-          <Card title="Recruitment pipeline" to="/recruiting">
-            <MiniBars items={TZ_RECRUITING.byStage.map((s) => ({ label: s.stage, value: s.count }))} />
-          </Card>
-          <Card title="Open requisitions">
-            <DataTable
-              headers={["ID", "Title", "Openings", "Stage"]}
-              rows={TZ_RECRUITING.myOpenReqs.map((j) => [j.id, j.title, String(j.openings), j.stage])}
-            />
-          </Card>
-        </div>
-      )}
-
-      {tab === "cycles" && (
-        <div className="mgr-home-grid">
-          <Card title="Performance cycle status" to={R.performance}>
-            <p>
-              {TZ_HR.performanceCycle.name} · due {TZ_HR.performanceCycle.due}
+  const sections: Section[] = [
+    { id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> },
+    { id: "myday", label: "My day", node: <MyDayCard /> },
+    {
+      id: "hr-actions",
+      label: "Pending HR actions",
+      node: (
+        <Card title={`Pending HR actions · ${hrActions.length}`}>
+          {actionKinds.length > 0 && (
+            <p className="muted">{actionKinds.map(([k, n]) => `${k} ${n}`).join(" · ")}</p>
+          )}
+          <DataTable
+            headers={["Action", "Person", "Detail", "Date"]}
+            rows={hrActions.slice(0, 6).map((a) => [
+              <Link key={a.id} to={a.to}>
+                {a.kind}
+              </Link>,
+              a.who,
+              a.detail,
+              a.date ? formatShortDate(a.date.slice(0, 10)) : "—",
+            ])}
+            empty={<p className="note">No HR actions pending.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "countries",
+      label: "Country headcount",
+      node: (
+        <Card title="Country headcount">
+          <MiniBars items={(hrbp ? stats : global).byCountry.map((c) => ({ label: c.code, value: c.count }))} />
+        </Card>
+      ),
+    },
+    {
+      id: "departments",
+      label: "Headcount by department",
+      node: (
+        <Card title="Headcount by department">
+          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name.slice(0, 10), value: d.count }))} />
+        </Card>
+      ),
+    },
+    {
+      id: "joiners",
+      label: "New joiners",
+      node: (
+        <Card title={`New joiners · ${joiners.length}`} to={R.onboarding}>
+          <DataTable
+            headers={["Name", "Department", "Country", "Joined"]}
+            rows={joiners.slice(0, 5).map((p) => [
+              <Link key={p.id} to={`/people/${p.id}`}>
+                {p.fullName}
+              </Link>,
+              p.department,
+              String(p.countryCode),
+              formatShortDate(p.dateOfJoining),
+            ])}
+            empty={<p className="note">No joiners in this period.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "exits",
+      label: "Exits",
+      node: (
+        <Card title={`Exits · ${leavers.length}`} to={R.exits}>
+          <DataTable
+            headers={["Name", "Department", "Exit date", "Reason"]}
+            rows={leavers.slice(0, 5).map((x) => [x.p.fullName, x.p.department, formatShortDate(x.exitDate ?? ""), x.exitReason ?? "—"])}
+            empty={<p className="note">No exits in this period.</p>}
+          />
+          {openExits.length > 0 && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              {openExits.length} resignation{openExits.length === 1 ? "" : "s"} in progress
             </p>
-            <ProgressBar value={TZ_HR.performanceCycle.completionPct} label="Completion" />
-          </Card>
-          <Card title="Learning completion" to={R.learning}>
-            <ProgressBar value={TZ_HR.learningCompletionPct} label="Mandatory learning (global)" />
-          </Card>
-          <Card title="Workforce insights" to="/analytics">
-            <ul className="todo">
-              <li>YTD attrition {TZ_MOVEMENT.attritionYtdPct}%</li>
-              <li>YTD hiring {TZ_MOVEMENT.hiringYtd}</li>
-              <li>Capacity utilization {TZ_EXEC.capacity.utilizedPct}%</li>
-            </ul>
-          </Card>
-        </div>
-      )}
-
-      <Card title="Employee directory shortcuts">
-        <AuthShortcuts
-          allowed={demoProfile.navAccess}
-          items={[
-            { label: "People directory", to: "/directory", access: "people" },
-            { label: "Organization", to: "/organization", access: "organization" },
-            { label: "Onboarding", to: "/onboarding", access: "onboarding" },
-            { label: "Administration", to: R.admin, access: "administration" },
-            { label: "Analytics", to: "/analytics", access: "analytics" },
-          ]}
-        />
-      </Card>
-    </div>
-  );
-}
-
-/* ───────────────────────────────────────────── D. HRBP ── */
-
-export function HrbpHome() {
-  const { employee, demoProfile } = usePortal();
-  const [range, setRange] = useDateRange("30d");
-  const scope = TZ_HR.hrbpScope;
-
-  useEffect(() => {
-    document.title = `HRBP Home · ${COMPANY_NAME}`;
-  }, []);
-
-  return (
-    <div className="stack">
-      <DashGreeting title="HR Business Partner Home" subtitle={`${dayGreeting(employee.fullName)} · Assigned organization support`} />
-      <DateRangeFilter value={range} onChange={setRange} />
-
-      <MetricGrid>
-        <MetricCard label="Org headcount" value={scope.employees} hint={scope.org} />
-        <MetricCard label="Open HR cases" value={scope.cases} hint="Assigned to you" />
-        <MetricCard label="Pending actions" value={11} hint="Lifecycle & policy" />
-        <MetricCard
-          label="Perf cycle progress"
-          value={`${TZ_HR.performanceCycle.completionPct}%`}
-          hint={TZ_HR.performanceCycle.name}
-        />
-      </MetricGrid>
-
-      <div className="mgr-home-grid">
-        <Card title="HR cases & pending actions" to="/workflows">
-          <ul className="todo">
-            <li>Case · Performance improvement plan · Kabir Sharma</li>
-            <li>Action · Contract renewal · Diya Patel</li>
-            <li>Case · Location transfer request · Ravi Menon</li>
-            <li>Action · Policy ack chase · Engineering IN</li>
-          </ul>
+          )}
         </Card>
-
-        <Card title="Workforce movement">
+      ),
+    },
+    {
+      id: "requisitions",
+      label: "Open positions",
+      node: (
+        <Card title={`Open positions · ${reqs.reduce((n, r) => n + r.openings, 0)}`} to={R.recruiting}>
           <DataTable
-            headers={["Type", "Employee", "Detail", "Date"]}
-            rows={scope.movements.map((m) => [m.type, m.who, m.detail, m.date])}
+            headers={["Title", "Country", "Openings", "Stage"]}
+            rows={reqs.map((r) => [r.title, r.country, String(r.openings), r.stageSummary])}
+            empty={<p className="note">No open requisitions.</p>}
           />
         </Card>
-
-        <Card title="Performance cycle progress" to={R.performance}>
-          <ProgressBar value={TZ_HR.performanceCycle.completionPct} label={scope.org} />
-          <p className="note">Org completion trails global average by ~4 pts.</p>
+      ),
+    },
+    {
+      id: "pipeline",
+      label: "Recruitment pipeline",
+      node: (
+        <Card title={`Recruitment pipeline · ${funnel.reduce((n, s) => n + s.count, 0)}`} to={R.recruiting}>
+          <MiniBars items={funnel.map((s) => ({ label: s.stage, value: s.count }))} />
         </Card>
-
-        <Card title="Organization headcount mix">
-          <MiniBars
-            items={[
-              { label: "Eng", value: 52 },
-              { label: "QA", value: 18 },
-              { label: "PM", value: 10 },
-              { label: "Other", value: 6 },
-            ]}
-          />
+      ),
+    },
+    {
+      id: "leave-trend",
+      label: "Leave trends",
+      node: (
+        <Card title="Leave trends · days">
+          <MiniBars items={leaveSeries.map((s) => ({ label: s.label, value: s.days }))} />
+          {onLeaveNow > 0 && <p className="note">{onLeaveNow} on leave today</p>}
         </Card>
-
-        <Card title="Policy & lifecycle shortcuts">
-          <AuthShortcuts
-            allowed={demoProfile.navAccess}
-            items={[
-              { label: "Policies", to: "/policies", access: "documents" },
-              { label: "Onboarding", to: "/onboarding", access: "onboarding" },
-              { label: "People", to: "/directory", access: "people" },
-              { label: "Performance", to: R.performance, access: "performance" },
-              { label: "Leave", to: "/leave", access: "leave" },
-            ]}
-          />
+      ),
+    },
+    {
+      id: "attendance-trend",
+      label: "Attendance trends",
+      node: (
+        <Card title="Attendance trends · weekly">
+          <MiniBars items={attendanceSeries.map((s) => ({ label: s.label, value: s.pct }))} valueSuffix="%" />
         </Card>
-      </div>
-    </div>
-  );
-}
-
-/* ───────────────────────────────────────────── E. RECRUITER ── */
-
-export function RecruiterHome() {
-  const { employee, demoProfile } = usePortal();
-  const [range, setRange] = useDateRange("30d");
-  const [query, setQuery] = useState("");
-  const candidates = TZ_RECRUITING.candidatesAwaitingFeedback.filter(
-    (c) => !query || c.name.toLowerCase().includes(query.toLowerCase()) || c.role.toLowerCase().includes(query.toLowerCase()),
-  );
-
-  useEffect(() => {
-    document.title = `Recruiter Home · ${COMPANY_NAME}`;
-  }, []);
-
-  return (
-    <div className="stack">
-      <DashGreeting title="Recruiter Home" subtitle={`${dayGreeting(employee.fullName)} · Talent acquisition pipeline`} />
-      <DateRangeFilter
-        value={range}
-        onChange={setRange}
-        extras={
-          <label className="filter-label">
-            Candidate search
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name or role" />
-          </label>
-        }
-      />
-
-      <MetricGrid>
-        <MetricCard label="Open requisitions" value={TZ_RECRUITING.openRequisitions} />
-        <MetricCard label="Active candidates" value={TZ_RECRUITING.candidates} />
-        <MetricCard label="Interviews this week" value={TZ_RECRUITING.interviewsThisWeek} />
-        <MetricCard label="Avg time-to-hire" value={`${TZ_RECRUITING.avgTimeToHireDays}d`} hint={`Period: ${range}`} />
-      </MetricGrid>
-
-      <div className="mgr-home-grid">
-        <Card title="Candidates by stage" to="/recruiting">
-          <MiniBars items={TZ_RECRUITING.byStage.map((s) => ({ label: s.stage, value: s.count }))} />
-        </Card>
-
-        <Card title="Interview schedule">
-          <DataTable
-            headers={["When", "Candidate", "Role", "Panel"]}
-            rows={TZ_RECRUITING.upcomingInterviews.map((i) => [i.when, i.candidate, i.role, i.panel])}
-          />
-        </Card>
-
-        <Card title="Pending feedback">
-          <DataTable
-            headers={["Candidate", "Role", "Stage", "Due"]}
-            rows={candidates.map((c) => [c.name, c.role, c.stage, c.due])}
-            empty={<p className="note">No matches for “{query}”</p>}
-          />
-        </Card>
-
-        <Card title="Offer status">
-          <MetricGrid>
-            <MetricCard label="Offers out" value={TZ_RECRUITING.offersOut} />
-            <MetricCard label="Accepted" value={TZ_RECRUITING.offersAccepted} />
-          </MetricGrid>
-          <PlaceholderPanel title="Offer letters" detail="Document generation is coming soon." />
-        </Card>
-
-        <Card title="Time-to-hire trend">
-          <MiniBars
-            items={[
-              { label: "Jul", value: 38 },
-              { label: "Aug", value: 36 },
-              { label: "Sep", value: 35 },
-              { label: "Oct", value: TZ_RECRUITING.avgTimeToHireDays },
-            ]}
-            valueSuffix="d"
-          />
-        </Card>
-
-        <Card title="Recruiting shortcuts">
-          <AuthShortcuts
-            allowed={demoProfile.navAccess}
-            items={[
-              { label: "Recruiting hub", to: "/recruiting", access: "recruiting" },
-              { label: "Jobs", to: "/jobs", access: "jobs" },
-              { label: "Onboarding", to: "/onboarding", access: "onboarding" },
-              { label: "People", to: "/directory", access: "people" },
-            ]}
-          />
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-/* ───────────────────────────────────────────── F. HIRING MANAGER ── */
-
-export function HiringManagerHome() {
-  const { employee, demoProfile } = usePortal();
-  const myReqs = TZ_RECRUITING.myOpenReqs.filter(
-    (r) => r.owner === "Daniel Ortiz" || r.title.includes("React") || r.title.includes("Product"),
-  );
-
-  useEffect(() => {
-    document.title = `Hiring Manager Home · ${COMPANY_NAME}`;
-  }, []);
-
-  return (
-    <div className="stack">
-      <DashGreeting title="Hiring Manager Home" subtitle={`${dayGreeting(employee.fullName)} · Your requisitions & interviews`} />
-
-      <MetricGrid>
-        <MetricCard label="My open requisitions" value={myReqs.length} />
-        <MetricCard label="Awaiting my feedback" value={TZ_RECRUITING.pendingFeedback} />
-        <MetricCard label="Upcoming interviews" value={TZ_RECRUITING.upcomingInterviews.length} />
-        <MetricCard label="Hiring approvals" value={3} hint="Offer / grade approvals" />
-      </MetricGrid>
-
-      <div className="mgr-home-grid">
-        <Card title="My open requisitions" to="/jobs">
-          <DataTable
-            headers={["ID", "Title", "Openings", "Stage"]}
-            rows={TZ_RECRUITING.myOpenReqs
-              .filter((j) => j.owner.includes("Daniel") || j.title.includes("React") || j.title.includes("Product"))
-              .map((j) => [j.id, j.title, String(j.openings), j.stage])}
-          />
-        </Card>
-
-        <Card title="Candidates awaiting feedback">
-          <DataTable
-            headers={["Candidate", "Role", "Stage", "Due"]}
-            rows={TZ_RECRUITING.candidatesAwaitingFeedback.map((c) => [
-              c.name,
-              c.role,
-              c.stage,
-              c.due,
-            ])}
-          />
-        </Card>
-
-        <Card title="Upcoming interviews">
-          <DataTable
-            headers={["When", "Candidate", "Role"]}
-            rows={TZ_RECRUITING.upcomingInterviews.map((i) => [i.when, i.candidate, i.role])}
-          />
-        </Card>
-
-        <Card title="Interview evaluation forms">
-          <ul className="todo">
-            <li>
-              <Link to="/recruiting">Technical scorecard · Aisha Khan</Link>
-            </li>
-            <li>
-              <Link to="/recruiting">HM interview form · Lucas Meyer</Link>
-            </li>
-            <li>
-              <Link to="/recruiting">Culture fit · Mei Lin</Link>
-            </li>
-          </ul>
-          <PlaceholderPanel title="Scorecard submit" detail="Forms open in the Recruiting module." />
-        </Card>
-
-        <Card title="Hiring approvals" to="/approvals">
-          <ul className="todo">
-            <li>Offer approval · Senior React Engineer · Grade L5</li>
-            <li>Headcount confirmation · JOB-221</li>
-            <li>Interview panel change · Finance Analyst</li>
-          </ul>
-        </Card>
-
-        <Card title="Authorized links">
-          <AuthShortcuts
-            allowed={demoProfile.navAccess}
-            items={[
-              { label: "Recruiting", to: "/recruiting", access: "recruiting" },
-              { label: "Jobs", to: "/jobs", access: "jobs" },
-              { label: "Team", to: "/directory", access: "team" },
-              { label: "Approvals", to: "/approvals", access: "workflows" },
-            ]}
-          />
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-/* ───────────────────────────────────────────── G. CEO / EXEC ── */
-
-export function ExecutiveHome() {
-  const { employee, demoProfile } = usePortal();
-  const [range, setRange] = useDateRange("ytd");
-  const move = movementForRange(range);
-
-  useEffect(() => {
-    document.title = `Executive Home · ${COMPANY_NAME}`;
-  }, []);
-
-  return (
-    <div className="stack">
-      <DashGreeting title="Executive Home" subtitle={`${dayGreeting(employee.fullName)} · Workforce analytics`} />
-      <DateRangeFilter value={range} onChange={setRange} />
-
-      <MetricGrid>
-        <MetricCard label="Global headcount" value={TZ_HEADCOUNT.global} />
-        <MetricCard label="Net growth" value={`+${move.net}`} hint={move.label} />
-        <MetricCard label="Attrition YTD" value={`${TZ_MOVEMENT.attritionYtdPct}%`} />
-        <MetricCard label="Open requisitions" value={TZ_RECRUITING.openRequisitions} />
-      </MetricGrid>
-
-      <div className="mgr-home-grid">
-        <Card title="Country distribution">
-          <MiniBars items={TZ_HEADCOUNT.byCountry.map((c) => ({ label: c.code, value: c.headcount }))} />
-        </Card>
-
-        <Card title="Hiring & attrition trends">
-          <MiniBars
-            items={[
-              { label: "Hire", value: move.joiners },
-              { label: "Exit", value: move.exits },
-            ]}
-          />
-          <p className="note">Hiring YTD {TZ_MOVEMENT.hiringYtd} · Exits YTD {TZ_MOVEMENT.exitsYtd}</p>
-        </Card>
-
-        <Card title="Workforce growth">
-          <MiniBars items={TZ_HEADCOUNT.byBusinessUnit.map((b) => ({ label: b.name.replace("Infotech ", ""), value: b.headcount }))} />
-        </Card>
-
-        <Card title="Department overview">
-          <MiniBars items={TZ_HEADCOUNT.byDepartment.map((d) => ({ label: d.name.slice(0, 8), value: d.headcount }))} />
-        </Card>
-
-        <Card title="Critical skill gaps" to="/skills">
-          <DataTable
-            headers={["Skill", "Gap", "Countries"]}
-            rows={TZ_EXEC.criticalSkillGaps.map((s) => [s.skill, s.gap, s.countries])}
-          />
-        </Card>
-
-        <Card title="Workforce capacity">
-          <ProgressBar value={TZ_EXEC.capacity.utilizedPct} label="Utilized" />
+      ),
+    },
+    {
+      id: "cycles",
+      label: "Performance cycle",
+      node: (
+        <Card title={`${cycle.name} · ${cycle.status}`} to={R.performance}>
+          <ProgressBar value={reviews.completionPct} label="Assessments submitted" />
+          <ProgressBar value={reviews.total ? (reviews.selfDone / reviews.total) * 100 : 0} label={`Self · ${reviews.selfDone} of ${reviews.total}`} />
+          <ProgressBar value={reviews.total ? (reviews.managerDone / reviews.total) * 100 : 0} label={`Manager · ${reviews.managerDone} of ${reviews.total}`} />
           <p className="note">
-            Bench {TZ_EXEC.capacity.benchPct}% · Hiring pressure: {TZ_EXEC.capacity.hiringPressure}
+            Ends {formatShortDate(cycle.end)} · {reviews.calibrated} rated · {reviews.released} released
           </p>
         </Card>
-
-        <Card title="Strategic alerts">
+      ),
+    },
+    {
+      id: "learning",
+      label: "Learning completion",
+      node: (
+        <Card title="Learning completion" to={R.learning}>
+          <ProgressBar value={learning.pct} label={`All courses · ${learning.completed} of ${learning.total}`} />
+          <ProgressBar value={learning.mandatoryPct} label={`Mandatory · ${learning.mandatoryDone} of ${learning.mandatoryTotal}`} />
+          {learning.overdue > 0 && <p className="note warn">{learning.overdue} enrollment{learning.overdue === 1 ? "" : "s"} overdue</p>}
+        </Card>
+      ),
+    },
+    {
+      id: "insights",
+      label: "Workforce insights",
+      node: (
+        <Card title="Workforce insights" to="/analytics">
           <ul className="todo">
-            {TZ_EXEC.strategicAlerts.map((a) => (
-              <li key={a.text} className={a.tone}>
-                {a.text}
-              </li>
-            ))}
+            {insights.length ? insights.map((i) => <li key={i.id}>{i.text}</li>) : <li>No people in this scope.</li>}
           </ul>
         </Card>
-
-        <Card title="Authorized analytics">
-          <AuthShortcuts
-            allowed={demoProfile.navAccess}
-            items={[
-              { label: "Analytics", to: "/analytics", access: "analytics" },
-              { label: "Organization", to: "/organization", access: "organization" },
-              { label: "People", to: "/directory", access: "people" },
-              { label: "Compensation", to: "/compensation", access: "compensation" },
-              { label: "Administration", to: R.admin, access: "administration" },
-            ]}
-          />
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-/* ───────────────────────────────────────────── H. FOUNDER ── */
-
-export function FounderHome({ variant = "founder" }: { variant?: "founder" | "cofounder" }) {
-  const { employee, demoProfile } = usePortal();
-  const [range, setRange] = useDateRange("ytd");
-  const move = movementForRange(range);
-  const title = variant === "cofounder" ? "Co-founder Home" : "Founder Home";
-
-  useEffect(() => {
-    document.title = `${title} · ${COMPANY_NAME}`;
-  }, [title]);
-
-  return (
-    <div className="stack">
-      <DashGreeting title={title} subtitle={`${dayGreeting(employee.fullName)} · Executive workforce overview`} />
-      <DateRangeFilter value={range} onChange={setRange} />
-
-      <MetricGrid>
-        <MetricCard label="Global headcount" value={TZ_HEADCOUNT.global} />
-        <MetricCard label="Business units" value={TZ_HEADCOUNT.byBusinessUnit.length} />
-        <MetricCard label="Hiring progress" value={move.joiners} hint={`Joiners · ${move.label}`} />
-        <MetricCard label="Org growth" value={`+${move.net}`} hint="Net movement" />
-      </MetricGrid>
-
-      <div className="mgr-home-grid">
-        <Card title="Business-unit trends">
-          <MiniBars items={TZ_HEADCOUNT.byBusinessUnit.map((b) => ({ label: b.name.replace("Infotech ", ""), value: b.headcount }))} />
-        </Card>
-
-        <Card title="Country trends">
-          <MiniBars items={TZ_HEADCOUNT.byCountry.map((c) => ({ label: c.code, value: c.headcount }))} />
-        </Card>
-
-        <Card title="Hiring progress" to="/recruiting">
-          <ProgressBar value={Math.round((TZ_RECRUITING.offersAccepted / Math.max(TZ_RECRUITING.offersOut, 1)) * 100)} label="Offer acceptance" />
-          <p className="note">
-            {TZ_RECRUITING.openRequisitions} open reqs · avg TTH {TZ_RECRUITING.avgTimeToHireDays} days
-          </p>
-        </Card>
-
-        <Card title="Organization growth">
-          <ul className="todo">
-            <li>YTD joiners {TZ_MOVEMENT.joinersYtd}</li>
-            <li>YTD exits {TZ_MOVEMENT.exitsYtd}</li>
-            <li>Attrition {TZ_MOVEMENT.attritionYtdPct}%</li>
-          </ul>
-        </Card>
-
-        <Card title="Approved strategic reports" to="/analytics">
-          <ul className="todo">
-            <li>
-              <Link to="/analytics">Workforce capacity board (authorized)</Link>
-            </li>
-            <li>
-              <Link to="/analytics">Country headcount pack Q3</Link>
-            </li>
-            <li>
-              <Link to="/analytics">Attrition deep-dive EMEA</Link>
-            </li>
-          </ul>
-        </Card>
-
-        <Card title="Company announcements">
-          <DataTable
-            headers={["Announcement", "When", "Audience"]}
-            rows={TZ_EXEC.announcements.map((a) => [a.title, a.when, a.audience])}
-          />
-        </Card>
-
-        <Card title="Shortcuts · explicitly authorized functions">
-          <AuthShortcuts
-            allowed={demoProfile.navAccess}
-            items={[
-              { label: "Analytics", to: "/analytics", access: "analytics" },
-              { label: "Organization", to: "/organization", access: "organization" },
-              { label: "People", to: "/directory", access: "people" },
-              { label: "Recruiting", to: "/recruiting", access: "recruiting" },
-              { label: "Workflows", to: "/workflows", access: "workflows" },
-              { label: "Administration", to: R.admin, access: "administration" },
-            ]}
-          />
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-/* ───────────────────────────────────────────── I. ADMINISTRATION ── */
-
-export function AdministrationHome() {
-  const { employee, demoProfile } = usePortal();
-  const [tab, setTab] = useState("users");
-  const [roleFilter, setRoleFilter] = useState("all");
-
-  useEffect(() => {
-    document.title = `Administration Home · ${COMPANY_NAME}`;
-  }, []);
-
-  const roleRows = [
-    { role: "Employee", users: 412, perms: "Self-service" },
-    { role: "Manager", users: 48, perms: "Team approvals" },
-    { role: "HR", users: 8, perms: "People ops" },
-    { role: "Recruiter", users: 9, perms: "ATS" },
-    { role: "Hiring Manager", users: 22, perms: "Requisitions" },
-    { role: "Executive", users: 5, perms: "Analytics overview" },
-    { role: "Compensation", users: 3, perms: "Pay & benefits" },
-    { role: "Admin", users: 4, perms: "Platform" },
-  ].filter((r) => roleFilter === "all" || r.role.toLowerCase().includes(roleFilter));
-
-  return (
-    <div className="stack">
-      <DashGreeting title="Administration Home" subtitle={`${dayGreeting(employee.fullName)} · Platform configuration`} />
-
-      <MetricGrid>
-        <MetricCard label="Users" value={TZ_ADMIN.users} />
-        <MetricCard label="Active roles" value={TZ_ADMIN.activeRoles} />
-        <MetricCard label="Legal entities" value={TZ_ADMIN.legalEntities} />
-        <MetricCard
-          label="Integration health"
-          value={TZ_ADMIN.integrations.filter((i) => i.status === "Healthy").length}
-          hint={`of ${TZ_ADMIN.integrations.length} connectors`}
-        />
-      </MetricGrid>
-
-      <SoftTabs
-        tabs={[
-          { id: "users", label: "Users & roles" },
-          { id: "perms", label: "Permissions" },
-          { id: "entities", label: "Countries & entities" },
-          { id: "integrations", label: "Integrations" },
-          { id: "audit", label: "Audit log" },
-          { id: "platform", label: "Platform" },
-        ]}
-        active={tab}
-        onChange={setTab}
-      />
-
-      {tab === "users" && (
-        <Card title="User and role management">
-          <div className="filter-bar">
-            <label className="filter-label">
-              Filter roles
-              <input value={roleFilter === "all" ? "" : roleFilter} onChange={(e) => setRoleFilter(e.target.value || "all")} placeholder="e.g. manager" />
-            </label>
-          </div>
-          <DataTable
-            headers={["Role", "Users", "Permission summary"]}
-            rows={roleRows.map((r) => [r.role, String(r.users), r.perms])}
-          />
-          <PlaceholderPanel title="Create user" detail="Coming soon." />
-        </Card>
-      )}
-
-      {tab === "perms" && (
-        <Card title="Permission configuration">
-          <DataTable
-            headers={["Capability", "Employee", "Manager", "HR Admin", "Executive"]}
-            rows={[
-              ["Self profile", "Yes", "Yes", "Yes", "Yes"],
-              ["Team approvals", "No", "Yes", "Yes", "No*"],
-              ["Global HR config", "No", "No", "Yes", "No"],
-              ["Workforce analytics", "No", "Limited", "Yes", "Yes"],
-              ["Administration", "No", "No", "Limited", "No"],
-            ]}
-          />
-          <p className="note">* Executives do not receive approval rights from title alone — grant via role binding.</p>
-        </Card>
-      )}
-
-      {tab === "entities" && (
-        <Card title="Country and legal entity settings">
-          <DataTable
-            headers={["Country", "Headcount", "Currency", "Legal entity"]}
-            rows={TZ_HEADCOUNT.byCountry.map((c) => [
-              c.name,
-              String(c.headcount),
-              c.currency,
-              `Infotech ${c.code}`,
-            ])}
-          />
-        </Card>
-      )}
-
-      {tab === "integrations" && (
-        <Card title="Integration health">
-          <DataTable
-            headers={["Integration", "Status"]}
-            rows={TZ_ADMIN.integrations.map((i) => [
-              i.name,
-              <StatusBadge key={i.name} status={i.status} tone={i.status === "Healthy" ? "ok" : "warn"} />,
-            ])}
-          />
-          <PlaceholderPanel title="Reconnect" detail="Connector diagnostics are coming soon." />
-        </Card>
-      )}
-
-      {tab === "audit" && (
-        <Card title="Audit log viewer">
-          <DataTable
-            headers={["When", "Actor", "Action", "Target"]}
-            rows={TZ_ADMIN.auditEvents.map((e) => [e.at, e.actor, e.action, e.target])}
-          />
-        </Card>
-      )}
-
-      {tab === "platform" && (
-        <Card title="Platform configuration">
-          <ul className="todo">
-            <li>Session timeout · 8 hours</li>
-            <li>Password policy · 90-day rotation</li>
-            <li>Feature flags · Copilot enabled · Agents beta</li>
-            <li>Branding · Infotech navy / indigo</li>
-          </ul>
-          <AuthShortcuts
-            allowed={demoProfile.navAccess}
-            items={[
-              { label: "Administration module", to: R.admin, access: "administration" },
-              { label: "Integrations", to: "/integrations", access: "integrations" },
-              { label: "Workflows", to: "/workflows", access: "workflows" },
-            ]}
-          />
-        </Card>
-      )}
-    </div>
-  );
-}
-
-/* Learning / Performance / Comp / Finance specialized homes */
-
-export function LearningAdminHome() {
-  const { employee, demoProfile } = usePortal();
-  useEffect(() => {
-    document.title = `Learning Admin Home · ${COMPANY_NAME}`;
-  }, []);
-  return (
-    <div className="stack">
-      <DashGreeting title="Learning Administrator Home" subtitle={dayGreeting(employee.fullName)} />
-      <MetricGrid>
-        <MetricCard label="Global completion" value={`${TZ_HR.learningCompletionPct}%`} />
-        <MetricCard label="Active learners" value={TZ_HEADCOUNT.global} hint="Assigned catalog" />
-        <MetricCard label="Overdue courses" value={86} />
-        <MetricCard label="New programs" value={4} hint="This quarter" />
-      </MetricGrid>
-      <div className="mgr-home-grid">
-        <Card title="Completion by country">
-          <MiniBars
-            items={TZ_HEADCOUNT.byCountry.slice(0, 5).map((c) => ({
-              label: c.code,
-              value: 60 + (c.headcount % 30),
-            }))}
-            valueSuffix="%"
-          />
-        </Card>
+      ),
+    },
+    { id: "holidays", label: "Upcoming holidays", node: <HolidaysCard holidays={data.holidays} countryName={employee.countryName} /> },
+    {
+      id: "links",
+      label: "Shortcuts",
+      node: (
         <Card title="Shortcuts">
           <AuthShortcuts
             allowed={demoProfile.navAccess}
             items={[
-              { label: "Learning", to: R.learning, access: "learning" },
-              { label: "Skills", to: "/skills", access: "skills" },
+              { label: "People directory", to: R.directory, access: "people" },
+              { label: "Organization", to: "/organization", access: "organization" },
+              { label: "Onboarding", to: R.onboarding, access: "onboarding" },
+              { label: "Bulk updates", to: "/data-tools/bulk", access: "bulkdata" },
               { label: "Analytics", to: "/analytics", access: "analytics" },
             ]}
           />
         </Card>
-      </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="stack">
+      <DashGreeting title={title} subtitle={`${dayGreeting(employee.fullName)} · ${hrbp ? `People partner · ${scopeName ?? ""}` : "People operations"}`} />
+      <DateRangeFilter value={range} onChange={setRange} extras={hrbp ? undefined : <RegionalFilter label="Country" />} />
+      <MetricGrid>
+        <MetricCard label="Global headcount" value={global.headcount} hint={`${global.byCountry.filter((c) => c.count > 0).length} countries`} />
+        <MetricCard label={scopeName ? `${scopeName} headcount` : "Joiners"} value={scopeName ? stats.headcount : stats.joiners} hint={scopeName ? `${stats.joiners} joiners · ${rangeLabel(range as RangeKey)}` : rangeLabel(range as RangeKey)} />
+        <MetricCard label="Exits" value={stats.exits} hint={`${stats.attritionPct}% · ${rangeLabel(range as RangeKey)}`} />
+        <MetricCard label="Open positions" value={reqs.reduce((n, r) => n + r.openings, 0)} hint={`${reqs.length} requisitions`} />
+      </MetricGrid>
+      <HomeSections userId={employee.id} sections={sections} />
     </div>
   );
 }
 
-export function PerformanceAdminHome() {
+/* ───────────────────────────────────────────── RECRUITER ── */
+
+export function RecruiterHome() {
   const { employee, demoProfile } = usePortal();
-  useEffect(() => {
-    document.title = `Performance Admin Home · ${COMPANY_NAME}`;
-  }, []);
+  const data = useHomeData();
+  const { talent } = data;
+  const [query, setQuery] = useState("");
+  const mine = talent.requisitions.filter((r) => r.recruiter === employee.fullName && r.approvalStatus === "Approved");
+  const active = talent.candidates.filter((c) => !["Hired", "Rejected", "Withdrawn"].includes(c.stage));
+  const shown = active.filter(
+    (c) => !query || c.name.toLowerCase().includes(query.toLowerCase()) || c.role.toLowerCase().includes(query.toLowerCase()),
+  );
+  const pendingFeedback = talent.interviews.filter((i) => i.feedbackStatus === "Pending");
+  const upcoming = talent.interviews.filter((i) => i.when.slice(0, 10) >= data.today);
+  const byStage = [...active.reduce((m, c) => m.set(c.stage, (m.get(c.stage) ?? 0) + 1), new Map<string, number>())];
+
+  useTitle("Recruiter Home");
+
+  const sections: Section[] = [
+    ...(data.waitingCount > 0 || data.team.length > 0
+      ? [{ id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> }]
+      : []),
+    { id: "myday", label: "My day", node: <MyDayCard /> },
+    {
+      id: "stages",
+      label: "Candidates by stage",
+      node: (
+        <Card title="Candidates by stage" to="/recruiting">
+          <MiniBars items={byStage.map(([stage, n]) => ({ label: stage, value: n }))} />
+        </Card>
+      ),
+    },
+    {
+      id: "candidates",
+      label: "Active candidates",
+      node: (
+        <Card title="Active candidates">
+          <label className="filter-label">
+            Search
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name or role" />
+          </label>
+          <DataTable
+            headers={["Candidate", "Role", "Stage"]}
+            rows={shown.slice(0, 8).map((c) => [c.name, c.role, c.stage])}
+            empty={<p className="note">No matches.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "feedback",
+      label: "Pending feedback",
+      node: (
+        <Card title="Pending interview feedback" to="/recruiting">
+          <DataTable
+            headers={["Candidate", "Role", "Interview"]}
+            rows={pendingFeedback.map((i) => [i.candidateName, i.role, i.when])}
+            empty={<p className="note">All feedback is in.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "links",
+      label: "Shortcuts",
+      node: (
+        <Card title="Shortcuts">
+          <AuthShortcuts
+            allowed={demoProfile.navAccess}
+            items={[
+              { label: "Recruiting", to: "/recruiting", access: "recruiting" },
+              { label: "Jobs", to: "/jobs", access: "jobs" },
+              { label: "Onboarding", to: "/onboarding", access: "onboarding" },
+              { label: "People", to: R.directory, access: "people" },
+            ]}
+          />
+        </Card>
+      ),
+    },
+  ];
+
   return (
     <div className="stack">
-      <DashGreeting title="Performance Administrator Home" subtitle={dayGreeting(employee.fullName)} />
+      <DashGreeting title="Recruiter Home" subtitle={`${dayGreeting(employee.fullName)} · Talent acquisition`} />
       <MetricGrid>
-        <MetricCard label="Cycle completion" value={`${TZ_HR.performanceCycle.completionPct}%`} hint={TZ_HR.performanceCycle.name} />
-        <MetricCard label="Reviews overdue" value={37} />
-        <MetricCard label="Calibration sessions" value={5} hint="Scheduled" />
-        <MetricCard label="Goal templates" value={14} />
+        <MetricCard label="My requisitions" value={mine.length} hint={`${mine.reduce((n, r) => n + r.openings, 0)} openings`} />
+        <MetricCard label="Active candidates" value={active.length} />
+        <MetricCard label="Upcoming interviews" value={upcoming.length} />
+        <MetricCard label="Feedback pending" value={pendingFeedback.length} />
       </MetricGrid>
-      <Card title="Authorized links">
-        <AuthShortcuts
-          allowed={demoProfile.navAccess}
-          items={[
-            { label: "Performance", to: R.performance, access: "performance" },
-            { label: "People", to: "/directory", access: "people" },
-            { label: "Analytics", to: "/analytics", access: "analytics" },
-          ]}
-        />
-      </Card>
+      <HomeSections userId={employee.id} sections={sections} />
     </div>
   );
 }
+
+/* ───────────────────────────────────────────── HIRING MANAGER ── */
+
+export function HiringManagerHome() {
+  const { employee, demoProfile } = usePortal();
+  const data = useHomeData();
+  const { talent } = data;
+  const myReqs = talent.requisitions.filter((r) => r.hiringManager === employee.fullName);
+  const reqIds = new Set(myReqs.map((r) => r.id));
+  const myCandidates = talent.candidates.filter((c) => reqIds.has(c.requisitionId) && !["Hired", "Rejected", "Withdrawn"].includes(c.stage));
+  const candIds = new Set(myCandidates.map((c) => c.id));
+  const myInterviews = talent.interviews.filter((i) => candIds.has(i.candidateId));
+  const feedbackDue = myInterviews.filter((i) => i.feedbackStatus === "Pending");
+
+  useTitle("Hiring Manager Home");
+
+  const sections: Section[] = [
+    ...(data.waitingCount > 0 || data.team.length > 0
+      ? [{ id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> }]
+      : []),
+    { id: "myday", label: "My day", node: <MyDayCard /> },
+    {
+      id: "requisitions",
+      label: "My requisitions",
+      node: (
+        <Card title="My requisitions" to="/jobs">
+          <DataTable
+            headers={["ID", "Title", "Openings", "Status"]}
+            rows={myReqs.map((j) => [j.id, j.title, String(j.openings), j.approvalStatus === "Approved" ? j.stageSummary : j.approvalStatus])}
+            empty={<p className="note">You have no requisitions.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "candidates",
+      label: "My candidates",
+      node: (
+        <Card title="Candidates for my roles" to="/recruiting">
+          <DataTable
+            headers={["Candidate", "Role", "Stage"]}
+            rows={myCandidates.map((c) => [c.name, c.role, c.stage])}
+            empty={<p className="note">No active candidates.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "feedback",
+      label: "Feedback due",
+      node: (
+        <Card title="Interview feedback due" to="/recruiting">
+          <DataTable
+            headers={["Candidate", "Role", "Interview"]}
+            rows={feedbackDue.map((i) => [i.candidateName, i.role, i.when])}
+            empty={<p className="note">No feedback due.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "links",
+      label: "Shortcuts",
+      node: (
+        <Card title="Shortcuts">
+          <AuthShortcuts
+            allowed={demoProfile.navAccess}
+            items={[
+              { label: "Recruiting", to: "/recruiting", access: "recruiting" },
+              { label: "Jobs", to: "/jobs", access: "jobs" },
+              { label: "Approvals", to: R.approvals, access: "inbox" },
+            ]}
+          />
+        </Card>
+      ),
+    },
+  ];
+
+  return (
+    <div className="stack">
+      <DashGreeting title="Hiring Manager Home" subtitle={`${dayGreeting(employee.fullName)} · Your requisitions & interviews`} />
+      <MetricGrid>
+        <MetricCard label="My requisitions" value={myReqs.length} hint={`${myReqs.filter((r) => r.approvalStatus === "Approved").length} approved`} />
+        <MetricCard label="Active candidates" value={myCandidates.length} />
+        <MetricCard label="Feedback due" value={feedbackDue.length} />
+        <MetricCard label="Pending approvals" value={data.waitingCount} hint="Waiting on you" />
+      </MetricGrid>
+      <HomeSections userId={employee.id} sections={sections} />
+    </div>
+  );
+}
+
+/* ───────────────────────────────────────────── EXECUTIVE ── */
+
+export function ExecutiveHome() {
+  const { employee, demoProfile } = usePortal();
+  const data = useHomeData();
+  const country = useRegionFilter();
+  const [range, setRange] = useDateRange("ytd");
+  const stats = useMemo(
+    () => workforceStats(data.people, { country, range: range as RangeKey, today: data.today }),
+    [data.people, country, range, data.today],
+  );
+  const direct = data.statuses.filter((s) => s.member.direct);
+  const skillGaps = useMemo(
+    () =>
+      criticalSkillGaps(
+        data.talent,
+        data.people
+          .filter((p) => p.employmentStatus !== "Terminated" && (country === "ALL" || p.countryCode === country))
+          .map((p) => ({ id: p.id, countryCode: String(p.countryCode) })),
+      ),
+    [data.talent, data.people, country],
+  );
+
+  useTitle("Executive Home");
+
+  const sections: Section[] = [
+    { id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> },
+    { id: "myday", label: "My day", node: <MyDayCard /> },
+    { id: "direct", label: "Direct reports", node: <TeamTodayCard statuses={direct} title="Direct reports today" /> },
+    {
+      id: "countries",
+      label: "Country distribution",
+      node: (
+        <Card title="Country distribution">
+          <MiniBars items={stats.byCountry.map((c) => ({ label: c.code, value: c.count }))} />
+        </Card>
+      ),
+    },
+    {
+      id: "units",
+      label: "Business units",
+      node: (
+        <Card title="Business units">
+          <MiniBars items={stats.byBusinessUnit.map((b) => ({ label: b.name.replace("Infotech ", ""), value: b.count }))} />
+        </Card>
+      ),
+    },
+    {
+      id: "departments",
+      label: "Departments",
+      node: (
+        <Card title="Departments">
+          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name.slice(0, 10), value: d.count }))} />
+        </Card>
+      ),
+    },
+    {
+      id: "skills",
+      label: "Critical skill gaps",
+      node: (
+        <Card title="Critical skill gaps" to={R.skills}>
+          <DataTable
+            headers={["Skill", "Gap", "Below target", "Countries"]}
+            rows={skillGaps.map((s) => [s.skill, s.gap, String(s.people), s.countries])}
+            empty={<p className="note">No skill gaps recorded.</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "links",
+      label: "Shortcuts",
+      node: (
+        <Card title="Shortcuts">
+          <AuthShortcuts
+            allowed={demoProfile.navAccess}
+            items={[
+              { label: "Analytics", to: "/analytics", access: "analytics" },
+              { label: "Organization", to: "/organization", access: "organization" },
+              { label: "People", to: R.directory, access: "people" },
+              { label: "Compensation", to: "/compensation", access: "compensation" },
+            ]}
+          />
+        </Card>
+      ),
+    },
+  ];
+
+  return (
+    <div className="stack">
+      <DashGreeting title="Executive Home" subtitle={`${dayGreeting(employee.fullName)} · Workforce overview`} />
+      <DateRangeFilter value={range} onChange={setRange} extras={<RegionalFilter label="Country" />} />
+      <MetricGrid>
+        <MetricCard label="Headcount" value={stats.headcount} hint={country === "ALL" ? "All countries" : stats.byCountry[0]?.name} />
+        <MetricCard label="Net growth" value={`${stats.joiners - stats.exits >= 0 ? "+" : ""}${stats.joiners - stats.exits}`} hint={rangeLabel(range as RangeKey)} />
+        <MetricCard label="Attrition" value={`${stats.attritionPct}%`} hint={rangeLabel(range as RangeKey)} />
+        <MetricCard label="Pending approvals" value={data.waitingCount} hint="Waiting on you" />
+      </MetricGrid>
+      <HomeSections userId={employee.id} sections={sections} />
+    </div>
+  );
+}
+
+/* ───────────────────────────────────────────── ADMINISTRATION ── */
+
+const ROLE_LABELS: Partial<Record<DemoAccount["role"], string>> = {
+  employee: "Employee",
+  manager: "Manager",
+  hr_admin: "HR",
+  recruiter: "Recruiter",
+  hiring_manager: "Hiring Manager",
+  executive: "Executive",
+  compensation_admin: "Compensation",
+  admin: "Admin",
+};
+
+/** Modules shown in the admin permissions table, read from each account's access pack. */
+const PERMISSION_ROWS: [string, string][] = [
+  ["team", "Team"],
+  ["inbox", "Approvals"],
+  ["people", "Directory"],
+  ["organization", "Organization"],
+  ["recruiting", "Recruiting"],
+  ["onboarding", "Onboarding"],
+  ["performance", "Performance"],
+  ["compensation", "Compensation"],
+  ["payroll", "Payroll"],
+  ["analytics", "Analytics"],
+  ["exitsadmin", "Exits"],
+  ["bgv", "Background checks"],
+  ["bulkdata", "Bulk updates"],
+  ["administration", "Administration"],
+  ["integrations", "Integrations"],
+  ["auditlog", "Audit log"],
+];
+
+export function AdministrationHome() {
+  const { employee, demoProfile } = usePortal();
+  const data = useHomeData();
+  const { countries } = useLocale();
+  useSyncExternalStore(subscribePlatform, getPlatformVersion, getPlatformVersion);
+  const integrations = listIntegrations();
+  const audit = listAuditLog();
+  const country = useRegionFilter();
+  const stats = useMemo(
+    () => workforceStats(data.people, { country, range: "ytd", today: data.today }),
+    [data.people, country, data.today],
+  );
+  const roleRows = Object.entries(
+    DEMO_ACCOUNTS.reduce<Record<string, number>>((acc, a) => {
+      const label = ROLE_LABELS[a.role] ?? a.role;
+      acc[label] = (acc[label] ?? 0) + 1;
+      return acc;
+    }, {}),
+  );
+
+  useTitle("Administration Home");
+
+  const sections: Section[] = [
+    { id: "myday", label: "My day", node: <MyDayCard /> },
+    {
+      id: "roles",
+      label: "Sign-in roles",
+      node: (
+        <Card title="Sign-in roles" to={R.admin}>
+          <DataTable headers={["Role", "Accounts"]} rows={roleRows.map(([role, n]) => [role, String(n)])} />
+        </Card>
+      ),
+    },
+    {
+      id: "permissions",
+      label: "Permissions",
+      node: (
+        <Card title="Who can do what" to={R.admin}>
+          <DataTable
+            headers={["Module", ...DEMO_ACCOUNTS.map((a) => a.personaLabel)]}
+            rows={PERMISSION_ROWS.map(([id, label]) => [label, ...DEMO_ACCOUNTS.map((a) => (accountHasNavAccess(a, id) ? "Yes" : "—"))])}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "entities",
+      label: "Countries & entities",
+      node: (
+        <Card title="Countries & legal entities">
+          <DataTable
+            headers={["Country", "Headcount", "Currency", "Legal entity"]}
+            rows={stats.byCountry.map((c) => {
+              const cfg = countries.find((x) => x.code === c.code);
+              return [c.name, String(c.count), cfg?.currency ?? "—", cfg?.legalEntity ?? "—"];
+            })}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "integrations",
+      label: "Integration health",
+      node: (
+        <Card title="Integration health" to="/integrations">
+          <DataTable
+            headers={["Integration", "Status"]}
+            rows={integrations.map((i) => [
+              i.name,
+              <StatusBadge
+                key={i.id}
+                status={i.status}
+                tone={i.status === "Connected" ? "ok" : i.status === "Degraded" ? "warn" : i.status === "Disconnected" ? "danger" : "neutral"}
+                literal
+              />,
+            ])}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "audit",
+      label: "Audit log",
+      node: (
+        <Card title="Recent audit events" to={R.admin}>
+          <DataTable headers={["When", "Who", "Action", "Target"]} rows={audit.slice(0, 6).map((e) => [e.at, e.actor, e.action, e.target])} />
+        </Card>
+      ),
+    },
+    {
+      id: "platform",
+      label: "Platform",
+      node: (
+        <Card title="Platform">
+          <ul className="todo">
+            <li>Idle sign-out · 30 min</li>
+          </ul>
+          <AuthShortcuts
+            allowed={demoProfile.navAccess}
+            items={[
+              { label: "Administration", to: R.admin, access: "administration" },
+              { label: "Integrations", to: "/integrations", access: "integrations" },
+              { label: "Bulk updates", to: "/data-tools/bulk", access: "bulkdata" },
+            ]}
+          />
+        </Card>
+      ),
+    },
+  ];
+
+  return (
+    <div className="stack">
+      <DashGreeting title="Administration Home" subtitle={`${dayGreeting(employee.fullName)} · Platform`} />
+      <MetricGrid>
+        <MetricCard label="People" value={stats.headcount} hint={country === "ALL" ? "All countries" : stats.byCountry[0]?.name} />
+        <MetricCard label="Sign-in accounts" value={DEMO_ACCOUNTS.length} />
+        <MetricCard label="Legal entities" value={countries.length} />
+        <MetricCard
+          label="Integrations connected"
+          value={integrations.filter((i) => i.status === "Connected").length}
+          hint={`of ${integrations.length}`}
+        />
+      </MetricGrid>
+      <HomeSections userId={employee.id} sections={sections} />
+    </div>
+  );
+}
+
+/* ───────────────────────────────────────────── COMPENSATION ── */
 
 export function CompensationAdminHome() {
   const { employee, demoProfile } = usePortal();
-  useEffect(() => {
-    document.title = `Compensation Admin Home · ${COMPANY_NAME}`;
-  }, []);
-  return (
-    <div className="stack">
-      <DashGreeting title="Compensation Administrator Home" subtitle={dayGreeting(employee.fullName)} />
-      <MetricGrid>
-        <MetricCard label="Countries in cycle" value={TZ_HEADCOUNT.byCountry.length} />
-        <MetricCard label="Budgets locked" value={3} hint="of 8 entities" />
-        <MetricCard label="Pending approvals" value={22} />
-        <MetricCard label="Band exceptions" value={9} />
-      </MetricGrid>
-      <Card title="Shortcuts">
-        <AuthShortcuts
-          allowed={demoProfile.navAccess}
-          items={[
-            { label: "Compensation", to: "/compensation", access: "compensation" },
-            { label: "Benefits", to: "/benefits", access: "benefits" },
-            { label: "Analytics", to: "/analytics", access: "analytics" },
-          ]}
-        />
-      </Card>
-    </div>
-  );
-}
+  const data = useHomeData();
 
-export function FinanceHome() {
-  const { employee, demoProfile } = usePortal();
-  useEffect(() => {
-    document.title = `Finance Home · ${COMPANY_NAME}`;
-  }, []);
+  const reward = useSyncExternalStore(subscribeReward, getRewardState, getRewardState);
+  const comp = compReviewStatus(reward.reviews);
+
+  useTitle("Compensation Home");
+
+  const sections: Section[] = [
+    ...(data.waitingCount > 0 || data.team.length > 0
+      ? [{ id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> }]
+      : []),
+    { id: "myday", label: "My day", node: <MyDayCard /> },
+    {
+      id: "cycle",
+      label: "Review cycle",
+      node: (
+        <Card title={comp ? `${comp.cycle} · ${comp.status}` : "Review cycle"} to="/compensation">
+          {comp && comp.total ? (
+            <>
+              <ProgressBar value={comp.submittedPct} label={`Submitted · ${comp.total} proposals`} />
+              <ProgressBar value={comp.total ? (comp.approved / comp.total) * 100 : 0} label={`Approved · ${comp.approved}`} />
+              <p className="note">{comp.pendingManagers} managers still to submit</p>
+            </>
+          ) : (
+            <p className="note">No proposals yet.</p>
+          )}
+        </Card>
+      ),
+    },
+    {
+      id: "links",
+      label: "Shortcuts",
+      node: (
+        <Card title="Shortcuts">
+          <AuthShortcuts
+            allowed={demoProfile.navAccess}
+            items={[
+              { label: "Compensation", to: "/compensation", access: "compensation" },
+              { label: "Benefits", to: R.benefits, access: "benefits" },
+              { label: "Payroll", to: "/payroll", access: "payroll" },
+              { label: "Analytics", to: "/analytics", access: "analytics" },
+            ]}
+          />
+        </Card>
+      ),
+    },
+  ];
+
   return (
     <div className="stack">
-      <DashGreeting title="Finance Home" subtitle={dayGreeting(employee.fullName)} />
+      <DashGreeting title="Compensation Home" subtitle={dayGreeting(employee.fullName)} />
       <MetricGrid>
-        <MetricCard label="Expense queue" value={41} />
-        <MetricCard label="Payroll entities ready" value={6} hint="of 8" />
-        <MetricCard label="Cash advances" value={12} />
-        <MetricCard label="Reimbursements" value={28} />
+        <MetricCard label="Review submitted" value={`${comp?.submittedPct ?? 0}%`} />
+        <MetricCard label="Awaiting approval" value={comp?.awaiting ?? 0} />
+        <MetricCard label="Managers pending" value={comp?.pendingManagers ?? 0} />
+        <MetricCard label="Pending approvals" value={data.waitingCount} hint="Waiting on you" />
       </MetricGrid>
-      <Card title="Shortcuts">
-        <AuthShortcuts
-          allowed={demoProfile.navAccess}
-          items={[
-            { label: "Payroll", to: "/payroll", access: "payroll" },
-            { label: "Approvals", to: "/approvals", access: "workflows" },
-            { label: "Analytics", to: "/analytics", access: "analytics" },
-          ]}
-        />
-      </Card>
+      <HomeSections userId={employee.id} sections={sections} />
     </div>
   );
 }
 
 export function RoleHomeRouter({ profile }: { profile: DemoAccount }) {
   switch (profile.role) {
-    case "employee":
-      return <EmployeeHome />;
     case "manager":
       return <ManagerHome />;
     case "hr_admin":
     case "hr":
       return <HrAdminHome />;
     case "hrbp":
-      return <HrbpHome />;
+      return <HrAdminHome hrbp />;
     case "recruiter":
       return <RecruiterHome />;
     case "hiring_manager":
       return <HiringManagerHome />;
     case "executive":
-      return <ExecutiveHome />;
     case "founder":
-      return <FounderHome variant="founder" />;
     case "cofounder":
-      return <FounderHome variant="cofounder" />;
-    case "learning_admin":
-      return <LearningAdminHome />;
-    case "performance_admin":
-      return <PerformanceAdminHome />;
+      return <ExecutiveHome />;
     case "compensation_admin":
       return <CompensationAdminHome />;
-    case "finance":
-      return <FinanceHome />;
     case "it_admin":
     case "admin":
     case "super_admin":
