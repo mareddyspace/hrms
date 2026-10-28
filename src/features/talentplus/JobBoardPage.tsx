@@ -25,6 +25,7 @@ import {
   type Referral,
   type Stage,
 } from "./jobBoardStore.ts";
+import { MaskedValue } from "../../components/MaskedValue.tsx";
 import "./talentplus.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -371,7 +372,7 @@ function Review() {
               <span key="c">
                 {r.email}
                 {r.phone && <br />}
-                {r.phone}
+                {r.phone && <MaskedValue value={r.phone} kind="phone" canReveal={hr || actor.role === "recruiter"} />}
               </span>,
               <StageBadge key="s" stage={r.status} />,
               <span key="b" className="row-gap">

@@ -18,9 +18,13 @@ import {
   type ApprovalStep,
   type ApprovalStepRole,
   type ParallelMode,
+  type StepCondition,
+  type WorkflowRecord,
   type WorkflowType,
   type WorkflowVersion,
 } from "../data/approvalWorkflows.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { fromApiStep, loadApiWorkflows, saveApiWorkflow, useApiWorkflowTypes } from "../api/syncWorkflows.ts";
 import { compensationStats, expenseStats, lifecycleStats, requisitionStats, travelStats } from "../data/workflowAnalytics.ts";
 import { useTravelRequests } from "../data/travelStore.ts";
 import { getLifecycleActions, subscribeLifecycleActions } from "../features/lifecycle/lifecycleActionsStore.ts";
@@ -29,6 +33,12 @@ import { getRewardState, subscribeReward, type CompProposal } from "../data/rewa
 
 const ADMIN_ROLES = ["admin", "super_admin"];
 const MAX_STEPS = 6;
+const EMPTY_RECORD: WorkflowRecord = { version: 0, steps: [], history: [] };
+const CONDITION_FIELDS: { id: StepCondition["field"]; label: string }[] = [
+  { id: "country", label: "Country" },
+  { id: "department", label: "Department" },
+  { id: "grade", label: "Grade" },
+];
 
 const typeLabel = (type: WorkflowType) => WORKFLOW_TYPES.find((w) => w.id === type)?.label ?? type;
 const changedText = (v: WorkflowVersion) =>
@@ -41,7 +51,15 @@ function stepsSummary(steps: ApprovalStep[]): string {
     .map((s) => {
       const roles = stepRoles(s);
       const who = roles.length > 1 ? `${roles.map(roleLabel).join(s.mode === "any" ? " or " : " + ")}` : s.label;
-      const when = [s.minAmount ? `from ${s.minAmount}` : "", s.minPercent ? `from ${s.minPercent}%` : ""].filter(Boolean).join(", ");
+      const when = [
+        s.minAmount ? `from ${s.minAmount}` : "",
+        s.minPercent ? `from ${s.minPercent}%` : "",
+        s.condition?.values.length ? `${s.condition.field} ${s.condition.values.join("/")}` : "",
+        s.onlyIf === "needs_hr" ? "when HR is needed" : "",
+        s.slaHours ? `${s.slaHours} h limit` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
       return when ? `${who} (${when})` : who;
     })
     .join(" → ");
@@ -51,8 +69,27 @@ function stepsSummary(steps: ApprovalStep[]): string {
 export function ApprovalWorkflowsPage() {
   const { demoProfile, demoAccounts, state } = usePortal();
   const records = useWorkflowRecords();
-  const [type, setType] = useState<WorkflowType>("expense");
-  const record = records[type];
+  const [type, setType] = useState<string>("expense");
+  // Backend mode: every request type the server has (leave, attendance, timesheets too), saved on the server.
+  const apiTypes = useApiWorkflowTypes();
+  const apiType = API_ENABLED ? apiTypes.find((t) => t.type === type) : undefined;
+  const apiRecord = useMemo<WorkflowRecord | null>(
+    () =>
+      apiType
+        ? {
+            version: apiType.version,
+            steps: apiType.steps.map(fromApiStep),
+            history: [],
+            ...(apiType.created_by ? { changedBy: apiType.created_by } : {}),
+            ...(apiType.created_at ? { changedOn: apiType.created_at } : {}),
+          }
+        : null,
+    [apiType],
+  );
+  const record: WorkflowRecord = API_ENABLED ? (apiRecord ?? EMPTY_RECORD) : (records[type as WorkflowType] ?? EMPTY_RECORD);
+  const defaults: ApprovalStep[] = API_ENABLED
+    ? (apiType?.default_steps.map(fromApiStep) ?? [])
+    : (DEFAULT_WORKFLOWS[type as WorkflowType] ?? []);
   const [draft, setDraft] = useState<ApprovalStep[]>(record.steps);
   const [previewId, setPreviewId] = useState("emp-mahesh");
   const [previewAmount, setPreviewAmount] = useState("");
@@ -76,6 +113,11 @@ export function ApprovalWorkflowsPage() {
   useEffect(() => {
     setDraft(record.steps);
   }, [type, record]);
+
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    void loadApiWorkflows().then((error) => error && setMessage({ tone: "err", text: error }));
+  }, []);
 
   if (!ADMIN_ROLES.includes(demoProfile.role)) {
     return (
@@ -111,10 +153,13 @@ export function ApprovalWorkflowsPage() {
     }
     if (step.minAmount !== undefined) next.minAmount = step.minAmount;
     if (step.minPercent !== undefined) next.minPercent = step.minPercent;
+    if (step.slaHours !== undefined) next.slaHours = step.slaHours;
+    if (step.condition !== undefined) next.condition = step.condition;
+    if (step.onlyIf !== undefined) next.onlyIf = step.onlyIf;
     setDraft((steps) => steps.map((s, i) => (i === index ? next : s)));
   }
 
-  function save() {
+  async function save() {
     if (draft.some((step) => !step.label.trim())) {
       setMessage({ tone: "err", text: "Every step needs a name." });
       return;
@@ -123,13 +168,29 @@ export function ApprovalWorkflowsPage() {
       setMessage({ tone: "err", text: "Minimum amounts and percents must be above zero." });
       return;
     }
-    saveApprovalSteps(type, draft, { id: demoProfile.id, fullName: demoProfile.fullName });
+    if (draft.some((step) => step.slaHours !== undefined && !(step.slaHours > 0))) {
+      setMessage({ tone: "err", text: "Time limits must be above zero hours." });
+      return;
+    }
+    if (API_ENABLED) {
+      const error = await saveApiWorkflow(type, draft);
+      setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `Saved as version ${record.version + 1}. New requests use it.` });
+      return;
+    }
+    saveApprovalSteps(type as WorkflowType, draft, { id: demoProfile.id, fullName: demoProfile.fullName });
     setMessage({ tone: "ok", text: `Saved as version ${record.version + 1}. New requests use it.` });
   }
 
-  const showAmount = AMOUNT_TYPES.includes(type);
-  const showPercent = PERCENT_TYPES.includes(type);
-  const lineFromSelf = LINE_FROM_REQUESTER.includes(type);
+  const showAmount = AMOUNT_TYPES.includes(type as WorkflowType);
+  const showPercent = PERCENT_TYPES.includes(type as WorkflowType);
+  const lineFromSelf = LINE_FROM_REQUESTER.includes(type as WorkflowType);
+  const setCondition = (index: number, field: StepCondition["field"] | "", values: string) => {
+    const list = values
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+    update(index, { condition: field ? { field, values: list } : undefined });
+  };
   const value = Number(previewAmount) || 0;
   const previewSteps = draft
     .filter((step) => (step.minAmount === undefined || (showAmount && value >= step.minAmount)) && (step.minPercent === undefined || (showPercent && value >= step.minPercent)))
@@ -142,10 +203,10 @@ export function ApprovalWorkflowsPage() {
   return (
     <Page title="Approval steps">
       <Tabs
-        tabs={WORKFLOW_TYPES.map((w) => ({ id: w.id, label: w.label }))}
+        tabs={API_ENABLED ? apiTypes.map((w) => ({ id: w.type, label: w.label })) : WORKFLOW_TYPES.map((w) => ({ id: w.id, label: w.label }))}
         value={type}
         onChange={(next) => {
-          setType(next as WorkflowType);
+          setType(next);
           setMessage(null);
         }}
       />
@@ -225,6 +286,53 @@ export function ApprovalWorkflowsPage() {
                           />
                         </Field>
                       )}
+                      {API_ENABLED && (
+                        <>
+                          <Field label="Time limit in hours (optional)">
+                            <input
+                              type="number"
+                              min={1}
+                              value={step.slaHours ?? ""}
+                              placeholder="None"
+                              onChange={(e) => update(index, { slaHours: e.target.value ? Number(e.target.value) : undefined })}
+                            />
+                          </Field>
+                          <Field label="Only for (optional)">
+                            <select
+                              value={step.condition?.field ?? ""}
+                              onChange={(e) => setCondition(index, e.target.value as StepCondition["field"] | "", step.condition?.values.join(", ") ?? "")}
+                            >
+                              <option value="">Everyone</option>
+                              {CONDITION_FIELDS.map((f) => (
+                                <option key={f.id} value={f.id}>
+                                  {f.label}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                          {step.condition && (
+                            <Field label={`${CONDITION_FIELDS.find((f) => f.id === step.condition?.field)?.label ?? "Value"}, comma separated`}>
+                              <input
+                                value={step.condition.values.join(", ")}
+                                placeholder={step.condition.field === "country" ? "IN, US" : ""}
+                                onChange={(e) => setCondition(index, step.condition!.field, e.target.value)}
+                              />
+                            </Field>
+                          )}
+                          {type === "leave" && (
+                            <Field label="When">
+                              <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 400 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={step.onlyIf === "needs_hr"}
+                                  onChange={(e) => update(index, { onlyIf: e.target.checked ? "needs_hr" : undefined })}
+                                />
+                                Only when HR is needed (long, unpaid or parental leave)
+                              </label>
+                            </Field>
+                          )}
+                        </>
+                      )}
                       {showPercent && (
                         <Field label="Only from increase % (optional)">
                           <input
@@ -252,15 +360,15 @@ export function ApprovalWorkflowsPage() {
             >
               Add step
             </button>
-            <button type="button" className="btn-ghost" onClick={() => setDraft(DEFAULT_WORKFLOWS[type])}>
+            <button type="button" className="btn-ghost" onClick={() => setDraft(defaults)}>
               Reset to default
             </button>
-            <button type="button" className="btn" disabled={!dirty} onClick={save}>
+            <button type="button" className="btn" disabled={!dirty} onClick={() => void save()}>
               Save
             </button>
           </div>
           <p className="muted">
-            Requests already raised keep the steps they started with. Parallel steps: tick more than one approver.
+            Open requests keep their current steps.
             {lineFromSelf ? " Here “Manager” is the hiring manager, so the department head is “Manager's manager”." : ""}
           </p>
         </Card>

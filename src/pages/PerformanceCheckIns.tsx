@@ -33,6 +33,7 @@ import {
   toggleCheckInItem,
   updateDevAction,
   updateOneOnOne,
+  talentAction,
   type TalentActor,
 } from "../data/talentLocal.ts";
 import { todayISO } from "../model.ts";
@@ -248,7 +249,7 @@ function RequestRow({ request, me }: { request: FeedbackItem; me: TalentActor })
           type="button"
           className="btn btn-tiny"
           disabled={reply.trim().length < 10}
-          onClick={() => setError(answerFeedbackRequest(me, request.id, reply) ?? "")}
+          onClick={() => talentAction(() => answerFeedbackRequest(me, request.id, reply), (res) => setError(res ?? ""))}
         >
           Send
         </button>
@@ -389,21 +390,21 @@ function MeetingDetail({ meeting, me }: { meeting: OneOnOne; me: TalentActor }) 
           title="Agenda"
           hint="Either of you can add points."
           items={meeting.agenda}
-          onAdd={(text) => setError(addCheckInItem(me, meeting.id, "agenda", text) ?? "")}
-          onToggle={(id) => setError(toggleCheckInItem(me, meeting.id, "agenda", id) ?? "")}
+          onAdd={(text) => talentAction(() => addCheckInItem(me, meeting.id, "agenda", text), (res) => setError(res ?? ""))}
+          onToggle={(id) => talentAction(() => toggleCheckInItem(me, meeting.id, "agenda", id), (res) => setError(res ?? ""))}
         />
         <ChecklistSection
           title="Action items"
           items={meeting.actionItems}
-          onAdd={(text) => setError(addCheckInItem(me, meeting.id, "actionItems", text) ?? "")}
-          onToggle={(id) => setError(toggleCheckInItem(me, meeting.id, "actionItems", id) ?? "")}
+          onAdd={(text) => talentAction(() => addCheckInItem(me, meeting.id, "actionItems", text), (res) => setError(res ?? ""))}
+          onToggle={(id) => talentAction(() => toggleCheckInItem(me, meeting.id, "actionItems", id), (res) => setError(res ?? ""))}
         />
         <Field label="Shared notes" wide>
           <textarea
             rows={4}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            onBlur={() => notes !== meeting.notes && setError(updateOneOnOne(me, meeting.id, (m) => void (m.notes = notes)) ?? "")}
+            onBlur={() => notes !== meeting.notes && talentAction(() => updateOneOnOne(me, meeting.id, (m) => void (m.notes = notes)), (res) => setError(res ?? ""))}
             placeholder="Key points, decisions, how they are feeling…"
           />
         </Field>
@@ -414,7 +415,7 @@ function MeetingDetail({ meeting, me }: { meeting: OneOnOne; me: TalentActor }) 
               className="btn"
               disabled={notStarted}
               title={notStarted ? "Available once the meeting has started" : undefined}
-              onClick={() => setError(setOneOnOneStatus(me, meeting.id, "Completed", notes) ?? "")}
+              onClick={() => talentAction(() => setOneOnOneStatus(me, meeting.id, "Completed", notes), (res) => setError(res ?? ""))}
             >
               Mark as completed
             </button>
@@ -422,7 +423,7 @@ function MeetingDetail({ meeting, me }: { meeting: OneOnOne; me: TalentActor }) 
             <button
               type="button"
               className="btn-ghost"
-              onClick={() => setError(setOneOnOneStatus(me, meeting.id, "Upcoming") ?? "")}
+              onClick={() => talentAction(() => setOneOnOneStatus(me, meeting.id, "Upcoming"), (res) => setError(res ?? ""))}
             >
               Reopen
             </button>
@@ -507,9 +508,10 @@ function Answer360Form({ me, review, onResult }: { me: TalentActor; review: Perf
       className="stack"
       onSubmit={(e) => {
         e.preventDefault();
-        const error = submit360Response(me, review.id, Number(rating), comment);
-        onResult(error, `360 feedback sent for ${review.employeeName}.`);
-        if (!error) setComment("");
+        talentAction(() => submit360Response(me, review.id, Number(rating), comment), (error) => {
+          onResult(error, `360 feedback sent for ${review.employeeName}.`);
+          if (!error) setComment("");
+        });
       }}
     >
       <strong>{review.employeeName}</strong>
@@ -554,7 +556,7 @@ export function Reviewers360({ me, review, open, onResult }: { me: TalentActor; 
               {canEdit && !r.respondedOn && (
                 <>
                   {" "}
-                  <button type="button" className="quiet-link" onClick={() => onResult(remove360Reviewer(me, review.id, r.reviewerId), "Reviewer removed.")}>
+                  <button type="button" className="quiet-link" onClick={() => talentAction(() => remove360Reviewer(me, review.id, r.reviewerId), (res) => onResult(res, "Reviewer removed."))}>
                     Remove
                   </button>
                 </>
@@ -577,9 +579,10 @@ export function Reviewers360({ me, review, open, onResult }: { me: TalentActor; 
             disabled={!pick}
             onClick={() => {
               const name = options.find((a) => a.id === pick)?.fullName ?? "Reviewer";
-              const error = nominate360Reviewer(me, review.id, pick);
-              onResult(error, `${name} asked for 360 feedback.`);
-              if (!error) setPick("");
+              talentAction(() => nominate360Reviewer(me, review.id, pick), (error) => {
+                onResult(error, `${name} asked for 360 feedback.`);
+                if (!error) setPick("");
+              });
             }}
           >
             Nominate
@@ -613,18 +616,18 @@ export function DevPlanEditor({ me, review, open, onResult }: { me: TalentActor;
                     type="date"
                     aria-label="Due date"
                     value={a.due}
-                    onChange={(e) => onResult(updateDevAction(me, review.id, a.id, { due: e.target.value }))}
+                    onChange={(e) => talentAction(() => updateDevAction(me, review.id, a.id, { due: e.target.value }), (res) => onResult(res))}
                   />
                   <select
                     aria-label="Action status"
                     value={a.status}
-                    onChange={(e) => onResult(updateDevAction(me, review.id, a.id, { status: e.target.value as DevActionStatus }))}
+                    onChange={(e) => talentAction(() => updateDevAction(me, review.id, a.id, { status: e.target.value as DevActionStatus }), (res) => onResult(res))}
                   >
                     {DEV_ACTION_STATUSES.map((s) => (
                       <option key={s} value={s}>{s}</option>
                     ))}
                   </select>
-                  <button type="button" className="quiet-link" onClick={() => onResult(removeDevAction(me, review.id, a.id), "Action removed.")}>
+                  <button type="button" className="quiet-link" onClick={() => talentAction(() => removeDevAction(me, review.id, a.id), (res) => onResult(res, "Action removed."))}>
                     Remove
                   </button>
                 </>
@@ -643,12 +646,13 @@ export function DevPlanEditor({ me, review, open, onResult }: { me: TalentActor;
           className="row-gap"
           onSubmit={(e) => {
             e.preventDefault();
-            const error = addDevAction(me, review.id, { title, due });
-            onResult(error, "Action added.");
-            if (!error) {
-              setTitle("");
-              setDue("");
-            }
+            talentAction(() => addDevAction(me, review.id, { title, due }), (error) => {
+              onResult(error, "Action added.");
+              if (!error) {
+                setTitle("");
+                setDue("");
+              }
+            });
           }}
         >
           <input aria-label="New action" value={title} maxLength={160} onChange={(e) => setTitle(e.target.value)} placeholder="New action" style={{ minWidth: 200 }} />

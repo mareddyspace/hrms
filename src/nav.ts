@@ -98,7 +98,7 @@ export const navGroups: readonly NavGroup[] = [
     label: "Team",
     links: [
       { id: "team", label: "Team overview", to: "/team" },
-      { id: "workflows", label: "Workflows", to: "/workflows" },
+      { id: "workflows", label: "Workflows & approvals", to: "/workflows" },
       { id: "probationreviews", label: "Probation reviews", to: "/team/probation" },
       { id: "lifecycleactions", label: "Lifecycle actions", to: "/lifecycle/actions" },
       { id: "teamexits", label: "Team exits", to: "/team/exits" },
@@ -111,7 +111,7 @@ export const navGroups: readonly NavGroup[] = [
     links: [
       { id: "people", label: "Directory", to: "/directory" },
       { id: "organization", label: "Organization", to: "/organization" },
-      { id: "jobs", label: "Jobs", to: "/jobs" },
+      { id: "jobs", label: "Jobs & positions", to: "/jobs" },
       { id: "compensation", label: "Compensation", to: "/compensation" },
       { id: "contractors", label: "Contractors", to: "/workforce/contractors" },
       { id: "hrcases", label: "HR cases", to: "/people/cases" },
@@ -152,6 +152,7 @@ export const navGroups: readonly NavGroup[] = [
       { id: "emailoutbox", label: "Email outbox", to: "/admin/email-outbox" },
       { id: "accessroles", label: "Roles & permissions", to: "/admin/roles" },
       { id: "aisettings", label: "AI settings", to: "/admin/ai" },
+      { id: "leavepolicies", label: "Leave policies", to: "/admin/leave-policies" },
       { id: "administration", label: "Console", to: "/admin" },
     ],
   },
@@ -245,6 +246,10 @@ export function findNavLink(pathname: string): { group: NavGroup; link: NavLink 
   return null;
 }
 
+const EXTRA_CRUMBS: Record<string, string> = {
+  "/settings/security": "Two-step sign-in",
+};
+
 export function breadcrumbsFor(pathname: string): { label: string; to?: string }[] {
   const crumbs: { label: string; to?: string }[] = [{ label: "Home", to: "/" }];
   if (pathname === "/") return crumbs;
@@ -256,7 +261,9 @@ export function breadcrumbsFor(pathname: string): { label: string; to?: string }
     crumbs.push({ label: hit.link.label });
     return crumbs;
   }
-  crumbs.push({ label: "Page" });
+  // Pages outside the menu (account settings and the like): name them after their path rather than "Page".
+  const extra = EXTRA_CRUMBS[pathname];
+  crumbs.push({ label: extra ?? "Page" });
   return crumbs;
 }
 

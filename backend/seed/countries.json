@@ -1,0 +1,50 @@
+[
+  {
+    "code": "IN",
+    "name": "India",
+    "currency": "INR",
+    "time_zone": "Asia/Kolkata"
+  },
+  {
+    "code": "US",
+    "name": "United States",
+    "currency": "USD",
+    "time_zone": "America/New_York"
+  },
+  {
+    "code": "GB",
+    "name": "United Kingdom",
+    "currency": "GBP",
+    "time_zone": "Europe/London"
+  },
+  {
+    "code": "AU",
+    "name": "Australia",
+    "currency": "AUD",
+    "time_zone": "Australia/Sydney"
+  },
+  {
+    "code": "CA",
+    "name": "Canada",
+    "currency": "CAD",
+    "time_zone": "America/Toronto"
+  },
+  {
+    "code": "AE",
+    "name": "United Arab Emirates",
+    "currency": "AED",
+    "time_zone": "Asia/Dubai"
+  },
+  {
+    "code": "SA",
+    "name": "Saudi Arabia",
+    "currency": "SAR",
+    "time_zone": "Asia/Riyadh"
+  },
+  {
+    "code": "DE",
+    "name": "Germany",
+    "currency": "EUR",
+    "time_zone": "Europe/Berlin"
+  }
+]

@@ -20,6 +20,7 @@ import {
 import { TIMEZ_COUNTRIES, type CountryCode } from "../model.ts";
 import { roleLabel } from "../nav.ts";
 import { usePortal } from "../store.tsx";
+import { API_ENABLED } from "../api/syncOps.ts";
 
 type Msg = { tone: "ok" | "err" | "warn"; text: string } | null;
 
@@ -44,7 +45,7 @@ export function RolesPermissionsPage() {
   const selected = DEMO_ACCOUNTS.find((a) => a.id === selectedId) ?? DEMO_ACCOUNTS[0];
 
   return (
-    <Page title="Roles & permissions" subtitle="Pages and data each account can see">
+    <Page title="Roles & permissions">
       {msg && <Banner message={msg} />}
       <Card title="Accounts">
         <DataTable
@@ -100,25 +101,39 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
     setCountries((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
   }
 
-  function savePages() {
-    const error = savePageAccess(account, pages, actor);
+  const [busy, setBusy] = useState(false);
+
+  async function savePages() {
+    setBusy(true);
+    const error = await savePageAccess(account, pages, actor);
+    setBusy(false);
     onResult(error ? { tone: "err", text: error } : { tone: "ok", text: `Pages saved for ${account.fullName}.` });
     if (!error) setPages(effectivePageIds(account));
   }
 
-  function saveScope() {
-    const error = saveDataScope(account.id, { scope, countries }, actorRef);
+  async function saveScope() {
+    setBusy(true);
+    const error = await saveDataScope(account.id, { scope, countries }, actorRef);
+    setBusy(false);
     onResult(error ? { tone: "err", text: error } : { tone: "ok", text: `Data scope saved for ${account.fullName}.` });
   }
 
-  function resetAll() {
-    const error = self ? null : resetPageAccess(account, actor);
+  async function resetAll() {
+    setBusy(true);
+    const error = self ? null : await resetPageAccess(account, actor);
     if (error) {
+      setBusy(false);
       onResult({ tone: "err", text: error });
       return;
     }
     const def = defaultDataScope(account);
-    saveDataScope(account.id, def, actorRef);
+    // Your own data scope can't change (the API refuses it too).
+    const scopeError = self && API_ENABLED ? null : await saveDataScope(account.id, def, actorRef);
+    setBusy(false);
+    if (scopeError) {
+      onResult({ tone: "err", text: scopeError });
+      return;
+    }
     setPages(effectivePageIds(account));
     setScope(def.scope);
     setCountries(def.countries);
@@ -131,10 +146,10 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
         title={`${account.fullName} · pages`}
         action={
           <span className="chip-row">
-            <button className="btn-ghost" type="button" onClick={resetAll}>
+            <button className="btn-ghost" type="button" onClick={() => void resetAll()} disabled={busy}>
               Reset to default
             </button>
-            <button className="btn" type="button" onClick={savePages} disabled={self}>
+            <button className="btn" type="button" onClick={() => void savePages()} disabled={self || busy}>
               Save pages
             </button>
           </span>
@@ -175,7 +190,7 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
       <Card
         title={`${account.fullName} · data scope`}
         action={
-          <button className="btn" type="button" onClick={saveScope}>
+          <button className="btn" type="button" onClick={() => void saveScope()} disabled={busy || (API_ENABLED && self)}>
             Save scope
           </button>
         }

@@ -389,6 +389,13 @@ export interface HrRequest {
   dueAt?: string;
   /** When HR first replied or changed the status. */
   firstResponseAt?: string;
+  /** Requester's rating (1–5) once resolved; backend mode only. */
+  satisfaction?: number;
+  satisfactionComment?: string;
+  /** Backend mode only: escalation, the server's overdue flag and attached files. */
+  escalatedAt?: string;
+  overdue?: boolean;
+  files?: { id: string; name: string; contentType: string; size: number; at: string }[];
 }
 
 export interface FaqItem {

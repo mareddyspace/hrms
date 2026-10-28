@@ -1,7 +1,12 @@
 /** Receipt files for expense claims, kept in this browser (IndexedDB, with localStorage as a fallback). */
 import { uid, type ExpenseReceipt } from "../model.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { apiReceiptBlob, apiUploadReceipt } from "../api/syncTimeExpenses.ts";
+import { errorText } from "../api/syncShared.ts";
 
-export const RECEIPT_MAX_BYTES = 1.5 * 1024 * 1024;
+/** Browser copies are capped at 1.5 MB; the server takes up to 5 MB (backend mode). */
+export const RECEIPT_MAX_BYTES = (API_ENABLED ? 5 : 1.5) * 1024 * 1024;
+const API_RECEIPT_TYPES = ["application/pdf", "image/gif", "image/jpeg", "image/png", "image/webp"];
 const DB_NAME = "kastech.receipts";
 const STORE = "files";
 const FALLBACK_PREFIX = "kastech.receipt.";
@@ -31,9 +36,9 @@ function readAsDataUrl(file: File): Promise<string> {
 
 /** Checks type and size; returns an error message or null. */
 export function receiptFileError(file: File): string | null {
-  const okType = file.type.startsWith("image/") || file.type === "application/pdf";
-  if (!okType) return "Receipts must be an image or a PDF.";
-  if (file.size > RECEIPT_MAX_BYTES) return "Receipt is too large (up to 1.5 MB).";
+  const okType = API_ENABLED ? API_RECEIPT_TYPES.includes(file.type) : file.type.startsWith("image/") || file.type === "application/pdf";
+  if (!okType) return API_ENABLED ? "Receipts must be a PDF, JPEG, PNG, GIF or WebP file." : "Receipts must be an image or a PDF.";
+  if (file.size > RECEIPT_MAX_BYTES) return `Receipt is too large (up to ${API_ENABLED ? "5" : "1.5"} MB).`;
   return null;
 }
 
@@ -41,6 +46,8 @@ export function receiptFileError(file: File): string | null {
 export async function saveReceipt(file: File): Promise<ExpenseReceipt> {
   const error = receiptFileError(file);
   if (error) throw new Error(error);
+  // Backend mode: uploaded to the server now; the claim attaches it by id.
+  if (API_ENABLED) return apiUploadReceipt(file);
   const dataUrl = await readAsDataUrl(file);
   const meta: ExpenseReceipt = { id: uid("rcpt"), name: file.name, type: file.type, size: file.size };
   const db = await openDb();
@@ -80,9 +87,18 @@ export async function loadReceipt(id: string): Promise<string | null> {
 
 /** Opens the receipt in a new tab (or downloads it). Returns an error message or null. */
 export async function openReceipt(receipt: ExpenseReceipt, download = false): Promise<string | null> {
-  const dataUrl = await loadReceipt(receipt.id);
-  if (!dataUrl) return "Receipt file isn't available in this browser.";
-  const blob = await (await fetch(dataUrl)).blob();
+  let blob: Blob;
+  if (API_ENABLED) {
+    try {
+      blob = await apiReceiptBlob(receipt.id);
+    } catch (error) {
+      return errorText(error, "Couldn't open the receipt.");
+    }
+  } else {
+    const dataUrl = await loadReceipt(receipt.id);
+    if (!dataUrl) return "Receipt file isn't available in this browser.";
+    blob = await (await fetch(dataUrl)).blob();
+  }
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

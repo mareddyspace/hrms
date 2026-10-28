@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent } fr
 import { Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
 import { addDaysISO, holidaysForPerson, todayISO } from "../../model.ts";
-import { taskTeamFor } from "../../data/taskTeam.ts";
 import {
   assignShift,
   canApproveSwap,
@@ -32,6 +31,8 @@ import {
   weekDates,
   canSetCoverage,
   checkCoverageAlerts,
+  CAN_RESET_COVERAGE,
+  ensureRosterWeek,
   COMPANY_SCOPE,
   coverageGaps,
   coverageMinimum,
@@ -49,7 +50,9 @@ import {
   type ShiftSwap,
   type SwapStatus,
 } from "./shiftsStore.ts";
-import { canDecideFor, fmt, isHrRole, isWeekend, personName, shortDay, weekStartOf, type WorkforceActor } from "./workforceShared.ts";
+import { API_ENABLED } from "../../api/syncOps.ts";
+import { canDecideFor, fmt, isHrRole, rosterTeamFor, isWeekend, personName, shortDay, swapPartnerError, weekStartOf, type WorkforceActor } from "./workforceShared.ts";
+import { apiSwapPartners } from "../../api/syncOpsShifts.ts";
 import "./workforce.css";
 import "./coverage.css";
 
@@ -71,7 +74,7 @@ function result(error: string | null, ok: string): Msg {
 export function ShiftRosterPage() {
   const { demoProfile } = usePortal();
   const actor: WorkforceActor = demoProfile;
-  const team = taskTeamFor(actor.id);
+  const team = rosterTeamFor(actor.id);
   const hr = isHrRole(actor.role);
   const ctx = useRosterContext();
   const tabs = [
@@ -182,14 +185,30 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
   const [teammateId, setTeammateId] = useState("");
   const [reason, setReason] = useState("");
   const mineOnDate = myUpcoming.find((a) => a.date === date);
-  const teammates = mineOnDate
+  // Backend mode: teammates' shifts aren't visible to an employee, so the API lists who can be asked
+  // (same roster, another shift, started, with a sign-in account to respond).
+  const [partners, setPartners] = useState<{ date: string; ids: string[] }>({ date: "", ids: [] });
+  useEffect(() => {
+    if (!API_ENABLED || !date || !mineOnDate) return;
+    let live = true;
+    apiSwapPartners(date)
+      .then((rows) => live && setPartners({ date, ids: rows.map((r) => r.id) }))
+      .catch(() => live && setPartners({ date, ids: [] }));
+    return () => {
+      live = false;
+    };
+  }, [date, mineOnDate]);
+  const teammates = API_ENABLED
+    ? (partners.date === date && mineOnDate ? partners.ids : []).map((id) => ({ id: `${id}-${date}`, personId: id, shiftId: "" }))
+    : mineOnDate
     ? data.assignments.filter(
         (a) =>
           a.date === date &&
           a.managerId === mineOnDate.managerId &&
           a.personId !== actor.id &&
           a.shiftId !== mineOnDate.shiftId &&
-          rosterWeek(a.managerId, weekStartOf(a.date), data)?.status === "published",
+          rosterWeek(a.managerId, weekStartOf(a.date), data)?.status === "published" &&
+          !swapPartnerError(a.personId, date),
       )
     : [];
 
@@ -197,9 +216,9 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
   const toApprove = data.swaps.filter((s) => s.status === "awaiting_manager" && canApproveSwap(actor, s));
   const mine = data.swaps.filter((s) => s.requesterId === actor.id || (s.teammateId === actor.id && s.status !== "awaiting_teammate"));
 
-  function submit(e: FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault();
-    const error = requestSwap(actor, ctx, { teammateId, date, reason });
+    const error = await requestSwap(actor, ctx, { teammateId, date, reason });
     setMsg(result(error, `Swap request sent to ${personName(teammateId)}.`));
     if (!error) {
       setDate("");
@@ -220,10 +239,10 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
                 <span>{swapLine(s, data)}</span>
                 <p className="muted">{s.reason}</p>
                 <div className="approval-actions">
-                  <button className="btn btn-tiny" type="button" onClick={() => setMsg(result(respondSwap(actor, s.id, true), "Accepted — sent to your manager."))}>
+                  <button className="btn btn-tiny" type="button" onClick={async () => setMsg(result(await respondSwap(actor, s.id, true), "Accepted — sent to your manager."))}>
                     Accept
                   </button>
-                  <button className="btn-ghost btn-tiny" type="button" onClick={() => setMsg(result(respondSwap(actor, s.id, false), "Swap declined."))}>
+                  <button className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await respondSwap(actor, s.id, false), "Swap declined."))}>
                     Decline
                   </button>
                 </div>
@@ -252,11 +271,11 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
                   <button
                     className="btn btn-tiny"
                     type="button"
-                    onClick={() => setMsg(result(decideSwap(actor, ctx, s.id, true, notes[s.id], impact.length > 0), "Swap approved — roster updated."))}
+                    onClick={async () => setMsg(result(await decideSwap(actor, ctx, s.id, true, notes[s.id], impact.length > 0), "Swap approved — roster updated."))}
                   >
                     {impact.length ? "Approve anyway" : "Approve"}
                   </button>
-                  <button className="btn-ghost btn-tiny" type="button" onClick={() => setMsg(result(decideSwap(actor, ctx, s.id, false, notes[s.id]), "Swap rejected."))}>
+                  <button className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await decideSwap(actor, ctx, s.id, false, notes[s.id]), "Swap rejected."))}>
                     Reject
                   </button>
                 </div>
@@ -287,7 +306,8 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
                   <option value="">{date && !teammates.length ? "No teammate on a different shift" : "Pick a teammate"}</option>
                   {teammates.map((a) => (
                     <option key={a.id} value={a.personId}>
-                      {personName(a.personId)} · {shiftById(a.shiftId, data)?.name}
+                      {personName(a.personId)}
+                      {a.shiftId ? ` · ${shiftById(a.shiftId, data)?.name ?? ""}` : ""}
                     </option>
                   ))}
                 </select>
@@ -313,7 +333,7 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
             </span>,
             <SwapBadge key="b" status={s.status} />,
             s.requesterId === actor.id && (s.status === "awaiting_teammate" || s.status === "awaiting_manager") ? (
-              <button key="c" className="btn-ghost btn-tiny" type="button" onClick={() => setMsg(result(cancelSwap(actor, s.id), "Swap request cancelled."))}>
+              <button key="c" className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await cancelSwap(actor, s.id), "Swap request cancelled."))}>
                 Cancel
               </button>
             ) : (
@@ -407,10 +427,11 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
   const data = useShifts();
   const ctx = useRosterContext();
   const today = todayISO();
-  const team = taskTeamFor(actor.id);
   const [weekStart, setWeekStart] = useState(() => weekStartOf(addDaysISO(today, 7)));
   const [msg, setMsg] = useState<Msg>(null);
   const dates = weekDates(weekStart);
+  // A pre-boarding joiner shows from the week they start (days before their start are refused).
+  const team = rosterTeamFor(actor.id, dates[6]);
   const week = rosterWeek(actor.id, weekStart, data);
   const published = week?.status === "published";
   const activeShifts = data.shifts.filter((s) => s.active);
@@ -419,21 +440,31 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
   const gaps = useMemo(() => coverageGaps(data, ctx, actor.id, weekStart), [data, ctx, actor.id, weekStart]);
   const [confirmGaps, setConfirmGaps] = useState(false);
   const weekOver = dates[6] < today;
+  const [busy, setBusy] = useState(false);
 
-  function change(personId: string, date: string, shiftId: string) {
-    const error = assignShift(actor, ctx, personId, date, shiftId || null);
+  useEffect(() => {
+    ensureRosterWeek(actor.id, weekStart);
+  }, [actor.id, weekStart]);
+
+  async function change(personId: string, date: string, shiftId: string) {
+    const error = await assignShift(actor, ctx, personId, date, shiftId || null);
     setMsg(error ? { tone: "err", text: error } : null);
     setConfirmGaps(false);
   }
 
-  function publish(allowGaps: boolean) {
+  async function publish(allowGaps: boolean) {
     if (gaps.length && !allowGaps) {
       setConfirmGaps(true);
       setMsg({ tone: "warn", text: `Under-covered: ${describeGaps(gaps, data)}. Fill these shifts or publish anyway.` });
       return;
     }
+    if (busy) return;
     setConfirmGaps(false);
-    setMsg(result(publishWeek(actor, ctx, weekStart, allowGaps), "Roster published — your team can see their shifts."));
+    setBusy(true);
+    const error = await publishWeek(actor, ctx, weekStart, allowGaps);
+    setBusy(false);
+    if (error && /under-covered/i.test(error)) setConfirmGaps(true);
+    setMsg(result(error, "Roster published — your team can see their shifts."));
   }
 
   const coverageShifts = data.shifts.filter((s) => coverage.some((c) => c.shiftId === s.id));
@@ -509,11 +540,11 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
             </div>
             {!published && !weekOver && (
               <div className="row-gap">
-                <button className="btn" type="button" onClick={() => publish(false)}>
+                <button className="btn" type="button" disabled={busy} onClick={() => void publish(false)}>
                   Publish roster
                 </button>
                 {confirmGaps && gaps.length > 0 && (
-                  <button className="btn-ghost" type="button" onClick={() => publish(true)}>
+                  <button className="btn-ghost" type="button" disabled={busy} onClick={() => void publish(true)}>
                     Publish anyway
                   </button>
                 )}
@@ -597,7 +628,7 @@ const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 function CoverageSettings({ actor }: { actor: WorkforceActor }) {
   const data = useShifts();
   const hr = isHrRole(actor.role);
-  const hasTeam = taskTeamFor(actor.id).length > 0;
+  const hasTeam = rosterTeamFor(actor.id).length > 0;
   const scopes = [
     ...(hr ? [{ id: COMPANY_SCOPE, label: "Company default" }] : []),
     ...(hasTeam ? [{ id: actor.id, label: "My team" }] : []),
@@ -608,9 +639,9 @@ function CoverageSettings({ actor }: { actor: WorkforceActor }) {
   const shifts = data.shifts.filter((s) => s.active);
   const ownCount = data.coverage.filter((r) => r.scope === scope).length;
 
-  function change(shiftId: string, weekday: number, value: string) {
+  async function change(shiftId: string, weekday: number, value: string) {
     if (value === "") return;
-    const error = setCoverageMinimum(actor, scope, shiftId, weekday, Number(value));
+    const error = await setCoverageMinimum(actor, scope, shiftId, weekday, Number(value));
     setMsg(error ? { tone: "err", text: error } : null);
   }
 
@@ -666,7 +697,7 @@ function CoverageSettings({ actor }: { actor: WorkforceActor }) {
           <div className="wf-grid">
             <DataTable headers={["Shift", ...WEEK_ORDER.map((d) => WEEKDAY_NAMES[d])]} rows={rows} empty={<EmptyState title="No active shifts" />} />
           </div>
-          {editable && ownCount > 0 && (
+          {editable && ownCount > 0 && CAN_RESET_COVERAGE && (
             <div className="row-gap">
               <button
                 className="btn-ghost btn-tiny"
@@ -699,9 +730,9 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
     setMsg(null);
   }
 
-  function submit(e: FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault();
-    const error = saveShift(actor, { ...form, id: editing ?? undefined });
+    const error = await saveShift(actor, { ...form, id: editing ?? undefined });
     setMsg(result(error, editing ? "Shift updated." : "Shift added."));
     if (!error) {
       setEditing(null);
@@ -727,7 +758,7 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
               <button
                 className="btn-ghost btn-tiny"
                 type="button"
-                onClick={() => setMsg(result(setShiftActive(actor, s.id, !s.active), s.active ? `${s.name} turned off.` : `${s.name} turned on.`))}
+                onClick={async () => setMsg(result(await setShiftActive(actor, s.id, !s.active), s.active ? `${s.name} turned off.` : `${s.name} turned on.`))}
               >
                 {s.active ? "Turn off" : "Turn on"}
               </button>

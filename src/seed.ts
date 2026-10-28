@@ -114,6 +114,36 @@ function nextWorkday(iso: string): string {
   return day === 6 ? addDaysISO(iso, 2) : day === 0 ? addDaysISO(iso, 1) : iso;
 }
 
+/** Projects everyone can log time to, in addition to their own client projects. */
+export function sharedProjectsFor(employeeId: string): PortalState["projects"] {
+  return [
+    {
+      id: "p-timez-hrms",
+      name: "TimeZ HRMS Platform",
+      vendor: "TimeZ",
+      client: "TimeZ (internal)",
+      startDate: "2026-01-05",
+      endDate: "",
+      timesheetType: "Weekly",
+      maxHours: 40,
+      status: "current",
+      employeeId,
+    },
+    {
+      id: "p-internal",
+      name: "Internal – meetings, training & admin",
+      vendor: "TimeZ",
+      client: "TimeZ (internal)",
+      startDate: "2026-01-01",
+      endDate: "",
+      timesheetType: "Weekly",
+      maxHours: 40,
+      status: "current",
+      employeeId,
+    },
+  ];
+}
+
 export function createSeed(): PortalState {
   return {
     version: 25,

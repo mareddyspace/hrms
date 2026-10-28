@@ -1,9 +1,10 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { Card, DataTable, EmptyState, Page, StatusBadge } from "../components/ui.tsx";
+import { Banner, Card, DataTable, EmptyState, Page, StatusBadge } from "../components/ui.tsx";
 import { useAuditTrail } from "../data/auditTrail.ts";
 import {
   AI_FEATURES,
+  aiSettingsError,
   knowledgePolicies,
   setAgentEnabled,
   setAiFeature,
@@ -56,7 +57,8 @@ export function AiSettingsPage() {
   const field = (changes: { field: string; after: string }[], name: string) => changes.find((c) => c.field === name)?.after ?? "—";
 
   return (
-    <Page title="AI settings" subtitle="What Copilot and agents may use">
+    <Page title="AI settings">
+      {aiSettingsError() && <Banner message={{ tone: "err", text: aiSettingsError() ?? "" }} />}
       <Card title={`Knowledge sources (${enabledCount} of ${policies.length} on)`}>
         <p className="note">Copilot answers only from policies that are on.</p>
         {groups.map(([group, list]) => {

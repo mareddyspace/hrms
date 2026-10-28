@@ -12,7 +12,6 @@ import {
   daysToExpiry,
   docStatus,
   getImmigrationState,
-  maskNumber,
   needsSponsor,
   removeDocument,
   setRenewalInProgress,
@@ -27,6 +26,7 @@ import {
 import { isHr, type ComplianceActor } from "./shared.ts";
 import { PersonPicker, toneFor } from "./ComplianceUi.tsx";
 import { useComplianceActor } from "./useActor.ts";
+import { MaskedValue } from "../../components/MaskedValue.tsx";
 import "./compliance.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -175,7 +175,7 @@ function DocItem({
         </span>
       </div>
       <div className="cmp-meta">
-        <span className="cmp-code">{canSeeFullNumber(actor, doc) ? doc.number : maskNumber(doc.number)}</span>
+        <span className="cmp-code"><MaskedValue value={doc.number} kind="id" canReveal={canSeeFullNumber(actor, doc)} /></span>
         <span>Issued {formatShortDate(doc.issueDate)}</span>
         <span>
           Expires {formatShortDate(doc.expiryDate)} ({expiryHint(doc)})
@@ -333,7 +333,7 @@ function AllDocuments({
                 <small className="muted">{d.issuingCountry}</small>
               </span>,
               <span key="n" className="cmp-code">
-                {canSeeFullNumber(actor, d) ? d.number : maskNumber(d.number)}
+                <MaskedValue value={d.number} kind="id" canReveal={canSeeFullNumber(actor, d)} />
               </span>,
               <span key="e">
                 {formatShortDate(d.expiryDate)}

@@ -17,6 +17,9 @@ import {
   workingDays,
 } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { API_ENABLED } from "../api/client.ts";
+import { apiLeaveMeta } from "../api/portalSync.ts";
+import { getPerson } from "../data/peopleLocal.ts";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
@@ -67,7 +70,7 @@ export function LeavePage() {
   const [from, setFrom] = useState("");
   // Balances in the dropdown follow the year of the chosen start date.
   const formYear = from ? Number(from.slice(0, 4)) : Number(todayISO().slice(0, 4));
-  const formRows = leaveRows(
+  const formRows = API_ENABLED && formYear === new Date().getFullYear() ? leaveTable : leaveRows(
     state.leavePolicies,
     state.leaveRequests,
     state.encashments,
@@ -100,21 +103,30 @@ export function LeavePage() {
   // Balances for the selected leave year (quotas reset every January).
   const yearRows = useMemo(
     () =>
-      leaveRows(state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, employee.id, activeOffs, year),
-    [state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, employee.id, year],
+      // Backend mode: this year's balances come from the server.
+      API_ENABLED && year === new Date().getFullYear()
+        ? leaveTable
+        : leaveRows(state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, employee.id, activeOffs, year),
+    [state.leavePolicies, state.leaveRequests, state.encashments, state.holidays, employee.id, year, leaveTable],
   );
   const requests = state.leaveRequests.filter(
     (request) => request.employeeId === employee.id && request.from.startsWith(String(year)),
   );
   // Past dates need permission from the reporting line before leave can be applied (recent sick leave excepted).
-  const isBackdated = hasApprover && Boolean(from) && needsBackdatedPermission(code, from, today);
+  // Backend mode: the server checks past dates itself (no separate permission step).
+  const isBackdated = !API_ENABLED && hasApprover && Boolean(from) && needsBackdatedPermission(code, from, today);
   const permission = isBackdated ? backdatedPermissionFor(state, employee.id, from, to || from, code) : undefined;
   const needsPermission = isBackdated && !permission;
   const recentSick = code === "sick" && Boolean(from) && from < today && !isBackdated;
   const myPermissions = state.backdatedPermissions.filter((p) => p.employeeId === employee.id);
   const teamPermissions = state.backdatedPermissions.filter((p) => p.status === "pending" && canDecideFor(p.employeeId));
-  const teamLeave = state.leaveRequests.filter((r) => r.status === "pending" && canDecideFor(r.employeeId));
-  const nameOf = (id: string) => demoAccounts.find((a) => a.id === id)?.fullName ?? taskPersonById(id)?.fullName ?? id;
+  const teamLeave = state.leaveRequests.filter(
+    (r) => r.status === "pending" && (API_ENABLED ? Boolean(apiLeaveMeta.get(r.id)?.canDecide) : canDecideFor(r.employeeId)),
+  );
+  const nameOf = (id: string) =>
+    demoAccounts.find((a) => a.id === id)?.fullName ?? taskPersonById(id)?.fullName ?? getPerson(id)?.fullName ?? id;
+  /** Working days of a request: the server's count in backend mode. */
+  const daysOf = (id: string, local: () => number) => apiLeaveMeta.get(id)?.days ?? local();
   const leaveName = (leaveCode: LeaveCode) => leaveTable.find((row) => row.code === leaveCode)?.name ?? leaveCode;
   const [notes, setNotes] = useState<Record<string, string>>({});
   // Past dates turn the form into a permission request, which has its own starter text.
@@ -256,10 +268,11 @@ export function LeavePage() {
                     </div>
                     <span>
                       {leaveName(r.code)} · {formatShortDate(r.from)} – {formatShortDate(r.to)} ·{" "}
-                      {plural(workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half), "day")}
+                      {plural(daysOf(r.id, () => workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half)), "day")}
                       {r.half ? ` · ${halfLabel(r.half)}` : ""}
                     </span>
                     <span className="muted">Reason: {r.reason}</span>
+                    {r.approvalProgress && <span className="muted">{r.approvalProgress}</span>}
                     <div className="approval-actions">
                       <input
                         value={notes[r.id] ?? ""}
@@ -347,12 +360,14 @@ export function LeavePage() {
                   )}
                   {requests.map((request) => {
                     const policy = leaveTable.find((row) => row.code === request.code);
-                    const count = workingDays(
-                      request.from,
-                      request.to,
-                      holidaySet(holidaysForPerson(state.holidays, employee.id)),
-                      activeOffs,
-                      request.half,
+                    const count = daysOf(request.id, () =>
+                      workingDays(
+                        request.from,
+                        request.to,
+                        holidaySet(holidaysForPerson(state.holidays, employee.id)),
+                        activeOffs,
+                        request.half,
+                      ),
                     );
                     return (
                       <tr key={request.id}>
@@ -366,6 +381,9 @@ export function LeavePage() {
                         <td>{request.reason}</td>
                         <td>
                           <StatusPill status={request.status} />
+                          {request.status === "pending" && request.approvalProgress && (
+                            <span className="muted request-decision">{request.approvalProgress}</span>
+                          )}
                           {request.decidedByName && (
                             <span className="muted request-decision">
                               by {request.decidedByName}

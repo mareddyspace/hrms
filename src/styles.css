@@ -6443,3 +6443,26 @@ html[data-theme="night"] .todo .ok { color: var(--ok); }
 .topbar-search:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .agent-starters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+/* Masked personal details (src/components/MaskedValue.tsx) */
+.masked-value { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.masked-toggle { display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 0.85em; cursor: pointer; }
+.masked-toggle:hover { text-decoration: underline; }
+.masked-toggle:disabled { opacity: 0.6; cursor: default; }
+
+.dialog-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dialog-close:hover { background: var(--line); color: inherit; }
+.dialog-panel h2 { padding-right: 32px; }

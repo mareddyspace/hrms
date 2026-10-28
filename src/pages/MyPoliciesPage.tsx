@@ -3,7 +3,14 @@ import { useSearchParams } from "react-router-dom";
 import { Card, Page } from "../components/ui.tsx";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import { getPerson, subscribePeople } from "../data/peopleLocal.ts";
-import { acknowledgePolicy, getPolicyAcks, hasAcknowledged, latestAck, subscribePolicyAcks } from "../data/policyAcks.ts";
+import {
+  acknowledgePolicyAsync,
+  getPolicyAcks,
+  hasAcknowledged,
+  latestAck,
+  loadPolicyAcksFor,
+  subscribePolicyAcks,
+} from "../data/policyAcks.ts";
 import {
   POLICY_CATEGORIES,
   appliesToLabel,
@@ -190,6 +197,9 @@ function MyPoliciesView({
 function PolicyDetail({ policy, userId, acks, query }: { policy: Policy; userId: string; acks: ReturnType<typeof getPolicyAcks>; query: string }) {
   const ack = latestAck(acks, userId, policy.id);
   const current = ack?.version === policy.version;
+  const [saving, setSaving] = useState(false);
+  const [ackError, setAckError] = useState<string | null>(null);
+  useEffect(() => setAckError(null), [policy.id]);
   return (
     <article className="pol-article">
       <header>
@@ -217,11 +227,21 @@ function PolicyDetail({ policy, userId, acks, query }: { policy: Policy; userId:
         ) : (
           <>
             {ack && <span className="muted">You acknowledged v{ack.version}. This version changed.</span>}
-            <button type="button" className="btn" onClick={() => acknowledgePolicy(userId, policy.id, policy.version)}>
-              Acknowledge v{policy.version}
+            <button
+              type="button"
+              className="btn"
+              disabled={saving}
+              onClick={async () => {
+                setSaving(true);
+                setAckError(await acknowledgePolicyAsync(userId, policy.id, policy.version));
+                setSaving(false);
+              }}
+            >
+              {saving ? "Saving…" : `Acknowledge v${policy.version}`}
             </button>
           </>
         )}
+        {ackError && <span className="pol-badge pol-badge-due">{ackError}</span>}
       </footer>
     </article>
   );
@@ -235,6 +255,11 @@ function AcknowledgementsView({ acks }: { acks: ReturnType<typeof getPolicyAcks>
   const people = useMemo(() => population(), [peopleTick]);
   const [mandatoryOnly, setMandatoryOnly] = useState(true);
   const catalog = useMemo(() => policyCatalog((code) => holidaysForCountry(state.holidays, code)), [state.holidays]);
+  // Backend mode: load everyone's acknowledgements for these policies (no-op in browser-only mode).
+  const catalogIds = catalog.map((p) => p.id).join("|");
+  useEffect(() => {
+    if (catalogIds) void loadPolicyAcksFor(catalogIds.split("|"));
+  }, [catalogIds]);
 
   const rows = catalog
     .filter((p) => !mandatoryOnly || p.mandatory)

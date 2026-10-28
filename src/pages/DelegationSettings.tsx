@@ -1,7 +1,11 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Banner, Card, Field, StatusBadge } from "../components/ui.tsx";
+import { API_ENABLED } from "../api/client.ts";
 import {
   activeDelegationFor,
+  apiCreateDelegation,
+  apiEndDelegation,
+  loadApiDelegations,
   createDelegation,
   delegateCandidates,
   DELEGATION_SCOPES,
@@ -44,8 +48,14 @@ export function DelegationSettings({ myId }: { myId: string }) {
 
   const report = (error: string | null, success: string) => setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: success });
 
-  function submit() {
-    const error = createDelegation({ delegatorId: myId, delegateId, from, to, note, scope: allTypes ? "all" : picked });
+  // Backend mode: delegations are kept on the server, which applies them when approvals are decided.
+  useEffect(() => {
+    if (API_ENABLED) void loadApiDelegations().then((error) => error && setMessage({ tone: "err", text: error }));
+  }, [myId]);
+
+  async function submit() {
+    const input = { delegatorId: myId, delegateId, from, to, note, scope: allTypes ? ("all" as const) : picked };
+    const error = API_ENABLED ? await apiCreateDelegation(input) : createDelegation(input);
     report(error, `Approvals delegated to ${personLabel(delegateId)} until ${formatShortDate(to)}.`);
     if (!error) {
       setNote("");
@@ -107,11 +117,12 @@ export function DelegationSettings({ myId }: { myId: string }) {
         </Field>
       </div>
       <div className="approval-actions">
-        <button type="button" className="btn btn-tiny" onClick={submit}>
+        <button type="button" className="btn btn-tiny" onClick={() => void submit()}>
           Delegate
         </button>
       </div>
 
+      {!API_ENABLED && (
       <div className="form-grid">
         <Field label="While I'm on approved leave" wide>
           <label>
@@ -141,6 +152,7 @@ export function DelegationSettings({ myId }: { myId: string }) {
           </Field>
         )}
       </div>
+      )}
 
       {history.length > 0 && (
         <ul className="approval-list">
@@ -159,7 +171,7 @@ export function DelegationSettings({ myId }: { myId: string }) {
                 {d.note && <span className="muted">{d.note}</span>}
                 {!d.endedOn && d.to >= today && (
                   <div className="approval-actions">
-                    <button type="button" className="btn-ghost btn-tiny" onClick={() => report(endDelegation(d.id, myId), "Delegation ended.")}>
+                    <button type="button" className="btn-ghost btn-tiny" onClick={async () => report(API_ENABLED ? await apiEndDelegation(d.id) : endDelegation(d.id, myId), "Delegation ended.")}>
                       {d.from > today ? "Cancel" : "End now"}
                     </button>
                   </div>

@@ -1,0 +1,2262 @@
+[
+  {
+    "id": "handbook",
+    "title": "Employee handbook",
+    "category": "Handbook",
+    "version": "1.0",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "How things work here",
+        "rules": [
+          "Your country, legal entity and role decide which policies apply to you. This page shows only those.",
+          "Requests (leave, expenses, letters, exits) go to the person above you in the reporting line.",
+          "If nobody is above you (the CEO), your time off is recorded without approval.",
+          "Ask HR through the Helpdesk if a rule is unclear."
+        ]
+      },
+      {
+        "heading": "Where to find things",
+        "rules": [
+          "Leave, holidays, timesheets and pay sit under Time & pay.",
+          "Letters and your own documents sit under Documents & letters.",
+          "Concerns can be raised in confidence under Raise a concern."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "code-of-conduct",
+    "title": "Code of conduct",
+    "category": "Code of conduct",
+    "version": "2.0",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Expected behaviour",
+        "rules": [
+          "Treat colleagues with respect. Harassment and discrimination are not tolerated.",
+          "Declare conflicts of interest to your manager and HR.",
+          "Use company systems and data only for work."
+        ]
+      },
+      {
+        "heading": "Raising a concern",
+        "rules": [
+          "Raise concerns under Me → Raise a concern. HR handles them in confidence.",
+          "Retaliation against anyone who raises a concern in good faith is a conduct breach."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "remote-work",
+    "title": "Remote work",
+    "category": "Remote work",
+    "version": "1.0",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Allowance",
+        "rules": [
+          "Work from home: 8 days a year.",
+          "Emergency work from home: 3 days a year."
+        ]
+      },
+      {
+        "heading": "How to apply",
+        "rules": [
+          "Apply under Leave & holidays, like any other leave type.",
+          "Approval goes up your reporting line.",
+          "Keep your usual working hours and stay reachable."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "learning",
+    "title": "Learning",
+    "category": "Learning",
+    "version": "1.0",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Programs",
+        "rules": [
+          "Programs assigned to you appear under Learning.",
+          "Progress is recorded module by module.",
+          "Once a program is marked complete it can't be reopened."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "data-privacy",
+    "title": "Data privacy & security",
+    "category": "Data privacy & security",
+    "version": "1.0",
+    "effective": "2026-04-01",
+    "owner": "IT",
+    "mandatory": true,
+    "countries": [],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Who can see what",
+        "rules": [
+          "Your personal data: you, HR, and people above you in your reporting line.",
+          "Your pay and payslips: you and Compensation only.",
+          "Managers do not see individual pay."
+        ]
+      },
+      {
+        "heading": "Account security",
+        "rules": [
+          "You are signed out after 30 minutes without activity.",
+          "Editing your own profile needs two-step verification.",
+          "Never share your password or one-time codes.",
+          "You can see and request your data under Me → Privacy."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "manager-approvals",
+    "title": "Approving for your team",
+    "category": "Handbook",
+    "version": "1.0",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [],
+    "legal_entities": [],
+    "roles": [
+      "manager",
+      "executive",
+      "founder",
+      "cofounder",
+      "hr_admin",
+      "hrbp"
+    ],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "What you approve",
+        "rules": [
+          "You decide requests from people below you in the reporting line, never your own.",
+          "Sick leave can't be applied in advance; past-dated leave older than 7 days needs your prior permission (valid 30 days).",
+          "Timesheets above 9 hours a day are refused.",
+          "Pay stays restricted: you don't see your team's salaries."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "hr-procedures",
+    "title": "HR procedures",
+    "category": "Handbook",
+    "version": "1.0",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [],
+    "legal_entities": [],
+    "roles": [
+      "hr",
+      "hr_admin",
+      "hrbp"
+    ],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Probation",
+        "rules": [
+          "Reviews come due 60 days before probation ends.",
+          "Probation can be extended at most 2 times, 1 to 3 months each.",
+          "HR finalises the manager's recommendation."
+        ]
+      },
+      {
+        "heading": "Notice periods",
+        "rules": [
+          "India: 30 days (Employment contract).",
+          "United Arab Emirates: 30 days (Labour law minimum).",
+          "Saudi Arabia: 30 days (Labour law minimum).",
+          "United Kingdom: 30 days (Employment contract).",
+          "United States: 14 days (At-will courtesy notice).",
+          "Australia: 28 days (Fair Work notice).",
+          "Canada: 14 days (Provincial standard).",
+          "Germany: 30 days (Statutory notice).",
+          "Contractors: 7 days."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "contractor-terms",
+    "title": "Contractor terms",
+    "category": "Handbook",
+    "version": "1.0",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [],
+    "legal_entities": [],
+    "roles": [],
+    "employment": "contractors",
+    "sections": [
+      {
+        "heading": "Key terms",
+        "rules": [
+          "Notice to end the engagement: 7 days.",
+          "Employee benefit plans don't apply to contractors."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "leave-IN",
+    "title": "Leave policy — India",
+    "category": "Leave",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "IN"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your yearly entitlement",
+        "rules": [
+          "Privilege leave: 18 days a year (accrues monthly; up to 10 days carry over).",
+          "Casual leave: 6 days a year.",
+          "Sick leave: 10 days a year."
+        ]
+      },
+      {
+        "heading": "Everyone also gets",
+        "rules": [
+          "Work from home: 8 days a year.",
+          "Emergency work from home: 3 days a year.",
+          "Bereavement leave: 3 days a year.",
+          "Leave without pay: 12 days a year.",
+          "Comp-off: earned only by working on a weekly off or holiday; use it within 90 days."
+        ]
+      },
+      {
+        "heading": "Applying",
+        "rules": [
+          "Sick leave can't be applied in advance.",
+          "Past-dated leave older than 7 days needs prior permission from your manager (valid 30 days).",
+          "Approval goes up your reporting line. The CEO's time off is recorded with no approval."
+        ]
+      },
+      {
+        "heading": "Encashment",
+        "rules": [
+          "Only privilege leave can be encashed, up to your available balance."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "holidays-IN",
+    "title": "Holiday calendar — India",
+    "category": "Holidays",
+    "version": "2026.1",
+    "effective": "2026-01-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "IN"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Holidays",
+        "rules": [
+          "Thu, 1 Jan 2026 — New Year's Day",
+          "Wed, 14 Jan 2026 — Makar Sankranti / Pongal",
+          "Mon, 26 Jan 2026 — Republic Day",
+          "Sun, 15 Feb 2026 — Maha Shivaratri",
+          "Tue, 3 Mar 2026 — Holi",
+          "Sat, 21 Mar 2026 — Eid-ul-Fitr",
+          "Thu, 19 Mar 2026 — Ugadi / Gudi Padwa",
+          "Thu, 26 Mar 2026 — Ram Navami",
+          "Fri, 3 Apr 2026 — Good Friday",
+          "Tue, 14 Apr 2026 — Dr. Ambedkar Jayanti",
+          "Fri, 1 May 2026 — May Day",
+          "Wed, 27 May 2026 — Eid-ul-Adha (Bakrid)",
+          "Sun, 31 May 2026 — Buddha Purnima",
+          "Fri, 26 Jun 2026 — Muharram",
+          "Fri, 14 Aug 2026 — Janmashtami",
+          "Sat, 15 Aug 2026 — Independence Day",
+          "Fri, 28 Aug 2026 — Founders' Day",
+          "Mon, 14 Sept 2026 — Ganesh Chaturthi",
+          "Fri, 2 Oct 2026 — Gandhi Jayanti",
+          "Tue, 20 Oct 2026 — Dussehra (Vijayadashami)",
+          "Sun, 8 Nov 2026 — Diwali",
+          "Mon, 9 Nov 2026 — Diwali / Annual shutdown",
+          "Tue, 10 Nov 2026 — Govardhan Puja",
+          "Wed, 11 Nov 2026 — Bhai Dooj",
+          "Tue, 24 Nov 2026 — Guru Nanak Jayanti",
+          "Fri, 25 Dec 2026 — Christmas"
+        ]
+      },
+      {
+        "heading": "Rules",
+        "rules": [
+          "Holidays don't count against your leave balance.",
+          "Working on a holiday earns a comp-off, valid 90 days."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "working-time-IN",
+    "title": "Working time & attendance — India",
+    "category": "Working time & attendance",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "IN"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your week",
+        "rules": [
+          "Work days: Mon–Fri.",
+          "Weekly off: Sunday and Saturday.",
+          "Shift: General shift, 09:30–18:30 IST."
+        ]
+      },
+      {
+        "heading": "Timesheets",
+        "rules": [
+          "Log at most 9 hours a day.",
+          "Timesheets are approved up your reporting line.",
+          "Hourly staff earn overtime above 48 hours a week at 2×."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "travel-expenses-IN",
+    "title": "Travel & expenses — India",
+    "category": "Travel & expenses",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "IN"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Claims",
+        "rules": [
+          "Claim within 90 days of spending.",
+          "Attach a receipt for anything above ₹500.",
+          "Largest single claim: ₹2,00,000.",
+          "Claims are approved up your reporting line."
+        ]
+      },
+      {
+        "heading": "Cash advance",
+        "rules": [
+          "Up to ₹1,00,000 per advance.",
+          "Settle the advance with receipts after the trip."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "benefits-IN",
+    "title": "Benefits — India",
+    "category": "Benefits",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "IN"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": "employees",
+    "sections": [
+      {
+        "heading": "Plans",
+        "rules": [
+          "Group Medical (India) (Medical) — Employee + family floater cover. Cost: Employer paid.",
+          "Provident Fund (Retirement) — Statutory PF. Every employee is enrolled from day one.. Cost: 12% of basic. Compulsory. Auto-enrolled."
+        ]
+      },
+      {
+        "heading": "Changes",
+        "rules": [
+          "Request enrolment changes under Benefits.",
+          "Compulsory plans can't be waived."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pay-tax-IN",
+    "title": "Pay & tax — India",
+    "category": "Pay & tax",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "IN"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Pay",
+        "rules": [
+          "Paid in INR by TimeZ India Pvt Ltd.",
+          "Income tax on your payslip: TDS.",
+          "Tax year starts 1 April.",
+          "Only you and Compensation can see your payslips."
+        ]
+      },
+      {
+        "heading": "Tax declarations",
+        "rules": [
+          "80C — PPF, ELSS, life insurance — up to ₹1,50,000 a year.",
+          "80CCD(1B) — NPS — up to ₹50,000 a year.",
+          "80D — health insurance (self, spouse, children) — up to ₹25,000 a year.",
+          "80D — health insurance for senior-citizen parents — up to ₹50,000 a year.",
+          "80E — education loan interest.",
+          "24(b) — home loan interest — up to ₹2,00,000 a year.",
+          "HRA — rent receipts.",
+          "Proofs are verified by Finance before they reduce your TDS."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "exit-IN",
+    "title": "Resignation & exit — India",
+    "category": "Exit",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "IN"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Notice and probation",
+        "rules": [
+          "Notice period: 30 days (Employment contract).",
+          "Contractors: 7 days.",
+          "Probation: 6 months."
+        ]
+      },
+      {
+        "heading": "How to resign",
+        "rules": [
+          "Resign under Me → Resignation. Your last day is set from your notice period.",
+          "An earlier last day needs your manager's agreement.",
+          "Return company assets before your last day."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "leave-US",
+    "title": "Leave policy — United States",
+    "category": "Leave",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "US"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your yearly entitlement",
+        "rules": [
+          "Paid time off: 15 days a year (accrues monthly).",
+          "Sick leave: 5 days a year."
+        ]
+      },
+      {
+        "heading": "Everyone also gets",
+        "rules": [
+          "Work from home: 8 days a year.",
+          "Emergency work from home: 3 days a year.",
+          "Bereavement leave: 3 days a year.",
+          "Leave without pay: 12 days a year.",
+          "Comp-off: earned only by working on a weekly off or holiday; use it within 90 days."
+        ]
+      },
+      {
+        "heading": "Applying",
+        "rules": [
+          "Sick leave can't be applied in advance.",
+          "Past-dated leave older than 7 days needs prior permission from your manager (valid 30 days).",
+          "Approval goes up your reporting line. The CEO's time off is recorded with no approval."
+        ]
+      },
+      {
+        "heading": "Encashment",
+        "rules": [
+          "Only privilege leave (India) can be encashed. Leave in this country can't be encashed."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "holidays-US",
+    "title": "Holiday calendar — United States",
+    "category": "Holidays",
+    "version": "2026.1",
+    "effective": "2026-01-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "US"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Holidays",
+        "rules": [
+          "Thu, 1 Jan 2026 — New Year's Day",
+          "Mon, 19 Jan 2026 — Martin Luther King Jr. Day",
+          "Mon, 16 Feb 2026 — Presidents' Day",
+          "Mon, 25 May 2026 — Memorial Day",
+          "Fri, 19 Jun 2026 — Juneteenth",
+          "Fri, 3 Jul 2026 — Independence Day (observed)",
+          "Mon, 7 Sept 2026 — Labor Day",
+          "Thu, 26 Nov 2026 — Thanksgiving",
+          "Fri, 27 Nov 2026 — Day after Thanksgiving",
+          "Fri, 25 Dec 2026 — Christmas Day"
+        ]
+      },
+      {
+        "heading": "Rules",
+        "rules": [
+          "Holidays don't count against your leave balance.",
+          "Working on a holiday earns a comp-off, valid 90 days."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "working-time-US",
+    "title": "Working time & attendance — United States",
+    "category": "Working time & attendance",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "US"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your week",
+        "rules": [
+          "Work days: Mon–Fri.",
+          "Weekly off: Sunday and Saturday.",
+          "Shift: General shift, 09:00–17:00 local."
+        ]
+      },
+      {
+        "heading": "Timesheets",
+        "rules": [
+          "Log at most 9 hours a day.",
+          "Timesheets are approved up your reporting line.",
+          "Hourly staff earn overtime above 40 hours a week at 1.5×."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "travel-expenses-US",
+    "title": "Travel & expenses — United States",
+    "category": "Travel & expenses",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "US"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Claims",
+        "rules": [
+          "Claim within 90 days of spending.",
+          "Attach a receipt for anything above $25.",
+          "Largest single claim: $2,500.",
+          "Claims are approved up your reporting line."
+        ]
+      },
+      {
+        "heading": "Cash advance",
+        "rules": [
+          "Up to $1,500 per advance.",
+          "Settle the advance with receipts after the trip."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "benefits-US",
+    "title": "Benefits — United States",
+    "category": "Benefits",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "US"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": "employees",
+    "sections": [
+      {
+        "heading": "Plans",
+        "rules": [
+          "Medical PPO (Medical) — PPO network · open enrollment Nov. Cost: $120 / paycheck.",
+          "401(k) (Retirement) — 4% employer match. Cost: Elective deferral."
+        ]
+      },
+      {
+        "heading": "Changes",
+        "rules": [
+          "Request enrolment changes under Benefits.",
+          "Compulsory plans can't be waived."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pay-tax-US",
+    "title": "Pay & tax — United States",
+    "category": "Pay & tax",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "US"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Pay",
+        "rules": [
+          "Paid in USD by TimeZ Inc.",
+          "Income tax on your payslip: Federal income tax.",
+          "Tax year starts 1 January.",
+          "Only you and Compensation can see your payslips."
+        ]
+      },
+      {
+        "heading": "Tax declarations",
+        "rules": [
+          "401(k) — extra pre-tax contribution — up to $24,500 a year.",
+          "HSA — health savings account — up to $4,400 a year.",
+          "Dependent care FSA — up to $7,500 a year.",
+          "W-4 — extra withholding or credits.",
+          "Pre-tax elections and W-4 changes apply from the next payroll run."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "exit-US",
+    "title": "Resignation & exit — United States",
+    "category": "Exit",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "US"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Notice and probation",
+        "rules": [
+          "Notice period: 14 days (At-will courtesy notice).",
+          "Contractors: 7 days.",
+          "Probation: 90 days."
+        ]
+      },
+      {
+        "heading": "How to resign",
+        "rules": [
+          "Resign under Me → Resignation. Your last day is set from your notice period.",
+          "An earlier last day needs your manager's agreement.",
+          "Return company assets before your last day."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "leave-GB",
+    "title": "Leave policy — United Kingdom",
+    "category": "Leave",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "GB"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your yearly entitlement",
+        "rules": [
+          "Annual leave: 25 days a year (accrues monthly; up to 5 days carry over; plus bank holidays).",
+          "Sick leave: 10 days a year."
+        ]
+      },
+      {
+        "heading": "Everyone also gets",
+        "rules": [
+          "Work from home: 8 days a year.",
+          "Emergency work from home: 3 days a year.",
+          "Bereavement leave: 3 days a year.",
+          "Leave without pay: 12 days a year.",
+          "Comp-off: earned only by working on a weekly off or holiday; use it within 90 days."
+        ]
+      },
+      {
+        "heading": "Applying",
+        "rules": [
+          "Sick leave can't be applied in advance.",
+          "Past-dated leave older than 7 days needs prior permission from your manager (valid 30 days).",
+          "Approval goes up your reporting line. The CEO's time off is recorded with no approval."
+        ]
+      },
+      {
+        "heading": "Encashment",
+        "rules": [
+          "Only privilege leave (India) can be encashed. Leave in this country can't be encashed."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "holidays-GB",
+    "title": "Holiday calendar — United Kingdom",
+    "category": "Holidays",
+    "version": "2026.1",
+    "effective": "2026-01-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "GB"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Holidays",
+        "rules": [
+          "Thu, 1 Jan 2026 — New Year's Day",
+          "Fri, 3 Apr 2026 — Good Friday",
+          "Mon, 6 Apr 2026 — Easter Monday",
+          "Mon, 4 May 2026 — Early May bank holiday",
+          "Mon, 25 May 2026 — Spring bank holiday",
+          "Mon, 31 Aug 2026 — Summer bank holiday",
+          "Fri, 25 Dec 2026 — Christmas Day",
+          "Mon, 28 Dec 2026 — Boxing Day (substitute)"
+        ]
+      },
+      {
+        "heading": "Rules",
+        "rules": [
+          "Holidays don't count against your leave balance.",
+          "Working on a holiday earns a comp-off, valid 90 days."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "working-time-GB",
+    "title": "Working time & attendance — United Kingdom",
+    "category": "Working time & attendance",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "GB"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your week",
+        "rules": [
+          "Work days: Mon–Fri.",
+          "Weekly off: Sunday and Saturday.",
+          "Shift: General shift, 09:00–17:30 GMT/BST."
+        ]
+      },
+      {
+        "heading": "Timesheets",
+        "rules": [
+          "Log at most 9 hours a day.",
+          "Timesheets are approved up your reporting line.",
+          "Hourly staff earn overtime above 48 hours a week at 1×."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "travel-expenses-GB",
+    "title": "Travel & expenses — United Kingdom",
+    "category": "Travel & expenses",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "GB"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Claims",
+        "rules": [
+          "Claim within 90 days of spending.",
+          "Attach a receipt for anything above £20.",
+          "Largest single claim: £2,000.",
+          "Claims are approved up your reporting line."
+        ]
+      },
+      {
+        "heading": "Cash advance",
+        "rules": [
+          "Up to £1,200 per advance.",
+          "Settle the advance with receipts after the trip."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "benefits-GB",
+    "title": "Benefits — United Kingdom",
+    "category": "Benefits",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "GB"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": "employees",
+    "sections": [
+      {
+        "heading": "Plans",
+        "rules": [
+          "Private Medical (Medical) — Employee + optional dependents. Cost: £45 / month.",
+          "Workplace Pension (Retirement) — Auto-enrolment pension · 3% employer contribution. You can opt out.. Cost: 5% of qualifying earnings. Auto-enrolled."
+        ]
+      },
+      {
+        "heading": "Changes",
+        "rules": [
+          "Request enrolment changes under Benefits.",
+          "Compulsory plans can't be waived."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pay-tax-GB",
+    "title": "Pay & tax — United Kingdom",
+    "category": "Pay & tax",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "GB"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Pay",
+        "rules": [
+          "Paid in GBP by TimeZ UK Ltd.",
+          "Income tax on your payslip: Income tax (PAYE).",
+          "Tax year starts 6 April.",
+          "Only you and Compensation can see your payslips."
+        ]
+      },
+      {
+        "heading": "Tax declarations",
+        "rules": [
+          "Extra pension contribution — up to £60,000 a year.",
+          "Gift Aid donations.",
+          "Cycle to Work scheme.",
+          "Tax code changes come from HMRC; declare salary-sacrifice items here."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "exit-GB",
+    "title": "Resignation & exit — United Kingdom",
+    "category": "Exit",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "GB"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Notice and probation",
+        "rules": [
+          "Notice period: 30 days (Employment contract).",
+          "Contractors: 7 days.",
+          "Probation: 6 months."
+        ]
+      },
+      {
+        "heading": "How to resign",
+        "rules": [
+          "Resign under Me → Resignation. Your last day is set from your notice period.",
+          "An earlier last day needs your manager's agreement.",
+          "Return company assets before your last day."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "leave-AU",
+    "title": "Leave policy — Australia",
+    "category": "Leave",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "AU"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your yearly entitlement",
+        "rules": [
+          "Annual leave: 20 days a year (accrues monthly).",
+          "Personal/carer's leave: 10 days a year."
+        ]
+      },
+      {
+        "heading": "Everyone also gets",
+        "rules": [
+          "Work from home: 8 days a year.",
+          "Emergency work from home: 3 days a year.",
+          "Bereavement leave: 3 days a year.",
+          "Leave without pay: 12 days a year.",
+          "Comp-off: earned only by working on a weekly off or holiday; use it within 90 days."
+        ]
+      },
+      {
+        "heading": "Applying",
+        "rules": [
+          "Sick leave can't be applied in advance.",
+          "Past-dated leave older than 7 days needs prior permission from your manager (valid 30 days).",
+          "Approval goes up your reporting line. The CEO's time off is recorded with no approval."
+        ]
+      },
+      {
+        "heading": "Encashment",
+        "rules": [
+          "Only privilege leave (India) can be encashed. Leave in this country can't be encashed."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "holidays-AU",
+    "title": "Holiday calendar — Australia",
+    "category": "Holidays",
+    "version": "2026.1",
+    "effective": "2026-01-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AU"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Holidays",
+        "rules": [
+          "Thu, 1 Jan 2026 — New Year's Day",
+          "Mon, 26 Jan 2026 — Australia Day",
+          "Fri, 3 Apr 2026 — Good Friday",
+          "Mon, 6 Apr 2026 — Easter Monday",
+          "Mon, 8 Jun 2026 — King's Birthday",
+          "Mon, 5 Oct 2026 — Labour Day",
+          "Fri, 25 Dec 2026 — Christmas Day",
+          "Mon, 28 Dec 2026 — Boxing Day (substitute)"
+        ]
+      },
+      {
+        "heading": "Rules",
+        "rules": [
+          "Holidays don't count against your leave balance.",
+          "Working on a holiday earns a comp-off, valid 90 days."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "working-time-AU",
+    "title": "Working time & attendance — Australia",
+    "category": "Working time & attendance",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "AU"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your week",
+        "rules": [
+          "Work days: Mon–Fri.",
+          "Weekly off: Sunday and Saturday.",
+          "Shift: General shift, 09:00–17:00 AEST."
+        ]
+      },
+      {
+        "heading": "Timesheets",
+        "rules": [
+          "Log at most 9 hours a day.",
+          "Timesheets are approved up your reporting line.",
+          "Hourly staff earn overtime above 38 hours a week at 1.5×."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "travel-expenses-AU",
+    "title": "Travel & expenses — Australia",
+    "category": "Travel & expenses",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AU"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Claims",
+        "rules": [
+          "Claim within 90 days of spending.",
+          "Attach a receipt for anything above $40.",
+          "Largest single claim: $3,500.",
+          "Claims are approved up your reporting line."
+        ]
+      },
+      {
+        "heading": "Cash advance",
+        "rules": [
+          "Up to $2,000 per advance.",
+          "Settle the advance with receipts after the trip."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "benefits-AU",
+    "title": "Benefits — Australia",
+    "category": "Benefits",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AU"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": "employees",
+    "sections": [
+      {
+        "heading": "Plans",
+        "rules": [
+          "No benefit plans are published for this country yet. Ask HR."
+        ]
+      },
+      {
+        "heading": "Changes",
+        "rules": [
+          "Request enrolment changes under Benefits.",
+          "Compulsory plans can't be waived."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pay-tax-AU",
+    "title": "Pay & tax — Australia",
+    "category": "Pay & tax",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AU"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Pay",
+        "rules": [
+          "Paid in AUD by TimeZ Australia Pty.",
+          "Income tax on your payslip: PAYG withholding.",
+          "Tax year starts 1 July.",
+          "Only you and Compensation can see your payslips."
+        ]
+      },
+      {
+        "heading": "Tax declarations",
+        "rules": [
+          "Salary-sacrifice super — up to $30,000 a year.",
+          "Work-related expenses.",
+          "Donations to registered charities.",
+          "Superannuation (12%) is paid by the company on top of salary."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "exit-AU",
+    "title": "Resignation & exit — Australia",
+    "category": "Exit",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AU"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Notice and probation",
+        "rules": [
+          "Notice period: 28 days (Fair Work notice).",
+          "Contractors: 7 days.",
+          "Probation: 6 months."
+        ]
+      },
+      {
+        "heading": "How to resign",
+        "rules": [
+          "Resign under Me → Resignation. Your last day is set from your notice period.",
+          "An earlier last day needs your manager's agreement.",
+          "Return company assets before your last day."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "leave-CA",
+    "title": "Leave policy — Canada",
+    "category": "Leave",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "CA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your yearly entitlement",
+        "rules": [
+          "Vacation: 10 days a year (accrues monthly).",
+          "Sick leave: 5 days a year."
+        ]
+      },
+      {
+        "heading": "Everyone also gets",
+        "rules": [
+          "Work from home: 8 days a year.",
+          "Emergency work from home: 3 days a year.",
+          "Bereavement leave: 3 days a year.",
+          "Leave without pay: 12 days a year.",
+          "Comp-off: earned only by working on a weekly off or holiday; use it within 90 days."
+        ]
+      },
+      {
+        "heading": "Applying",
+        "rules": [
+          "Sick leave can't be applied in advance.",
+          "Past-dated leave older than 7 days needs prior permission from your manager (valid 30 days).",
+          "Approval goes up your reporting line. The CEO's time off is recorded with no approval."
+        ]
+      },
+      {
+        "heading": "Encashment",
+        "rules": [
+          "Only privilege leave (India) can be encashed. Leave in this country can't be encashed."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "holidays-CA",
+    "title": "Holiday calendar — Canada",
+    "category": "Holidays",
+    "version": "2026.1",
+    "effective": "2026-01-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "CA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Holidays",
+        "rules": [
+          "Thu, 1 Jan 2026 — New Year's Day",
+          "Mon, 16 Feb 2026 — Family Day",
+          "Fri, 3 Apr 2026 — Good Friday",
+          "Mon, 18 May 2026 — Victoria Day",
+          "Wed, 1 Jul 2026 — Canada Day",
+          "Mon, 3 Aug 2026 — Civic Holiday",
+          "Mon, 7 Sept 2026 — Labour Day",
+          "Mon, 12 Oct 2026 — Thanksgiving",
+          "Fri, 25 Dec 2026 — Christmas Day",
+          "Mon, 28 Dec 2026 — Boxing Day (substitute)"
+        ]
+      },
+      {
+        "heading": "Rules",
+        "rules": [
+          "Holidays don't count against your leave balance.",
+          "Working on a holiday earns a comp-off, valid 90 days."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "working-time-CA",
+    "title": "Working time & attendance — Canada",
+    "category": "Working time & attendance",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "CA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your week",
+        "rules": [
+          "Work days: Mon–Fri.",
+          "Weekly off: Sunday and Saturday.",
+          "Shift: General shift, 09:00–17:00 local."
+        ]
+      },
+      {
+        "heading": "Timesheets",
+        "rules": [
+          "Log at most 9 hours a day.",
+          "Timesheets are approved up your reporting line.",
+          "Hourly staff earn overtime above 44 hours a week at 1.5×."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "travel-expenses-CA",
+    "title": "Travel & expenses — Canada",
+    "category": "Travel & expenses",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "CA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Claims",
+        "rules": [
+          "Claim within 90 days of spending.",
+          "Attach a receipt for anything above $30.",
+          "Largest single claim: $3,000.",
+          "Claims are approved up your reporting line."
+        ]
+      },
+      {
+        "heading": "Cash advance",
+        "rules": [
+          "Up to $1,800 per advance.",
+          "Settle the advance with receipts after the trip."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "benefits-CA",
+    "title": "Benefits — Canada",
+    "category": "Benefits",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "CA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": "employees",
+    "sections": [
+      {
+        "heading": "Plans",
+        "rules": [
+          "No benefit plans are published for this country yet. Ask HR."
+        ]
+      },
+      {
+        "heading": "Changes",
+        "rules": [
+          "Request enrolment changes under Benefits.",
+          "Compulsory plans can't be waived."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pay-tax-CA",
+    "title": "Pay & tax — Canada",
+    "category": "Pay & tax",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "CA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Pay",
+        "rules": [
+          "Paid in CAD by TimeZ Canada Inc.",
+          "Income tax on your payslip: Federal income tax.",
+          "Tax year starts 1 January.",
+          "Only you and Compensation can see your payslips."
+        ]
+      },
+      {
+        "heading": "Tax declarations",
+        "rules": [
+          "RRSP contributions — up to $32,490 a year.",
+          "First Home Savings Account — up to $8,000 a year.",
+          "TD1 — personal tax credits.",
+          "RRSP room is shown on your CRA notice of assessment."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "exit-CA",
+    "title": "Resignation & exit — Canada",
+    "category": "Exit",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "CA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Notice and probation",
+        "rules": [
+          "Notice period: 14 days (Provincial standard).",
+          "Contractors: 7 days.",
+          "Probation: 3 months."
+        ]
+      },
+      {
+        "heading": "How to resign",
+        "rules": [
+          "Resign under Me → Resignation. Your last day is set from your notice period.",
+          "An earlier last day needs your manager's agreement.",
+          "Return company assets before your last day."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "leave-AE",
+    "title": "Leave policy — United Arab Emirates",
+    "category": "Leave",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "AE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your yearly entitlement",
+        "rules": [
+          "Annual leave: 30 days a year (accrues monthly).",
+          "Sick leave: 15 days a year."
+        ]
+      },
+      {
+        "heading": "Everyone also gets",
+        "rules": [
+          "Work from home: 8 days a year.",
+          "Emergency work from home: 3 days a year.",
+          "Bereavement leave: 3 days a year.",
+          "Leave without pay: 12 days a year.",
+          "Comp-off: earned only by working on a weekly off or holiday; use it within 90 days."
+        ]
+      },
+      {
+        "heading": "Applying",
+        "rules": [
+          "Sick leave can't be applied in advance.",
+          "Past-dated leave older than 7 days needs prior permission from your manager (valid 30 days).",
+          "Approval goes up your reporting line. The CEO's time off is recorded with no approval."
+        ]
+      },
+      {
+        "heading": "Encashment",
+        "rules": [
+          "Only privilege leave (India) can be encashed. Leave in this country can't be encashed."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "holidays-AE",
+    "title": "Holiday calendar — United Arab Emirates",
+    "category": "Holidays",
+    "version": "2026.1",
+    "effective": "2026-01-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Holidays",
+        "rules": [
+          "Thu, 1 Jan 2026 — New Year's Day",
+          "Fri, 20 Mar 2026 — Eid al-Fitr",
+          "Sat, 21 Mar 2026 — Eid al-Fitr holiday",
+          "Tue, 26 May 2026 — Arafat Day",
+          "Wed, 27 May 2026 — Eid al-Adha",
+          "Thu, 28 May 2026 — Eid al-Adha holiday",
+          "Tue, 16 Jun 2026 — Islamic New Year",
+          "Tue, 25 Aug 2026 — Prophet's Birthday",
+          "Wed, 2 Dec 2026 — National Day",
+          "Thu, 3 Dec 2026 — National Day holiday"
+        ]
+      },
+      {
+        "heading": "Rules",
+        "rules": [
+          "Holidays don't count against your leave balance.",
+          "Working on a holiday earns a comp-off, valid 90 days."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "working-time-AE",
+    "title": "Working time & attendance — United Arab Emirates",
+    "category": "Working time & attendance",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "AE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your week",
+        "rules": [
+          "Work days: Sun–Thu.",
+          "Weekly off: Friday and Saturday.",
+          "Shift: General shift, 09:00–18:00 GST."
+        ]
+      },
+      {
+        "heading": "Timesheets",
+        "rules": [
+          "Log at most 9 hours a day.",
+          "Timesheets are approved up your reporting line.",
+          "Hourly staff earn overtime above 48 hours a week at 1.5×."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "travel-expenses-AE",
+    "title": "Travel & expenses — United Arab Emirates",
+    "category": "Travel & expenses",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Claims",
+        "rules": [
+          "Claim within 90 days of spending.",
+          "Attach a receipt for anything above AED 100.",
+          "Largest single claim: AED 9,000.",
+          "Claims are approved up your reporting line."
+        ]
+      },
+      {
+        "heading": "Cash advance",
+        "rules": [
+          "Up to AED 5,000 per advance.",
+          "Settle the advance with receipts after the trip."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "benefits-AE",
+    "title": "Benefits — United Arab Emirates",
+    "category": "Benefits",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": "employees",
+    "sections": [
+      {
+        "heading": "Plans",
+        "rules": [
+          "DHA Medical (Medical) — Mandatory medical insurance (DHA). Cost: Employer paid. Compulsory."
+        ]
+      },
+      {
+        "heading": "Changes",
+        "rules": [
+          "Request enrolment changes under Benefits.",
+          "Compulsory plans can't be waived."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pay-tax-AE",
+    "title": "Pay & tax — United Arab Emirates",
+    "category": "Pay & tax",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Pay",
+        "rules": [
+          "Paid in AED by TimeZ Middle East FZ.",
+          "No personal income tax is deducted.",
+          "Tax year starts 1 January.",
+          "Only you and Compensation can see your payslips."
+        ]
+      },
+      {
+        "heading": "Tax declarations",
+        "rules": [
+          "No personal income tax in the UAE."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "exit-AE",
+    "title": "Resignation & exit — United Arab Emirates",
+    "category": "Exit",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "AE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Notice and probation",
+        "rules": [
+          "Notice period: 30 days (Labour law minimum).",
+          "Contractors: 7 days.",
+          "Probation: 6 months."
+        ]
+      },
+      {
+        "heading": "How to resign",
+        "rules": [
+          "Resign under Me → Resignation. Your last day is set from your notice period.",
+          "An earlier last day needs your manager's agreement.",
+          "Return company assets before your last day."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "leave-SA",
+    "title": "Leave policy — Saudi Arabia",
+    "category": "Leave",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "SA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your yearly entitlement",
+        "rules": [
+          "Annual leave: 21 days a year (accrues monthly).",
+          "Sick leave: 30 days a year."
+        ]
+      },
+      {
+        "heading": "Everyone also gets",
+        "rules": [
+          "Work from home: 8 days a year.",
+          "Emergency work from home: 3 days a year.",
+          "Bereavement leave: 3 days a year.",
+          "Leave without pay: 12 days a year.",
+          "Comp-off: earned only by working on a weekly off or holiday; use it within 90 days."
+        ]
+      },
+      {
+        "heading": "Applying",
+        "rules": [
+          "Sick leave can't be applied in advance.",
+          "Past-dated leave older than 7 days needs prior permission from your manager (valid 30 days).",
+          "Approval goes up your reporting line. The CEO's time off is recorded with no approval."
+        ]
+      },
+      {
+        "heading": "Encashment",
+        "rules": [
+          "Only privilege leave (India) can be encashed. Leave in this country can't be encashed."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "holidays-SA",
+    "title": "Holiday calendar — Saudi Arabia",
+    "category": "Holidays",
+    "version": "2026.1",
+    "effective": "2026-01-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "SA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Holidays",
+        "rules": [
+          "Sun, 22 Feb 2026 — Founding Day",
+          "Thu, 19 Mar 2026 — Eid al-Fitr",
+          "Sun, 22 Mar 2026 — Eid al-Fitr holiday",
+          "Mon, 23 Mar 2026 — Eid al-Fitr holiday",
+          "Tue, 26 May 2026 — Arafat Day",
+          "Wed, 27 May 2026 — Eid al-Adha",
+          "Thu, 28 May 2026 — Eid al-Adha holiday",
+          "Wed, 23 Sept 2026 — National Day"
+        ]
+      },
+      {
+        "heading": "Rules",
+        "rules": [
+          "Holidays don't count against your leave balance.",
+          "Working on a holiday earns a comp-off, valid 90 days."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "working-time-SA",
+    "title": "Working time & attendance — Saudi Arabia",
+    "category": "Working time & attendance",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "SA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your week",
+        "rules": [
+          "Work days: Sun–Thu.",
+          "Weekly off: Friday and Saturday.",
+          "Shift: General shift, 09:00–18:00 AST."
+        ]
+      },
+      {
+        "heading": "Timesheets",
+        "rules": [
+          "Log at most 9 hours a day.",
+          "Timesheets are approved up your reporting line.",
+          "Hourly staff earn overtime above 48 hours a week at 1.5×."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "travel-expenses-SA",
+    "title": "Travel & expenses — Saudi Arabia",
+    "category": "Travel & expenses",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "SA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Claims",
+        "rules": [
+          "Claim within 90 days of spending.",
+          "Attach a receipt for anything above SAR 100.",
+          "Largest single claim: SAR 9,000.",
+          "Claims are approved up your reporting line."
+        ]
+      },
+      {
+        "heading": "Cash advance",
+        "rules": [
+          "Up to SAR 5,000 per advance.",
+          "Settle the advance with receipts after the trip."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "benefits-SA",
+    "title": "Benefits — Saudi Arabia",
+    "category": "Benefits",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "SA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": "employees",
+    "sections": [
+      {
+        "heading": "Plans",
+        "rules": [
+          "No benefit plans are published for this country yet. Ask HR."
+        ]
+      },
+      {
+        "heading": "Changes",
+        "rules": [
+          "Request enrolment changes under Benefits.",
+          "Compulsory plans can't be waived."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pay-tax-SA",
+    "title": "Pay & tax — Saudi Arabia",
+    "category": "Pay & tax",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "SA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Pay",
+        "rules": [
+          "Paid in SAR by TimeZ Saudi LLC.",
+          "No personal income tax is deducted.",
+          "Tax year starts 1 January.",
+          "Only you and Compensation can see your payslips."
+        ]
+      },
+      {
+        "heading": "Tax declarations",
+        "rules": [
+          "No personal income tax in Saudi Arabia."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "exit-SA",
+    "title": "Resignation & exit — Saudi Arabia",
+    "category": "Exit",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "SA"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Notice and probation",
+        "rules": [
+          "Notice period: 30 days (Labour law minimum).",
+          "Contractors: 7 days.",
+          "Probation: 90 days."
+        ]
+      },
+      {
+        "heading": "How to resign",
+        "rules": [
+          "Resign under Me → Resignation. Your last day is set from your notice period.",
+          "An earlier last day needs your manager's agreement.",
+          "Return company assets before your last day."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "leave-DE",
+    "title": "Leave policy — Germany",
+    "category": "Leave",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "DE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your yearly entitlement",
+        "rules": [
+          "Urlaub (annual leave): 28 days a year (accrues monthly).",
+          "Sick leave: 30 days a year."
+        ]
+      },
+      {
+        "heading": "Everyone also gets",
+        "rules": [
+          "Work from home: 8 days a year.",
+          "Emergency work from home: 3 days a year.",
+          "Bereavement leave: 3 days a year.",
+          "Leave without pay: 12 days a year.",
+          "Comp-off: earned only by working on a weekly off or holiday; use it within 90 days."
+        ]
+      },
+      {
+        "heading": "Applying",
+        "rules": [
+          "Sick leave can't be applied in advance.",
+          "Past-dated leave older than 7 days needs prior permission from your manager (valid 30 days).",
+          "Approval goes up your reporting line. The CEO's time off is recorded with no approval."
+        ]
+      },
+      {
+        "heading": "Encashment",
+        "rules": [
+          "Only privilege leave (India) can be encashed. Leave in this country can't be encashed."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "holidays-DE",
+    "title": "Holiday calendar — Germany",
+    "category": "Holidays",
+    "version": "2026.1",
+    "effective": "2026-01-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "DE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Holidays",
+        "rules": [
+          "Thu, 1 Jan 2026 — Neujahr",
+          "Fri, 3 Apr 2026 — Karfreitag",
+          "Mon, 6 Apr 2026 — Ostermontag",
+          "Fri, 1 May 2026 — Tag der Arbeit",
+          "Thu, 14 May 2026 — Christi Himmelfahrt",
+          "Mon, 25 May 2026 — Pfingstmontag",
+          "Sat, 3 Oct 2026 — Tag der Deutschen Einheit",
+          "Fri, 25 Dec 2026 — 1. Weihnachtstag"
+        ]
+      },
+      {
+        "heading": "Rules",
+        "rules": [
+          "Holidays don't count against your leave balance.",
+          "Working on a holiday earns a comp-off, valid 90 days."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "working-time-DE",
+    "title": "Working time & attendance — Germany",
+    "category": "Working time & attendance",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": true,
+    "countries": [
+      "DE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Your week",
+        "rules": [
+          "Work days: Mon–Fri.",
+          "Weekly off: Sunday and Saturday.",
+          "Shift: General shift, 09:00–17:30 CET."
+        ]
+      },
+      {
+        "heading": "Timesheets",
+        "rules": [
+          "Log at most 9 hours a day.",
+          "Timesheets are approved up your reporting line.",
+          "Hourly staff earn overtime above 40 hours a week at 1.5×."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "travel-expenses-DE",
+    "title": "Travel & expenses — Germany",
+    "category": "Travel & expenses",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "DE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Claims",
+        "rules": [
+          "Claim within 90 days of spending.",
+          "Attach a receipt for anything above 25 €.",
+          "Largest single claim: 2.200 €.",
+          "Claims are approved up your reporting line."
+        ]
+      },
+      {
+        "heading": "Cash advance",
+        "rules": [
+          "Up to 1.300 € per advance.",
+          "Settle the advance with receipts after the trip."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "benefits-DE",
+    "title": "Benefits — Germany",
+    "category": "Benefits",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "DE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": "employees",
+    "sections": [
+      {
+        "heading": "Plans",
+        "rules": [
+          "No benefit plans are published for this country yet. Ask HR."
+        ]
+      },
+      {
+        "heading": "Changes",
+        "rules": [
+          "Request enrolment changes under Benefits.",
+          "Compulsory plans can't be waived."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pay-tax-DE",
+    "title": "Pay & tax — Germany",
+    "category": "Pay & tax",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "DE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Pay",
+        "rules": [
+          "Paid in EUR by TimeZ Germany GmbH.",
+          "Income tax on your payslip: Lohnsteuer.",
+          "Tax year starts 1 January.",
+          "Only you and Compensation can see your payslips."
+        ]
+      },
+      {
+        "heading": "Tax declarations",
+        "rules": [
+          "Werbungskosten — work expenses.",
+          "Riester pension — up to 2.100 € a year.",
+          "Lohnsteuer-Freibetrag.",
+          "Allowances (Freibeträge) are registered with the Finanzamt and flow into ELStAM."
+        ]
+      }
+    ]
+  },
+  {
+    "id": "exit-DE",
+    "title": "Resignation & exit — Germany",
+    "category": "Exit",
+    "version": "2026.1",
+    "effective": "2026-04-01",
+    "owner": "HR",
+    "mandatory": false,
+    "countries": [
+      "DE"
+    ],
+    "legal_entities": [],
+    "roles": [],
+    "employment": null,
+    "sections": [
+      {
+        "heading": "Notice and probation",
+        "rules": [
+          "Notice period: 30 days (Statutory notice).",
+          "Contractors: 7 days.",
+          "Probation: 6 months."
+        ]
+      },
+      {
+        "heading": "How to resign",
+        "rules": [
+          "Resign under Me → Resignation. Your last day is set from your notice period.",
+          "An earlier last day needs your manager's agreement.",
+          "Return company assets before your last day."
+        ]
+      }
+    ]
+  }
+]

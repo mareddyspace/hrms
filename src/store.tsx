@@ -66,10 +66,11 @@ import {
   demoPasswordFor,
   findDemoByCode,
   findDemoByEmailOrCode,
+  normalizeSignInEmail,
   findDemoById,
   managementChain,
   type DemoAccount, RETIRED_ACCOUNT_IDS, RETIRED_SIGN_IN_IDS, mentionsRetiredAccount, setDirectoryChainSource, setNavOverrideSource } from "./demoAccounts.ts";
-import { canApproveTeam, holidaysForPerson, setEarnedLeaveSource, setHolidayContext } from "./model.ts";
+import { canApproveTeam, holidaysForPerson, maskAddress, maskMobile, setEarnedLeaveSource, setHolidayContext } from "./model.ts";
 import { getOptionalHolidayState, subscribeOptionalHolidays } from "./features/workforce/optionalHolidaysStore.ts";
 import { editedPerson, getPerson, isAccountActive, listPeople, managerChainIds, subscribePeople } from "./data/peopleLocal.ts";
 import { delegatedAuthority, noteLeaves, type DelegationScope } from "./data/delegations.ts";
@@ -77,7 +78,7 @@ import { cachedPayslips, generatePayslips } from "./data/payslipGenerator.ts";
 import { getTaxRegime } from "./data/taxRegime.ts";
 import { getExitState, subscribeExits } from "./features/lifecycle/exitStore.ts";
 import { getNavOverrides } from "./data/platformLocal.ts";
-import { createSeed, DEMO_PASSWORD, EMPLOYEE, findAccountByCode, findAccountById } from "./seed.ts";
+import { createSeed, DEMO_PASSWORD, EMPLOYEE, findAccountByCode, findAccountById, sharedProjectsFor } from "./seed.ts";
 import { taskPersonById } from "./data/taskTeam.ts";
 import { pushManagerTaskAlert, pushPersonTaskAlert } from "./data/collabLocal.ts";
 import { resolveFlow } from "./data/approvalWorkflows.ts";
@@ -85,6 +86,27 @@ import { approvedNameFor, getCorrections, subscribeCorrections } from "./data/pr
 import { canPayExpenses, currentStepOf, decideFlowStep, isWaitingOn, waitingApproverIds } from "./data/expenseFlow.ts";
 import { taskProgress } from "./data/taskHelpers.ts";
 import { isTaskAutoMode } from "./data/taskAutoMode.ts";
+import { API_ENABLED, ApiError, announceApiSession, apiChangePassword, apiLogin, clearTokens, hasTokens, onSessionEnded } from "./api/client.ts";
+import {
+  apiApplyLeave,
+  apiCancelLeave,
+  apiDecideLeave,
+  clearApiPeople,
+  loadApiLeave,
+  loadApiNotifications,
+  loadApiPeople,
+  markApiNotificationsRead,
+} from "./api/portalSync.ts";
+import { setApiNotificationReadHandler } from "./data/collabLocal.ts";
+import type { LeaveRow } from "./model.ts";
+import { apiAddTimeEntry, apiDecideWeek, apiRemoveTimeEntry, apiSubmitWeek, timeMirror } from "./api/syncTimeSheets.ts";
+import { pendingMirror } from "./api/syncTimeApprovals.ts";
+import { apiAddExpense, apiDecideExpense, apiPayExpense, apiWithdrawExpense, claimsMirror } from "./api/syncTimeExpenses.ts";
+
+/** Portal lists that the API owns in backend mode (the server writes their audit entries). */
+const API_AUDITED_LISTS: ReadonlySet<string> = API_ENABLED
+  ? new Set(["leaveRequests", "expenses", "timesheets", "orgTimesheets"])
+  : new Set();
 
 const STORAGE_KEY = "kastech.ess.state.v1";
 const SESSION_KEY = "kastech.ess.session";
@@ -138,7 +160,33 @@ function readSession(): boolean {
     sessionStorage.removeItem(SESSION_KEY);
     return false;
   }
-  return localStorage.getItem(SESSION_KEY) === "in" || sessionStorage.getItem(SESSION_KEY) === "in";
+  const saved = localStorage.getItem(SESSION_KEY) === "in" || sessionStorage.getItem(SESSION_KEY) === "in";
+  // With the backend, a session needs its tokens (kept per browser tab); without them, sign in again.
+  return saved && (!API_ENABLED || hasTokens());
+}
+
+/** Backend sign-in: wrong passwords counted here too, so the lockout can be explained (the API's error is generic). */
+const API_LOCK_KEY = "timez.api.login-fails";
+const API_LOCK_MINUTES = 15;
+
+function readApiLock(email: string): { fails: number; until: number } {
+  try {
+    const all = JSON.parse(localStorage.getItem(API_LOCK_KEY) ?? "{}") as Record<string, { fails: number; until: number }>;
+    return all[email] ?? { fails: 0, until: 0 };
+  } catch {
+    return { fails: 0, until: 0 };
+  }
+}
+
+function writeApiLock(email: string, value: { fails: number; until: number } | null) {
+  try {
+    const all = JSON.parse(localStorage.getItem(API_LOCK_KEY) ?? "{}") as Record<string, { fails: number; until: number }>;
+    if (value) all[email] = value;
+    else delete all[email];
+    localStorage.setItem(API_LOCK_KEY, JSON.stringify(all));
+  } catch {
+    /* storage blocked */
+  }
 }
 
 function readLock(employeeCode: string): { fails: number; until: number } {
@@ -289,16 +337,17 @@ interface PortalApi {
   signedIn: boolean;
   loginNotice: LoginNotice | null;
   dismissLoginNotice: () => void;
-  changePasswordAfterStaleLogin: (newPassword: string, confirm: string) => string | null;
+  changePasswordAfterStaleLogin: (newPassword: string, confirm: string) => string | null | Promise<string | null>;
   passwordPolicy: PasswordPolicyStatus;
-  changePassword: (currentPassword: string, newPassword: string, confirm: string) => string | null;
+  changePassword: (currentPassword: string, newPassword: string, confirm: string) => string | null | Promise<string | null>;
   requestPasswordResetOtp: (
     employeeCode: string,
     channel: "email" | "mobile",
   ) => { code: string; sentTo: string; channel: "email" | "mobile" } | { error: string };
   resetPasswordWithOtp: (employeeCode: string, otp: string, newPassword: string, confirm: string) => string | null;
   /** Accepts work email or employee ID. */
-  signIn: (emailOrCode: string, password: string, remember?: boolean) => Promise<string | null>;
+  /** mfaCode: the second step of a two-step sign-in (API mode). */
+  signIn: (emailOrCode: string, password: string, remember?: boolean, mfaCode?: string) => Promise<string | null>;
   /** Prototype-only persona switch — not production authorization. */
   switchDemoPersona: (accountId: string) => string | null;
   rememberedEmail: string | null;
@@ -316,6 +365,11 @@ interface PortalApi {
     },
     otp: string,
   ) => string | null;
+  /**
+   * Local mode: checks (and uses up) the code. Backend mode: only checks it is 6 digits; the server checks the code
+   * (sent by POST /people/me/otp) when PATCH /people/me changes mobile or personal email.
+   */
+  verifyProfileOtp: (otp: string) => string | null;
   resetDemo: () => void;
   state: PortalState;
   leaveTable: ReturnType<typeof leaveRows>;
@@ -346,19 +400,19 @@ interface PortalApi {
     projectId: string,
     weekStart: string,
     input: Omit<TimeEntry, "id">,
-  ) => string | null;
-  removeTimeEntry: (projectId: string, weekStart: string, entryId: string) => string | null;
-  submitWeekTimesheets: (weekStart: string) => string | null;
-  setOrgTimesheetStatus: (id: string, status: OrgTimesheetStatus) => string | null;
+  ) => Promise<string | null>;
+  removeTimeEntry: (projectId: string, weekStart: string, entryId: string) => Promise<string | null>;
+  submitWeekTimesheets: (weekStart: string) => Promise<string | null>;
+  setOrgTimesheetStatus: (id: string, status: OrgTimesheetStatus) => Promise<string | null>;
   /** Whether the signed-in user may verify tax-saving proofs (payroll/HR). */
   canVerifyProofs: boolean;
-  addExpense: (input: Omit<Expense, "id" | "employeeId" | "status">) => string | null;
-  setExpenseStatus: (id: string, status: Expense["status"], note?: string) => string | null;
+  addExpense: (input: Omit<Expense, "id" | "employeeId" | "status">) => Promise<string | null>;
+  setExpenseStatus: (id: string, status: Expense["status"], note?: string) => Promise<string | null>;
   /** Whether the signed-in user decides the open approval step of this claim. */
   canDecideExpense: (expense: Expense) => boolean;
   /** Whether the signed-in user records payment on this approved claim (finance or admin). */
   canPayExpense: (expense: Expense) => boolean;
-  markExpensePaid: (id: string, paidOn: string, reference: string) => string | null;
+  markExpensePaid: (id: string, paidOn: string, reference: string) => Promise<string | null>;
   acceptTask: (id: string) => string | null;
   moveTask: (id: string, status: TaskStatus) => void;
   /** Manager: set primary owner / reassign task. */
@@ -511,14 +565,90 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   // A forced password change survives a page refresh until the password is actually changed.
   const [loginNotice, setLoginNotice] = useState<LoginNotice | null>(() => {
     const account = findDemoById(localStorage.getItem(USER_KEY) ?? EMPLOYEE.id);
-    if (!readSession() || !account || localStorage.getItem(userKey(MUST_CHANGE_KEY, account.employeeCode)) !== "1") return null;
+    if (API_ENABLED || !readSession() || !account || localStorage.getItem(userKey(MUST_CHANGE_KEY, account.employeeCode)) !== "1") return null;
     return { previousIso: null, timeZone: account.timeZone, requirePasswordChange: true };
   });
+  const mustChangeNow = Boolean(API_ENABLED && loginNotice?.requirePasswordChange);
   const [profileOtp, setProfileOtp] = useState<{ code: string; expiresAt: number; attempts: number } | null>(null);
   const [resetOtp, setResetOtp] = useState<{ code: string; expiresAt: number; employeeCode: string; attempts: number } | null>(null);
   const [passwordRevision, setPasswordRevision] = useState(0);
 
+  /* ───── Backend mode (VITE_API_URL): people, leave and notifications come from the API ───── */
+  const localLeaveRequests = useRef(state.leaveRequests);
+  // Backend mode: the password typed at sign-in, kept in memory only while a password change is required.
+  const signInPasswordRef = useRef<string | null>(null);
+  const [apiLeave, setApiLeave] = useState<{ balances: LeaveRow[] } | null>(null);
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
+
+  async function refreshApiLeave() {
+    const account = findDemoById(userIdRef.current);
+    if (!account || !hasTokens()) return;
+    const data = await loadApiLeave(
+      { id: account.id, role: account.role },
+      (id) => getPerson(id)?.fullName ?? findDemoById(id)?.fullName,
+    );
+    setState((prev) => ({ ...prev, leaveRequests: data.requests }));
+    setApiLeave({ balances: data.balances });
+  }
+
+  async function refreshApiNotifications() {
+    if (!hasTokens()) return;
+    await loadApiNotifications(userIdRef.current);
+  }
+
+  function endApiSession() {
+    clearTokens();
+    announceApiSession(null);
+    clearApiPeople();
+    setApiLeave(null);
+    setState((prev) => ({ ...prev, leaveRequests: localLeaveRequests.current }));
+  }
+
+  // After sign-in: load the directory, leave and notifications; check notifications again every minute.
+  useEffect(() => {
+    if (!API_ENABLED || !signedIn) return;
+    // A required password change comes first; the server refuses everything else until then.
+    if (mustChangeNow) return;
+    // Module stores (attendance, expenses, talent, rewards, cases…) load their own data on this signal.
+    if (hasTokens()) announceApiSession(userId);
+    let stopped = false;
+    const report = (error: unknown) => {
+      if (!stopped) console.error("Could not load data from the server", error);
+    };
+    void loadApiPeople()
+      .then(() => (stopped ? undefined : refreshApiLeave()))
+      .catch(report);
+    void refreshApiNotifications().catch(report);
+    const timer = window.setInterval(() => {
+      void refreshApiNotifications().catch(report);
+      void refreshApiLeave().catch(report);
+    }, 60000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [signedIn, userId, mustChangeNow]);
+
+  // The API couldn't refresh the session: sign out. Reading a backend notification marks it read there too.
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    setApiNotificationReadHandler((ids) => void markApiNotificationsRead(ids));
+    const off = onSessionEnded(() => {
+      endApiSession();
+      localStorage.setItem(SESSION_KEY, "out");
+      sessionStorage.removeItem(SESSION_KEY);
+      setSignedIn(false);
+      setLoginNotice(null);
+    });
+    return () => {
+      off();
+      setApiNotificationReadHandler(null);
+    };
+  }, []);
+
   // Audit trail: every change to a business record is written down with who made it and what changed.
+  // Backend mode: lists loaded from the API are audited by the server, so they are not diffed here.
   const auditedState = useRef(state);
   useEffect(() => {
     const previous = auditedState.current;
@@ -529,13 +659,15 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       diffForAudit(previous as unknown as Record<string, unknown>, state as unknown as Record<string, unknown>, {
         id: userId,
         name: actor?.fullName ?? userId,
-      }),
+      }, API_AUDITED_LISTS),
     );
   }, [state, userId]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      // Backend mode: leave requests come from the API, so the browser copy keeps the local ones untouched.
+      const saved = API_ENABLED ? { ...state, leaveRequests: localLeaveRequests.current } : state;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
     } catch (error) {
       // Storage full (e.g. many large signatures): keep working in memory rather than crash the app.
       console.error("Could not save portal data to browser storage", error);
@@ -555,6 +687,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     };
     const expired = () => Date.now() - Number(localStorage.getItem(LAST_ACTIVE_KEY) ?? Date.now()) > IDLE_MS;
     const endSession = () => {
+      if (API_ENABLED) endApiSession();
       localStorage.setItem(SESSION_KEY, "out");
       sessionStorage.removeItem(SESSION_KEY);
       setSignedIn(false);
@@ -589,6 +722,10 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     setPasswordRevision((value) => value + 1);
   }, [userId]);
 
+  // Backend mode: timesheets/projects and expense claims load from the API on each session (src/api/syncTime*.ts).
+  const apiTime = useSyncExternalStore(timeMirror.subscribe, timeMirror.get, timeMirror.get);
+  const apiClaims = useSyncExternalStore(claimsMirror.subscribe, claimsMirror.get, claimsMirror.get);
+
   const api = useMemo<PortalApi>(() => {
     const activeDemo = findDemoById(userId) ?? findDemoByCode((findAccountById(userId) ?? EMPLOYEE).employeeCode) ?? TIMEZ_DEMOS[0]!;
     const approvedName = approvedNameFor(activeDemo.id, corrections);
@@ -615,24 +752,43 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         countryCode: person.countryCode,
       }).weeklyOffDays;
     };
-    const leaveTable = leaveRows(
-      state.leavePolicies,
-      state.leaveRequests,
-      state.encashments,
-      state.holidays,
-      active.id,
-      activeOffs,
-      Number(todayISO().slice(0, 4)),
-    );
-    const currentProjects = mine(state.projects).filter((project) => project.status === "current");
-    const previousProjects = mine(state.projects).filter((project) => project.status === "previous");
+    const leaveTable =
+      API_ENABLED && apiLeave
+        ? apiLeave.balances
+        : leaveRows(
+            state.leavePolicies,
+            state.leaveRequests,
+            state.encashments,
+            state.holidays,
+            active.id,
+            activeOffs,
+            Number(todayISO().slice(0, 4)),
+          );
+    // Everyone can log to the internal projects; client projects come from their own assignments.
+    const ownCurrent = mine(state.projects).filter((project) => project.status === "current");
+    // Backend mode: projects, timesheets, team weeks and expense claims come from the API mirrors (src/api/syncTime*.ts).
+    const currentProjects = API_ENABLED
+      ? apiTime.projects.filter((project) => project.status === "current")
+      : [...ownCurrent, ...sharedProjectsFor(active.id).filter((p) => !ownCurrent.some((o) => o.id === p.id))];
+    const previousProjects = API_ENABLED
+      ? apiTime.projects.filter((project) => project.status === "previous")
+      : mine(state.projects).filter((project) => project.status === "previous");
+    const viewState: PortalState = API_ENABLED
+      ? {
+          ...state,
+          projects: [...apiTime.projects, ...state.projects.filter((p) => !apiTime.projects.some((a) => a.id === p.id))],
+          timesheets: apiTime.timesheets,
+          orgTimesheets: apiTime.orgTimesheets,
+          expenses: apiClaims.expenses,
+        }
+      : state;
 
     function colleagueName(colleagueId: string) {
       return state.colleagues.find((person) => person.id === colleagueId)?.name ?? "Employee";
     }
 
     function projectName(projectId: string) {
-      return state.projects.find((project) => project.id === projectId)?.name ?? "Project";
+      return viewState.projects.find((project) => project.id === projectId)?.name ?? "Project";
     }
 
     /** Saves the signed-in person's own contact details. Job title and shift are HR-owned and ignored here. */
@@ -647,8 +803,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       }
       const address = input.address.trim();
       const changes = [
-        ...(mobile !== current.mobile ? [{ field: "Mobile", before: current.mobile || "—", after: mobile }] : []),
-        ...(address !== (current.address ?? "") ? [{ field: "Address", before: current.address || "—", after: address || "—" }] : []),
+        // The audit trail keeps masked copies only.
+        ...(mobile !== current.mobile ? [{ field: "Mobile", before: maskMobile(current.mobile || ""), after: maskMobile(mobile) }] : []),
+        ...(address !== (current.address ?? "") ? [{ field: "Address", before: maskAddress(current.address || ""), after: maskAddress(address) }] : []),
         ...(input.photo ? [{ field: "Photo", before: "—", after: "Updated" }] : []),
       ];
       if (changes.length) {
@@ -755,16 +912,24 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       return { decidedById: active.id, decidedByName: active.fullName, decidedOn: todayISO(), decisionNote: note?.trim() || undefined };
     }
 
-    function activateSession(account: DemoAccount, options?: { silent?: boolean; remember?: boolean }) {
+    function activateSession(
+      account: DemoAccount,
+      options?: { silent?: boolean; remember?: boolean; previousIso?: string | null; mustChangePassword?: boolean },
+    ) {
       // A fresh sign-in starts the idle clock again (an old stamp from an earlier visit must not sign them out).
       localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()));
       const lastLoginKey = userKey(LAST_LOGIN_KEY, account.employeeCode);
-      // Older versions kept one device-wide stamp; fall back to it once.
-      const previousIso = localStorage.getItem(lastLoginKey) ?? localStorage.getItem(LAST_LOGIN_KEY);
-      const requirePasswordChange =
-        localStorage.getItem(userKey(MUST_CHANGE_KEY, account.employeeCode)) === "1" ||
-        (previousIso ? daysSinceLogin(previousIso) > PASSWORD_STALE_DAYS : false);
-      if (requirePasswordChange) localStorage.setItem(userKey(MUST_CHANGE_KEY, account.employeeCode), "1");
+      // Older versions kept one device-wide stamp; fall back to it once. The backend's own record wins when given.
+      const previousIso =
+        options?.previousIso !== undefined
+          ? options.previousIso
+          : (localStorage.getItem(lastLoginKey) ?? localStorage.getItem(LAST_LOGIN_KEY));
+      const requirePasswordChange = API_ENABLED
+        ? // The server decides (no sign-in for 90+ days).
+          Boolean(options?.mustChangePassword)
+        : localStorage.getItem(userKey(MUST_CHANGE_KEY, account.employeeCode)) === "1" ||
+          (previousIso ? daysSinceLogin(previousIso) > PASSWORD_STALE_DAYS : false);
+      if (requirePasswordChange && !API_ENABLED) localStorage.setItem(userKey(MUST_CHANGE_KEY, account.employeeCode), "1");
       localStorage.setItem(lastLoginKey, new Date().toISOString());
       if (options?.remember ?? localStorage.getItem(SESSION_KEY) === "in") {
         localStorage.setItem(SESSION_KEY, "in");
@@ -799,6 +964,20 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setLoginNotice((notice) => (notice?.requirePasswordChange ? notice : null));
       },
       changePasswordAfterStaleLogin: (newPassword, confirm) => {
+        if (API_ENABLED) {
+          const chosen = newPassword.trim();
+          if (chosen !== confirm.trim()) return "Confirmation does not match.";
+          const current = signInPasswordRef.current;
+          if (!current) return "Sign in again to change your password.";
+          return apiChangePassword(current, chosen).then(
+            () => {
+              signInPasswordRef.current = null;
+              setLoginNotice(null);
+              return null;
+            },
+            (error: unknown) => (error instanceof Error ? error.message : "Could not change the password."),
+          );
+        }
         const next = newPassword.trim();
         if (next.length < 6) return "Use at least 6 characters.";
         if (next !== confirm.trim()) return "Confirmation does not match.";
@@ -810,6 +989,13 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       passwordPolicy: passwordPolicyFromChangedAt(passwordChangedAtIso(active.employeeCode)),
       changePassword: (currentPassword, newPassword, confirm) => {
+        if (API_ENABLED) {
+          if (newPassword.trim() !== confirm.trim()) return "Confirmation does not match.";
+          return apiChangePassword(currentPassword, newPassword.trim()).then(
+            () => null,
+            (error: unknown) => (error instanceof Error ? error.message : "Could not change the password."),
+          );
+        }
         if (currentPassword !== storedPassword(active.employeeCode)) return "Current password is not correct.";
         const next = newPassword.trim();
         if (next.length < 6) return "Use at least 6 characters.";
@@ -860,9 +1046,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setResetOtp(null);
         return null;
       },
-      state,
+      state: viewState,
       leaveTable,
-      counts: actionCounts(state, active.id),
+      counts: actionCounts(viewState, active.id),
       // Payslips run from joining (last 12 months) to the last completed month; a leaver's final
       // month is pro-rated and settles unused privilege leave. Tax follows the country's rules, the
       // India regime choice and verified declarations; hourly staff are paid approved timesheet hours.
@@ -896,11 +1082,44 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       currentProjects,
       previousProjects,
-      hoursFor: (projectId: string) => projectHours(mine(state.timesheets), projectId),
+      hoursFor: (projectId: string) => projectHours(mine(viewState.timesheets), projectId),
       colleagueName,
       projectName,
       menuItem: (menuItemId: string) => state.menu.find((item) => item.id === menuItemId),
-      signIn: async (emailOrCode, password, remember = false) => {
+      signIn: async (emailOrCode, password, remember = false, mfaCode) => {
+        if (API_ENABLED) {
+          if (!password.trim()) return "Enter your password.";
+          // An employee ID is turned into the work email the server signs in with.
+          const email = normalizeSignInEmail(emailOrCode.includes("@") ? emailOrCode : findDemoByEmailOrCode(emailOrCode)?.email ?? emailOrCode);
+          const lockedMessage = `Too many wrong passwords. Sign-in is locked for ${API_LOCK_MINUTES} minutes.`;
+          const lock = readApiLock(email);
+          if (lock.until > Date.now()) {
+            const minutes = Math.ceil((lock.until - Date.now()) / 60000);
+            return `Too many wrong passwords. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+          }
+          try {
+            const { me, previousLoginAt, mustChangePassword } = await apiLogin(email, password, mfaCode);
+            const account = findDemoById(me.account_id);
+            if (!account) {
+              clearTokens();
+              return "This account can't use the portal yet. Contact HR.";
+            }
+            writeApiLock(email, null);
+            if (remember) localStorage.setItem(REMEMBER_KEY, account.email);
+            else localStorage.removeItem(REMEMBER_KEY);
+            signInPasswordRef.current = mustChangePassword ? password : null;
+            activateSession(account, { remember, previousIso: previousLoginAt, mustChangePassword });
+            return null;
+          } catch (error) {
+            if (error instanceof ApiError && error.status === 401) {
+              const fails = (lock.until > 0 ? 0 : lock.fails) + 1;
+              const locked = fails >= MAX_LOGIN_ATTEMPTS;
+              writeApiLock(email, { fails: locked ? 0 : fails, until: locked ? Date.now() + API_LOCK_MINUTES * 60000 : 0 });
+              return locked ? lockedMessage : error.message;
+            }
+            return error instanceof Error ? error.message : "Sign-in failed. Try again.";
+          }
+        }
         const account = findDemoByEmailOrCode(emailOrCode);
         if (!account) return "That email/ID and password don't match.";
         if (!password.trim()) return "Enter your password.";
@@ -931,10 +1150,12 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       switchDemoPersona: (accountId) => {
         const account = findDemoById(accountId);
         if (!account) return "That account was not found.";
+        if (API_ENABLED) return "Sign out and sign in as that person.";
         activateSession(account, { silent: true });
         return null;
       },
       signOut: () => {
+        if (API_ENABLED) endApiSession();
         localStorage.setItem(SESSION_KEY, "out");
         sessionStorage.removeItem(SESSION_KEY);
         setSignedIn(false);
@@ -945,6 +1166,25 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const code = String(100000 + Math.floor(Math.random() * 900000));
         setProfileOtp({ code, expiresAt: Date.now() + 5 * 60 * 1000, attempts: 0 });
         return code;
+      },
+      verifyProfileOtp: (otp) => {
+        if (API_ENABLED) return /^\d{6}$/.test(otp.trim()) ? null : "Enter the 6-digit code.";
+        if (!profileOtp) return "Send a verification code first.";
+        if (Date.now() > profileOtp.expiresAt) {
+          setProfileOtp(null);
+          return "That code has expired. Send a new one.";
+        }
+        if (otp.trim() !== profileOtp.code) {
+          const attempts = profileOtp.attempts + 1;
+          if (attempts >= MAX_OTP_ATTEMPTS) {
+            setProfileOtp(null);
+            return "Too many wrong codes. Send a new code and try again.";
+          }
+          setProfileOtp({ ...profileOtp, attempts });
+          return `That verification code is not correct. ${MAX_OTP_ATTEMPTS - attempts} tries left.`;
+        }
+        setProfileOtp(null);
+        return null;
       },
       updateProfileWithOtp: (input, otp) => {
         if (!profileOtp) return "Send a verification code first.";
@@ -967,6 +1207,22 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       resetDemo: () => setState(createSeed()),
       applyLeave: async (input) => {
+        if (API_ENABLED) {
+          if (!input.from || !input.to) return "Choose the from and to dates.";
+          try {
+            await apiApplyLeave({
+              code: input.code,
+              from: input.from,
+              to: input.to,
+              half: input.half && input.from === input.to ? input.half : "none",
+              reason: input.reason.trim(),
+            });
+          } catch (error) {
+            return error instanceof Error ? error.message : "Could not send the request.";
+          }
+          await refreshApiLeave().catch(() => undefined);
+          return null;
+        }
         const error = validateLeave(state, active.id, input, activeOffs, todayISO(), { needsApprover: activeHasApprover });
         if (error) return error;
         const { half, ...rest } = input;
@@ -1086,6 +1342,22 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       setLeaveStatus: async (leaveId, status, note) => {
         const request = state.leaveRequests.find((item) => item.id === leaveId);
         if (!request) return "Leave request not found.";
+        if (API_ENABLED) {
+          try {
+            if (status === "approved" || status === "rejected") {
+              await apiDecideLeave(leaveId, status === "approved" ? "approve" : "reject", note);
+            } else if (status === "withdrawn") {
+              await apiCancelLeave(leaveId);
+            } else {
+              return "That status change isn't allowed.";
+            }
+          } catch (error) {
+            return error instanceof Error ? error.message : "Could not save the decision.";
+          }
+          // The approvals inbox ("waiting on me") also changes: a multi-step leave moves on to HR.
+          await Promise.all([refreshApiLeave(), refreshApiNotifications(), pendingMirror.reload()]).catch(() => undefined);
+          return null;
+        }
         // Approved leave that hasn't started yet can still be cancelled by the employee.
         const cancellingUpcoming =
           status === "withdrawn" && request.employeeId === active.id && request.status === "approved" && request.from > todayISO();
@@ -1225,8 +1497,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         });
         return null;
       },
-      addTimeEntry: (projectId, weekStart, input) => {
-        const project = state.projects.find((item) => item.id === projectId && item.employeeId === active.id);
+      addTimeEntry: async (projectId, weekStart, input) => {
+        const project = viewState.projects.find((item) => item.id === projectId && item.employeeId === active.id);
         if (!project) return "Choose a project.";
         if (!input.date) return "Choose a date.";
         if (!input.note.trim()) return "Enter a short note for the block.";
@@ -1245,7 +1517,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           if (!task.accepted) return "Accept the task before logging time.";
           if (task.status === "done" || task.status === "scheduled") return "That task isn't open.";
         }
-        const overlapping = state.timesheets
+        const overlapping = viewState.timesheets
           .filter((sheet) => sheet.employeeId === active.id)
           .flatMap((sheet) => sheet.entries ?? [])
           .some(
@@ -1255,15 +1527,20 @@ export function PortalProvider({ children }: { children: ReactNode }) {
               entry.startHour < input.startHour + input.hours,
           );
         if (overlapping) return "That block overlaps time you've already logged.";
-        const existing = state.timesheets.find(
+        const existing = viewState.timesheets.find(
           (sheet) => sheet.employeeId === active.id && sheet.projectId === projectId && sheet.weekStart === weekStart,
         );
         if (existing?.status === "approved") return "This week is already approved.";
         const entry: TimeEntry = { ...input, id: uid("te"), note: input.note.trim() };
         const entries = [...(existing?.entries ?? []), entry];
         const hours = hoursFromEntries(entries);
-        const error = validateTimesheet(state, active.id, project, hours);
+        const error = validateTimesheet(viewState, active.id, project, hours);
         if (error) return error;
+        // Backend mode: the API keeps the entry (and checks the week is still editable).
+        if (API_ENABLED) {
+          if (existing?.status === "submitted") return "This week is submitted. It can be changed again if your manager sends it back.";
+          return apiAddTimeEntry(projectId, { ...input, note: input.note.trim() });
+        }
         setState((prev) => {
           const current = prev.timesheets.find(
             (sheet) => sheet.employeeId === active.id && sheet.projectId === projectId && sheet.weekStart === weekStart,
@@ -1291,12 +1568,16 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         });
         return null;
       },
-      removeTimeEntry: (projectId, weekStart, entryId) => {
-        const existing = state.timesheets.find(
+      removeTimeEntry: async (projectId, weekStart, entryId) => {
+        const existing = viewState.timesheets.find(
           (sheet) => sheet.employeeId === active.id && sheet.projectId === projectId && sheet.weekStart === weekStart,
         );
         if (!existing) return "Entry not found.";
         if (existing.status === "approved") return "This week is already approved.";
+        if (API_ENABLED) {
+          if (existing.status === "submitted") return "This week is submitted. It can be changed again if your manager sends it back.";
+          return apiRemoveTimeEntry(entryId);
+        }
         setState((prev) => ({
           ...prev,
           timesheets: prev.timesheets.map((sheet) => {
@@ -1308,11 +1589,13 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }));
         return null;
       },
-      submitWeekTimesheets: (weekStart) => {
-        const mine = state.timesheets.filter((sheet) => sheet.employeeId === active.id && sheet.weekStart === weekStart);
+      submitWeekTimesheets: async (weekStart) => {
+        const mine = viewState.timesheets.filter((sheet) => sheet.employeeId === active.id && sheet.weekStart === weekStart);
         if (mine.length === 0) return "Log some time before submitting.";
         if (mine.every((sheet) => sheet.status === "approved")) return "This week is already approved.";
         if (weekStart > todayISO()) return "You can't submit a week that hasn't started yet.";
+        // Backend mode: the API checks the week and sends it to the manager (or approves it when there is none).
+        if (API_ENABLED) return apiSubmitWeek(weekStart);
         const hours = mine.reduce((sum, sheet) => sum + Object.values(sheet.hours).reduce((a, b) => a + b, 0), 0);
         const projectSummary = mine
           .map((sheet) => state.projects.find((p) => p.id === sheet.projectId)?.name)
@@ -1352,10 +1635,16 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         });
         return null;
       },
-      setOrgTimesheetStatus: (recordId, status) => {
-        const row = state.orgTimesheets.find((item) => item.id === recordId);
+      setOrgTimesheetStatus: async (recordId, status) => {
+        const row = viewState.orgTimesheets.find((item) => item.id === recordId);
         if (!row) return "Timesheet record not found.";
         if (row.personId === active.id) return "You cannot approve your own timesheet.";
+        // Backend mode: rows are the weeks the API lets this user decide; "draft" = sent back (rejected with a note).
+        if (API_ENABLED) {
+          if (row.status !== "submitted") return "Only submitted timesheets can be approved or sent back.";
+          if (status !== "approved" && status !== "draft") return "That status change isn't allowed.";
+          return apiDecideWeek(recordId, status === "approved" ? "approve" : "reject");
+        }
         if (!canDecideFor(row.personId)) return "Only someone above this person in their reporting line can decide this.";
         if (row.status === "missing") return "Missing timesheets must be filled by the employee first.";
         if (row.status !== "submitted") return "Only submitted timesheets can be approved or sent back.";
@@ -1372,9 +1661,20 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }));
         return null;
       },
-      addExpense: (input) => {
+      addExpense: async (input) => {
         const error = validateExpense(input, claimLimitsFor(active.countryCode).maxClaim, payRulesFor(active.countryCode).currency);
         if (error) return error;
+        // Backend mode: the API checks limits, receipts and duplicates, then starts the approval steps.
+        if (API_ENABLED) {
+          return apiAddExpense({
+            date: input.date,
+            category: input.category,
+            amount: input.amount,
+            description: input.description,
+            tripId: input.tripId,
+            receiptId: input.receipt?.id,
+          });
+        }
         if (input.amount > receiptThresholdFor(active.countryCode) && !input.receipt && !/Receipt:/i.test(input.description)) {
           return "Attach the receipt for this amount.";
         }
@@ -1430,9 +1730,19 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }
         return null;
       },
-      setExpenseStatus: (expenseId, status, note) => {
-        const expense = state.expenses.find((item) => item.id === expenseId);
+      setExpenseStatus: async (expenseId, status, note) => {
+        const expense = viewState.expenses.find((item) => item.id === expenseId);
         if (!expense) return "Expense not found.";
+        if (API_ENABLED) {
+          if (status === "withdrawn") {
+            if (expense.employeeId !== active.id) return "Only the person who filed this claim can withdraw it.";
+            return apiWithdrawExpense(expenseId);
+          }
+          if (status !== "approved" && status !== "rejected") return "That status change isn't allowed.";
+          if (expense.employeeId === active.id) return "You cannot decide your own request.";
+          if (!apiClaims.toDecide.has(expenseId)) return "This claim isn't waiting on you.";
+          return apiDecideExpense(expenseId, status === "approved" ? "approve" : "reject", note);
+        }
         const step = currentStepOf(expense);
         // Older claims (no steps) and withdrawals keep the one-step rule.
         if (status === "withdrawn" || !step || !expense.steps) {
@@ -1463,7 +1773,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const stepDecisions = [...(expense.stepDecisions ?? []), ...result.entries];
         const patch: Partial<Expense> =
           outcome === "waiting" || outcome === "advanced"
-            ? { stepDecisions, currentStep: result.currentStep }
+            ? { stepDecisions, currentStep: result.currentStep, steps: result.steps }
             : { stepDecisions, status, ...decision(status, note) };
         setState((prev) => ({ ...prev, expenses: patchById(prev.expenses, expenseId, patch) }));
         // Other groups of this parallel step still have to approve; they were told when the step opened.
@@ -1495,10 +1805,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }
         return null;
       },
-      canDecideExpense: (expense) => isWaitingOn(expense, active.id, (id) => canDecideFor(id, "expenses")),
-      canPayExpense: (expense) => expense.status === "approved" && canPayExpenses(active.role, active.id, expense.employeeId),
-      markExpensePaid: (expenseId, paidOn, reference) => {
-        const expense = state.expenses.find((item) => item.id === expenseId);
+      canDecideExpense: (expense) =>
+        API_ENABLED
+          ? expense.status === "submitted" && apiClaims.toDecide.has(expense.id)
+          : isWaitingOn(expense, active.id, (id) => canDecideFor(id, "expenses")),
+      // Backend mode: the API lets Finance and administrators record payments.
+      canPayExpense: (expense) =>
+        expense.status === "approved" &&
+        (API_ENABLED
+          ? (active.role === "finance" || active.role === "admin") && expense.employeeId !== active.id
+          : canPayExpenses(active.role, active.id, expense.employeeId)),
+      markExpensePaid: async (expenseId, paidOn, reference) => {
+        const expense = viewState.expenses.find((item) => item.id === expenseId);
         if (!expense) return "Expense not found.";
         if (expense.status !== "approved") return "Only approved claims can be marked paid.";
         if (!canPayExpenses(active.role, active.id, expense.employeeId)) return "Only finance or admin can record payments.";
@@ -1507,6 +1825,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (expense.decidedOn && paidOn < expense.decidedOn) return "Payment date can't be before the approval.";
         const ref = reference.trim();
         if (!ref) return "Enter the payment reference.";
+        if (API_ENABLED) return apiPayExpense(expenseId, paidOn, ref);
         setState((prev) => ({
           ...prev,
           expenses: patchById(prev.expenses, expenseId, {
@@ -2404,7 +2723,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
     };
-  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState, exitState, corrections, people]);
+  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState, exitState, corrections, people, apiLeave, apiTime, apiClaims]);
 
   return <PortalContext.Provider value={api}>{children}</PortalContext.Provider>;
 }

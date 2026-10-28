@@ -35,10 +35,13 @@ import {
   type InboxTab,
 } from "../data/collabData.ts";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
+import { API_ENABLED } from "../api/client.ts";
 import {
   addHrComment,
+  addHrCommentApi,
   allowedHrStatuses,
   assignHrRequest,
+  assignHrRequestApi,
   canReassignHrRequest,
   conversationUnreadCount,
   countPendingInbox,
@@ -46,6 +49,10 @@ import {
   countUnreadNotifications,
   createGroupConversation,
   createHrRequest,
+  createHrRequestApi,
+  downloadHrRequestFileApi,
+  escalateHrRequestApi,
+  uploadHrRequestFileApi,
   decideInboxTask,
   delegateInboxTask,
   getCollabState,
@@ -55,10 +62,12 @@ import {
   listConversationsForUser,
   markAnnouncementRead,
   markConversationRead,
+  rateHrRequestApi,
   sendChatMessage,
   setAnnouncementState,
   setHrRequestPriority,
   setHrRequestStatus,
+  setHrRequestStatusApi,
   startDirectChat,
   subscribeCollab,
   worksHrRequest,
@@ -921,6 +930,84 @@ function HrDueCell({ request }: { request: HrRequest }) {
   );
 }
 
+/** Backend mode: escalate an overdue request and attach or download files. */
+function HrRequestExtras({ request, onError }: { request: HrRequest; onError: (text: string) => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [inputKey, setInputKey] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const files = request.files ?? [];
+  const closed = request.status === "Closed";
+  const canEscalate = !!request.overdue && !request.escalatedAt && !closed;
+  return (
+    <div className="stack">
+      {request.escalatedAt && <p className="note">Escalated {formatWhen(request.escalatedAt)}.</p>}
+      {canEscalate && (
+        <div>
+          <button
+            type="button"
+            className="btn-ghost"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              onError((await escalateHrRequestApi(request.id)) ?? "");
+              setBusy(false);
+            }}
+          >
+            Escalate (overdue)
+          </button>
+        </div>
+      )}
+      <h4 className="collab-section-title">Files</h4>
+      {files.length ? (
+        <ul className="collab-timeline">
+          {files.map((f) => (
+            <li key={f.id}>
+              <button
+                type="button"
+                className="quiet-link"
+                onClick={async () => {
+                  const err = await downloadHrRequestFileApi(request.id, f);
+                  if (err) onError(err);
+                }}
+              >
+                {f.name}
+              </button>
+              <div className="muted">
+                {Math.max(1, Math.round(f.size / 1024))} KB · {formatWhen(f.at)}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">No files.</p>
+      )}
+      {!closed && (
+        <div className="row-gap">
+          <input key={inputKey} type="file" aria-label="Attach a file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <button
+            type="button"
+            className="btn-ghost"
+            disabled={!file || busy}
+            onClick={async () => {
+              if (!file) return;
+              setBusy(true);
+              const err = await uploadHrRequestFileApi(request.id, file);
+              setBusy(false);
+              onError(err ?? "");
+              if (!err) {
+                setFile(null);
+                setInputKey((k) => k + 1);
+              }
+            }}
+          >
+            Attach
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function HelpHrRequestsPage() {
   const { employee, demoProfile } = usePortal();
   const collab = useCollab();
@@ -956,6 +1043,7 @@ export function HelpHrRequestsPage() {
   const [selectedId, setSelectedId] = useState("");
   const [comment, setComment] = useState("");
   const [ticketError, setTicketError] = useState("");
+  const [rating, setRating] = useState(5);
   const [faqQ, setFaqQ] = useState("");
 
   // Deep link from a notification: /help?request=<id>
@@ -1017,14 +1105,21 @@ export function HelpHrRequestsPage() {
   const selected = listForTab.find((r) => r.id === selectedId) ?? (tab === "queue" ? queueRows[0] : mine[0]) ?? null;
   const statusOptions = selected ? allowedHrStatuses(selected, employee.id, demoProfile.role) : [];
   const canReassign = selected ? canReassignHrRequest(selected, employee.id, demoProfile.role) : false;
-  const canSetPriority = selected ? worksHrRequest(selected, employee.id, demoProfile.role) : false;
+  // The backend sets priority when the request is raised; it has no priority change.
+  const canSetPriority = selected && !API_ENABLED ? worksHrRequest(selected, employee.id, demoProfile.role) : false;
+  const canRate =
+    API_ENABLED &&
+    !!selected &&
+    selected.requesterId === employee.id &&
+    (selected.status === "Resolved" || selected.status === "Closed") &&
+    selected.satisfaction === undefined;
 
   const faqs = FAQ_ITEMS.filter((f) => {
     if (!faqQ) return true;
     return `${f.question} ${f.answer} ${f.topic}`.toLowerCase().includes(faqQ.toLowerCase());
   });
 
-  function submitRequest(event: FormEvent) {
+  async function submitRequest(event: FormEvent) {
     event.preventDefault();
     if (!subject.trim() || !description.trim()) {
       setFormError("Subject and description are required.");
@@ -1036,14 +1131,25 @@ export function HelpHrRequestsPage() {
       setFormOk("");
       return;
     }
-    const id = createHrRequest({
-      category,
-      subject,
-      description,
-      author: employee.fullName,
-      requesterId: employee.id,
-      priority,
-    });
+    let id: string;
+    if (API_ENABLED) {
+      const result = await createHrRequestApi({ category, subject, description, priority });
+      if ("error" in result) {
+        setFormError(result.error);
+        setFormOk("");
+        return;
+      }
+      id = result.id;
+    } else {
+      id = createHrRequest({
+        category,
+        subject,
+        description,
+        author: employee.fullName,
+        requesterId: employee.id,
+        priority,
+      });
+    }
     setSubject("");
     setPriority("Normal");
     resetDescription();
@@ -1078,6 +1184,14 @@ export function HelpHrRequestsPage() {
             <dd>{hrDeskOwnerName(selected.assigneeId)}</dd>
             <dt>Priority</dt>
             <dd>{selected.priority ?? "Normal"}</dd>
+            {selected.satisfaction !== undefined && (
+              <>
+                <dt>Rating</dt>
+                <dd>
+                  {selected.satisfaction}/5{selected.satisfactionComment ? ` · ${selected.satisfactionComment}` : ""}
+                </dd>
+              </>
+            )}
             <dt>First response</dt>
             <dd>
               {selected.firstResponseAt
@@ -1096,7 +1210,13 @@ export function HelpHrRequestsPage() {
                 <Field label="Owner">
                   <select
                     value={selected.assigneeId ?? ""}
-                    onChange={(e) => setTicketError(assignHrRequest(selected.id, e.target.value, actor) ?? "")}
+                    onChange={async (e) =>
+                      setTicketError(
+                        (API_ENABLED
+                          ? await assignHrRequestApi(selected.id, e.target.value)
+                          : assignHrRequest(selected.id, e.target.value, actor)) ?? "",
+                      )
+                    }
                   >
                     <option value="">Unassigned</option>
                     {HR_DESK_OWNERS.filter((o) => o.id !== selected.requesterId).map((o) => (
@@ -1127,9 +1247,14 @@ export function HelpHrRequestsPage() {
             <Field label="Status">
               <select
                 value={selected.status}
-                onChange={(e) =>
-                  setTicketError(setHrRequestStatus(selected.id, e.target.value as typeof selected.status, actor) ?? "")
-                }
+                onChange={async (e) => {
+                  const next = e.target.value as typeof selected.status;
+                  setTicketError(
+                    (API_ENABLED
+                      ? await setHrRequestStatusApi(selected.id, next)
+                      : setHrRequestStatus(selected.id, next, actor)) ?? "",
+                  );
+                }}
               >
                 {[selected.status, ...statusOptions].map((s) => (
                   <option key={s} value={s}>
@@ -1150,6 +1275,25 @@ export function HelpHrRequestsPage() {
               </span>
             </div>
           )}
+          {canRate && (
+            <div className="row-gap">
+              <Field label="Rate this service">
+                <select value={rating} onChange={(e) => setRating(Number(e.target.value))}>
+                  {[5, 4, 3, 2, 1].map((n) => (
+                    <option key={n} value={n}>{n} / 5</option>
+                  ))}
+                </select>
+              </Field>
+              <button
+                type="button"
+                className="btn"
+                onClick={async () => setTicketError((await rateHrRequestApi(selected.id, rating)) ?? "")}
+              >
+                Rate
+              </button>
+            </div>
+          )}
+          {API_ENABLED && <HrRequestExtras request={selected} onError={setTicketError} />}
           <p>{selected.description}</p>
           <h4 className="collab-section-title">Comments</h4>
           <ul className="collab-timeline">
@@ -1169,8 +1313,10 @@ export function HelpHrRequestsPage() {
             type="button"
             className="btn"
             disabled={!comment.trim()}
-            onClick={() => {
-              const failure = addHrComment(selected.id, employee.fullName, comment, actor);
+            onClick={async () => {
+              const failure = API_ENABLED
+                ? await addHrCommentApi(selected.id, comment)
+                : addHrComment(selected.id, employee.fullName, comment, actor);
               setTicketError(failure ?? "");
               if (!failure) setComment("");
             }}

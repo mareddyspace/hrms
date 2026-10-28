@@ -13,6 +13,21 @@ import {
   type SyncRun,
   type SyncSchedule,
 } from "./platformData.ts";
+import { API_ENABLED, createApiMirror, errorText } from "../api/syncOps.ts";
+import {
+  apiDismissQuarantine,
+  apiFixQuarantine,
+  apiRetryQuarantine,
+  apiRunConnector,
+  apiRunJobs,
+  apiSetSchedule,
+  loadApiIntegrations,
+  type ApiIntegrationData,
+  type ConnectorOut,
+  type QuarantineOut,
+} from "../api/syncOpsAdmin.ts";
+import { apiEmailSwitches, setApiEmailSwitch, subscribeEmailOutbox } from "./emailOutbox.ts";
+import { findDemoById } from "../demoAccounts.ts";
 
 const INT_KEY = "timez.platform.integrations.v2";
 const AUDIT_KEY = "timez.platform.audit.v2";
@@ -53,7 +68,100 @@ function writeJson(key: string, value: unknown) {
   notify();
 }
 
+/* —— Backend mode (VITE_API_URL): connectors, runs and quarantine live on the server (admins) —— */
+
+const intMirror = createApiMirror<ApiIntegrationData | null>(
+  () => null,
+  () => loadApiIntegrations().catch(() => ({ connectors: [], runs: {}, quarantine: {} })),
+);
+if (API_ENABLED) {
+  intMirror.subscribe(notify);
+  subscribeEmailOutbox(notify); // email switches load with the outbox
+}
+
+/** "2026-10-28T09:31:00Z" → local "2026-10-28 15:01" (the card's last-run format). */
+function localStamp(iso: string | null): string {
+  if (!iso) return "Never";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : syncStamp(d);
+}
+
+const runner = (id: string | null, trigger: string) => (id ? (findDemoById(id)?.fullName ?? id) : trigger === "schedule" ? "Scheduler" : trigger);
+
+let apiCards: { api: ApiIntegrationData | null; out: IntegrationCard[] } | null = null;
+
+function toCard(c: ConnectorOut, api: ApiIntegrationData): IntegrationCard {
+  const seed = INTEGRATION_SEED.find((s) => s.id === c.id);
+  const runs = (api.runs[c.id] ?? []).map(
+    (r): SyncRun => ({ at: r.started_at, processed: r.processed, succeeded: r.succeeded, failed: r.failed, by: runner(r.run_by, r.trigger) }),
+  );
+  const logs: IntegrationCard["logs"] = runs.slice(0, 8).map((r) => ({
+    at: new Date(r.at).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }),
+    level: r.failed ? "warn" : "info",
+    message: r.failed ? `Sync by ${r.by}: ${r.succeeded} of ${r.processed} records passed, ${r.failed} quarantined` : `Sync by ${r.by}: ${r.processed} records passed`,
+  }));
+  return {
+    id: c.id,
+    name: c.name,
+    category: c.category,
+    description: seed?.description ?? "",
+    status: c.status as IntegrationCard["status"],
+    lastSync: localStamp(c.last_sync_at),
+    recordsProcessed: c.records_processed,
+    errorCount: c.open_quarantine,
+    logs,
+    schedule: (SYNC_SCHEDULES.some((s) => s.id === c.schedule) ? c.schedule : "hourly") as SyncSchedule,
+    runs,
+    successCount: c.success_count,
+    failedCount: c.failed_count,
+  };
+}
+
+function apiIntegrationCards(): IntegrationCard[] {
+  const api = intMirror.get();
+  if (apiCards?.api === api) return apiCards.out;
+  apiCards = { api, out: api ? api.connectors.map((c) => toCard(c, api)) : [] };
+  return apiCards.out;
+}
+
+function toQuarantine(q: QuarantineOut): QuarantineRecord {
+  return {
+    id: q.id,
+    connectorId: q.connector_id,
+    record: q.record,
+    field: q.field as QuarantineField,
+    value: q.value,
+    reason: q.reason,
+    at: new Date(q.created_at).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }),
+    attempts: q.attempts,
+  };
+}
+
+async function apiOutcome(run: () => Promise<{ ok: boolean; record: QuarantineOut } | unknown>): Promise<RecordOutcome> {
+  try {
+    const out = (await run()) as { ok: boolean; record: QuarantineOut };
+    return { ok: out.ok, record: toQuarantine(out.record) };
+  } catch (e) {
+    return { ok: false, error: errorText(e) };
+  } finally {
+    await intMirror.reload();
+  }
+}
+
+/**
+ * Backend mode: runs the scheduled jobs once (approval reminders, SLA escalation, case retention).
+ * Connector syncs are never included from here.
+ */
+export async function runScheduledJobsNow(): Promise<{ results: Record<string, unknown> } | { error: string }> {
+  try {
+    return await apiRunJobs();
+  } catch (e) {
+    return { error: errorText(e) };
+  }
+}
+
 export function listIntegrations(): IntegrationCard[] {
+  if (API_ENABLED) return apiIntegrationCards();
   return readJson(INT_KEY, INTEGRATION_SEED);
 }
 
@@ -69,7 +177,10 @@ function retrySucceeds(item: IntegrationCard, attempt: number): boolean {
 
 export type RetryOutcome = { item: IntegrationCard; ok: boolean };
 
-export function retryIntegration(id: string, actorName: string): RetryOutcome | null {
+export function retryIntegration(id: string, actorName: string): RetryOutcome | null | Promise<RetryOutcome | null> {
+  if (API_ENABLED) {
+    return runIntegrationSyncApi(id).then((r) => (r && "item" in r ? { item: r.item, ok: r.failed.length === 0 } : null));
+  }
   const list = listIntegrations().map((item) => ({ ...item, logs: [...item.logs] }));
   const idx = list.findIndex((i) => i.id === id);
   if (idx < 0) return null;
@@ -125,10 +236,33 @@ export function appendAudit(partial: Omit<AuditLogRow, "id" | "at"> & { at?: str
 }
 
 export function listNotificationPrefs(): NotificationPref[] {
-  return readJson(NOTIF_KEY, NOTIFICATION_PREF_SEED);
+  const local = readJson(NOTIF_KEY, NOTIFICATION_PREF_SEED);
+  const server = API_ENABLED ? apiEmailSwitches() : null;
+  if (!server) return local;
+  // Backend mode: the email switch comes from the server; in-app and digest stay in this browser.
+  return local.map((p) => {
+    const s = server.find((x) => x.channel === p.id);
+    return s ? { ...p, email: s.email } : p;
+  });
+}
+
+let prefError: string | null = null;
+
+/** Backend mode: the last email-switch save error, or null. */
+export function notificationPrefError(): string | null {
+  return prefError;
 }
 
 export function updateNotificationPref(id: string, patch: Partial<NotificationPref>, actorName: string) {
+  if (API_ENABLED && patch.email !== undefined && apiEmailSwitches()?.some((s) => s.channel === id)) {
+    void setApiEmailSwitch(id, patch.email).then((error) => {
+      prefError = error;
+      notify();
+    });
+    const { email: _email, ...rest } = patch;
+    if (!Object.keys(rest).length) return;
+    patch = rest;
+  }
   const list = listNotificationPrefs().map((p) => (p.id === id ? { ...p, ...patch, id: p.id } : p));
   writeJson(NOTIF_KEY, list);
   appendAudit({
@@ -266,6 +400,10 @@ export function integrationTotals(item: IntegrationCard): { succeeded: number; f
 /** When the next scheduled run is due, or null for manual-only / not set up. */
 export function nextRunAt(item: IntegrationCard, now: Date = new Date()): Date | null {
   if (item.status === "Not configured" || item.status === "Disconnected") return null;
+  if (API_ENABLED) {
+    const next = intMirror.get()?.connectors.find((c) => c.id === item.id)?.next_run_at;
+    return next ? new Date(next) : null;
+  }
   const minutes = scheduleMinutes(integrationSchedule(item));
   if (!minutes) return null;
   const runs = integrationRuns(item);
@@ -278,7 +416,13 @@ export function nextRunAt(item: IntegrationCard, now: Date = new Date()): Date |
   return new Date(next);
 }
 
-export function setIntegrationSchedule(connectorId: string, schedule: SyncSchedule, actorName: string): void {
+export function setIntegrationSchedule(connectorId: string, schedule: SyncSchedule, actorName: string): void | Promise<string | null> {
+  if (API_ENABLED) {
+    return apiSetSchedule(connectorId, schedule).then(
+      () => intMirror.reload().then(() => null),
+      (e) => intMirror.reload().then(() => errorText(e)),
+    );
+  }
   const list = listIntegrations();
   const item = list.find((i) => i.id === connectorId);
   if (!item) return;
@@ -377,7 +521,19 @@ function readQuarantine(): QuarantineState {
   return { runs: { ...raw.runs }, items: { ...raw.items } };
 }
 
+let quarantineCache: { api: ApiIntegrationData | null; byId: Map<string, QuarantineRecord[]> } | null = null;
+
 export function listQuarantine(connectorId: string): QuarantineRecord[] {
+  if (API_ENABLED) {
+    const api = intMirror.get();
+    if (quarantineCache?.api !== api) quarantineCache = { api, byId: new Map() };
+    let rows = quarantineCache.byId.get(connectorId);
+    if (!rows) {
+      rows = (api?.quarantine[connectorId] ?? []).map(toQuarantine);
+      quarantineCache.byId.set(connectorId, rows);
+    }
+    return rows;
+  }
   return readQuarantine().items[connectorId] ?? [];
 }
 
@@ -415,7 +571,24 @@ function save(state: QuarantineState, connectorId: string, patch: (item: Integra
 export type SyncRunResult = { item: IntegrationCard; processed: number; passed: number; failed: QuarantineRecord[] };
 
 /** Runs one batch of records for a connector. A few fail validation and go to quarantine. */
-export function runIntegrationSync(connectorId: string, actor: Actor): SyncRunResult | null {
+/** Backend mode: one connector run on the server; the result has the records it quarantined. */
+async function runIntegrationSyncApi(connectorId: string): Promise<SyncRunResult | { error: string } | null> {
+  const current = listIntegrations().find((i) => i.id === connectorId);
+  if (!current || current.status === "Not configured") return null;
+  try {
+    const run = await apiRunConnector(connectorId);
+    await intMirror.reload();
+    const item = listIntegrations().find((i) => i.id === connectorId) ?? current;
+    const failed = (intMirror.get()?.quarantine[connectorId] ?? []).filter((q) => q.run_id === run.id).map(toQuarantine);
+    return { item, processed: run.processed, passed: run.succeeded, failed };
+  } catch (e) {
+    await intMirror.reload();
+    return { error: errorText(e) };
+  }
+}
+
+export function runIntegrationSync(connectorId: string, actor: Actor): SyncRunResult | null | Promise<SyncRunResult | { error: string } | null> {
+  if (API_ENABLED) return runIntegrationSyncApi(connectorId);
   const current = listIntegrations().find((i) => i.id === connectorId);
   if (!current || current.status === "Not configured") return null;
   const state = readQuarantine();
@@ -505,25 +678,28 @@ function settle(connectorId: string, recordId: string, ok: boolean, actor: Actor
 const retryPasses = (r: QuarantineRecord) => hash(r.id, r.attempts + 1) % 100 < 40;
 
 /** Re-sends a quarantined record as it is. */
-export function retryQuarantined(connectorId: string, recordId: string, actor: Actor): RecordOutcome {
+export function retryQuarantined(connectorId: string, recordId: string, actor: Actor): RecordOutcome | Promise<RecordOutcome> {
+  if (API_ENABLED) return apiOutcome(() => apiRetryQuarantine(connectorId, recordId));
   const rec = listQuarantine(connectorId).find((r) => r.id === recordId);
   if (!rec) return { ok: false, error: GONE };
   return settle(connectorId, recordId, retryPasses(rec), actor, "Retry quarantined record");
 }
 
 /** Corrects the failing field and re-sends. Passes when the new value is valid. */
-export function fixAndRetryQuarantined(connectorId: string, recordId: string, value: string, actor: Actor): RecordOutcome {
+export function fixAndRetryQuarantined(connectorId: string, recordId: string, value: string, actor: Actor): RecordOutcome | Promise<RecordOutcome> {
   const rec = listQuarantine(connectorId).find((r) => r.id === recordId);
   if (!rec) return { ok: false, error: GONE };
   const error = validateQuarantineValue(rec.field, value);
   if (error) return { ok: false, error };
+  if (API_ENABLED) return apiOutcome(() => apiFixQuarantine(connectorId, recordId, value));
   return settle(connectorId, recordId, true, actor, `Fix and retry record (${QUARANTINE_FIELD_LABEL[rec.field].toLowerCase()})`);
 }
 
 /** Removes a record from quarantine without sending it. */
-export function dismissQuarantined(connectorId: string, recordId: string, reason: string, actor: Actor): RecordOutcome {
+export function dismissQuarantined(connectorId: string, recordId: string, reason: string, actor: Actor): RecordOutcome | Promise<RecordOutcome> {
   const why = reason.trim();
   if (!why) return { ok: false, error: "Add a reason to dismiss." };
+  if (API_ENABLED) return apiOutcome(() => apiDismissQuarantine(connectorId, recordId, why));
   const state = readQuarantine();
   const list = state.items[connectorId] ?? [];
   const rec = list.find((r) => r.id === recordId);
@@ -535,7 +711,24 @@ export function dismissQuarantined(connectorId: string, recordId: string, reason
 }
 
 /** Retries every quarantined record for a connector. */
-export function retryAllQuarantined(connectorId: string, actor: Actor): { passed: number; failed: number } {
+export function retryAllQuarantined(connectorId: string, actor: Actor): { passed: number; failed: number } | Promise<{ passed: number; failed: number }> {
+  if (API_ENABLED) {
+    return (async () => {
+      let passed = 0;
+      let failed = 0;
+      for (const r of listQuarantine(connectorId)) {
+        try {
+          const out = (await apiRetryQuarantine(connectorId, r.id)) as { ok: boolean };
+          if (out.ok) passed += 1;
+          else failed += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      await intMirror.reload();
+      return { passed, failed };
+    })();
+  }
   const state = readQuarantine();
   const list = state.items[connectorId] ?? [];
   if (!list.length) return { passed: 0, failed: 0 };
@@ -562,6 +755,7 @@ export function retryAllQuarantined(connectorId: string, actor: Actor): { passed
 
 /** Runs every connector whose scheduled time has passed since its last run. Returns how many ran. */
 export function runDueSyncs(now: Date = new Date()): number {
+  if (API_ENABLED) return 0; // the server runs connectors on their schedule
   let ran = 0;
   for (const item of listIntegrations()) {
     if (item.status === "Not configured" || item.status === "Disconnected") continue;

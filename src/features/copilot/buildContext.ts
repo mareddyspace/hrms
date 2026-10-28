@@ -5,7 +5,7 @@
  */
 import type { CopilotContext } from "../../data/platformData.ts";
 import { managementChain, type DemoAccount } from "../../demoAccounts.ts";
-import type { PersonRecord } from "../../data/peopleData.ts";
+import { inHeadcount, type PersonRecord } from "../../data/peopleData.ts";
 import { getExitDetails } from "../../data/peopleLocal.ts";
 import { COURSES, PIPELINE_STAGES } from "../../data/talentData.ts";
 import { currentCycle, weightedProgress } from "../../data/homeInsights.ts";
@@ -143,7 +143,7 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
   if (src.orgWide) {
     const ytd = workforceStats(people, { country: "ALL", range: "ytd", today });
     const monthStart = `${today.slice(0, 7)}-01`;
-    const active = people.filter((p) => p.employmentStatus !== "Terminated");
+    const active = people.filter((p) => inHeadcount(p, today));
     const joinersMonth = active.filter((p) => p.dateOfJoining >= monthStart && p.dateOfJoining <= today).length;
     const exitsMonth = people.filter((p) => {
       if (p.employmentStatus !== "Terminated") return false;

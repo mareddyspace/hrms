@@ -33,6 +33,18 @@ import {
   type NotifRef,
 } from "./collabData.ts";
 import { queueEmailForNotification } from "./emailOutbox.ts";
+import { API_ENABLED, apiRun, createApiMirror } from "../api/syncOps.ts";
+import {
+  apiCreateHrRequest,
+  apiHrAssign,
+  apiHrComment,
+  apiHrDownloadFile,
+  apiHrEscalate,
+  apiHrRate,
+  apiHrStatus,
+  apiHrUploadFile,
+  loadApiHrRequests,
+} from "../api/syncOpsCases.ts";
 import { DEMO_ACCOUNTS, RETIRED_ACCOUNT_IDS, RETIRED_ACCOUNT_NAMES, findDemoById, managementChain, mentionsRetiredAccount } from "../demoAccounts.ts";
 
 const KEY = "timez.collab.state.v6";
@@ -278,14 +290,30 @@ export function subscribeCollab(listener: () => void) {
   };
 }
 
-/** Stable snapshot for useSyncExternalStore. */
-export function getCollabState(): CollabState {
+/**
+ * Backend mode: HR service desk requests come from the API (in memory only). The rest of the collab state
+ * stays in this browser.
+ */
+const apiHrRequests = createApiMirror<HrRequest[]>(() => [], () => loadApiHrRequests());
+if (API_ENABLED) apiHrRequests.subscribe(() => listeners.forEach((fn) => fn()));
+let composed: { local: CollabState; hr: HrRequest[]; out: CollabState } | null = null;
+
+function localCollabState(): CollabState {
   if (!cache) cache = read();
   return cache;
 }
 
+/** Stable snapshot for useSyncExternalStore. */
+export function getCollabState(): CollabState {
+  const local = localCollabState();
+  if (!API_ENABLED) return local;
+  const hr = apiHrRequests.get();
+  if (composed?.local !== local || composed.hr !== hr) composed = { local, hr, out: { ...local, hrRequests: hr } };
+  return composed.out;
+}
+
 export function updateCollab(mutator: (state: CollabState) => void) {
-  const state = structuredClone(getCollabState());
+  const state = structuredClone(localCollabState());
   mutator(state);
   write(state);
 }
@@ -538,6 +566,74 @@ const addRead = (n: AppNotification, userId: string) => {
 
 export function markNotificationsRead(ids: string[], userId = currentCollabUserId()) {
   patchNotifications(ids, userId, addRead);
+  const apiIds = ids.filter((id) => id.startsWith(API_NOTIF_PREFIX)).map((id) => Number(id.slice(API_NOTIF_PREFIX.length)));
+  if (apiIds.length) apiReadHandler?.(apiIds.filter((n) => Number.isFinite(n)));
+}
+
+/* ── Backend notifications (VITE_API_URL) ── */
+
+const API_NOTIF_PREFIX = "api-n-";
+let apiReadHandler: ((ids: number[]) => void) | null = null;
+
+/** Called with backend notification ids when the user reads them here. */
+export function setApiNotificationReadHandler(handler: ((ids: number[]) => void) | null) {
+  apiReadHandler = handler;
+}
+
+export interface ApiNotificationInput {
+  id: number;
+  title: string;
+  body: string;
+  href: string | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * Puts the backend's notifications for this user into the notification centre and bell.
+ * They replace earlier backend copies; read state from either side is kept.
+ */
+export function syncApiNotifications(userId: string, items: ApiNotificationInput[]) {
+  const current = getCollabState().notifications;
+  const previous = new Map(
+    current.filter((n) => n.id.startsWith(API_NOTIF_PREFIX) && n.recipientId === userId).map((n) => [n.id, n]),
+  );
+  const next: AppNotification[] = items.map((item) => {
+    const id = `${API_NOTIF_PREFIX}${item.id}`;
+    const old = previous.get(id);
+    const leaveId = item.href?.match(/^\/leave\/requests\/(.+)$/)?.[1];
+    // A request waiting on this user links to the leave item, so it counts as done once decided.
+    const waitingOnMe = Boolean(leaveId) && /^Leave request from /.test(item.title);
+    const readBy = new Set(old?.readBy ?? []);
+    if (item.readAt) readBy.add(userId);
+    return {
+      id,
+      category: "Leave",
+      title: item.title,
+      body: item.body,
+      at: item.createdAt,
+      readBy: [...readBy],
+      hiddenFor: old?.hiddenFor ?? [],
+      audience: "employee",
+      recipientId: userId,
+      href: leaveId ? "/leave" : item.href ?? undefined,
+      actionLabel: waitingOnMe ? "Review" : "Open",
+      ref: waitingOnMe && leaveId ? { kind: "leave", id: leaveId } : undefined,
+    };
+  });
+  const unchanged =
+    next.length === previous.size &&
+    next.every((n) => {
+      const old = previous.get(n.id);
+      return old && old.readBy.length === n.readBy.length && old.recipientId === n.recipientId;
+    });
+  if (unchanged) return;
+  updateCollab((s) => {
+    s.notifications = [
+      ...next,
+      ...s.notifications.filter((n) => !(n.id.startsWith(API_NOTIF_PREFIX) && n.recipientId === userId)),
+    ];
+  });
 }
 
 export function markNotificationRead(id: string, userId = currentCollabUserId()) {
@@ -906,6 +1002,57 @@ export function setHrRequestPriority(
     if (row) row.priority = priority;
   });
   return null;
+}
+
+/* ── HR requests in backend mode (VITE_API_URL): the API routes, notifies and keeps the SLA ── */
+
+/** Raises a request through the API. Returns the new id, or an error. */
+export async function createHrRequestApi(input: {
+  category: HrRequestCategory;
+  subject: string;
+  description: string;
+  priority?: HrRequestPriority;
+}): Promise<{ id: string } | { error: string }> {
+  let id = "";
+  const error = await apiRun(async () => {
+    id = await apiCreateHrRequest(input);
+  }, apiHrRequests);
+  return error ? { error } : { id };
+}
+
+export async function addHrCommentApi(id: string, text: string): Promise<string | null> {
+  if (!text.trim()) return "Comment cannot be empty.";
+  return apiRun(() => apiHrComment(id, text), apiHrRequests);
+}
+
+export async function setHrRequestStatusApi(id: string, status: HrRequest["status"]): Promise<string | null> {
+  return apiRun(() => apiHrStatus(id, status), apiHrRequests);
+}
+
+export async function assignHrRequestApi(id: string, assigneeId: string): Promise<string | null> {
+  return apiRun(() => apiHrAssign(id, assigneeId), apiHrRequests);
+}
+
+export async function rateHrRequestApi(id: string, rating: number, comment?: string): Promise<string | null> {
+  return apiRun(() => apiHrRate(id, rating, comment), apiHrRequests);
+}
+
+/** Escalates an overdue request by hand (the SLA job also does this). */
+export async function escalateHrRequestApi(id: string): Promise<string | null> {
+  return apiRun(() => apiHrEscalate(id), apiHrRequests);
+}
+
+export async function uploadHrRequestFileApi(id: string, file: File): Promise<string | null> {
+  return apiRun(() => apiHrUploadFile(id, file), apiHrRequests);
+}
+
+export async function downloadHrRequestFileApi(id: string, file: NonNullable<HrRequest["files"]>[number]): Promise<string | null> {
+  try {
+    await apiHrDownloadFile(id, file);
+    return null;
+  } catch (e) {
+    return e instanceof Error && e.message ? e.message : "That didn't work. Try again.";
+  }
 }
 
 /* ── Counters ── */

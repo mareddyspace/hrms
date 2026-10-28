@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react";
+import { API_ENABLED } from "../api/client.ts";
 import { Banner, Dialog, Field } from "../components/ui.tsx";
 import { DEMO_ACCOUNTS, type DemoAccount } from "../demoAccounts.ts";
 import { todayISO } from "../model.ts";
@@ -10,6 +11,7 @@ import {
   createCompCycle,
   createCompProposal,
   currentPay,
+  formatAmount,
   getRewardState,
   parseAmount,
   setPlanDependents,
@@ -79,8 +81,8 @@ export function NewCycleDialog({ actor, countries, onClose, onDone }: { actor: D
   const [picked, setPicked] = useState<string[]>(countries);
   const [error, setError] = useState<string | null>(null);
 
-  function save() {
-    const err = createCompCycle(actor, { name, opensOn, closesOn, effectiveDate, budgetPct: Number(budget), countries: picked });
+  async function save() {
+    const err = await createCompCycle(actor, { name, opensOn, closesOn, effectiveDate, budgetPct: Number(budget), countries: picked });
     setError(err);
     if (!err) onDone(`${name.trim()} created.`);
   }
@@ -142,8 +144,16 @@ export function ProposeDialog({ actor, cycle, grades, onClose, onDone }: { actor
   const base = pay ? parseAmount(pay.base) : num(currentBase);
   const pct = Number.isFinite(base) && base > 0 && num(proposed) > 0 ? Math.round(((num(proposed) - base) / base) * 1000) / 10 : null;
 
-  function save(submit: boolean) {
-    const err = createCompProposal(actor, {
+  // Backend mode: the manager enters the increase in percent; the server applies it to the current base
+  // (which managers without pay access never see) and starts the approval chain straight away.
+  const [increase, setIncrease] = useState("");
+  const [busy, setBusy] = useState(false);
+  const increasePct = increase.trim() === "" ? Number.NaN : Number(increase);
+
+  async function save(submit: boolean) {
+    if (busy) return;
+    setBusy(true);
+    const err = await createCompProposal(actor, {
       cycleId: cycle.id,
       employeeId,
       proposedGrade: grade || pay?.grade || currentGrade,
@@ -152,9 +162,50 @@ export function ProposeDialog({ actor, cycle, grades, onClose, onDone }: { actor
       currentBase: num(currentBase),
       currentGrade,
       submit,
+      increasePct: API_ENABLED ? increasePct : undefined,
     });
+    setBusy(false);
     setError(err);
-    if (!err) onDone(`${person?.fullName ?? "Proposal"}: ${submit ? "submitted" : "saved as draft"}.`);
+    if (!err) onDone(`${person?.fullName ?? "Proposal"}: ${submit || API_ENABLED ? "submitted" : "saved as draft"}.`);
+  }
+
+  if (API_ENABLED && people.length) {
+    return (
+      <FormDialog open title={`Propose · ${cycle.name}`} submitLabel={busy ? "Submitting…" : "Submit"} onClose={onClose} onSubmit={() => save(true)} error={error}>
+        <Field label="Employee" wide>
+          <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
+            {people.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.fullName} · {p.designation}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {pay && (
+          <p className="note field wide">
+            Current: {pay.grade} · {pay.base} (from {pay.effective})
+          </p>
+        )}
+        <Field label="Proposed grade (optional)">
+          <select value={grade} onChange={(e) => setGrade(e.target.value)}>
+            <option value="">Keep current grade</option>
+            {grades.map((g) => (
+              <option key={g} value={g}>{g}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Increase (%)">
+          <input type="number" min={0} max={100} step={0.1} value={increase} onChange={(e) => setIncrease(e.target.value)} required />
+        </Field>
+        <Field label={`Bonus (optional, ${person?.currency ?? "INR"})`}>
+          <input inputMode="numeric" value={bonus} onChange={(e) => setBonus(e.target.value)} />
+        </Field>
+        <p className="note field wide">
+          {pay && Number.isFinite(increasePct) ? `New base about ${formatAmount(parseAmount(pay.base) * (1 + increasePct / 100), pay.currency)} · ` : ""}
+          {cycle.budgetPct ? `Cycle budget ${cycle.budgetPct}%. ` : ""}Approvals follow the compensation workflow; amounts stay hidden from people without pay access.
+        </p>
+      </FormDialog>
+    );
   }
 
   if (!people.length) {
@@ -233,8 +284,8 @@ export function BandDialog({ actor, band, onClose, onDone }: { actor: DemoAccoun
   const [mid, setMid] = useState(String(parseAmount(band.mid)));
   const [max, setMax] = useState(String(parseAmount(band.max)));
   const [error, setError] = useState<string | null>(null);
-  function save() {
-    const err = updateGradeBand(actor, band.id, { min: num(min), mid: num(mid), max: num(max) });
+  async function save() {
+    const err = await updateGradeBand(actor, band.id, { min: num(min), mid: num(mid), max: num(max) });
     setError(err);
     if (!err) onDone(`${band.grade} ${band.family} (${band.country}) range updated.`);
   }
@@ -263,8 +314,8 @@ export function BonusDialog({ actor, onClose, onDone }: { actor: DemoAccount; on
   const [amount, setAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
   const person = people.find((p) => p.id === employeeId);
-  function save() {
-    const err: RewardResult = addBonus(actor, { employeeId, type, period, amount: num(amount) });
+  async function save() {
+    const err: RewardResult = await addBonus(actor, { employeeId, type, period, amount: num(amount) });
     setError(err);
     if (!err) onDone(`${type} recorded for ${person?.fullName ?? "employee"}.`);
   }
@@ -302,9 +353,9 @@ export function DependentDialog({ actor, row, onClose, onDone }: { actor: DemoAc
   const [dob, setDob] = useState(row?.dateOfBirth ?? "");
   const [gender, setGender] = useState(row?.gender ?? "");
   const [error, setError] = useState<string | null>(null);
-  function save() {
+  async function save() {
     const input = { name, relationship, dateOfBirth: dob, gender };
-    const err = row ? updateDependent(actor, row.id, input) : addDependent(actor, input);
+    const err = await (row ? updateDependent(actor, row.id, input) : addDependent(actor, input));
     setError(err);
     if (!err) onDone(row ? `${name.trim()} updated. HR will verify the change.` : `${name.trim()} added. HR will verify.`);
   }
@@ -353,8 +404,8 @@ export function CoverDialog({
 }) {
   const [picked, setPicked] = useState<string[]>(dependents.filter((d) => d.coveredPlans.includes(planName)).map((d) => d.id));
   const [error, setError] = useState<string | null>(null);
-  function save() {
-    const err = setPlanDependents(actor, planId, picked);
+  async function save() {
+    const err = await setPlanDependents(actor, planId, picked);
     setError(err);
     if (!err) onDone(`${planName}: cover updated.`);
   }

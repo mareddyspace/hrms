@@ -26,8 +26,8 @@ import {
   type CorrectionKind,
 } from "../data/attendanceData.ts";
 import {
-  attendanceAction,
-  decideCorrection,
+  attendanceActionAsync,
+  decideCorrectionAsync,
   getAttendanceState,
   getCurrentSession,
   isHrReviewer,
@@ -35,9 +35,11 @@ import {
   listCorrectionsForEmployee,
   missingCheckOutSessions,
   sessionHours,
-  submitCorrection,
+  submitCorrectionAsync,
   subscribeAttendance,
 } from "../data/attendanceLocal.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { loadApiAttendanceSummary, type AttendanceSummaryOut } from "../api/syncAttendance.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import {
@@ -116,13 +118,30 @@ export function AttendancePage() {
   const [historyQ, setHistoryQ] = useState("");
   const [historyKind, setHistoryKind] = useState("");
   const [corrDate, setCorrDate] = useState(today);
-  const [corrKind, setCorrKind] = useState<CorrectionKind>("missing_check_out");
+  const [corrKind, setCorrKind] = useState<CorrectionKind>("missing_check_in");
   const [corrReason, setCorrReason] = useState("");
   const [corrIn, setCorrIn] = useState("");
   const [corrOut, setCorrOut] = useState("");
   const [corrError, setCorrError] = useState<string | null>(null);
   // Decision notes are per correction so typing on one row does not leak into another.
   const [decideNotes, setDecideNotes] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  // Backend mode: the server's month summary (working days, late days, overtime) for the month shown.
+  const [apiSummary, setApiSummary] = useState<AttendanceSummaryOut | null>(null);
+  const summaryMonth = `${cursor.year}-${String(cursor.month + 1).padStart(2, "0")}`;
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let stale = false;
+    setApiSummary(null);
+    loadApiAttendanceSummary(summaryMonth)
+      .then((out) => {
+        if (!stale) setApiSummary(out);
+      })
+      .catch(() => undefined);
+    return () => {
+      stale = true;
+    };
+  }, [summaryMonth, attState]);
 
   useEffect(() => {
     if (!message) return;
@@ -254,6 +273,16 @@ export function AttendancePage() {
   const selectedRecord: AttendanceDayRecord | undefined =
     byDate.get(selectedDate) || history.find((r) => r.date === selectedDate);
 
+  // Correction type follows the day: no record -> missing check-in (both times); a check-in without a
+  // check-out -> missing check-out; a full day -> wrong time.
+  const corrRecord = byDate.get(corrDate) || history.find((r) => r.date === corrDate);
+  const corrHasCheckIn = !!corrRecord?.checkIn;
+  useEffect(() => {
+    setCorrKind(!corrRecord?.checkIn ? "missing_check_in" : !corrRecord.checkOut ? "missing_check_out" : "wrong_time");
+    // only when the date changes (or on first load), so a type the person picks is kept
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [corrDate, corrRecord?.checkIn, corrRecord?.checkOut]);
+
   const filteredHistory = useMemo(() => {
     const q = historyQ.trim().toLowerCase();
     return history
@@ -295,8 +324,11 @@ export function AttendancePage() {
     setCursor({ year: base.getFullYear(), month: base.getMonth() });
   }
 
-  function runPunch(action: "check_in" | "start_break" | "end_break" | "check_out") {
-    const error = attendanceAction(employee.id, action, dayContext);
+  async function runPunch(action: "check_in" | "start_break" | "end_break" | "check_out") {
+    if (busy) return;
+    setBusy(true);
+    const error = await attendanceActionAsync(employee.id, action, dayContext);
+    setBusy(false);
     if (error) {
       setMessage({ tone: "err", text: error });
       return;
@@ -310,8 +342,10 @@ export function AttendancePage() {
     setMessage({ tone: "ok", text: labels[action] });
   }
 
-  function submitCorr() {
-    const error = submitCorrection({
+  async function submitCorr() {
+    if (busy) return;
+    setBusy(true);
+    const error = await submitCorrectionAsync({
       employeeId: employee.id,
       employeeName: employee.fullName,
       managerId,
@@ -321,7 +355,9 @@ export function AttendancePage() {
       requestedCheckIn: corrIn || undefined,
       requestedCheckOut: corrOut || undefined,
       context: dayContext,
+      dayHasCheckIn: corrHasCheckIn,
     });
+    setBusy(false);
     setCorrError(error);
     if (error) return;
     setMessage({ tone: "ok", text: `Correction request submitted — ${approver?.fullName ?? "your manager"} will review it.` });
@@ -331,8 +367,8 @@ export function AttendancePage() {
     setTab("corrections");
   }
 
-  function decide(row: AttendanceCorrection, status: "Approved" | "Rejected") {
-    const error = decideCorrection(row.id, { id: employee.id, role: demoProfile.role, fullName: employee.fullName }, status, decideNotes[row.id]);
+  async function decide(row: AttendanceCorrection, status: "Approved" | "Rejected") {
+    const error = await decideCorrectionAsync(row.id, { id: employee.id, role: demoProfile.role, fullName: employee.fullName }, status, decideNotes[row.id]);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `Correction ${status.toLowerCase()}.` });
     if (!error) setDecideNotes((prev) => ({ ...prev, [row.id]: "" }));
   }
@@ -794,11 +830,11 @@ export function AttendancePage() {
                     </select>
                   </label>
                   <label className="field">
-                    Requested check-in{corrKind === "missing_check_in" ? " *" : ""}
+                    Requested check-in{corrKind === "missing_check_in" || (!corrHasCheckIn && corrKind !== "other") ? " *" : ""}
                     <input type="time" value={corrIn} onChange={(e) => setCorrIn(e.target.value)} placeholder="HH:mm" />
                   </label>
                   <label className="field">
-                    Requested check-out{corrKind === "missing_check_out" ? " *" : ""}
+                    Requested check-out{corrKind === "missing_check_out" || (corrKind === "missing_check_in" && !corrHasCheckIn) ? " *" : ""}
                     <input type="time" value={corrOut} onChange={(e) => setCorrOut(e.target.value)} placeholder="HH:mm" />
                   </label>
                   <label className="field" style={{ gridColumn: "1 / -1" }}>
@@ -816,7 +852,7 @@ export function AttendancePage() {
                   </p>
                 )}
                 <div className="form-actions">
-                  <button type="button" className="btn" onClick={submitCorr} disabled={!approver}>
+                  <button type="button" className="btn" onClick={submitCorr} disabled={busy || (!approver && !API_ENABLED)}>
                     Submit request
                   </button>
                 </div>
@@ -905,6 +941,16 @@ export function AttendancePage() {
                     hint={monthRecordedHours >= monthExpectedHours ? "On / above target" : "Below target"}
                   />
                 </MetricGrid>
+                {apiSummary && (
+                  <MetricGrid>
+                    <MetricCard label="Working days" value={apiSummary.working_days} />
+                    <MetricCard label="Present" value={apiSummary.present} />
+                    <MetricCard label="Absent" value={apiSummary.absent} />
+                    <MetricCard label="On leave" value={apiSummary.on_leave} />
+                    <MetricCard label="Late" value={apiSummary.late} hint={`${apiSummary.early} left early`} />
+                    <MetricCard label="Hours (server)" value={apiSummary.hours.toFixed(1)} hint={`${apiSummary.overtime_hours.toFixed(1)}h overtime`} />
+                  </MetricGrid>
+                )}
                 <p className="note">
                   Late after {SAMPLE_SHIFT.lateGraceMinutes} min grace · overtime after {SAMPLE_SHIFT.overtimeAfterMinutes} min past shift end.
                 </p>
@@ -931,6 +977,11 @@ function CorrectionRow({ row }: { row: AttendanceCorrection }) {
         {row.requestedCheckIn ? ` · in ${row.requestedCheckIn}` : ""}
         {row.requestedCheckOut ? ` · out ${row.requestedCheckOut}` : ""}
       </p>
+      {row.status === "Pending" && row.approvalProgress && (
+        <p className="muted" style={{ margin: "4px 0 0" }}>
+          {row.approvalProgress}
+        </p>
+      )}
       {row.decisionNote && <p className="note">Decision: {row.decisionNote}</p>}
     </div>
   );

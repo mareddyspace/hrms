@@ -12,7 +12,9 @@ import {
   StatusBadge,
   Tabs,
 } from "../components/ui.tsx";
-import { type AppLanguage } from "../locale/countryConfig.ts";
+import { type AppLanguage, withServerConfig } from "../locale/countryConfig.ts";
+import { CountryServerConfigCard, useServerCountries } from "../locale/CountryServerConfig.tsx";
+import { API_ENABLED } from "../api/client.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import { formatShortDate, holidaysForCountry, type CountryCode } from "../model.ts";
@@ -152,15 +154,20 @@ export function CountryDocumentsConfigPage() {
 }
 
 /**
- * Country reference. These settings are not wired into leave balances, holidays or pay elsewhere in
- * the app, so the page is read-only rather than pretending edits take effect.
+ * Country reference. Without the backend it is read-only. In backend mode the country rules (languages,
+ * work week, hours, probation, notice, required documents, workflow notes) come from GET /countries and
+ * admins edit them (PUT /countries/{code}); the probation months feed leave eligibility on the server.
  */
 export function CountryAdminPage() {
   const { countries, t } = useLocale();
   const { demoProfile } = usePortal();
   const [code, setCode] = useState<CountryCode>(countries[0]?.code ?? "IN");
   const [tab, setTab] = useState("overview");
-  const selected = countries.find((c) => c.code === code) ?? countries[0];
+  const [serverRows, replaceServerRow] = useServerCountries();
+  const serverConfig = serverRows?.find((c) => c.code === code);
+  const localSelected = countries.find((c) => c.code === code) ?? countries[0];
+  const selected = localSelected && withServerConfig(localSelected, serverConfig);
+  const canEditServer = demoProfile.role === "admin" || demoProfile.role === "super_admin";
 
   if (!COUNTRY_REFERENCE_ROLES.includes(demoProfile.role)) {
     return (
@@ -171,7 +178,7 @@ export function CountryAdminPage() {
   }
 
   return (
-    <Page title={`${t("admin.countries")} · Reference`} subtitle="Read-only">
+    <Page title={`${t("admin.countries")} · Reference`} subtitle={API_ENABLED ? (canEditServer ? "Country rules are saved on the server" : "Read-only") : "Read-only"}>
       <FilterBar>
         <label className="filter-label">
           Country
@@ -208,6 +215,9 @@ export function CountryAdminPage() {
                 <div className="info-fact"><dt>Office time zone</dt><dd>{selected.timeZone}</dd></div>
               </dl>
             </Card>
+          )}
+          {tab === "overview" && serverConfig && (
+            <CountryServerConfigCard config={serverConfig} canEdit={canEditServer} onSaved={replaceServerRow} />
           )}
 
           {tab === "leave" && (

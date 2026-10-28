@@ -144,9 +144,9 @@ function WelcomeLoginDialog() {
     : null;
   const stale = loginNotice.requirePasswordChange;
 
-  function submitPassword(event: FormEvent) {
+  async function submitPassword(event: FormEvent) {
     event.preventDefault();
-    const error = changePasswordAfterStaleLogin(newPassword, confirm);
+    const error = await changePasswordAfterStaleLogin(newPassword, confirm);
     if (error) setMessage({ tone: "err", text: error });
     else {
       setNewPassword("");
@@ -240,9 +240,9 @@ function usePasswordPolicyPrompt() {
   const due = passwordPolicy.due;
   const label = due ? "Change password" : `Change password (${passwordPolicy.daysRemaining}d left)`;
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
-    const error = changePassword(current, newPassword, confirm);
+    const error = await changePassword(current, newPassword, confirm);
     if (error) setMessage({ tone: "err", text: error });
     else {
       setCurrent("");
@@ -602,6 +602,7 @@ export function Shell() {
               items={[
                 { id: "profile", label: "My profile", to: "/info" },
                 { id: "personalise", label: "Personalisation", to: "/settings/personalisation" },
+                { id: "security", label: "Two-step sign-in", to: "/settings/security" },
                 {
                   id: "org-context",
                   label: `Home: ${employee.countryName ?? "—"} · ${employee.legalEntity ?? COMPANY_NAME}`,

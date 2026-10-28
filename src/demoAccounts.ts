@@ -83,7 +83,8 @@ export type NavAccessId =
   | "lifecycleactions"
   | "recognition"
   | "accessroles"
-  | "aisettings";
+  | "aisettings"
+  | "leavepolicies";
 
 export interface DemoAccount extends Employee {
   /** Prototype-only plain-text password (frontend mock). */
@@ -189,6 +190,7 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "lifecycleactions",
   "accessroles", // Roles & permissions (/admin/roles)
   "aisettings", // AI settings (/admin/ai)
+  "leavepolicies", // Leave policies (/admin/leave-policies)
 ];
 
 function account(
@@ -300,6 +302,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "paypreview",
       "hrcases",
       "integrations", // sync health for payroll and HR data
+      "leavepolicies", // Leave policies (/admin/leave-policies)
     ],
   }),
   account({
@@ -470,8 +473,13 @@ export function findDemoById(id: string): DemoAccount | undefined {
   return DEMO_ACCOUNTS.find((account) => account.id === id);
 }
 
+/** Lower-cased, trimmed sign-in email; addresses from before the rename (@infotech.com) map to @timez.com. */
+export function normalizeSignInEmail(value: string): string {
+  return value.trim().toLowerCase().replace(/@infotech\.com$/, "@timez.com");
+}
+
 export function findDemoByEmailOrCode(value: string): DemoAccount | undefined {
-  const needle = value.trim().toLowerCase();
+  const needle = normalizeSignInEmail(value);
   if (!needle) return undefined;
   return DEMO_ACCOUNTS.find(
     (account) =>

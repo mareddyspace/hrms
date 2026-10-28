@@ -67,6 +67,8 @@ export interface Requisition {
   stepDecisions?: FlowDecision[];
   /** Workflow version the steps came from. */
   workflowVersion?: number;
+  /** Skills and experience the role needs (backend mode: from the requisition). */
+  requirements?: string[];
 }
 
 /** One stage move. enteredOn is local date + time, e.g. "2026-09-12T10:30". */
@@ -93,6 +95,9 @@ export interface Candidate {
   resumeNote: string;
   /** Every stage move, oldest first. */
   history?: StageStep[];
+  /** Backend mode: a CV file is stored for the candidate. */
+  hasCv?: boolean;
+  cvFilename?: string;
 }
 
 export interface Interview {
@@ -102,6 +107,8 @@ export interface Interview {
   role: string;
   when: string;
   panel: string;
+  /** Backend mode: the panel's employee ids. */
+  panelIds?: string[];
   type: string;
   feedbackStatus: "Pending" | "Submitted";
   score?: number;
@@ -162,6 +169,28 @@ export interface OnboardingJoiner {
   policyAckBy?: string;
   policyAckByHr?: boolean;
   overallStatus: "Pre-boarding" | "Day 1 ready" | "In progress" | "Completed";
+  /** Pre-boarding form filled in by the joiner or HR. */
+  preboarding?: PreboardingForm;
+  preboardingOn?: string;
+}
+
+export const EQUIPMENT_ITEMS = ["laptop", "monitor", "keyboard", "headset", "phone", "docking_station"] as const;
+export type EquipmentItem = (typeof EQUIPMENT_ITEMS)[number];
+export const EQUIPMENT_LABEL: Record<EquipmentItem, string> = {
+  laptop: "Laptop",
+  monitor: "Monitor",
+  keyboard: "Keyboard & mouse",
+  headset: "Headset",
+  phone: "Mobile phone",
+  docking_station: "Docking station",
+};
+
+/** Pre-boarding form: personal info check, emergency contact, equipment and IT access request. */
+export interface PreboardingForm {
+  personal: { confirmed: boolean; preferredName?: string; personalEmail?: string; mobile?: string; address?: string };
+  emergencyContact: { name: string; relationship: string; phone: string };
+  equipment: EquipmentItem[];
+  itRequest: { systems: string[]; notes?: string };
 }
 
 export interface OnboardingTask {
@@ -169,9 +198,12 @@ export interface OnboardingTask {
   joinerId: string;
   title: string;
   owner: "HR" | "IT" | "Manager" | "Employee";
-  category: "Documents" | "Equipment" | "Accounts" | "Orientation" | "Training" | "Policy";
+  category: "Documents" | "Equipment" | "Accounts" | "Orientation" | "Training" | "Policy" | "Review";
   status: "Pending" | "In progress" | "Done";
   due: string;
+  /** Checklist key, and keys of tasks that must be done first. */
+  key?: string;
+  dependsOn?: string[];
   /** When HR updates a task someone else owns, the reason is kept here. */
   overrideNote?: string;
 }
@@ -961,13 +993,24 @@ export const ONBOARDING_JOINERS: OnboardingJoiner[] = [
 ];
 
 /** Checklist created for every new hire; due dates are days relative to the start date. */
-export const ONBOARDING_TEMPLATE: { title: string; owner: OnboardingTask["owner"]; category: OnboardingTask["category"]; dueOffset: number }[] = [
-  { title: "Verify identity & tax docs", owner: "HR", category: "Documents", dueOffset: -5 },
-  { title: "Laptop & peripherals", owner: "IT", category: "Equipment", dueOffset: -3 },
-  { title: "Email and system accounts", owner: "IT", category: "Accounts", dueOffset: 0 },
-  { title: "Team orientation", owner: "Manager", category: "Orientation", dueOffset: 1 },
-  { title: "Mandatory security training", owner: "Employee", category: "Training", dueOffset: 14 },
-  { title: "Acknowledge Code of Conduct", owner: "Employee", category: "Policy", dueOffset: 1 },
+export const ONBOARDING_TEMPLATE: {
+  key: string;
+  title: string;
+  owner: OnboardingTask["owner"];
+  category: OnboardingTask["category"];
+  dueOffset: number;
+  dependsOn: string[];
+}[] = [
+  { key: "hr_docs", title: "HR documentation", owner: "HR", category: "Documents", dueOffset: -5, dependsOn: [] },
+  { key: "it_account", title: "IT account creation", owner: "IT", category: "Accounts", dueOffset: -3, dependsOn: ["hr_docs"] },
+  { key: "laptop", title: "Laptop assignment", owner: "IT", category: "Equipment", dueOffset: -2, dependsOn: [] },
+  { key: "access", title: "Access provisioning", owner: "IT", category: "Accounts", dueOffset: -1, dependsOn: ["it_account"] },
+  { key: "manager_intro", title: "Manager introduction", owner: "Manager", category: "Orientation", dueOffset: 0, dependsOn: [] },
+  { key: "orientation", title: "Orientation", owner: "HR", category: "Orientation", dueOffset: 1, dependsOn: ["access"] },
+  { key: "policy_training", title: "Policy training", owner: "Employee", category: "Policy", dueOffset: 3, dependsOn: ["orientation"] },
+  { key: "mandatory_learning", title: "Mandatory learning", owner: "Employee", category: "Training", dueOffset: 14, dependsOn: ["access"] },
+  { key: "team_intro", title: "Team introduction", owner: "Manager", category: "Orientation", dueOffset: 2, dependsOn: ["manager_intro"] },
+  { key: "first_week_review", title: "First-week review", owner: "Manager", category: "Review", dueOffset: 7, dependsOn: ["orientation", "team_intro"] },
 ];
 
 export const ONBOARDING_TASKS: OnboardingTask[] = [

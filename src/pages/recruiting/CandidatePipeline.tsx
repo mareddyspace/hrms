@@ -3,6 +3,7 @@ import { DataTable, EmptyState, Field, MetricCard, MetricGrid, StatusBadge } fro
 import { CLOSED_STAGES, PIPELINE_STAGES, type Candidate, type Interview, type PipelineStage, type Requisition, type StageStep } from "../../data/talentData.ts";
 import {
   addCandidate,
+  canActOnRequisition,
   canRunPipeline,
   candidateIntakeRequisitions,
   candidateHistory,
@@ -15,14 +16,22 @@ import {
   scheduleInterview,
   setCandidateStage,
   stageMovesFor,
+  talentAction,
   updateTalent,
   type TalentActor,
   type TalentResult,
 } from "../../data/talentLocal.ts";
+import { API_ENABLED } from "../../api/client.ts";
+import { apiDownloadCv, apiUploadCv } from "../../api/syncTalent.ts";
 import { CandidateMatchCard } from "../../features/ai/CandidateMatchCard.tsx";
 import { CvReader } from "../../features/ai/CvReader.tsx";
 import type { CvFields } from "../../features/ai/cvReader.ts";
 import { useAiOn } from "../../features/ai/flags.ts";
+import { DraftTag } from "../../features/ai/DraftTag.tsx";
+import { apiCompareCandidates, apiFeedbackSummary, type CompareOut, type FeedbackSummaryOut } from "../../api/syncCareer.ts";
+import { MaskedValue } from "../../components/MaskedValue.tsx";
+import { candidateRevealer } from "../../data/piiReveal.ts";
+import { maskPhone } from "../../utils/mask.ts";
 import "./candidatePipeline.css";
 
 type Talent = ReturnType<typeof getTalentState>;
@@ -211,6 +220,64 @@ export function CandidateStepper({ candidate, req, now = nowStamp() }: { candida
   );
 }
 
+/* ───────────── CV file (backend mode) ───────────── */
+
+function CandidateCvFile({
+  candidate,
+  canUpload,
+  onResult,
+}: {
+  candidate: Candidate;
+  canUpload: boolean;
+  onResult: (error: TalentResult, okText: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  if (!candidate.hasCv && !canUpload) return null;
+  return (
+    <p className="row-gap">
+      {candidate.hasCv ? (
+        <button
+          type="button"
+          className="quiet-link"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void apiDownloadCv(candidate.id, candidate.cvFilename ?? "cv").then((error) => {
+              setBusy(false);
+              if (error) onResult(error, "");
+            });
+          }}
+        >
+          Download CV{candidate.cvFilename ? ` (${candidate.cvFilename})` : ""}
+        </button>
+      ) : (
+        <span className="muted">No CV file.</span>
+      )}
+      {canUpload && (
+        <label className="btn-ghost btn-tiny">
+          {busy ? "Uploading…" : candidate.hasCv ? "Replace CV" : "Upload CV"}
+          <input
+            type="file"
+            hidden
+            disabled={busy}
+            accept=".pdf,.doc,.docx,.txt"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (!file) return;
+              setBusy(true);
+              void apiUploadCv(candidate.id, file).then((error) => {
+                setBusy(false);
+                onResult(error, `CV saved for ${candidate.name}.`);
+              });
+            }}
+          />
+        </label>
+      )}
+    </p>
+  );
+}
+
 /* ───────────── Per-candidate pipeline ───────────── */
 
 export function CandidatePipelineView({
@@ -263,7 +330,17 @@ export function CandidatePipelineView({
       <dl className="cp-facts">
         <div className="cp-fact"><dt>Role</dt><dd>{candidate.role}</dd></div>
         <div className="cp-fact"><dt>Email</dt><dd><a href={`mailto:${candidate.email}`}>{candidate.email}</a></dd></div>
-        <div className="cp-fact"><dt>Phone</dt><dd>{candidate.phone || "—"}</dd></div>
+        <div className="cp-fact">
+          <dt>Phone</dt>
+          <dd>
+            <MaskedValue
+              value={candidate.phone}
+              kind="phone"
+              canReveal={!!req && canRunPipeline(actor, req)}
+              onReveal={candidateRevealer(candidate.id, candidate.phone)}
+            />
+          </dd>
+        </div>
         <div className="cp-fact"><dt>Country</dt><dd>{candidate.country}</dd></div>
         <div className="cp-fact"><dt>Source</dt><dd>{candidate.source}</dd></div>
         <div className="cp-fact"><dt>Experience</dt><dd>{plural(candidate.experienceYears, "year")}</dd></div>
@@ -276,6 +353,7 @@ export function CandidatePipelineView({
         </p>
       )}
       {candidate.resumeNote && <p className="muted">{candidate.resumeNote}</p>}
+      {API_ENABLED && <CandidateCvFile candidate={candidate} canUpload={!!req && canRunPipeline(actor, req)} onResult={onResult} />}
       {matchOn && <CandidateMatchCard candidate={candidate} req={req} />}
 
       <h3 className="cp-section-title">Progress</h3>
@@ -311,6 +389,7 @@ export function CandidatePipelineView({
           ))}
         </ul>
       )}
+      {API_ENABLED && !!req && canActOnRequisition(actor, req) && interviews.length > 0 && <FeedbackSummaryButton candidateId={candidate.id} />}
       {canSchedule && (
         <div className="cp-actions">
           <Field label="Date and time">
@@ -327,9 +406,11 @@ export function CandidatePipelineView({
             className="btn btn-tiny"
             disabled={!iv.when || !iv.panel.trim()}
             onClick={() => {
-              const error = scheduleInterview(actor, candidate.id, iv);
-              onResult(error, `Interview booked for ${fmtDateTime(iv.when)}.`);
-              if (!error) setIv((f) => ({ ...f, when: "" }));
+              const input = iv;
+              talentAction(() => scheduleInterview(actor, candidate.id, input), (error) => {
+                onResult(error, `Interview booked for ${fmtDateTime(input.when)}.`);
+                if (!error) setIv((f) => ({ ...f, when: "" }));
+              });
             }}
           >
             Schedule
@@ -378,12 +459,13 @@ export function CandidatePipelineView({
               className="btn btn-tiny"
               disabled={!target}
               onClick={() => {
-                const error = setCandidateStage(actor, candidate.id, target as PipelineStage, note);
-                onResult(error, target === "Hired" ? `${candidate.name} hired. Onboarding started.` : `${candidate.name} → ${target}.`);
-                if (!error) {
-                  setTarget("");
-                  setNote("");
-                }
+                talentAction(() => setCandidateStage(actor, candidate.id, target as PipelineStage, note), (error) => {
+                  onResult(error, target === "Hired" ? `${candidate.name} hired. Onboarding started.` : `${candidate.name} → ${target}.`);
+                  if (!error) {
+                    setTarget("");
+                    setNote("");
+                  }
+                });
               }}
             >
               Move
@@ -530,6 +612,7 @@ export function AddCandidateForm({
   const [form, setForm] = useState(() => ({ ...EMPTY_CANDIDATE, appliedOn: nowStamp().slice(0, 10) }));
   const [cvOpen, setCvOpen] = useState(false);
   const [cv, setCv] = useState<CvFields | null>(null);
+  const [cvFile, setCvFile] = useState<File | null>(null);
   const cvOn = useAiOn("cv");
   if (reqs.length === 0) return null;
   const req = reqs.find((r) => r.id === reqId) ?? reqs[0];
@@ -539,12 +622,7 @@ export function AddCandidateForm({
   function applyCv(email: string) {
     if (!cv) return;
     const lower = email.trim().toLowerCase();
-    const note = [
-      cv.currentTitle || cv.currentCompany ? `Current: ${[cv.currentTitle, cv.currentCompany].filter(Boolean).join(" at ")}.` : "",
-      cv.education.length ? `Education: ${cv.education.join("; ")}.` : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
+    const note = cvNoteOf(cv);
     updateTalent((s) => {
       const row = s.candidates.find((c) => c.requisitionId === req.id && c.email.toLowerCase() === lower);
       if (!row) return;
@@ -570,15 +648,19 @@ export function AddCandidateForm({
       className="cp-actions"
       onSubmit={(e) => {
         e.preventDefault();
-        const error = addCandidate(actor, { requisitionId: req.id, ...form });
-        if (!error) applyCv(form.email);
-        onResult(error, `${form.name.trim()} added to ${req.id} at ${PIPELINE_STAGES[0]}.`);
-        if (!error) {
-          setForm({ ...EMPTY_CANDIDATE, appliedOn: nowStamp().slice(0, 10) });
-          setCv(null);
-          setCvOpen(false);
-          setOpen(false);
-        }
+        // Backend mode: the confirmed CV details (and file) go with the new candidate.
+        const input = API_ENABLED && cv ? { requisitionId: req.id, ...form, ...cvExtras(cv, actor), cvFile } : { requisitionId: req.id, ...form };
+        talentAction(() => addCandidate(actor, input), (error) => {
+          if (!error && !API_ENABLED) applyCv(form.email);
+          onResult(error, `${form.name.trim()} added to ${req.id} at ${PIPELINE_STAGES[0]}.`);
+          if (!error) {
+            setForm({ ...EMPTY_CANDIDATE, appliedOn: nowStamp().slice(0, 10) });
+            setCv(null);
+            setCvFile(null);
+            setCvOpen(false);
+            setOpen(false);
+          }
+        });
       }}
     >
       {cvOn && !cvOpen && (
@@ -601,8 +683,9 @@ export function AddCandidateForm({
       {cvOn && cvOpen && (
         <CvReader
           onClose={() => setCvOpen(false)}
-          onApply={(fields) => {
+          onApply={(fields, file) => {
             setCv(fields);
+            setCvFile(file ?? null);
             set({ name: fields.name || form.name, email: fields.email || form.email });
             setCvOpen(false);
           }}
@@ -650,6 +733,27 @@ export function AddCandidateForm({
       </div>
     </form>
   );
+}
+
+/** The CV's current role and education as one line for the candidate's note. */
+function cvNoteOf(cv: CvFields): string {
+  return [
+    cv.currentTitle || cv.currentCompany ? `Current: ${[cv.currentTitle, cv.currentCompany].filter(Boolean).join(" at ")}.` : "",
+    cv.education.length ? `Education: ${cv.education.join("; ")}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** Backend mode: confirmed CV details sent with a new candidate. */
+function cvExtras(cv: CvFields, actor: TalentActor) {
+  const note = cvNoteOf(cv);
+  return {
+    phone: cv.phone.slice(0, 30),
+    experienceYears: cv.experienceYears,
+    skills: [...new Set([...cv.librarySkills, ...cv.otherSkills])],
+    cvNote: note ? `${note} (from CV, checked by ${actor.fullName})`.slice(0, 400) : "",
+  };
 }
 
 /* ───────────── Recruiter / hiring manager view ───────────── */
@@ -719,7 +823,7 @@ export function CandidateCards({
                     </button>
                     <span className="muted"> · {c.role} · {req ? req.id : c.requisitionId}</span>
                     <div className="muted cp-card-meta">
-                      {c.email} · {c.phone || "no phone"} · {c.country} · {c.source} · {plural(c.experienceYears, "yr")} exp
+                      {c.email} · {c.phone ? maskPhone(c.phone) : "no phone"} · {c.country} · {c.source} · {plural(c.experienceYears, "yr")} exp
                       {req?.recruiter ? ` · Recruiter ${req.recruiter}` : ""}
                     </div>
                   </div>
@@ -748,7 +852,7 @@ export function CandidateCards({
                         onChange={(e) => {
                           const target = e.target.value as PipelineStage;
                           if (!target) return;
-                          onResult(setCandidateStage(actor, c.id, target), target === "Hired" ? `${c.name} hired. Onboarding started.` : `${c.name} → ${target}.`);
+                          talentAction(() => setCandidateStage(actor, c.id, target), (res) => onResult(res, target === "Hired" ? `${c.name} hired. Onboarding started.` : `${c.name} → ${target}.`));
                         }}
                       >
                         <option value="">Move to…</option>
@@ -926,6 +1030,124 @@ export function MyPipeline({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ───────────── AI helpers (backend mode): compare candidates, summarise feedback ───────────── */
+
+/** Summary of a candidate's interview feedback. Draft only: the recruiter and hiring manager decide. */
+function FeedbackSummaryButton({ candidateId }: { candidateId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<FeedbackSummaryOut | null>(null);
+  const [error, setError] = useState("");
+  const run = () => {
+    setBusy(true);
+    setError("");
+    apiFeedbackSummary(candidateId)
+      .then(setResult)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Couldn't summarise. Try again."))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="stack">
+      <div className="cp-actions">
+        <button type="button" className="btn-ghost btn-tiny" disabled={busy} onClick={run}>
+          {busy ? "Summarising…" : result ? "Summarise again" : "Summarise feedback"}
+        </button>
+      </div>
+      {error && <p className="note err">{error}</p>}
+      {result && (
+        <div className="stack">
+          <div className="ai-row">
+            <DraftTag />
+          </div>
+          <p>{result.summary}</p>
+          <p className="ai-note">{result.note}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Pick 2–4 candidates for one job and see them side by side, with a short draft summary. */
+export function CompareCandidates({ actor, talent, candidates }: { actor: TalentActor; talent: Talent; candidates: Candidate[] }) {
+  const reqs = talent.requisitions.filter((r) => canActOnRequisition(actor, r) && candidates.some((c) => c.requisitionId === r.id));
+  const [reqId, setReqId] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<CompareOut | null>(null);
+  const [error, setError] = useState("");
+  const current = reqs.find((r) => r.id === reqId) ?? reqs[0];
+  if (!current) return <EmptyState title="Nothing to compare" description="No jobs with candidates you work on." />;
+  const pool = candidates.filter((c) => c.requisitionId === current.id);
+  const toggle = (id: string) =>
+    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length >= 4 ? p : [...p, id]));
+  const chosen = picked.filter((id) => pool.some((c) => c.id === id));
+  const run = () => {
+    setBusy(true);
+    setError("");
+    apiCompareCandidates(current.id, chosen)
+      .then(setResult)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Couldn't compare. Try again."))
+      .finally(() => setBusy(false));
+  };
+  const avg = (n: number | null) => (n === null ? "—" : `${n}/5`);
+  return (
+    <div className="stack">
+      <Field label="Job">
+        <select
+          value={current.id}
+          onChange={(e) => {
+            setReqId(e.target.value);
+            setPicked([]);
+            setResult(null);
+          }}
+        >
+          {reqs.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.id} · {r.title}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <div className="row-gap" style={{ flexWrap: "wrap" }} role="group" aria-label="Candidates to compare">
+        {pool.map((c) => (
+          <label key={c.id} className="row-gap">
+            <input type="checkbox" checked={chosen.includes(c.id)} onChange={() => toggle(c.id)} disabled={!chosen.includes(c.id) && chosen.length >= 4} />
+            <span>
+              {c.name} <span className="muted">· {c.stage}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="cp-actions">
+        <button type="button" className="btn" disabled={busy || chosen.length < 2} onClick={run}>
+          {busy ? "Comparing…" : "Compare"}
+        </button>
+        <span className="muted">Pick 2 to 4.</span>
+      </div>
+      {error && <p className="note err">{error}</p>}
+      {result && (
+        <div className="stack">
+          <DataTable
+            headers={["Candidate", "Stage", "Experience", "Skills matched", "Missing", "Interviews"]}
+            rows={result.rows.map((r) => [
+              <strong key="n">{r.name}</strong>,
+              r.stage,
+              `${r.experience_years} yrs`,
+              `${r.match_score}% · ${r.matched_skills.join(", ") || "—"}`,
+              r.missing_skills.join(", ") || "None",
+              `${avg(r.average_score)} (${r.interviews_done} done${r.interviews_pending ? `, ${r.interviews_pending} pending` : ""})`,
+            ])}
+          />
+          <div className="ai-row">
+            <DraftTag />
+          </div>
+          <p>{result.summary}</p>
+          <p className="ai-note">{result.note}</p>
+        </div>
+      )}
     </div>
   );
 }

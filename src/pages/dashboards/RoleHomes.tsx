@@ -10,6 +10,7 @@ import { useProfileCorrections } from "../../data/profileCorrections.ts";
 import { canDecide as canDecideLifecycle, getLifecycleActions, subscribeLifecycleActions } from "../../features/lifecycle/lifecycleActionsStore.ts";
 import { listPeople, subscribePeople, getExitDetails } from "../../data/peopleLocal.ts";
 import { TASK_TEAM } from "../../data/taskTeam.ts";
+import { inHeadcount } from "../../data/peopleData.ts";
 import { getPlatformVersion, listAuditLog, listIntegrations, subscribePlatform } from "../../data/platformLocal.ts";
 import {
   dayStatus,
@@ -44,7 +45,7 @@ import { getRewardState, subscribeReward } from "../../data/rewardLocal.ts";
 import { canApproveCompReviews } from "../../data/rbac.ts";
 import { attendanceContextFor, formatHm, nonWorkingReason, phaseLabel } from "../../data/attendanceData.ts";
 import {
-  attendanceAction,
+  attendanceActionAsync,
   getAttendanceState,
   getCurrentSession,
   missingCheckOutSessions,
@@ -93,6 +94,7 @@ import { countInto, dailyCounts, monthlyMovement } from "../../data/adminCharts.
 import { useAuditTrail } from "../../data/auditTrail.ts";
 import { TICKET_STATUSES, useTickets } from "../../data/ticketStore.ts";
 import { TodaySummaryCard, employeeSummary, hrSummary, managerSummary } from "../../features/copilot/homeSummary.tsx";
+import { OnboardingHomeCard } from "../../features/onboarding/OnboardingAnalytics.tsx";
 
 /** Map dashboard shortcut labels to real routes. */
 const R = {
@@ -420,7 +422,7 @@ export function EmployeeHome() {
   const unread = countUnreadNotificationsFor(employee.id, state, demoProfile.role);
 
   function punch(action: "check_in" | "end_break" | "check_out") {
-    setPunchError(attendanceAction(employee.id, action, dayContext));
+    void attendanceActionAsync(employee.id, action, dayContext).then(setPunchError);
   }
 
   // Today's summary — short lines from the same data as the cards below.
@@ -1112,7 +1114,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
     String(peopleById.get(id)?.countryCode ?? DEMO_ACCOUNTS.find((a) => a.id === id)?.countryCode ?? "IN");
   const inScope = (id: string) => country === "ALL" || countryOf(id) === country;
   const scopePeople = useMemo(
-    () => data.people.filter((p) => p.employmentStatus !== "Terminated" && (country === "ALL" || p.countryCode === country)),
+    () => data.people.filter((p) => inHeadcount(p) && (country === "ALL" || p.countryCode === country)),
     [data.people, country],
   );
   const reqs = data.openReqs.filter((r) => !scopeName || r.country === scopeName);
@@ -1209,7 +1211,9 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
   const weekAgo = addDaysISO(today, -6);
   const summaryLines = hrSummary({
     scopeName,
-    joinedThisWeek: scopePeople.filter((p) => p.dateOfJoining >= weekAgo && p.dateOfJoining <= today).map((p) => p.fullName),
+    joinedThisWeek: data.people
+      .filter((p) => p.employmentStatus !== "Terminated" && (country === "ALL" || p.countryCode === country) && p.dateOfJoining >= weekAgo && p.dateOfJoining <= today)
+      .map((p) => p.fullName),
     startingSoon: talent.joiners.filter((j) => j.startDate > today && j.startDate <= addDaysISO(today, 7) && (!scopeName || j.country === scopeName)).length,
     leavingSoon: exitState.cases
       .filter((c) => c.status === "Accepted" && c.lastWorkingDay >= today && c.lastWorkingDay <= addDaysISO(today, 14) && inScope(c.employeeId))
@@ -1391,6 +1395,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
         </Card>
       ),
     },
+    { id: "onboarding-stats", label: "Onboarding", node: <OnboardingHomeCard /> },
     // HR owns compensation & benefits: the pay review cycle sits on the HR home.
     ...(comp && showComp
       ? [
@@ -1526,7 +1531,7 @@ export function RecruiterHome() {
             allowed={demoProfile.navAccess}
             items={[
               { label: "Recruiting", to: "/recruiting", access: "recruiting" },
-              { label: "Jobs", to: "/jobs", access: "jobs" },
+              { label: "Jobs & positions", to: "/jobs", access: "jobs" },
               { label: "Onboarding", to: "/onboarding", access: "onboarding" },
               { label: "People", to: R.directory, access: "people" },
             ]}

@@ -25,6 +25,9 @@ import {
 } from "../data/profileCorrections.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
 import { formatShortDate } from "../model.ts";
+import { MaskedValue } from "../components/MaskedValue.tsx";
+import { canRevealPersonal, personRevealer } from "../data/piiReveal.ts";
+import { isMasked } from "../utils/mask.ts";
 
 type Msg = { tone: "ok" | "err"; text: string } | null;
 
@@ -94,7 +97,23 @@ export function ProfileDetailsCards({
             <Fact label="Legal name" value={record.fullName} action={correct("fullName")} />
             <Fact label="Middle name" value={record.middleName} action={correct("middleName")} />
             <Fact label="Preferred name" value={record.preferredName} />
-            <Fact label="Date of birth" value={record.dateOfBirth ? formatShortDate(record.dateOfBirth) : ""} action={correct("dateOfBirth")} />
+            <Fact
+              label="Date of birth"
+              value={
+                record.dateOfBirth ? (
+                  <MaskedValue
+                    value={record.dateOfBirth}
+                    kind="dob"
+                    canReveal={canRevealPersonal(viewer, record.id, isMe ? record.id : "", canSeePersonal)}
+                    onReveal={personRevealer(record.id, "date_of_birth", record.dateOfBirth)}
+                    format={(dob) => (isMasked(dob) ? dob : formatShortDate(dob))}
+                  />
+                ) : (
+                  ""
+                )
+              }
+              action={correct("dateOfBirth")}
+            />
             <Fact label="Nationality" value={record.nationality} action={correct("nationality")} />
             <Fact label="Preferred language" value={record.preferredLanguage} />
             <Fact label="Languages" value={languages.join(", ")} />
@@ -112,6 +131,11 @@ export function ProfileDetailsCards({
             action={correct("managerId")}
           />
           <Fact label="Work arrangement" value={record.workArrangement} action={correct("workArrangement")} />
+          {record.company && <Fact label="Company" value={record.company} />}
+          {canSeePersonal && record.holidayCalendar && <Fact label="Holiday calendar" value={record.holidayCalendar} />}
+          {canSeePersonal && record.leavePolicy && <Fact label="Leave policy" value={record.leavePolicy} />}
+          {canSeePersonal && record.payrollStatus && <Fact label="Payroll status" value={record.payrollStatus} />}
+          {canSeePersonal && record.aiProfileStatus && <Fact label="AI profile status" value={record.aiProfileStatus} />}
           {canSeePersonal && <Fact label="Employment type" value={record.employmentType} />}
           {canSeePersonal && record.contractEndDate && <Fact label="Contract ends" value={formatShortDate(record.contractEndDate)} />}
           {canSeePersonal && record.confirmationDate && <Fact label="Confirmed" value={formatShortDate(record.confirmationDate)} />}
@@ -122,7 +146,7 @@ export function ProfileDetailsCards({
             />
           )}
         </dl>
-        {isMe && <p className="note">Job details are managed by HR. Use Request correction if something is wrong.</p>}
+        {isMe && <p className="note">Managed by HR.</p>}
       </Card>
 
       {(isMe || canSeeWork) && (
@@ -219,8 +243,8 @@ function CorrectionsCard({ record, isMe, viewer, rows }: { record: PersonRecord;
   const mine = isMe ? rows.filter((c) => c.personId === record.id) : [];
   if (!hrQueue.length && !mine.length) return null;
 
-  function decide(row: ProfileCorrection, decision: "approve" | "reject") {
-    const error = decideProfileCorrection(viewer, row.id, decision, notes[row.id] ?? "");
+  async function decide(row: ProfileCorrection, decision: "approve" | "reject") {
+    const error = await decideProfileCorrection(viewer, row.id, decision, notes[row.id] ?? "");
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: decision === "approve" ? "Correction approved and applied." : "Correction rejected." });
   }
 
@@ -272,8 +296,8 @@ function CorrectionsCard({ record, isMe, viewer, rows }: { record: PersonRecord;
                   key={`w-${c.id}`}
                   type="button"
                   className="quiet-link"
-                  onClick={() => {
-                    const error = withdrawProfileCorrection(viewer, c.id);
+                  onClick={async () => {
+                    const error = await withdrawProfileCorrection(viewer, c.id);
                     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: "Request withdrawn." });
                   }}
                 >
@@ -313,10 +337,10 @@ function CorrectionDialog({
   );
   const label = CORRECTION_FIELD_LABEL[field];
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const manager = field === "managerId" ? managers.find((p) => p.id === value) : undefined;
-    const result = requestProfileCorrection(viewer, {
+    const result = await requestProfileCorrection(viewer, {
       field,
       requestedValue: manager ? manager.fullName : value,
       requestedId: manager?.id,
@@ -403,9 +427,9 @@ function BackgroundEditor({ record, viewer, onClose, onSaved }: { record: Person
     setNewLanguage("");
   }
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
-    const result = saveOwnBackground(viewer, { preferredName, preferredLanguage, spokenLanguages: languages, education, experience, careerGoals });
+    const result = await saveOwnBackground(viewer, { preferredName, preferredLanguage, spokenLanguages: languages, education, experience, careerGoals });
     if (result) setError(result);
     else onSaved();
   }
@@ -512,7 +536,7 @@ function BackgroundEditor({ record, viewer, onClose, onSaved }: { record: Person
         <Field label="Career goals" wide>
           <textarea rows={4} value={careerGoals} maxLength={1000} onChange={(e) => setCareerGoals(e.target.value)} placeholder="Where do you want to grow next?" />
         </Field>
-        <p className="note">Name, date of birth, nationality, job and work arrangement are managed by HR.</p>
+        <p className="note">Name, date of birth, nationality and job are managed by HR.</p>
         {error && <p className="note err">{error}</p>}
         <div className="dialog-actions">
           <button type="button" className="btn-ghost" onClick={onClose}>

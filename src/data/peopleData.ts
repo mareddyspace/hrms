@@ -1,5 +1,5 @@
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
-import { TIMEZ_COUNTRIES, type CountryCode } from "../model.ts";
+import { TIMEZ_COUNTRIES, todayISO, type CountryCode } from "../model.ts";
 import {
   DEPARTMENT_CODE,
   DEPARTMENTS,
@@ -37,6 +37,22 @@ export {
 } from "./personProfileSeed.ts";
 
 export type EmploymentStatus = "Active" | "Onboarding" | "On Leave" | "Contractor" | "Terminated";
+
+const PRE_START = new Set(["onboarding", "pre-boarding", "pre_boarding", "preboarding"]);
+
+/**
+ * Whether this person has started: pre-boarding joiners (status Onboarding / Pre-boarding, or a joining date still
+ * ahead) are in the directory and onboarding, but not in headcount, review lists or rosters yet.
+ */
+export function hasStarted(p: Pick<PersonRecord, "employmentStatus" | "dateOfJoining">, today: string = todayISO()): boolean {
+  if (PRE_START.has(String(p.employmentStatus ?? "").trim().toLowerCase())) return false;
+  return !p.dateOfJoining || p.dateOfJoining <= today;
+}
+
+/** Counts in headcount: started and not left. */
+export function inHeadcount(p: Pick<PersonRecord, "employmentStatus" | "dateOfJoining">, today: string = todayISO()): boolean {
+  return p.employmentStatus !== "Terminated" && hasStarted(p, today);
+}
 
 export interface PersonRecord {
   id: string;
@@ -97,6 +113,19 @@ export interface PersonRecord {
   rehireDate?: string;
   /** Current leave of absence, while the person is on one. */
   leaveOfAbsence?: { type: string; start: string; end: string };
+  /* HCM workbook fields and server-held profile details (backend mode; masked parts arrive masked). */
+  company?: string;
+  holidayCalendar?: string;
+  leavePolicy?: string;
+  payrollStatus?: string;
+  aiProfileStatus?: string;
+  addressLine?: string;
+  addressCity?: string;
+  addressPostcode?: string;
+  addressCountry?: string;
+  emergencyName?: string;
+  emergencyRelationship?: string;
+  emergencyPhone?: string;
 }
 
 /** Languages offered in profile forms. */

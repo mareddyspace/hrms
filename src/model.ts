@@ -1,3 +1,5 @@
+import { maskAddress as maskAddressValue, maskEmail as maskEmailValue, maskPhone } from "./utils/mask.ts";
+
 export type LeaveCode = "comp_off" | "pto" | "wfh" | "emergency_wfh" | "sick" | "casual" | "unpaid" | "bereavement";
 export type RequestStatus = "pending" | "approved" | "rejected" | "withdrawn";
 
@@ -21,6 +23,8 @@ export interface OrgTimesheetRecord {
   hours: number;
   status: OrgTimesheetStatus;
   projectSummary: string;
+  /** Backend mode: "Step 2 of 2 · HR" while a multi-step approval is pending. */
+  approvalProgress?: string;
 }
 export type TaskStatus = "open" | "progress" | "done" | "scheduled";
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
@@ -215,6 +219,8 @@ export interface LeaveRequest extends DecisionInfo {
   appliedOn: string;
   /** Half-day leave (only when from === to): counts as 0.5 day. */
   half?: LeaveHalf;
+  /** Backend mode: "Step 2 of 2 · HR" while a multi-step approval is pending. */
+  approvalProgress?: string;
 }
 
 /** Which half of the day a half-day leave covers. */
@@ -286,6 +292,7 @@ export function holidaysForCountry(holidays: Holiday[], country: CountryCode | u
 export interface Project {
   id: string;
   name: string;
+  code?: string;
   vendor: string;
   client: string;
   startDate: string;
@@ -865,41 +872,19 @@ export function formatShortDate(iso: string): string {
   });
 }
 
-/** Mask mobile for on-screen display; full value stays in profile edit only. */
+/** Mask mobile for on-screen display ("+91 ••••• 22110"); full value stays in profile edit only. */
 export function maskMobile(mobile: string): string {
-  const trimmed = mobile.trim();
-  if (!trimmed) return "—";
-  const digits = trimmed.replace(/\D/g, "");
-  if (digits.length < 4) return "••••";
-  const last4 = digits.slice(-4);
-  const country = trimmed.match(/^\+\d{1,3}/)?.[0];
-  if (country) return `${country} ••••• •${last4}`;
-  return `••••• •${last4}`;
+  return maskPhone(mobile) || "—";
 }
 
-/** Mask email for display, e.g. m••••@example.com */
+/** Mask email for display, e.g. b•••@gmail.com */
 export function maskEmail(email: string): string {
-  const trimmed = email.trim();
-  if (!trimmed) return "—";
-  const at = trimmed.indexOf("@");
-  if (at <= 0) return "••••@••••";
-  const local = trimmed.slice(0, at);
-  const domain = trimmed.slice(at + 1);
-  const visible = local.slice(0, 1);
-  return `${visible}${"•".repeat(Math.max(3, local.length - 1))}@${domain}`;
+  return maskEmailValue(email) || "—";
 }
 
-/** Mask address for display; keep city/area hint when possible. */
+/** Mask address for display: city / country only. */
 export function maskAddress(address: string): string {
-  const trimmed = address.trim();
-  if (!trimmed) return "—";
-  const parts = trimmed.split(",").map((part) => part.trim()).filter(Boolean);
-  if (parts.length >= 2) {
-    const city = parts[parts.length - 1];
-    return `••••••••, ${city}`;
-  }
-  if (trimmed.length <= 6) return "••••••";
-  return `${"•".repeat(Math.min(10, trimmed.length - 4))}${trimmed.slice(-4)}`;
+  return maskAddressValue(address) || "—";
 }
 
 export function formatStamp(iso: string): string {

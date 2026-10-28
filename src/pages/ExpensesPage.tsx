@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { FormEvent } from "react";
 import { Banner, Card, Field, Page, StatusBadge } from "../components/ui.tsx";
 import { StepTimeline } from "../components/StepTimeline.tsx";
@@ -7,10 +7,12 @@ import { addDaysISO, EXPENSE_CATEGORIES, EXPENSE_CLAIM_WINDOW_DAYS, formatShortD
 import type { Expense, ExpenseReceipt } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
-import { openReceipt, receiptFileError, saveReceipt } from "../data/receiptStore.ts";
+import { openReceipt, RECEIPT_MAX_BYTES, receiptFileError, saveReceipt } from "../data/receiptStore.ts";
 import { stepText } from "../data/expenseFlow.ts";
 import { tripLabel, useTravelRequests } from "../data/travelStore.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { loadExpenseRules, type ExpenseRulesOut } from "../api/syncTimeExpenses.ts";
 
 const STATUS_LABEL: Record<Expense["status"], string> = {
   submitted: "Pending",
@@ -52,8 +54,22 @@ export function ExpensesPage() {
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
   const trips = useTravelRequests();
   const currency = payRulesFor(employee.countryCode).currency;
-  const receiptAbove = receiptThresholdFor(employee.countryCode);
-  const { maxClaim } = claimLimitsFor(employee.countryCode);
+  // Backend mode: the server's claim rules (receipt threshold, limits) for this person's country.
+  const [apiRules, setApiRules] = useState<ExpenseRulesOut | null>(null);
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let stale = false;
+    loadExpenseRules()
+      .then((rules) => {
+        if (!stale) setApiRules(rules);
+      })
+      .catch(() => undefined);
+    return () => {
+      stale = true;
+    };
+  }, [employee.id]);
+  const receiptAbove = apiRules?.receipt_required_over ?? receiptThresholdFor(employee.countryCode);
+  const maxClaim = apiRules?.max_claim ?? claimLimitsFor(employee.countryCode).maxClaim;
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [fileKey, setFileKey] = useState(0);
   const [date, setDate] = useState("");
@@ -106,7 +122,7 @@ export function ExpensesPage() {
       showErr(error instanceof Error ? error.message : "Couldn't save the receipt.");
       return;
     }
-    const error = addExpense({
+    const error = await addExpense({
       date,
       category,
       amount: value,
@@ -131,15 +147,15 @@ export function ExpensesPage() {
     }
   }
 
-  function decide(expense: Expense, status: "approved" | "rejected") {
-    const error = portal.setExpenseStatus(expense.id, status, notes[expense.id]);
+  async function decide(expense: Expense, status: "approved" | "rejected") {
+    const error = await portal.setExpenseStatus(expense.id, status, notes[expense.id]);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: status === "approved" ? "Claim approved." : "Claim declined." });
     if (!error) setNotes((prev) => ({ ...prev, [expense.id]: "" }));
   }
 
-  function pay(expense: Expense) {
+  async function pay(expense: Expense) {
     const entry = payment[expense.id] ?? { on: todayISO(), ref: "" };
-    const error = portal.markExpensePaid(expense.id, entry.on, entry.ref);
+    const error = await portal.markExpensePaid(expense.id, entry.on, entry.ref);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Claim marked paid." });
   }
 
@@ -277,7 +293,7 @@ export function ExpensesPage() {
               <Field label={`Amount (${currency}, up to ${money(maxClaim, currency)})`}>
                 <input type="number" min={1} value={amount} onChange={(event) => setAmount(event.target.value)} />
               </Field>
-              <Field label={`Receipt (required over ${money(receiptAbove, currency)}, up to 1.5 MB)`}>
+              <Field label={`Receipt (required over ${money(receiptAbove, currency)}, up to ${RECEIPT_MAX_BYTES / 1024 / 1024} MB)`}>
                 <input
                   key={fileKey}
                   type="file"
@@ -295,15 +311,18 @@ export function ExpensesPage() {
                   }}
                 />
               </Field>
-              <Field label="Project">
-                <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-                  {currentProjects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+              {/* Claims in the API have no project; the trip links them instead. */}
+              {!API_ENABLED && (
+                <Field label="Project">
+                  <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+                    {currentProjects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               <Field label="Trip">
                 <select value={tripId} onChange={(event) => setTripId(event.target.value)}>
                   <option value="">No trip</option>

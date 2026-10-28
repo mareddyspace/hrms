@@ -140,7 +140,7 @@ export function PayPreviewPage() {
   const groups = [...new Set(people.map((p) => p.group))];
 
   return (
-    <Page title="Pay preview" subtitle="Processed by the payroll provider · Read only">
+    <Page title="Pay preview" subtitle="Read only">
       <Card>
         <div className="form-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
           <Field label="Person">

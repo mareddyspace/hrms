@@ -36,6 +36,8 @@ import {
   type OfferStatus,
   type OnboardingJoiner,
   type OnboardingTask,
+  type PreboardingForm,
+  EQUIPMENT_LABEL,
   type OneOnOne,
   type PerfCycle,
   type PerfGoal,
@@ -58,6 +60,9 @@ import { pushPersonTaskAlert } from "./collabLocal.ts";
 import { appendAuditEntries } from "./auditTrail.ts";
 import { resolveFlow, workflowVersion, type FlowStep } from "./approvalWorkflows.ts";
 import { decideFlowStep, isAllParallel, isWaitingOn, stepText, waitingApproverIds, type SteppedRequest } from "./expenseFlow.ts";
+import { API_ENABLED } from "../api/client.ts";
+import * as talentApi from "../api/syncTalent.ts";
+import * as perfApi from "../api/syncTalentPerf.ts";
 
 // v3: recruiting seed made consistent (approval trails, structured offers, joiners linked to hires).
 // v4: manager → HR → recruiter hiring flow and per-candidate stage history.
@@ -169,10 +174,91 @@ export function subscribeTalent(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
+/*
+ * Backend mode (VITE_API_URL): recruiting, onboarding, performance, learning and skills come from the API
+ * (in memory only, see src/api/syncTalent*.ts). Feedback and praise, and 1:1s still being planned, stay in
+ * this browser; a finished 1:1 is recorded on the server as a check-in.
+ */
+const MIRRORS = [talentApi.recruitingMirror, perfApi.performanceMirror, perfApi.learningMirror] as const;
+if (API_ENABLED) MIRRORS.forEach((m) => m.subscribe(() => listeners.forEach((fn) => fn())));
+
+let composed: { local: TalentState; parts: readonly unknown[]; out: TalentState } | null = null;
+
 /** Stable snapshot for useSyncExternalStore — same reference until data changes. */
 export function getTalentState(): TalentState {
   if (!cache) cache = read();
-  return cache;
+  if (!API_ENABLED) return cache;
+  const [rec, perf, learn] = [talentApi.recruitingMirror.get(), perfApi.performanceMirror.get(), perfApi.learningMirror.get()];
+  if (composed && composed.local === cache && composed.parts[0] === rec && composed.parts[1] === perf && composed.parts[2] === learn) return composed.out;
+  const out: TalentState = {
+    ...cache,
+    ...rec,
+    goals: perf.goals,
+    reviews: perf.reviews,
+    oneOnOnes: [...cache.oneOnOnes.filter((m) => m.status === "Upcoming"), ...perf.checkIns],
+    enrollments: learn.enrollments,
+    certifications: learn.certifications,
+    skillProfiles: learn.skillProfiles,
+    cycles: perf.cycles,
+    cycleStatus: Object.fromEntries(perf.cycles.map((c) => [c.id, c.status])),
+  };
+  composed = { local: cache, parts: [rec, perf, learn], out };
+  return out;
+}
+
+/** Course catalog: the server's in backend mode, otherwise the built-in one. */
+export function courseCatalog(): Course[] {
+  return API_ENABLED ? perfApi.learningMirror.get().courses : COURSES;
+}
+
+/* Backend mode: a change is sent to the server; its result arrives later. */
+let pendingApi: Promise<TalentResult> | null = null;
+const claimedApi = new WeakSet<Promise<TalentResult>>();
+let apiNotice: string | null = null;
+
+/** Sends the change and returns null at once; the answer goes to talentAction's callback or talentApiNotice. */
+function viaApi(send: () => Promise<TalentResult>): TalentResult {
+  const p = send();
+  pendingApi = p;
+  void p.then((error) => {
+    if (error && !claimedApi.has(p)) {
+      apiNotice = error;
+      listeners.forEach((fn) => fn());
+    }
+  });
+  return null;
+}
+
+/**
+ * Runs a talent change and reports its result. Without the backend this is synchronous, exactly as calling the
+ * change directly; in backend mode `done` gets the server's answer (null, or the error message) once it arrives.
+ */
+export function talentAction(change: () => TalentResult, done: (result: TalentResult) => void): void {
+  if (!API_ENABLED) {
+    done(change());
+    return;
+  }
+  pendingApi = null;
+  const result = change();
+  const p = pendingApi as Promise<TalentResult> | null;
+  pendingApi = null;
+  if (result || !p) {
+    done(result);
+    return;
+  }
+  claimedApi.add(p);
+  void p.then(done);
+}
+
+/** Backend mode: the last server refusal of a change made outside talentAction (e.g. from Approvals). */
+export function talentApiNotice(): string | null {
+  return apiNotice;
+}
+
+export function clearTalentApiNotice() {
+  if (!apiNotice) return;
+  apiNotice = null;
+  listeners.forEach((fn) => fn());
 }
 
 export function updateTalent(mutator: (state: TalentState) => void) {
@@ -406,6 +492,7 @@ function pushStep(candidate: Candidate, actor: TalentActor, stage: PipelineStage
 }
 
 export function setCandidateStage(actor: TalentActor, id: string, stage: PipelineStage, note = ""): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiSetCandidateStage(id, stage, note));
   return guarded((s) => {
     const row = s.candidates.find((c) => c.id === id);
     if (!row) return "Candidate not found.";
@@ -521,6 +608,7 @@ function assignRecruiter(row: Requisition, recruiter: DemoAccount, stamp: { on: 
  * approves the requisition and assigns the recruiter. Once approved, HR can pause it and lift the pause.
  */
 export function setRequisitionApproval(actor: TalentActor, id: string, approvalStatus: ApprovalStatus, note = "", recruiterId = DEFAULT_RECRUITER_ID): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiSetRequisitionApproval(id, approvalStatus, note, recruiterId));
   let alerts: ReqAlert[] = [];
   const result = guarded((s) => {
     const row = reqFor(s, id);
@@ -584,7 +672,7 @@ export function setRequisitionApproval(actor: TalentActor, id: string, approvalS
     const recruiter = decision.outcome === "approved" ? pickRecruiter() : undefined;
     if (decision.outcome === "approved" && !row.recruiterId && !recruiter) return "Choose a recruiter.";
     // Older requisitions get their single HR step saved with the decision.
-    row.approvalSteps = flow.steps as FlowStep[];
+    row.approvalSteps = decision.steps as FlowStep[];
     row.stepDecisions = [...(row.stepDecisions ?? []), ...decision.entries];
     const labels = decision.entries.map((e) => e.label).join(", ");
 
@@ -632,6 +720,11 @@ export type RequisitionInput = { title: string; department: string; country: str
 
 /** The hiring manager raises a requisition; it goes to the first approval step (no approvers: approved at once). */
 export function raiseRequisition(actor: TalentActor, input: RequisitionInput): TalentResult {
+  if (API_ENABLED) {
+    if (!canRaiseRequisition(actor)) return "Only the manager who needs the role can raise a requisition.";
+    if (!TIMEZ_COUNTRIES.some((c) => c.name === input.country)) return "Choose a country.";
+    return viaApi(() => talentApi.apiRaiseRequisition(input));
+  }
   let alerts: ReqAlert[] = [];
   const result = guarded((s) => {
     if (!canRaiseRequisition(actor)) return "Only the manager who needs the role can raise a requisition.";
@@ -676,7 +769,8 @@ export function raiseRequisition(actor: TalentActor, input: RequisitionInput): T
   return result;
 }
 
-export type CandidateInput = { requisitionId: string; name: string; email: string; source: string; appliedOn: string };
+/** Backend mode may add the confirmed CV details and file (ApiCandidateExtras). */
+export type CandidateInput = { requisitionId: string; name: string; email: string; source: string; appliedOn: string } & talentApi.ApiCandidateExtras;
 
 /** Requisitions this actor can add candidates to: approved, staffed, and run by them (recruiter or HR). */
 export function candidateIntakeRequisitions(actor: TalentActor, reqs: Requisition[]): Requisition[] {
@@ -685,6 +779,7 @@ export function candidateIntakeRequisitions(actor: TalentActor, reqs: Requisitio
 
 /** The recruiter or HR adds a candidate to an approved requisition; they start at the first pipeline stage. */
 export function addCandidate(actor: TalentActor, input: CandidateInput): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiAddCandidate(input));
   return guarded((s) => {
     const req = reqFor(s, input.requisitionId);
     if (!req) return "Choose a requisition.";
@@ -738,6 +833,7 @@ export type InterviewInput = { when: string; panel: string; type: string };
 
 /** The assigned recruiter (or HR) schedules interviews for candidates at the Interview stage. */
 export function scheduleInterview(actor: TalentActor, candidateId: string, input: InterviewInput): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiScheduleInterview(candidateId, input));
   return guarded((s) => {
     const candidate = s.candidates.find((c) => c.id === candidateId);
     if (!candidate) return "Candidate not found.";
@@ -836,6 +932,11 @@ export function offerEligibleCandidates(state: Pick<TalentState, "candidates" | 
 export type OfferInput = { candidateId: string; grade: string; baseSalary: number; startDate: string; packageNote: string };
 
 export function createOffer(actor: TalentActor, input: OfferInput): TalentResult {
+  if (API_ENABLED) {
+    if (!input.grade) return "Choose a grade.";
+    if (!Number.isFinite(input.baseSalary) || input.baseSalary <= 0) return "Enter the annual base salary.";
+    return viaApi(() => talentApi.apiCreateOffer(input));
+  }
   return guarded((s) => {
     const candidate = s.candidates.find((c) => c.id === input.candidateId);
     if (!candidate) return "Candidate not found.";
@@ -875,6 +976,7 @@ const APPROVAL_REFUSAL: Record<OfferApproval["role"], string> = {
 };
 
 export function approveOffer(actor: TalentActor, id: string): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiApproveOffer(id));
   return guarded((s) => {
     const row = s.offers.find((o) => o.id === id);
     if (!row) return "Offer not found.";
@@ -891,6 +993,7 @@ export function approveOffer(actor: TalentActor, id: string): TalentResult {
 
 /** Moves an offer. Accepted / Declined record the candidate's answer and need a note on how it was received. */
 export function setOfferStatus(actor: TalentActor, id: string, status: OfferStatus, note = ""): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiSetOfferStatus(id, status, note));
   return guarded((s) => {
     const row = s.offers.find((o) => o.id === id);
     if (!row) return "Offer not found.";
@@ -926,6 +1029,7 @@ export function averageTimeToHire(state: Pick<TalentState, "offers" | "requisiti
 
 /** Feedback comes from the panel and the hiring manager. */
 export function canSubmitInterviewFeedback(actor: TalentActor, interview: Interview): boolean {
+  if (interview.panelIds?.includes(actor.id)) return true;
   if (interview.panel.toLowerCase().includes(actor.fullName.trim().toLowerCase())) return true;
   const state = getTalentState();
   const candidate = state.candidates.find((c) => c.id === interview.candidateId);
@@ -934,6 +1038,11 @@ export function canSubmitInterviewFeedback(actor: TalentActor, interview: Interv
 }
 
 export function submitInterviewFeedback(actor: TalentActor, id: string, score: number, feedback: string): TalentResult {
+  if (API_ENABLED) {
+    if (!Number.isInteger(score) || score < 1 || score > 5) return "Score must be a whole number from 1 to 5.";
+    if (!feedback.trim()) return "Add feedback notes.";
+    return viaApi(() => talentApi.apiSubmitInterviewFeedback(id, score, feedback));
+  }
   return guarded((s) => {
     const row = s.interviews.find((i) => i.id === id);
     if (!row) return "Interview not found.";
@@ -1020,7 +1129,10 @@ function createJoiner(s: TalentState, candidate: Candidate, req: Requisition, ac
   };
   s.joiners.push(joiner);
   ONBOARDING_TEMPLATE.forEach((t, i) =>
-    s.tasks.push({ id: `${id}-t${i + 1}`, joinerId: id, title: t.title, owner: t.owner, category: t.category, status: "Pending", due: addDaysTo(startDate, t.dueOffset) }),
+    s.tasks.push({
+      id: `${id}-t${i + 1}`, joinerId: id, key: t.key, title: t.title, owner: t.owner, category: t.category, status: "Pending",
+      due: addDaysTo(startDate, t.dueOffset), dependsOn: [...t.dependsOn],
+    }),
   );
   const hired = s.candidates.filter((c) => c.requisitionId === req.id && c.stage === "Hired").length;
   if (hired >= req.openings) req.stageSummary = "Filled";
@@ -1134,6 +1246,7 @@ function syncJoinerRecord(s: TalentState, joiner: OnboardingJoiner, before: Onbo
 }
 
 export function setOnboardingTaskStatus(actor: TalentActor, id: string, status: OnboardingTask["status"], reason = ""): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiSetOnboardingTaskStatus(id, status, reason));
   return guarded((s) => {
     const row = s.tasks.find((t) => t.id === id);
     if (!row) return "Task not found.";
@@ -1143,6 +1256,10 @@ export function setOnboardingTaskStatus(actor: TalentActor, id: string, status: 
       if (reason.trim().length < 5) return "Give a reason for updating someone else's task.";
       row.overrideNote = `${actor.fullName}, ${todayISO()}: ${reason.trim()}`;
     }
+    if (status !== "Pending" && row.dependsOn?.length) {
+      const waiting = s.tasks.filter((t) => t.joinerId === row.joinerId && t.key && row.dependsOn!.includes(t.key) && t.status !== "Done");
+      if (waiting.length) return `Finish first: ${waiting.map((t) => t.title).join(", ")}.`;
+    }
     const before = joiner?.overallStatus ?? "Pre-boarding";
     row.status = status;
     if (joiner) syncJoinerRecord(s, joiner, before, actor);
@@ -1150,8 +1267,55 @@ export function setOnboardingTaskStatus(actor: TalentActor, id: string, status: 
   });
 }
 
+/**
+ * Pre-boarding form (the joiner or HR): kept on the joiner; each equipment item and the IT request becomes an IT task
+ * (once — sending the form again updates the open tasks). The laptop uses the checklist's own laptop task.
+ */
+export function submitPreboarding(actor: TalentActor, joinerId: string, form: PreboardingForm): TalentResult {
+  if (form.emergencyContact.name.trim().length < 2 || form.emergencyContact.phone.trim().length < 5)
+    return "Add an emergency contact name and phone.";
+  if (API_ENABLED) return viaApi(() => talentApi.apiSubmitPreboarding(joinerId, form));
+  return guarded((s) => {
+    const joiner = s.joiners.find((j) => j.id === joinerId);
+    if (!joiner) return "Joiner not found.";
+    if (!canAcknowledgePolicies(actor, joiner)) return "Only the new joiner or HR can fill in the pre-boarding form.";
+    if (joiner.overallStatus === "Completed") return "Onboarding is already complete.";
+    joiner.preboarding = structuredClone(form);
+    joiner.preboardingOn = todayISO();
+    const mine = s.tasks.filter((t) => t.joinerId === joinerId);
+    const hasLaptop = mine.some((t) => t.key === "laptop");
+    const wanted: { key: string; title: string; category: OnboardingTask["category"]; offset: number; dependsOn: string[] }[] =
+      form.equipment
+        .filter((item) => !(item === "laptop" && hasLaptop))
+        .map((item) => ({ key: `equip_${item}`, title: `Equipment: ${EQUIPMENT_LABEL[item]}`, category: "Equipment", offset: -2, dependsOn: [] }));
+    if (form.itRequest.systems.length || form.itRequest.notes?.trim())
+      wanted.push({
+        key: "it_request",
+        title: `IT provisioning: ${form.itRequest.systems.join(", ") || "see notes"}`,
+        category: "Accounts",
+        offset: -1,
+        dependsOn: mine.some((t) => t.key === "it_account") ? ["it_account"] : [],
+      });
+    for (const w of wanted) {
+      const task = mine.find((t) => t.key === w.key);
+      if (!task)
+        s.tasks.push({
+          id: newId("ot"), joinerId, key: w.key, title: w.title, owner: "IT", category: w.category, status: "Pending",
+          due: addDaysTo(joiner.startDate, w.offset), dependsOn: w.dependsOn,
+        });
+      else if (task.status !== "Done") task.title = w.title;
+    }
+    syncJoinerRecord(s, joiner, joiner.overallStatus, actor);
+    return null;
+  });
+}
+
 /** The joiner acknowledges policies themselves, or HR records it for them (kept with the date and "recorded by HR"). */
 export function setJoinerPolicyAck(actor: TalentActor, id: string, policyAck: OnboardingJoiner["policyAck"]): TalentResult {
+  if (API_ENABLED) {
+    if (policyAck !== "Complete") return "A recorded acknowledgment can't be undone.";
+    return viaApi(() => talentApi.apiAcknowledgePolicies(id));
+  }
   return guarded((s) => {
     const row = s.joiners.find((j) => j.id === id);
     if (!row) return "Joiner not found.";
@@ -1183,6 +1347,7 @@ export function inReviewCycle(employeeId: string): boolean {
 }
 
 export function cycleStatusOf(state: Pick<TalentState, "cycleStatus"> & Partial<Pick<TalentState, "cycles">>, cycleId: string): PerfCycle["status"] {
+  if (API_ENABLED) return state.cycleStatus[cycleId] ?? state.cycles?.find((c) => c.id === cycleId)?.status ?? "Planning";
   return (
     state.cycleStatus[cycleId] ??
     PERF_CYCLES.find((c) => c.id === cycleId)?.status ??
@@ -1193,6 +1358,7 @@ export function cycleStatusOf(state: Pick<TalentState, "cycleStatus"> & Partial<
 
 /** Built-in cycles plus the ones HR created, each with its current status. */
 export function allCycles(state: Pick<TalentState, "cycleStatus" | "cycles">): PerfCycle[] {
+  if (API_ENABLED) return state.cycles.map((c) => ({ ...c, status: cycleStatusOf(state, c.id) }));
   return [...PERF_CYCLES, ...(state.cycles ?? [])].map((c) => ({ ...c, status: cycleStatusOf(state, c.id) }));
 }
 
@@ -1202,6 +1368,12 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** HR creates a review cycle (it starts in Planning). Everyone with a manager gets a review in it. */
 export function createReviewCycle(actor: TalentActor, input: CycleInput): TalentResult {
+  if (API_ENABLED) {
+    if (!isHrRole(actor.role)) return "Only HR can create review cycles.";
+    if (input.name.trim().length < 3) return "Enter a cycle name.";
+    if (![input.start, input.end, input.selfReviewDue, input.managerReviewDue].every((d) => ISO_DATE.test(d))) return "Fill in all four dates.";
+    return viaApi(() => perfApi.apiCreateCycle(input));
+  }
   return guarded((s) => {
     if (!isHrRole(actor.role)) return "Only HR can create review cycles.";
     const name = input.name.trim();
@@ -1252,6 +1424,7 @@ export function nextCycleStatus(status: PerfCycle["status"]): PerfCycle["status"
 
 /** HR moves a cycle forward one step. */
 export function advanceCycle(actor: TalentActor, cycleId: string): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiAdvanceCycle(cycleId));
   return guarded((s) => {
     if (!isHrRole(actor.role)) return "Only HR can change the cycle status.";
     const next = CYCLE_NEXT[cycleStatusOf(s, cycleId)];
@@ -1293,6 +1466,7 @@ function reviewFor(s: TalentState, id: string): PerfReview | string {
 }
 
 export function saveSelfAssessment(actor: TalentActor, id: string, text: string, submit: boolean): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiSaveAssessment(id, "self", text, submit));
   return guarded((s) => {
     const row = reviewFor(s, id);
     if (typeof row === "string") return row;
@@ -1308,6 +1482,7 @@ export function saveSelfAssessment(actor: TalentActor, id: string, text: string,
 }
 
 export function saveManagerAssessment(actor: TalentActor, id: string, text: string, submit: boolean): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiSaveAssessment(id, "manager", text, submit));
   return guarded((s) => {
     const row = reviewFor(s, id);
     if (typeof row === "string") return row;
@@ -1323,6 +1498,7 @@ export function saveManagerAssessment(actor: TalentActor, id: string, text: stri
 }
 
 export function set360Status(actor: TalentActor, id: string, status: PerfReview["feedback360Status"]): TalentResult {
+  if (API_ENABLED) return "The 360 status follows the reviewers' answers.";
   return guarded((s) => {
     const row = reviewFor(s, id);
     if (typeof row === "string") return row;
@@ -1334,6 +1510,7 @@ export function set360Status(actor: TalentActor, id: string, status: PerfReview[
 }
 
 export function setRating(actor: TalentActor, id: string, rating: string | undefined): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiSetRating(id, rating));
   return guarded((s) => {
     const row = reviewFor(s, id);
     if (typeof row === "string") return row;
@@ -1382,6 +1559,7 @@ export function pending360For(state: Pick<TalentState, "reviews" | "cycleStatus"
 }
 
 export function nominate360Reviewer(actor: TalentActor, reviewId: string, reviewerId: string): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiNominate360(reviewId, reviewerId));
   return guarded((s) => {
     const row = reviewFor(s, reviewId);
     if (typeof row === "string") return row;
@@ -1406,6 +1584,7 @@ export function nominate360Reviewer(actor: TalentActor, reviewId: string, review
 
 /** Removes a nominee who has not answered yet. */
 export function remove360Reviewer(actor: TalentActor, reviewId: string, reviewerId: string): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiRemove360(reviewId, reviewerId));
   return guarded((s) => {
     const row = reviewFor(s, reviewId);
     if (typeof row === "string") return row;
@@ -1420,6 +1599,11 @@ export function remove360Reviewer(actor: TalentActor, reviewId: string, reviewer
 
 /** A nominee answers: a 1–5 rating and a comment. The 360 is complete once every nominee has answered. */
 export function submit360Response(actor: TalentActor, reviewId: string, rating: number, comment: string): TalentResult {
+  if (API_ENABLED) {
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) return "Rating must be 1 to 5.";
+    if (comment.trim().length < 5) return "Add a short comment.";
+    return viaApi(() => perfApi.apiAnswer360(reviewId, rating, comment.slice(0, 600)));
+  }
   return guarded((s) => {
     const row = reviewFor(s, reviewId);
     if (typeof row === "string") return row;
@@ -1464,6 +1648,11 @@ function devPlanFor(s: TalentState, actor: TalentActor, reviewId: string): PerfR
 }
 
 export function addDevAction(actor: TalentActor, reviewId: string, input: { title: string; due: string }): TalentResult {
+  if (API_ENABLED) {
+    if (input.title.trim().length < 3) return "Enter the action.";
+    if (input.due && !ISO_DATE.test(input.due)) return "Choose a valid due date.";
+    return viaApi(() => perfApi.apiAddDevAction(reviewId, { title: input.title.trim().slice(0, 160), due: input.due }));
+  }
   return guarded((s) => {
     const row = devPlanFor(s, actor, reviewId);
     if (typeof row === "string") return row;
@@ -1482,6 +1671,11 @@ export function updateDevAction(
   actionId: string,
   patch: Partial<Pick<DevAction, "title" | "due" | "status">>,
 ): TalentResult {
+  if (API_ENABLED) {
+    if (patch.title !== undefined && patch.title.trim().length < 3) return "Enter the action.";
+    if (patch.due && !ISO_DATE.test(patch.due)) return "Choose a valid due date.";
+    return viaApi(() => perfApi.apiUpdateDevAction(actionId, patch));
+  }
   return guarded((s) => {
     const row = devPlanFor(s, actor, reviewId);
     if (typeof row === "string") return row;
@@ -1504,6 +1698,7 @@ export function updateDevAction(
 }
 
 export function removeDevAction(actor: TalentActor, reviewId: string, actionId: string): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiRemoveDevAction(actionId));
   return guarded((s) => {
     const row = devPlanFor(s, actor, reviewId);
     if (typeof row === "string") return row;
@@ -1515,6 +1710,7 @@ export function removeDevAction(actor: TalentActor, reviewId: string, actionId: 
 
 /** HR shares the calibrated rating with the employee. */
 export function releaseRating(actor: TalentActor, id: string): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiReleaseRating(id));
   return guarded((s) => {
     const row = reviewFor(s, id);
     if (typeof row === "string") return row;
@@ -1551,6 +1747,13 @@ export function goalOwnerOptions(actor: TalentActor): { id: string; name: string
 export type GoalInput = Pick<PerfGoal, "ownerId" | "type" | "title" | "target" | "weight" | "period" | "cycleId"> & { id?: string };
 
 export function saveGoal(actor: TalentActor, input: GoalInput): TalentResult {
+  if (API_ENABLED) {
+    if (!input.title.trim()) return "Enter a goal title.";
+    if (!input.target.trim()) return "Enter a target.";
+    const weight = Math.round(Number(input.weight));
+    if (!Number.isFinite(weight) || weight < 1 || weight > 100) return "Weight must be between 1 and 100.";
+    return viaApi(() => perfApi.apiSaveGoal({ ...input, weight }));
+  }
   return guarded((s) => {
     const owner = goalOwnerOptions(actor).find((o) => o.id === input.ownerId);
     if (!owner) return "You can only set goals for yourself or people below you.";
@@ -1577,6 +1780,7 @@ export function saveGoal(actor: TalentActor, input: GoalInput): TalentResult {
 }
 
 export function updateGoalProgress(actor: TalentActor, id: string, progress: number): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiGoalProgress(id, progress));
   return guarded((s) => {
     const row = s.goals.find((g) => g.id === id);
     if (!row) return "Goal not found.";
@@ -1614,6 +1818,10 @@ export function courseOpenTo(course: Course, learner: Learner): boolean {
 }
 
 export function enrollInCourse(learner: Learner, courseId: string): TalentResult {
+  if (API_ENABLED) {
+    if (!courseCatalog().some((c) => c.id === courseId)) return "Course not found.";
+    return viaApi(() => perfApi.apiEnroll(courseId, isoDaysFromToday(ENROLLMENT_DUE_DAYS)));
+  }
   return guarded((s) => {
     const course = COURSES.find((c) => c.id === courseId);
     if (!course) return "Course not found.";
@@ -1633,6 +1841,7 @@ export function enrollInCourse(learner: Learner, courseId: string): TalentResult
 }
 
 export function updateEnrollmentProgress(actor: TalentActor, id: string, progress: number): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiEnrollmentProgress(id, Math.min(SELF_PROGRESS_CAP, progress)));
   return guarded((s) => {
     const row = s.enrollments.find((e) => e.id === id);
     if (!row) return "Enrollment not found.";
@@ -1652,6 +1861,17 @@ export function earnedCertificate(e: Enrollment): boolean {
 
 /** HR confirms completion at 90%+ progress, or with a passing assessment score. */
 export function completeEnrollment(actor: TalentActor, id: string, score?: number): TalentResult {
+  if (API_ENABLED) {
+    const row = getTalentState().enrollments.find((e) => e.id === id);
+    if (!row) return "Enrollment not found.";
+    if (score !== undefined) {
+      if (!Number.isInteger(score) || score < 0 || score > 100) return "Score must be a whole number from 0 to 100.";
+      if (score < PASS_MARK) return `Below the pass mark of ${PASS_MARK}.`;
+    } else if (row.progress < SELF_PROGRESS_CAP) {
+      return `Needs ${SELF_PROGRESS_CAP}% progress or an assessment score.`;
+    }
+    return viaApi(() => perfApi.apiCompleteEnrollment(id, score));
+  }
   return guarded((s) => {
     const row = s.enrollments.find((e) => e.id === id);
     if (!row) return "Enrollment not found.";
@@ -1697,8 +1917,12 @@ export function isCertExpired(c: Pick<Certification, "expiresOn">, today = today
   return !!c.expiresOn && c.expiresOn < today;
 }
 
+/** Backend mode: renewals and HR verification are not kept on the server yet. */
+const CERT_CHECKS_OFFLINE = "Certification renewals and verification aren't available on the server yet.";
+
 /** The employee records a renewal; it stays pending until HR verifies it. */
 export function requestCertificationRenewal(actor: TalentActor, id: string, expiresOn?: string): TalentResult {
+  if (API_ENABLED) return CERT_CHECKS_OFFLINE;
   return guarded((s) => {
     const row = s.certifications.find((c) => c.id === id);
     if (!row) return "Certification not found.";
@@ -1717,6 +1941,7 @@ export function requestCertificationRenewal(actor: TalentActor, id: string, expi
 }
 
 export function verifyCertificationRenewal(actor: TalentActor, id: string): TalentResult {
+  if (API_ENABLED) return CERT_CHECKS_OFFLINE;
   return guarded((s) => {
     const row = s.certifications.find((c) => c.id === id);
     if (!row) return "Certification not found.";
@@ -1737,6 +1962,7 @@ export function verifyCertificationRenewal(actor: TalentActor, id: string): Tale
 
 /** HR confirms a certification with the issuer and records its credential number. */
 export function verifyCertification(actor: TalentActor, id: string, credentialId: string): TalentResult {
+  if (API_ENABLED) return CERT_CHECKS_OFFLINE;
   return guarded((s) => {
     const row = s.certifications.find((c) => c.id === id);
     if (!row) return "Certification not found.";
@@ -1817,6 +2043,13 @@ export function isMeetingInFuture(meeting: Pick<OneOnOne, "date" | "time">): boo
   return meetingStart(meeting) > Date.now();
 }
 
+/** Backend mode: check-ins recorded on the server (they can't be changed). */
+const SAVED_CHECK_IN = "This check-in is saved on the server and can't be changed.";
+
+function isServerCheckIn(id: string): boolean {
+  return API_ENABLED && perfApi.performanceMirror.get().checkIns.some((m) => m.id === id);
+}
+
 function isParticipant(actor: TalentActor, meeting: OneOnOne): boolean {
   return actor.id === meeting.managerId || actor.id === meeting.employeeId;
 }
@@ -1848,6 +2081,21 @@ export function scheduleOneOnOne(
 }
 
 export function setOneOnOneStatus(actor: TalentActor, id: string, status: OneOnOne["status"], notes?: string): TalentResult {
+  if (API_ENABLED) {
+    if (isServerCheckIn(id)) return SAVED_CHECK_IN;
+    if (status === "Completed") {
+      const row = read().oneOnOnes.find((m) => m.id === id);
+      if (!row) return "Meeting not found.";
+      if (!isParticipant(actor, row)) return "Only the two people in this 1:1 can change it.";
+      if (isMeetingInFuture(row)) return "A 1:1 can only be completed once it has started.";
+      // Recorded on the server as a check-in; the planning copy in this browser is then removed.
+      return viaApi(async () => {
+        const error = await perfApi.apiRecordCheckIn(row, notes ?? row.notes);
+        if (!error) updateTalent((s) => void (s.oneOnOnes = s.oneOnOnes.filter((m) => m.id !== id)));
+        return error;
+      });
+    }
+  }
   return guarded((s) => {
     const row = s.oneOnOnes.find((m) => m.id === id);
     if (!row) return "Meeting not found.";
@@ -1860,6 +2108,7 @@ export function setOneOnOneStatus(actor: TalentActor, id: string, status: OneOnO
 }
 
 export function updateOneOnOne(actor: TalentActor, id: string, mutator: (meeting: OneOnOne) => void): TalentResult {
+  if (API_ENABLED && isServerCheckIn(id)) return SAVED_CHECK_IN;
   return guarded((s) => {
     const row = s.oneOnOnes.find((m) => m.id === id);
     if (!row) return "Meeting not found.";
@@ -1907,12 +2156,32 @@ function ownProfile(s: TalentState, employeeId: string): SkillProfile {
   return profile;
 }
 
+/** Backend mode: apply the change to a copy of my profile, then save it on the server. */
+function saveSkillsViaApi(actor: TalentActor, employeeId: string, change: (skills: EmployeeSkill[]) => TalentResult): TalentResult {
+  if (actor.id !== employeeId) return "You can only edit your own skills profile.";
+  const before = skillProfileFor(getTalentState(), employeeId);
+  const next = structuredClone(before);
+  const error = change(next);
+  if (error) return error;
+  return viaApi(() => perfApi.apiSaveMySkills(employeeId, before, next));
+}
+
 export function updateEmployeeSkill(
   actor: TalentActor,
   employeeId: string,
   skillId: string,
   patch: Partial<Pick<EmployeeSkill, "level" | "targetLevel">>,
 ): TalentResult {
+  if (API_ENABLED) {
+    return saveSkillsViaApi(actor, employeeId, (skills) => {
+      if (patch.level !== undefined && !SKILL_LEVELS.includes(patch.level)) return "Choose a level.";
+      if (patch.targetLevel !== undefined && !SKILL_LEVELS.includes(patch.targetLevel)) return "Choose a target level.";
+      const skill = skills.find((k) => k.skillId === skillId);
+      if (!skill) return "Skill not found.";
+      Object.assign(skill, patch);
+      return null;
+    });
+  }
   return guarded((s) => {
     if (actor.id !== employeeId) return "You can only edit your own skills profile.";
     if (patch.level !== undefined && !SKILL_LEVELS.includes(patch.level)) return "Choose a level.";
@@ -1926,6 +2195,20 @@ export function updateEmployeeSkill(
 
 /** Adds a skill to your own profile: a library skill by name, or a new one. */
 export function addEmployeeSkill(actor: TalentActor, employeeId: string, name: string, level: string): TalentResult {
+  if (API_ENABLED) {
+    return saveSkillsViaApi(actor, employeeId, (skills) => {
+      const clean = name.trim().replace(/\s+/g, " ");
+      if (clean.length < 2) return "Enter a skill name.";
+      if (!SKILL_LEVELS.includes(level)) return "Choose a level.";
+      if (skills.some((k) => sameName(k.skillName, clean))) return `${clean} is already on your profile.`;
+      if (skills.length >= 20) return "Up to 20 skills.";
+      const def = SKILL_LIBRARY.find((d) => sameName(d.name, clean));
+      const rank = SKILL_LEVELS.indexOf(level);
+      const skillName = def?.name ?? clean.slice(0, 40);
+      skills.push({ skillId: perfApi.skillIdFor(skillName), skillName, level, targetLevel: SKILL_LEVELS[Math.min(SKILL_LEVELS.length - 1, rank + 1)] });
+      return null;
+    });
+  }
   return guarded((s) => {
     if (actor.id !== employeeId) return "You can only edit your own skills profile.";
     const clean = name.trim().replace(/\s+/g, " ");
@@ -1947,6 +2230,14 @@ export function addEmployeeSkill(actor: TalentActor, employeeId: string, name: s
 }
 
 export function removeEmployeeSkill(actor: TalentActor, employeeId: string, skillId: string): TalentResult {
+  if (API_ENABLED) {
+    return saveSkillsViaApi(actor, employeeId, (skills) => {
+      const at = skills.findIndex((k) => k.skillId === skillId);
+      if (at < 0) return "Skill not found.";
+      skills.splice(at, 1);
+      return null;
+    });
+  }
   return guarded((s) => {
     if (actor.id !== employeeId) return "You can only edit your own skills profile.";
     const profile = ownProfile(s, employeeId);

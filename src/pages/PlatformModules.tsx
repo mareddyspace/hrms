@@ -46,9 +46,9 @@ import {
   type DayStatus,
 } from "../data/workforceStats.ts";
 import { countWaitingOnMe } from "./ApprovalsCenter.tsx";
-import { useAskCopilot } from "../features/copilot/askCopilot.ts";
+import { useAskCopilotAi, type CopilotOrigin } from "../features/copilot/askCopilot.ts";
 import { agentEnabled } from "../data/aiSettings.ts";
-import { CopilotSources } from "../features/copilot/CopilotSources.tsx";
+import { CopilotOriginTag, CopilotSources, CopilotThinking } from "../features/copilot/CopilotSources.tsx";
 import { CopilotExtras } from "../features/copilot/CopilotExtras.tsx";
 import { getCompensationAccess, hasModuleAccess } from "../data/peoplePermissions.ts";
 import { canManageLetters, canViewReport } from "../data/rbac.ts";
@@ -83,7 +83,9 @@ import {
   listNotificationPrefs,
   listQuarantine,
   nextRunAt,
+  notificationPrefError,
   retryAllQuarantined,
+  runScheduledJobsNow,
   retryIntegration,
   retryQuarantined,
   runIntegrationSync,
@@ -94,11 +96,15 @@ import {
   type QuarantineField,
   type QuarantineRecord,
 } from "../data/platformLocal.ts";
+import { API_ENABLED } from "../api/syncOps.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import { formatShortDate, todayISO, type CountryCode } from "../model.ts";
 import { roleLabel } from "../nav.ts";
 import { usePortal } from "../store.tsx";
+import { MaskedValue } from "../components/MaskedValue.tsx";
+import { OnboardingAnalyticsPanel } from "../features/onboarding/OnboardingAnalytics.tsx";
+import { PayrollStatusPanel } from "../features/payroll/PayrollStatusPanel.tsx";
 
 function usePlatformTick() {
   return useSyncExternalStore(subscribePlatform, getPlatformVersion, getPlatformVersion);
@@ -246,6 +252,7 @@ export function AnalyticsPage() {
     ...(canTeam ? [{ id: "team", label: "My team" }] : []),
     ...(canCompany ? [{ id: "workforce", label: "Workforce" }] : []),
     ...(canRecruiting ? [{ id: "recruiting", label: "Recruiting" }] : []),
+    ...(canCompany ? [{ id: "onboarding", label: "Onboarding" }] : []),
     ...(canCompany ? [{ id: "attendance", label: "Attendance & leave" }] : []),
     ...(canCompany ? [{ id: "talent", label: "Performance & learning" }] : []),
     ...(canCompany ? [{ id: "skills", label: "Skills & capacity" }] : []),
@@ -398,6 +405,10 @@ export function AnalyticsPage() {
         </div>
       )}
 
+      {activeTab === "onboarding" && canCompany && (
+        <OnboardingAnalyticsPanel country={countryFilter === "ALL" ? undefined : countryFilter} />
+      )}
+
       {activeTab === "recruiting" && (
         <div className="grid-2">
           <Card title="Recruitment pipeline">
@@ -541,39 +552,56 @@ function integrationTone(status: string): "ok" | "warn" | "danger" | "neutral" {
 
 /* ───────────────── AI Copilot ───────────────── */
 
-type ChatTurn = { id: string; role: "user" | "assistant"; text: string; answer?: CopilotAnswer };
+type ChatTurn = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  answer?: CopilotAnswer;
+  origin?: CopilotOrigin;
+  model?: string;
+  pending?: boolean;
+};
 
 export function AiCopilotPage() {
   const { employee, demoProfile } = usePortal();
-  const askCopilot = useAskCopilot();
+  const askCopilot = useAskCopilotAi();
   const persona = copilotPersonaFromRole(demoProfile.role);
   const suggestions = COPILOT_SUGGESTIONS[persona];
   const [prompt, setPrompt] = useState("");
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  function ask(question: string) {
+  async function ask(question: string) {
     const q = question.trim();
-    if (!q) return;
-    const answer = askCopilot(q);
+    if (!q || busy) return;
     const stamp = Date.now();
+    const botId = `a-${stamp}`;
+    const earlier = history.filter((t) => !t.pending).map((t) => ({ role: t.role, content: t.text }));
     const userTurn: ChatTurn = { id: `u-${stamp}`, role: "user", text: q };
-    const botTurn: ChatTurn = { id: `a-${stamp}`, role: "assistant", text: answer.summary, answer };
-    setHistory((prev) => [...prev, userTurn, botTurn]);
-    setActiveId(botTurn.id);
+    setHistory((prev) => [...prev, userTurn, { id: botId, role: "assistant", text: "", pending: true }]);
+    setActiveId(botId);
     setPrompt("");
+    setBusy(true);
+    try {
+      const reply = await askCopilot(q, earlier);
+      const botTurn: ChatTurn = { id: botId, role: "assistant", text: reply.answer.summary, answer: reply.answer, origin: reply.origin, model: reply.model };
+      setHistory((prev) => prev.map((t) => (t.id === botId ? botTurn : t)));
+    } finally {
+      setBusy(false);
+    }
   }
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
-    ask(prompt);
+    void ask(prompt);
   }
 
   const [askParams, setAskParams] = useSearchParams();
   useEffect(() => {
     const linked = askParams.get("ask");
     if (!linked) return;
-    ask(linked);
+    void ask(linked);
     setAskParams({}, { replace: true });
     // ask is stable enough for a one-off linked question
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -615,7 +643,7 @@ export function AiCopilotPage() {
           <Card title="Suggested">
             <div className="chip-row">
               {suggestions.map((s) => (
-                <button key={s} type="button" className="chip-btn" onClick={() => ask(s)}>
+                <button key={s} type="button" className="chip-btn" onClick={() => void ask(s)}>
                   {s}
                 </button>
               ))}
@@ -631,8 +659,11 @@ export function AiCopilotPage() {
               )}
               {history.map((turn) => (
                 <div key={turn.id} className={`copilot-bubble ${turn.role}`}>
-                  <p className="copilot-role">{turn.role === "user" ? "You" : `${PRODUCT_NAME} Copilot`}</p>
-                  <p>{turn.text || turn.answer?.summary || "—"}</p>
+                  <p className="copilot-role">
+                    {turn.role === "user" ? "You" : `${PRODUCT_NAME} Copilot`}
+                    {turn.role === "assistant" && <CopilotOriginTag origin={turn.origin} model={turn.model} />}
+                  </p>
+                  {turn.pending ? <CopilotThinking /> : <p>{turn.text || turn.answer?.summary || "—"}</p>}
                   {turn.answer && <CopilotAnswerCard answer={turn.answer} highlight={turn.id === activeId || turn.id === `a-${activeId?.replace(/^u-/, "")}`} />}
                 </div>
               ))}
@@ -646,7 +677,7 @@ export function AiCopilotPage() {
                   placeholder="e.g. What is my leave balance?"
                 />
               </Field>
-              <button className="btn" type="submit">
+              <button className="btn" type="submit" disabled={busy}>
                 Send
               </button>
             </form>
@@ -791,10 +822,12 @@ export function IntegrationsPage() {
 
   const active = integrations.find((i) => i.id === selected) ?? integrations[0];
   const actor = { id: employee.id, name: employee.fullName };
+  // With the API, only admins run syncs or fix records; HR sees status, runs and quarantine.
+  const canAct = !API_ENABLED || demoProfile.role === "admin" || demoProfile.role === "super_admin";
 
   if (!hasModuleAccess(demoProfile, "integrations") && !hasModuleAccess(demoProfile, "*")) {
     return (
-      <Page title="Integrations" subtitle="Connectors and sync status">
+      <Page title="Integrations">
         <EmptyState title="Not authorized" description="Only admins manage integrations." />
       </Page>
     );
@@ -805,9 +838,9 @@ export function IntegrationsPage() {
     setReviewOpen(true);
   }
 
-  function confirmRetry() {
+  async function confirmRetry() {
     if (!pendingRetry) return;
-    const result = retryIntegration(pendingRetry, employee.fullName);
+    const result = await retryIntegration(pendingRetry, employee.fullName);
     setReviewOpen(false);
     setPendingRetry(null);
     if (!result) setToast({ tone: "err", text: "This connector can't be retried." });
@@ -815,9 +848,10 @@ export function IntegrationsPage() {
     else setToast({ tone: "err", text: `${result.item.name} retry failed. Check the logs.` });
   }
 
-  function runSync(id: string) {
-    const result = runIntegrationSync(id, actor);
+  async function runSync(id: string) {
+    const result = await runIntegrationSync(id, actor);
     if (!result) setToast({ tone: "err", text: "This connector isn't set up." });
+    else if ("error" in result) setToast({ tone: "err", text: result.error });
     else if (result.failed.length)
       setToast({ tone: "warn", text: `${result.item.name}: ${result.passed} of ${result.processed} records synced, ${result.failed.length} moved to quarantine.` });
     else setToast({ tone: "ok", text: `${result.item.name}: all ${result.processed} records synced.` });
@@ -878,8 +912,8 @@ export function IntegrationsPage() {
         <Card
           title={`${active.name} · logs`}
           action={
-            <span className="chip-row">
-              <button className="btn" type="button" onClick={() => runSync(active.id)} disabled={active.status === "Not configured"}>
+            canAct && <span className="chip-row">
+              <button className="btn" type="button" onClick={() => void runSync(active.id)} disabled={active.status === "Not configured"}>
                 Run sync
               </button>
               <button className="btn-ghost" type="button" onClick={() => requestRetry(active.id)} disabled={active.status === "Not configured"}>
@@ -907,10 +941,15 @@ export function IntegrationsPage() {
               Schedule
               <select
                 value={integrationSchedule(active)}
-                disabled={active.status === "Not configured"}
-                onChange={(e) => {
-                  setIntegrationSchedule(active.id, e.target.value as SyncSchedule, employee.fullName);
-                  setToast({ tone: "ok", text: `${active.name} now syncs: ${scheduleLabel(e.target.value as SyncSchedule).toLowerCase()}.` });
+                disabled={!canAct || active.status === "Not configured"}
+                onChange={async (e) => {
+                  const schedule = e.target.value as SyncSchedule;
+                  const error = await setIntegrationSchedule(active.id, schedule, employee.fullName);
+                  setToast(
+                    error
+                      ? { tone: "err", text: error }
+                      : { tone: "ok", text: `${active.name} now syncs: ${scheduleLabel(schedule).toLowerCase()}.` },
+                  );
                 }}
               >
                 {SYNC_SCHEDULES.map((s) => (
@@ -934,7 +973,7 @@ export function IntegrationsPage() {
         </Card>
       )}
 
-      {active && active.status !== "Not configured" && <QuarantineCard connectorId={active.id} actor={actor} onResult={setToast} />}
+      {active && active.status !== "Not configured" && <QuarantineCard connectorId={active.id} actor={actor} onResult={setToast} canAct={canAct} />}
 
       <Dialog
         open={reviewOpen}
@@ -945,7 +984,7 @@ export function IntegrationsPage() {
             <button className="btn-ghost" type="button" onClick={() => { setReviewOpen(false); setPendingRetry(null); }}>
               Cancel
             </button>
-            <button className="btn" type="button" onClick={confirmRetry}>
+            <button className="btn" type="button" onClick={() => void confirmRetry()}>
               Retry now
             </button>
           </>
@@ -964,26 +1003,27 @@ function QuarantineCard({
   connectorId,
   actor,
   onResult,
+  canAct,
 }: {
   connectorId: string;
   actor: { id: string; name: string };
   onResult: (msg: { tone: "ok" | "err" | "warn"; text: string }) => void;
+  canAct: boolean;
 }) {
   const records = listQuarantine(connectorId);
   const [editing, setEditing] = useState<{ id: string; mode: "fix" | "dismiss"; value: string; error?: string } | null>(null);
 
-  function retry(r: QuarantineRecord) {
-    const out = retryQuarantined(connectorId, r.id, actor);
+  async function retry(r: QuarantineRecord) {
+    const out = await retryQuarantined(connectorId, r.id, actor);
     if (out.error) onResult({ tone: "err", text: out.error });
     else onResult(out.ok ? { tone: "ok", text: `${r.record} synced.` } : { tone: "warn", text: `${r.record} failed again: ${r.reason}.` });
   }
 
-  function submitEdit(r: QuarantineRecord) {
+  async function submitEdit(r: QuarantineRecord) {
     if (!editing) return;
-    const out =
-      editing.mode === "fix"
-        ? fixAndRetryQuarantined(connectorId, r.id, editing.value, actor)
-        : dismissQuarantined(connectorId, r.id, editing.value, actor);
+    const out = await (editing.mode === "fix"
+      ? fixAndRetryQuarantined(connectorId, r.id, editing.value, actor)
+      : dismissQuarantined(connectorId, r.id, editing.value, actor));
     if (!out.ok) {
       setEditing({ ...editing, error: out.error });
       return;
@@ -992,8 +1032,8 @@ function QuarantineCard({
     onResult({ tone: "ok", text: editing.mode === "fix" ? `${r.record} fixed and synced.` : `${r.record} dismissed.` });
   }
 
-  function retryAll() {
-    const out = retryAllQuarantined(connectorId, actor);
+  async function retryAll() {
+    const out = await retryAllQuarantined(connectorId, actor);
     onResult(
       out.failed
         ? { tone: "warn", text: `${out.passed} synced, ${out.failed} still in quarantine.` }
@@ -1005,15 +1045,15 @@ function QuarantineCard({
     <Card
       title={`Quarantine (${records.length})`}
       action={
-        records.length > 0 && (
-          <button className="btn-ghost" type="button" onClick={retryAll}>
+        canAct && records.length > 0 && (
+          <button className="btn-ghost" type="button" onClick={() => void retryAll()}>
             Retry all
           </button>
         )
       }
     >
       <DataTable
-        headers={["Record", "Reason", "Time", "Actions"]}
+        headers={canAct ? ["Record", "Reason", "Time", "Actions"] : ["Record", "Reason", "Time"]}
         empty={<p className="note">No failed records. Records that fail a sync are held here.</p>}
         rows={records.map((r) => {
           const open = editing?.id === r.id ? editing : null;
@@ -1023,18 +1063,23 @@ function QuarantineCard({
               {r.reason}
               <br />
               <small className="note">
-                {QUARANTINE_FIELD_LABEL[r.field]}: {r.value || "blank"}
+                {QUARANTINE_FIELD_LABEL[r.field] ?? r.field}:{" "}
+                {r.value ? (
+                  r.field === "bankAccount" || r.field === "taxId" ? <MaskedValue value={r.value} kind="id" canReveal /> : r.value
+                ) : (
+                  "blank"
+                )}
                 {r.attempts ? ` · ${r.attempts} ${r.attempts === 1 ? "retry" : "retries"}` : ""}
               </small>
             </span>,
             r.at,
-            open ? (
+            ...(!canAct ? [] : [open ? (
               <form
                 key="edit"
                 className="stack-tight"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  submitEdit(r);
+                  void submitEdit(r);
                 }}
               >
                 <input
@@ -1056,7 +1101,7 @@ function QuarantineCard({
               </form>
             ) : (
               <span key="actions" className="chip-row">
-                <button className="btn-ghost btn-tiny" type="button" onClick={() => retry(r)}>
+                <button className="btn-ghost btn-tiny" type="button" onClick={() => void retry(r)}>
                   Retry
                 </button>
                 <button className="btn-ghost btn-tiny" type="button" onClick={() => setEditing({ id: r.id, mode: "fix", value: r.value })}>
@@ -1066,7 +1111,7 @@ function QuarantineCard({
                   Dismiss
                 </button>
               </span>
-            ),
+            )]),
           ];
         })}
       />
@@ -1098,8 +1143,27 @@ export function PayrollPage() {
 
   const rows = PAYROLL_PROVIDERS.filter((p) => regionCode === "ALL" || matchesRegion(p.country));
 
+  if (API_ENABLED) {
+    return (
+      <Page title="Payroll">
+        <Banner message={{ tone: "warn", text: "Payroll is run by external providers. This tab shows integration status only." }} />
+        <FilterBar>
+          <RegionalFilter />
+        </FilterBar>
+        <PayrollStatusPanel country={regionCode === "ALL" ? undefined : String(regionCode)} />
+        <Card title="Not done in this app">
+          <ul className="stack">
+            {PAYROLL_STATUS.notImplemented.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </Card>
+      </Page>
+    );
+  }
+
   return (
-    <Page title="Payroll" subtitle="Provider handoff by country">
+    <Page title="Payroll">
       <Banner message={{ tone: "warn", text: "Payroll is run by external providers." }} />
       <FilterBar>
         <RegionalFilter />
@@ -1365,7 +1429,11 @@ export function AdminPage() {
       )}
 
       {tab === "notifications" && (
-        <Card title="Notification preferences">
+        <Card
+          title="Notification preferences"
+          action={API_ENABLED && canEdit ? <RunJobsButton /> : undefined}
+        >
+          {notificationPrefError() && <Banner message={{ tone: "err", text: notificationPrefError() ?? "" }} />}
           <DataTable
             headers={["Channel", "Description", "Email", "In-app", "Digests"]}
             rows={prefs.map((p) => [
@@ -1399,6 +1467,30 @@ export function AdminPage() {
         </p>
       </Dialog>
     </Page>
+  );
+}
+
+/** Backend mode: runs approval reminders, SLA escalations and case retention once (no connector syncs). */
+function RunJobsButton() {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  async function run() {
+    setBusy(true);
+    const out = await runScheduledJobsNow();
+    setBusy(false);
+    if ("error" in out) setNote({ tone: "err", text: out.error });
+    else {
+      const parts = Object.entries(out.results).map(([k, v]) => `${k.replace(/_/g, " ")}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
+      setNote({ tone: "ok", text: parts.length ? `Jobs ran — ${parts.join(" · ")}` : "Jobs ran." });
+    }
+  }
+  return (
+    <span className="chip-row">
+      {note && <small className={note.tone === "err" ? "note err" : "note"}>{note.text}</small>}
+      <button className="btn-ghost btn-tiny" type="button" disabled={busy} onClick={() => void run()}>
+        {busy ? "Running…" : "Run scheduled jobs now"}
+      </button>
+    </span>
   );
 }
 

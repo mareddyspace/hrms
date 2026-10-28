@@ -68,7 +68,8 @@ export function PeopleDirectoryPage() {
       people.filter((p) => {
         if (!matchesRegion(String(p.countryCode), p.countryName)) return false;
         if (listScope === "self") return p.id === employee.id;
-        if (!canSee(p)) return false;
+        // The basic directory is the whole company (basic fields only); full records follow the data scope.
+        if (!basic && !canSee(p)) return false;
         // The basic directory lists current colleagues only.
         if (basic && p.employmentStatus === "Terminated") return false;
         return true;
@@ -169,7 +170,7 @@ export function PeopleDirectoryPage() {
     <Page
       title="People"
       subtitle={`${filtered.length.toLocaleString()} ${filtered.length === 1 ? "person" : "people"}${
-        listScope === "self" ? " (your profile)" : dataScope.scope === "global" && !dataScope.countries.length ? "" : ` · ${dataScopeLabel(dataScope)}`
+        listScope === "self" ? " (your profile)" : basic ? " · Company directory" : dataScope.scope === "global" && !dataScope.countries.length ? "" : ` · ${dataScopeLabel(dataScope)}`
       }`}
       action={
         canEdit ? (

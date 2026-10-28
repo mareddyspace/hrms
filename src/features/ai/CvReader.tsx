@@ -1,21 +1,43 @@
 import { useState } from "react";
 import { Field } from "../../components/ui.tsx";
+import { API_ENABLED } from "../../api/client.ts";
+import { apiParseCv } from "../../api/syncTalent.ts";
 import { readCv, type CvFields } from "./cvReader.ts";
 import { DraftTag } from "./DraftTag.tsx";
 import "./ai.css";
 
-/** Paste or load a CV, check what was read, then hand the confirmed fields to the form. */
-export function CvReader({ onApply, onClose }: { onApply: (fields: CvFields) => void; onClose: () => void }) {
+/**
+ * Paste or load a CV, check what was read, then hand the confirmed fields to the form.
+ * Backend mode: the server reads the text, and the chosen file is handed over too so it can be stored with the candidate.
+ */
+export function CvReader({ onApply, onClose }: { onApply: (fields: CvFields, file?: File) => void; onClose: () => void }) {
   const [text, setText] = useState("");
   const [fileNote, setFileNote] = useState("");
   const [fields, setFields] = useState<CvFields | null>(null);
+  const [file, setFile] = useState<File | undefined>(undefined);
+  const [reading, setReading] = useState(false);
   const set = (patch: Partial<CvFields>) => setFields((f) => (f ? { ...f, ...patch } : f));
+
+  function read() {
+    if (!API_ENABLED) {
+      setFields(readCv(text));
+      return;
+    }
+    setReading(true);
+    setFileNote("");
+    apiParseCv(text)
+      .then(setFields)
+      .catch((error: unknown) => setFileNote(error instanceof Error ? error.message : "The CV could not be read. Try again."))
+      .finally(() => setReading(false));
+  }
 
   function loadFile(file: File | undefined) {
     setFileNote("");
+    setFile(undefined);
     if (!file) return;
+    if (API_ENABLED && file.size <= 5 * 1024 * 1024 && /\.(pdf|docx?|txt)$/i.test(file.name)) setFile(file);
     if (file.size > 1_000_000) {
-      setFileNote(`${file.name} is too large. Paste the text instead.`);
+      setFileNote(`${file.name} is too large${API_ENABLED && file.size <= 5 * 1024 * 1024 ? " to read here, but it will be saved with the candidate" : ""}. Paste the text instead.`);
       return;
     }
     if (/\.txt$/i.test(file.name) || file.type === "text/plain") {
@@ -26,7 +48,9 @@ export function CvReader({ onApply, onClose }: { onApply: (fields: CvFields) => 
       };
       reader.readAsText(file);
     } else {
-      setFileNote(`${file.name} attached. PDF and Word files can't be read here — open it and paste the text below.`);
+      setFileNote(
+        `${file.name} attached${API_ENABLED ? " and will be saved with the candidate" : ""}. PDF and Word files can't be read here — open it and paste the text below.`,
+      );
     }
   }
 
@@ -46,8 +70,8 @@ export function CvReader({ onApply, onClose }: { onApply: (fields: CvFields) => 
             <textarea value={text} maxLength={20000} onChange={(e) => setText(e.target.value)} placeholder="Paste the CV text here" />
           </Field>
           <div className="row-gap">
-            <button type="button" className="btn btn-tiny" disabled={text.trim().length < 20} onClick={() => setFields(readCv(text))}>
-              Read CV
+            <button type="button" className="btn btn-tiny" disabled={text.trim().length < 20 || reading} onClick={read}>
+              {reading ? "Reading…" : "Read CV"}
             </button>
             <button type="button" className="btn-ghost btn-tiny" onClick={onClose}>
               Cancel
@@ -56,7 +80,6 @@ export function CvReader({ onApply, onClose }: { onApply: (fields: CvFields) => 
         </>
       ) : (
         <>
-          <p className="ai-note">Check these before using them. Blank means nothing was found.</p>
           <div className="ai-fields">
             <Field label="Name">
               <input value={fields.name} maxLength={80} onChange={(e) => set({ name: e.target.value })} />
@@ -117,7 +140,7 @@ export function CvReader({ onApply, onClose }: { onApply: (fields: CvFields) => 
             <button
               type="button"
               className="btn btn-tiny"
-              onClick={() => onApply({ ...fields, education: fields.education.map((x) => x.trim()).filter(Boolean) })}
+              onClick={() => onApply({ ...fields, education: fields.education.map((x) => x.trim()).filter(Boolean) }, file)}
             >
               Use these details
             </button>

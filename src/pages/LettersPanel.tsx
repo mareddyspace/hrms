@@ -1,5 +1,15 @@
 /** Documents & Letters — letter request, approval, generation and access (blueprint §24 / §39). */
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { API_ENABLED } from "../api/client.ts";
+import {
+  apiCancelLetter,
+  apiDecideLetter,
+  apiIssueLetter,
+  apiRequestLetter,
+  downloadLetterPdf,
+  fetchLetterPreview,
+  type LetterPreviewOut,
+} from "../api/syncRewards.ts";
 import { LetterDownloadButtons, LetterFrame, printLetter } from "../components/LetterDocument.tsx";
 import { Banner, Card, DataTable, Dialog, EmptyState, Field, StatusBadge } from "../components/ui.tsx";
 import {
@@ -21,6 +31,7 @@ import {
 import {
   ALL_LETTER_TEMPLATES,
   letterDate,
+  letterDocumentHtml,
   letterFileName,
   letterInfo,
   missingFields,
@@ -29,7 +40,7 @@ import {
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { canManageLetters } from "../data/rbac.ts";
 import type { LetterRequest, LetterType } from "../data/rewardData.ts";
-import { getRewardState, nextLetterStatuses, setLetterStatus, subscribeReward } from "../data/rewardLocal.ts";
+import { getRewardState, nextLetterStatuses, runRewardApi, setLetterStatus, subscribeReward } from "../data/rewardLocal.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
 import { getExitState, subscribeExits } from "../features/lifecycle/exitStore.ts";
 import { todayISO } from "../model.ts";
@@ -46,6 +57,68 @@ function useLetterData() {
 }
 
 const label = (type: FullLetterType) => letterInfo(type).label;
+
+/** Backend mode: the server already returns only the letters this viewer may see. */
+const visibleTo = (actor: DemoAccount, row: LetterRequest) => (row.api ? true : canSeeLetter(actor, row));
+
+const pdfName = (row: LetterRequest, version?: number) =>
+  `${letterFileName(row.type, row.employeeName.replace(/\s+/g, "-"), version ?? row.api?.issues.at(-1)?.version ?? 1).replace(/\.html?$/i, "")}.pdf`;
+
+/** Backend mode: the letter's actions (approve, reject, cancel, generate, PDF). */
+function ApiLetterActions({ row, onOpen, onResult }: { row: LetterRequest; onOpen?: () => void; onResult: (msg: Msg) => void }) {
+  const info = row.api!;
+  const [busy, setBusy] = useState(false);
+  async function go(call: () => Promise<string | null>, ok: string) {
+    if (busy) return;
+    setBusy(true);
+    const error = await runRewardApi(call(), ["letters"]);
+    setBusy(false);
+    onResult(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
+  }
+  async function pdf() {
+    const error = await downloadLetterPdf(row.id, pdfName(row));
+    if (error) onResult({ tone: "err", text: error });
+  }
+  return (
+    <span className="reward-actions">
+      {onOpen && (
+        <button type="button" className="quiet-link" onClick={onOpen}>
+          {info.issues.length ? "Open" : "Preview"}
+        </button>
+      )}
+      {info.canDecide && (
+        <>
+          <button type="button" className="btn" disabled={busy} onClick={() => go(() => apiDecideLetter(row.id, "approve"), `${label(row.type)} approved.`)}>
+            Approve
+          </button>
+          <button type="button" className="btn-ghost" disabled={busy} onClick={() => go(() => apiDecideLetter(row.id, "reject"), "Request rejected.")}>
+            Reject
+          </button>
+        </>
+      )}
+      {info.canCancel && (
+        <button type="button" className="btn-ghost" disabled={busy} onClick={() => go(() => apiCancelLetter(row.id), "Request cancelled.")}>
+          Cancel
+        </button>
+      )}
+      {info.canIssue && (
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy}
+          onClick={() => go(() => apiIssueLetter(row.id), info.issues.length ? `Regenerated as v${info.issues.length + 1}.` : "Letter generated.")}
+        >
+          {info.issues.length ? "Regenerate" : "Generate PDF"}
+        </button>
+      )}
+      {row.status === "Issued" && info.issues.length > 0 && (
+        <button type="button" className="btn-ghost" onClick={() => void pdf()}>
+          PDF
+        </button>
+      )}
+    </span>
+  );
+}
 
 function MissingList({ missing }: { missing: string[] }) {
   if (!missing.length) return null;
@@ -95,7 +168,7 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
     return missingFields(type, collectLetterFields(draft, reward.history));
   }, [subjectId, type, note, details, effectiveDate, actor.fullName, reward.history]);
 
-  const letters = reward.letters.filter((l) => canSeeLetter(actor, l));
+  const letters = reward.letters.filter((l) => visibleTo(actor, l));
   const sortedPeople = [...people].sort((a, b) => a.fullName.localeCompare(b.fullName));
 
   function act(fn: () => string | null, ok: string) {
@@ -110,6 +183,19 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
           className="stack"
           onSubmit={(e) => {
             e.preventDefault();
+            if (API_ENABLED) {
+              void runRewardApi(apiRequestLetter({ employeeId: subjectId, type, note, details, effectiveDate }), ["letters"]).then((error) => {
+                if (error) return setMsg({ tone: "err", text: error });
+                setMsg({
+                  tone: "ok",
+                  text: template.secondApproval ? `${template.label} raised. It needs a second approver.` : `${template.label} requested — awaiting approval.`,
+                });
+                setNote("");
+                setDetails("");
+                setEffectiveDate("");
+              });
+              return;
+            }
             const error = requestLetter(actor, { employeeId: subjectId, type, note, details, effectiveDate });
             if (error) return setMsg({ tone: "err", text: error });
             setMsg({
@@ -156,7 +242,7 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
           <Field label="Reason" wide>
             <input value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="e.g. bank loan, visa appointment" />
           </Field>
-          {blocked ? <Banner message={{ tone: "warn", text: blocked }} /> : hr && <MissingList missing={missing} />}
+          {blocked ? <Banner message={{ tone: "warn", text: blocked }} /> : hr && !API_ENABLED && <MissingList missing={missing} />}
           <button type="submit" className="btn" disabled={!!blocked}>
             Request letter
           </button>
@@ -173,6 +259,17 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
         <DataTable
           headers={["Employee", "Letter", "Status", "Version", "Approver", "Actions"]}
           rows={letters.map((l) => {
+            if (l.api) {
+              const latest = l.api.issues.at(-1);
+              return [
+                l.employeeName,
+                label(l.type),
+                <StatusBadge key={`${l.id}-s`} status={l.status} literal />,
+                latest ? `v${latest.version}` : "—",
+                l.approver ?? (l.api.issueError ? `Not generated: ${l.api.issueError}` : "—"),
+                <ApiLetterActions key={`${l.id}-a`} row={l} onOpen={() => onOpen({ letterId: l.id })} onResult={setMsg} />,
+              ];
+            }
             const issue = currentIssue(l);
             const canDecide = canApproveLetterRow(actor, l) && (l.status === "Pending approval" || l.status === "Approved");
             const submit = nextLetterStatuses(actor, l).includes("Pending approval");
@@ -231,13 +328,14 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
 
 export function LetterHistoryPanel({ actor, onOpen }: { actor: DemoAccount; onOpen: (open: OpenLetter) => void }) {
   const reward = useLetterData();
-  const letters = reward.letters.filter((l) => canSeeLetter(actor, l));
+  const letters = reward.letters.filter((l) => visibleTo(actor, l));
   return (
     <Card title="Request and approval history">
       <DataTable
         headers={["Requested", "Employee", "Letter", "By", "Status", "Approver", "Decided", "Document", "Note"]}
         rows={letters.map((l) => {
           const issue = currentIssue(l);
+          const apiIssue = l.api?.issues.at(-1);
           return [
             l.requestedOn,
             l.employeeName,
@@ -246,7 +344,11 @@ export function LetterHistoryPanel({ actor, onOpen }: { actor: DemoAccount; onOp
             <StatusBadge key={l.id} status={l.status} literal />,
             l.approver ?? "—",
             l.decidedOn ?? "—",
-            issue ? (
+            apiIssue ? (
+              <button key={`${l.id}-d`} type="button" className="quiet-link" onClick={() => onOpen({ letterId: l.id })}>
+                {apiIssue.referenceNo} · v{apiIssue.version}
+              </button>
+            ) : issue ? (
               <button key={`${l.id}-d`} type="button" className="quiet-link" onClick={() => onOpen({ letterId: l.id, docId: issue.docId })}>
                 {issue.docId} · v{issue.version}
               </button>
@@ -267,11 +369,35 @@ export function LetterHistoryPanel({ actor, onOpen }: { actor: DemoAccount; onOp
 export function MyLettersPanel({ actor, onOpen }: { actor: DemoAccount; onOpen: (open: OpenLetter) => void }) {
   const reward = useLetterData();
   const mine = reward.letters.filter((l) => l.employeeId === actor.id && l.status === "Issued");
+  const [msg, setMsg] = useState<Msg>(null);
   return (
     <Card title="My letters">
+      <Banner message={msg} />
       <DataTable
         headers={["Letter", "Version", "Reference", "Approved", ""]}
         rows={mine.map((l) => {
+          const apiIssue = l.api?.issues.at(-1);
+          if (l.api) {
+            if (!apiIssue) return [label(l.type), "—", "—", l.decidedOn ?? "—", <span key={l.id} className="muted">Not generated — ask HR to regenerate</span>];
+            return [
+              label(l.type),
+              `v${apiIssue.version}`,
+              apiIssue.referenceNo,
+              `${l.approver ? `${l.approver}, ` : ""}${apiIssue.on}`,
+              <span key={l.id} className="reward-actions">
+                <button type="button" className="quiet-link" onClick={() => onOpen({ letterId: l.id })}>
+                  Open
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => void downloadLetterPdf(l.id, pdfName(l, apiIssue.version)).then((e) => e && setMsg({ tone: "err", text: e }))}
+                >
+                  Download PDF
+                </button>
+              </span>,
+            ];
+          }
           const issue = currentIssue(l);
           if (!issue) return [label(l.type), "—", "—", l.decidedOn ?? "—", <span key={l.id} className="muted">Not generated — ask HR to regenerate</span>];
           return [
@@ -307,6 +433,7 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
   const [effectiveDate, setEffectiveDate] = useState("");
 
   if (!open) return null;
+  if (row?.api) return <ApiLetterViewer row={row} onClose={onClose} />;
   if (!row || !canSeeLetter(actor, row)) {
     return (
       <Dialog open title="Letter" onClose={onClose}>
@@ -432,6 +559,97 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
         </form>
       )}
       <LetterFrame html={preview.html} title={`${template.label} draft`} />
+    </Dialog>
+  );
+}
+
+/* ───────────── Backend-mode viewer ───────────── */
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
+}
+
+/** The wording the server puts in the letter, plus PDF downloads for issued versions. */
+function ApiLetterViewer({ row, onClose }: { row: LetterRequest; onClose: () => void }) {
+  const info = row.api!;
+  const [preview, setPreview] = useState<LetterPreviewOut | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<Msg>(null);
+  const [version, setVersion] = useState<number | undefined>(info.issues.at(-1)?.version);
+
+  useEffect(() => {
+    let live = true;
+    setPreview(null);
+    setError(null);
+    void fetchLetterPreview(row.id).then((out) => {
+      if (!live) return;
+      setPreview(out.data);
+      setError(out.error);
+    });
+    return () => {
+      live = false;
+    };
+  }, [row.id, row.status]);
+
+  useEffect(() => setVersion(info.issues.at(-1)?.version), [info.issues]);
+
+  const template = letterInfo(row.type);
+  const issued = row.status === "Issued" && info.issues.length > 0;
+  const html = preview
+    ? letterDocumentHtml(
+        `<h1>${escapeHtml(preview.title)}</h1>${preview.paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("")}`,
+        { title: `${template.label}${issued ? "" : " (draft)"}`, draft: !issued },
+      )
+    : "";
+
+  async function pdf(mode: "save" | "open") {
+    const err = await downloadLetterPdf(row.id, pdfName(row, version), version, mode);
+    if (err) setMsg({ tone: "err", text: err });
+  }
+
+  return (
+    <Dialog
+      open
+      wide
+      title={`${template.label} — ${row.employeeName}${issued ? "" : " (draft)"}`}
+      onClose={onClose}
+      actions={
+        issued ? (
+          <>
+            <button type="button" className="btn-ghost" onClick={() => void pdf("open")}>
+              Open PDF
+            </button>
+            <button type="button" className="btn" onClick={() => void pdf("save")}>
+              Download PDF
+            </button>
+          </>
+        ) : undefined
+      }
+    >
+      <Banner message={msg} />
+      {issued && info.issues.length > 1 && (
+        <Field label="Version">
+          <select value={version} onChange={(e) => setVersion(Number(e.target.value))}>
+            {info.issues.map((i, n) => (
+              <option key={i.version} value={i.version}>
+                v{i.version} · {i.on} · {i.referenceNo}
+                {n === info.issues.length - 1 ? " (current)" : ""}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <p className="letter-meta">
+        Status: {row.status}
+        {issued && ` · ${info.issues.find((i) => i.version === version)?.referenceNo ?? ""}`}
+        {info.issueError && ` · not generated: ${info.issueError}`}
+      </p>
+      <div className="row-gap">
+        <ApiLetterActions row={row} onResult={setMsg} />
+      </div>
+      {preview && <MissingList missing={preview.missing} />}
+      {error && <Banner message={{ tone: "warn", text: error }} />}
+      {preview ? <LetterFrame html={html} title={`${template.label} wording`} /> : !error && <p className="note">Loading the letter…</p>}
     </Dialog>
   );
 }

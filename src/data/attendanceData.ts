@@ -66,6 +66,8 @@ export interface AttendanceCorrection {
   decidedById?: string;
   decidedByName?: string;
   decisionNote?: string;
+  /** Backend mode: "Step 2 of 2 · HR" while a multi-step approval is pending. */
+  approvalProgress?: string;
 }
 
 export interface TodaySession {
@@ -231,9 +233,11 @@ export function shiftTimesFrom(shiftHours?: string): ShiftTimes {
 
 function punchFlags(checkIn?: string, checkOut?: string, shift: ShiftTimes = SAMPLE_SHIFT) {
   const late = checkIn ? Math.max(0, minutesBetween(shift.start, checkIn) - SAMPLE_SHIFT.lateGraceMinutes) : 0;
+  // Overtime counts only time worked after the shift ends (a late check-in after shift end isn't overtime).
+  const otStart = checkIn && checkIn > shift.end ? checkIn : shift.end;
   const overtime =
-    checkOut && minutesBetween(shift.end, checkOut) > SAMPLE_SHIFT.overtimeAfterMinutes
-      ? minutesBetween(shift.end, checkOut)
+    checkOut && minutesBetween(otStart, checkOut) > SAMPLE_SHIFT.overtimeAfterMinutes
+      ? minutesBetween(otStart, checkOut)
       : 0;
   return { lateMinutes: late, overtimeMinutes: overtime };
 }

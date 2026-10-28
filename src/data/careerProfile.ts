@@ -9,6 +9,7 @@ import {
   type SkillTrack,
   type TargetRole,
 } from "./talentData.ts";
+import { apiTargetRoles } from "../api/syncCareer.ts";
 
 const LEVELS = ["Awareness", "Working", "Intermediate", "Advanced", "Expert"];
 
@@ -95,7 +96,8 @@ export function careerTarget(
 ): { role: TargetRole; gaps: SkillGap[] } | null {
   const track = trackFor(person);
   if (!track) return null;
-  const roles = TARGET_ROLES.filter((r) => r.track === track);
+  // Backend mode: career paths come from the server (/career/paths) once loaded.
+  const roles = (apiTargetRoles() ?? TARGET_ROLES).filter((r) => r.track === track);
   if (!roles.length) return null;
   const current = roles.findIndex((r) => r.title.toLowerCase() === person.designation.toLowerCase());
   const byGrade: Record<string, number> = { L3: 0, L4: 0, L5: 0, L6: 1, M1: 2, M2: 3, M3: 3, E1: 3 };

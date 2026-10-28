@@ -1,4 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { API_ENABLED } from "../api/client.ts";
+import { apiUpdatePerson, type ApiHrProfileUpdate } from "../api/syncProfile.ts";
 import { Banner, Card, Dialog, Field } from "../components/ui.tsx";
 import {
   FILTER_OPTIONS,
@@ -25,6 +27,7 @@ import {
   type LocalPersonRecord,
 } from "../data/peopleLocal.ts";
 import { TIMEZ_COUNTRIES, todayISO } from "../model.ts";
+import { isMasked } from "../utils/mask.ts";
 import { LOCATIONS, gradeForTitle } from "../workforce.ts";
 
 const GRADES = ["L3", "L4", "L5", "L6", "M1", "M2", "M3", "E1"];
@@ -92,7 +95,10 @@ function validatePerson(draft: LocalPersonRecord, people: PersonRecord[], isNew:
   const email = draft.email.trim().toLowerCase();
   if (!draft.firstName?.trim()) errors.push("First name is required.");
   if (!draft.lastName?.trim()) errors.push("Last name is required.");
-  if (!draft.dateOfBirth || !/^\d{4}-\d{2}-\d{2}$/.test(draft.dateOfBirth)) errors.push("Enter the date of birth.");
+  // Backend mode: an unchanged date of birth arrives masked and is kept as it is.
+  if (!isNew && isMasked(draft.dateOfBirth)) {
+    /* not edited */
+  } else if (!draft.dateOfBirth || !/^\d{4}-\d{2}-\d{2}$/.test(draft.dateOfBirth)) errors.push("Enter the date of birth.");
   else if (draft.dateOfJoining && ageOn(draft.dateOfBirth, draft.dateOfJoining) < 18) {
     errors.push("The employee must be at least 18 on the joining date.");
   } else if (ageOn(draft.dateOfBirth, today) > 80) errors.push("Check the date of birth.");
@@ -146,7 +152,26 @@ export function saveEmployee(
   }
   upsertPerson(next);
   if (before) recordLifecycleChanges(before, next, effectiveDate, actor);
+  if (API_ENABLED && before) syncProfileToServer(before, next);
   return false;
+}
+
+/** Backend mode: send the HR-owned profile fields that changed (PATCH /people/{id}, audited on the server). */
+function syncProfileToServer(before: PersonRecord, next: PersonRecord) {
+  const update: ApiHrProfileUpdate = {};
+  const changed = (a: unknown, b: unknown) => (a ?? "") !== (b ?? "");
+  if (changed(before.firstName, next.firstName)) update.first_name = next.firstName ?? null;
+  if (changed(before.middleName, next.middleName)) update.middle_name = next.middleName ?? null;
+  if (changed(before.lastName, next.lastName)) update.last_name = next.lastName ?? null;
+  if (changed(before.preferredName, next.preferredName)) update.preferred_name = next.preferredName ?? null;
+  if (changed(before.nationality, next.nationality)) update.nationality = next.nationality ?? null;
+  if (changed(before.workArrangement, next.workArrangement) && next.workArrangement) update.work_arrangement = next.workArrangement;
+  if (changed(before.gender, next.gender)) update.gender = next.gender || null;
+  if (changed(before.dateOfBirth, next.dateOfBirth) && next.dateOfBirth && !isMasked(next.dateOfBirth)) update.date_of_birth = next.dateOfBirth;
+  if (!Object.keys(update).length) return;
+  void apiUpdatePerson(next.id, update).then((error) => {
+    if (error) console.error("Could not save profile on the server:", error);
+  });
 }
 
 function addYears(iso: string, years: number): string {

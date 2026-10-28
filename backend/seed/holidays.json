@@ -1,0 +1,530 @@
+[
+  {
+    "id": "h-newyear",
+    "date": "2026-01-01",
+    "name": "New Year's Day",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-sankranti",
+    "date": "2026-01-14",
+    "name": "Makar Sankranti / Pongal",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-republic",
+    "date": "2026-01-26",
+    "name": "Republic Day",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-shivaratri",
+    "date": "2026-02-15",
+    "name": "Maha Shivaratri",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-holi",
+    "date": "2026-03-03",
+    "name": "Holi",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-eid-fitr",
+    "date": "2026-03-21",
+    "name": "Eid-ul-Fitr",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-ugadi",
+    "date": "2026-03-19",
+    "name": "Ugadi / Gudi Padwa",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-ramnavami",
+    "date": "2026-03-26",
+    "name": "Ram Navami",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-goodfriday",
+    "date": "2026-04-03",
+    "name": "Good Friday",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-ambedkar",
+    "date": "2026-04-14",
+    "name": "Dr. Ambedkar Jayanti",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-mayday",
+    "date": "2026-05-01",
+    "name": "May Day",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-bakrid",
+    "date": "2026-05-27",
+    "name": "Eid-ul-Adha (Bakrid)",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-buddha",
+    "date": "2026-05-31",
+    "name": "Buddha Purnima",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-muharram",
+    "date": "2026-06-26",
+    "name": "Muharram",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-janmashtami",
+    "date": "2026-08-14",
+    "name": "Janmashtami",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-independence",
+    "date": "2026-08-15",
+    "name": "Independence Day",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-founders",
+    "date": "2026-08-28",
+    "name": "Founders' Day",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-ganesh",
+    "date": "2026-09-14",
+    "name": "Ganesh Chaturthi",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-gandhi",
+    "date": "2026-10-02",
+    "name": "Gandhi Jayanti",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-dussehra",
+    "date": "2026-10-20",
+    "name": "Dussehra (Vijayadashami)",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-diwali",
+    "date": "2026-11-08",
+    "name": "Diwali",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-diwali-2",
+    "date": "2026-11-09",
+    "name": "Diwali / Annual shutdown",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-govardhan",
+    "date": "2026-11-10",
+    "name": "Govardhan Puja",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-bhaidooj",
+    "date": "2026-11-11",
+    "name": "Bhai Dooj",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-gurunanak",
+    "date": "2026-11-24",
+    "name": "Guru Nanak Jayanti",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-christmas",
+    "date": "2026-12-25",
+    "name": "Christmas",
+    "country_code": "IN"
+  },
+  {
+    "id": "h-us-01-01",
+    "date": "2026-01-01",
+    "name": "New Year's Day",
+    "country_code": "US"
+  },
+  {
+    "id": "h-us-01-19",
+    "date": "2026-01-19",
+    "name": "Martin Luther King Jr. Day",
+    "country_code": "US"
+  },
+  {
+    "id": "h-us-02-16",
+    "date": "2026-02-16",
+    "name": "Presidents' Day",
+    "country_code": "US"
+  },
+  {
+    "id": "h-us-05-25",
+    "date": "2026-05-25",
+    "name": "Memorial Day",
+    "country_code": "US"
+  },
+  {
+    "id": "h-us-06-19",
+    "date": "2026-06-19",
+    "name": "Juneteenth",
+    "country_code": "US"
+  },
+  {
+    "id": "h-us-07-03",
+    "date": "2026-07-03",
+    "name": "Independence Day (observed)",
+    "country_code": "US"
+  },
+  {
+    "id": "h-us-09-07",
+    "date": "2026-09-07",
+    "name": "Labor Day",
+    "country_code": "US"
+  },
+  {
+    "id": "h-us-11-26",
+    "date": "2026-11-26",
+    "name": "Thanksgiving",
+    "country_code": "US"
+  },
+  {
+    "id": "h-us-11-27",
+    "date": "2026-11-27",
+    "name": "Day after Thanksgiving",
+    "country_code": "US"
+  },
+  {
+    "id": "h-us-12-25",
+    "date": "2026-12-25",
+    "name": "Christmas Day",
+    "country_code": "US"
+  },
+  {
+    "id": "h-gb-01-01",
+    "date": "2026-01-01",
+    "name": "New Year's Day",
+    "country_code": "GB"
+  },
+  {
+    "id": "h-gb-04-03",
+    "date": "2026-04-03",
+    "name": "Good Friday",
+    "country_code": "GB"
+  },
+  {
+    "id": "h-gb-04-06",
+    "date": "2026-04-06",
+    "name": "Easter Monday",
+    "country_code": "GB"
+  },
+  {
+    "id": "h-gb-05-04",
+    "date": "2026-05-04",
+    "name": "Early May bank holiday",
+    "country_code": "GB"
+  },
+  {
+    "id": "h-gb-05-25",
+    "date": "2026-05-25",
+    "name": "Spring bank holiday",
+    "country_code": "GB"
+  },
+  {
+    "id": "h-gb-08-31",
+    "date": "2026-08-31",
+    "name": "Summer bank holiday",
+    "country_code": "GB"
+  },
+  {
+    "id": "h-gb-12-25",
+    "date": "2026-12-25",
+    "name": "Christmas Day",
+    "country_code": "GB"
+  },
+  {
+    "id": "h-gb-12-28",
+    "date": "2026-12-28",
+    "name": "Boxing Day (substitute)",
+    "country_code": "GB"
+  },
+  {
+    "id": "h-au-01-01",
+    "date": "2026-01-01",
+    "name": "New Year's Day",
+    "country_code": "AU"
+  },
+  {
+    "id": "h-au-01-26",
+    "date": "2026-01-26",
+    "name": "Australia Day",
+    "country_code": "AU"
+  },
+  {
+    "id": "h-au-04-03",
+    "date": "2026-04-03",
+    "name": "Good Friday",
+    "country_code": "AU"
+  },
+  {
+    "id": "h-au-04-06",
+    "date": "2026-04-06",
+    "name": "Easter Monday",
+    "country_code": "AU"
+  },
+  {
+    "id": "h-au-06-08",
+    "date": "2026-06-08",
+    "name": "King's Birthday",
+    "country_code": "AU"
+  },
+  {
+    "id": "h-au-10-05",
+    "date": "2026-10-05",
+    "name": "Labour Day",
+    "country_code": "AU"
+  },
+  {
+    "id": "h-au-12-25",
+    "date": "2026-12-25",
+    "name": "Christmas Day",
+    "country_code": "AU"
+  },
+  {
+    "id": "h-au-12-28",
+    "date": "2026-12-28",
+    "name": "Boxing Day (substitute)",
+    "country_code": "AU"
+  },
+  {
+    "id": "h-ca-01-01",
+    "date": "2026-01-01",
+    "name": "New Year's Day",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ca-02-16",
+    "date": "2026-02-16",
+    "name": "Family Day",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ca-04-03",
+    "date": "2026-04-03",
+    "name": "Good Friday",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ca-05-18",
+    "date": "2026-05-18",
+    "name": "Victoria Day",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ca-07-01",
+    "date": "2026-07-01",
+    "name": "Canada Day",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ca-08-03",
+    "date": "2026-08-03",
+    "name": "Civic Holiday",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ca-09-07",
+    "date": "2026-09-07",
+    "name": "Labour Day",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ca-10-12",
+    "date": "2026-10-12",
+    "name": "Thanksgiving",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ca-12-25",
+    "date": "2026-12-25",
+    "name": "Christmas Day",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ca-12-28",
+    "date": "2026-12-28",
+    "name": "Boxing Day (substitute)",
+    "country_code": "CA"
+  },
+  {
+    "id": "h-ae-01-01",
+    "date": "2026-01-01",
+    "name": "New Year's Day",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-ae-03-20",
+    "date": "2026-03-20",
+    "name": "Eid al-Fitr",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-ae-03-21",
+    "date": "2026-03-21",
+    "name": "Eid al-Fitr holiday",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-ae-05-26",
+    "date": "2026-05-26",
+    "name": "Arafat Day",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-ae-05-27",
+    "date": "2026-05-27",
+    "name": "Eid al-Adha",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-ae-05-28",
+    "date": "2026-05-28",
+    "name": "Eid al-Adha holiday",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-ae-06-16",
+    "date": "2026-06-16",
+    "name": "Islamic New Year",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-ae-08-25",
+    "date": "2026-08-25",
+    "name": "Prophet's Birthday",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-ae-12-02",
+    "date": "2026-12-02",
+    "name": "National Day",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-ae-12-03",
+    "date": "2026-12-03",
+    "name": "National Day holiday",
+    "country_code": "AE"
+  },
+  {
+    "id": "h-sa-02-22",
+    "date": "2026-02-22",
+    "name": "Founding Day",
+    "country_code": "SA"
+  },
+  {
+    "id": "h-sa-03-19",
+    "date": "2026-03-19",
+    "name": "Eid al-Fitr",
+    "country_code": "SA"
+  },
+  {
+    "id": "h-sa-03-22",
+    "date": "2026-03-22",
+    "name": "Eid al-Fitr holiday",
+    "country_code": "SA"
+  },
+  {
+    "id": "h-sa-03-23",
+    "date": "2026-03-23",
+    "name": "Eid al-Fitr holiday",
+    "country_code": "SA"
+  },
+  {
+    "id": "h-sa-05-26",
+    "date": "2026-05-26",
+    "name": "Arafat Day",
+    "country_code": "SA"
+  },
+  {
+    "id": "h-sa-05-27",
+    "date": "2026-05-27",
+    "name": "Eid al-Adha",
+    "country_code": "SA"
+  },
+  {
+    "id": "h-sa-05-28",
+    "date": "2026-05-28",
+    "name": "Eid al-Adha holiday",
+    "country_code": "SA"
+  },
+  {
+    "id": "h-sa-09-23",
+    "date": "2026-09-23",
+    "name": "National Day",
+    "country_code": "SA"
+  },
+  {
+    "id": "h-de-01-01",
+    "date": "2026-01-01",
+    "name": "Neujahr",
+    "country_code": "DE"
+  },
+  {
+    "id": "h-de-04-03",
+    "date": "2026-04-03",
+    "name": "Karfreitag",
+    "country_code": "DE"
+  },
+  {
+    "id": "h-de-04-06",
+    "date": "2026-04-06",
+    "name": "Ostermontag",
+    "country_code": "DE"
+  },
+  {
+    "id": "h-de-05-01",
+    "date": "2026-05-01",
+    "name": "Tag der Arbeit",
+    "country_code": "DE"
+  },
+  {
+    "id": "h-de-05-14",
+    "date": "2026-05-14",
+    "name": "Christi Himmelfahrt",
+    "country_code": "DE"
+  },
+  {
+    "id": "h-de-05-25",
+    "date": "2026-05-25",
+    "name": "Pfingstmontag",
+    "country_code": "DE"
+  },
+  {
+    "id": "h-de-10-03",
+    "date": "2026-10-03",
+    "name": "Tag der Deutschen Einheit",
+    "country_code": "DE"
+  },
+  {
+    "id": "h-de-12-25",
+    "date": "2026-12-25",
+    "name": "1. Weihnachtstag",
+    "country_code": "DE"
+  }
+]

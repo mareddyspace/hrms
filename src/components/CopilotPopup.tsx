@@ -8,21 +8,30 @@ import {
   type CopilotAnswer,
 } from "../data/platformData.ts";
 import { usePortal } from "../store.tsx";
-import { useAskCopilot } from "../features/copilot/askCopilot.ts";
-import { CopilotSources } from "../features/copilot/CopilotSources.tsx";
+import { useAskCopilotAi, type CopilotOrigin } from "../features/copilot/askCopilot.ts";
+import { CopilotOriginTag, CopilotSources, CopilotThinking } from "../features/copilot/CopilotSources.tsx";
 import { CopilotExtras } from "../features/copilot/CopilotExtras.tsx";
 
-type Turn = { id: string; role: "user" | "assistant"; text: string; answer?: CopilotAnswer };
+type Turn = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  answer?: CopilotAnswer;
+  origin?: CopilotOrigin;
+  model?: string;
+  pending?: boolean;
+};
 
 /** Floating AI button + popup chat — shown for every signed-in role. */
 export function CopilotPopup() {
   const { employee, demoProfile } = usePortal();
-  const askCopilot = useAskCopilot();
+  const askCopilot = useAskCopilotAi();
   const persona = copilotPersonaFromRole(demoProfile.role);
   const suggestions = COPILOT_SUGGESTIONS[persona].slice(0, 3);
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [history, setHistory] = useState<Turn[]>([]);
+  const [busy, setBusy] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -37,27 +46,37 @@ export function CopilotPopup() {
     el.scrollTop = el.scrollHeight;
   }, [history, open]);
 
-  function ask(question: string) {
+  async function ask(question: string) {
     const q = question.trim();
-    if (!q) return;
-    const answer = askCopilot(q);
+    if (!q || busy) return;
     const stamp = Date.now();
+    const botId = `a-${stamp}`;
+    const earlier = history.filter((t) => !t.pending).map((t) => ({ role: t.role, content: t.text }));
     setHistory((prev) => [
       ...prev,
       { id: `u-${stamp}`, role: "user", text: q },
-      {
-        id: `a-${stamp}`,
-        role: "assistant",
-        text: answer.summary?.trim() || "Here is what I found.",
-        answer,
-      },
+      { id: botId, role: "assistant", text: "", pending: true },
     ]);
     setPrompt("");
+    setBusy(true);
+    try {
+      const reply = await askCopilot(q, earlier);
+      const answer = reply.answer;
+      setHistory((prev) =>
+        prev.map((t) =>
+          t.id === botId
+            ? { id: botId, role: "assistant", text: answer.summary?.trim() || "Here is what I found.", answer, origin: reply.origin, model: reply.model }
+            : t,
+        ),
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
-    ask(prompt);
+    void ask(prompt);
   }
 
   const firstName = employee.fullName.split(" ")[0] || "there";
@@ -100,8 +119,11 @@ export function CopilotPopup() {
             )}
             {history.map((turn) => (
               <div key={turn.id} className={`copilot-bubble ${turn.role}`}>
-                <p className="copilot-role">{turn.role === "user" ? "You" : "Copilot"}</p>
-                <p>{turn.text}</p>
+                <p className="copilot-role">
+                  {turn.role === "user" ? "You" : "Copilot"}
+                  {turn.role === "assistant" && <CopilotOriginTag origin={turn.origin} model={turn.model} />}
+                </p>
+                {turn.pending ? <CopilotThinking /> : <p>{turn.text}</p>}
                 {turn.answer?.metrics && turn.answer.metrics.length > 0 && (
                   <dl className="copilot-fab-metrics">
                     {turn.answer.metrics.map((m) => (
@@ -152,7 +174,7 @@ export function CopilotPopup() {
           {history.length === 0 && (
             <div className="copilot-fab-chips">
               {suggestions.map((s) => (
-                <button key={s} type="button" className="chip-btn" onClick={() => ask(s)}>
+                <button key={s} type="button" className="chip-btn" onClick={() => void ask(s)}>
                   {s}
                 </button>
               ))}
@@ -169,11 +191,11 @@ export function CopilotPopup() {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  ask(prompt);
+                  void ask(prompt);
                 }
               }}
             />
-            <button className="btn" type="submit" disabled={!prompt.trim()}>
+            <button className="btn" type="submit" disabled={!prompt.trim() || busy}>
               Send
             </button>
           </form>

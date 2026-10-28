@@ -15,9 +15,7 @@ import { appendAuditEntries } from "../data/auditTrail.ts";
 import { ADMIN_ROLES } from "../data/collabData.ts";
 import {
   clearSentEmails,
-  emailChannelFor,
-  markEmailsSent,
-  sendAllQueuedEmails,
+  markEmailsSentAnywhere,
   useEmailOutbox,
   type EmailEvent,
   type EmailStatus,
@@ -46,7 +44,8 @@ export function EmailOutboxPage() {
   const [channel, setChannel] = useState("all");
   const [query, setQuery] = useState("");
   const [openId, setOpenId] = useState("");
-  const [message, setMessage] = useState<{ tone: "ok" | "info"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: "ok" | "info" | "err"; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
   const isAdmin = ADMIN_ROLES.includes(demoProfile.role);
 
   const channels = useMemo(() => Array.from(new Set(rows.map((r) => r.channel))).sort(), [rows]);
@@ -77,15 +76,22 @@ export function EmailOutboxPage() {
     ]);
   }
 
-  function markOne(row: EmailEvent) {
-    if (markEmailsSent([row.id]) > 0) {
+  async function markOne(row: EmailEvent) {
+    const out = await markEmailsSentAnywhere([row.id]);
+    if ("error" in out) return setMessage({ tone: "err", text: out.error });
+    if (out.count > 0) {
       audit(1, "Marked sent");
       setMessage({ tone: "ok", text: `Marked sent to ${row.to}.` });
     }
   }
 
-  function sendAll() {
-    const count = sendAllQueuedEmails();
+  async function sendAll() {
+    if (busy) return;
+    setBusy(true);
+    const out = await markEmailsSentAnywhere("all");
+    setBusy(false);
+    if ("error" in out) return setMessage({ tone: "err", text: out.error });
+    const count = out.count;
     if (count > 0) audit(count, "Sent queued");
     setMessage(count ? { tone: "ok", text: `${count} ${count === 1 ? "email" : "emails"} sent.` } : { tone: "info", text: "Nothing queued." });
   }
@@ -106,9 +112,8 @@ export function EmailOutboxPage() {
   return (
     <Page
       title="Email outbox"
-      subtitle="Emails queued with notifications. Channels with email turned off in notification settings are skipped."
       action={
-        <button type="button" className="btn" disabled={queued === 0} onClick={sendAll}>
+        <button type="button" className="btn" disabled={queued === 0 || busy} onClick={() => void sendAll()}>
           Send all queued
         </button>
       }
@@ -163,7 +168,7 @@ export function EmailOutboxPage() {
                   View
                 </button>
                 {r.status === "Queued" && (
-                  <button type="button" className="quiet-link" onClick={() => markOne(r)}>
+                  <button type="button" className="quiet-link" onClick={() => void markOne(r)}>
                     Mark sent
                   </button>
                 )}
@@ -194,9 +199,6 @@ export function EmailOutboxPage() {
                 <p className="muted">
                   Link: <a href={open.link}>{open.link}</a>
                 </p>
-              )}
-              {!emailChannelFor(open.category) && (
-                <p className="muted">This category has no email switch in notification settings, so it always sends.</p>
               )}
               <Link to="/admin" className="quiet-link">Admin settings</Link>
             </div>
