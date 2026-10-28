@@ -1,12 +1,12 @@
 /** Travel requests: raised by an employee, decided step by step (approval workflow "travel"). Saved in this browser. */
 import { useSyncExternalStore } from "react";
-import type { DecisionInfo, ExpenseApprovalStep, ExpenseStepDecision } from "../model.ts";
+import type { DecisionInfo } from "../model.ts";
 import { todayISO, uid } from "../model.ts";
 import { money } from "../countryPay.ts";
 import { appendAuditEntries } from "./auditTrail.ts";
 import { pushPersonTaskAlert } from "./collabLocal.ts";
-import { resolveWorkflow } from "./approvalWorkflows.ts";
-import { currentStepOf, isWaitingOn } from "./expenseFlow.ts";
+import { resolveFlow, workflowVersion, type FlowDecision, type FlowStep } from "./approvalWorkflows.ts";
+import { decideFlowStep, isWaitingOn, waitingApproverIds } from "./expenseFlow.ts";
 
 export const TRAVEL_MODES = ["Flight", "Train", "Bus", "Car", "Other"] as const;
 export type TravelMode = (typeof TRAVEL_MODES)[number];
@@ -27,9 +27,12 @@ export interface TravelRequest extends DecisionInfo {
   advanceAmount?: number;
   status: "pending" | "approved" | "rejected" | "withdrawn";
   submittedOn: string;
-  steps: ExpenseApprovalStep[];
+  /** Fixed when the request is raised; later workflow changes don't affect it. */
+  steps: FlowStep[];
   currentStep: number;
-  stepDecisions: ExpenseStepDecision[];
+  stepDecisions: FlowDecision[];
+  /** Workflow version the steps came from. */
+  workflowVersion?: number;
 }
 
 export type TravelInput = Pick<
@@ -146,7 +149,7 @@ export function submitTravel(actor: TravelActor, input: TravelInput): string | n
   );
   if (overlap) return "You already have a trip on these dates.";
 
-  const steps = resolveWorkflow("travel", actor.id, input.estimatedCost).map(({ role, label, approverIds }) => ({ role, label, approverIds }));
+  const steps = resolveFlow("travel", actor.id, { amount: input.estimatedCost });
   const today = todayISO();
   const request: TravelRequest = {
     id: uid("trv"),
@@ -167,6 +170,7 @@ export function submitTravel(actor: TravelActor, input: TravelInput): string | n
     steps,
     currentStep: 0,
     stepDecisions: [],
+    workflowVersion: workflowVersion("travel"),
     ...(steps.length === 0
       ? { decidedById: actor.id, decidedByName: actor.fullName, decidedOn: today, decisionNote: "Approved automatically — no approver for this request" }
       : {}),
@@ -204,38 +208,33 @@ export function decideTravel(
   if (!t) return "Travel request not found.";
   if (t.employeeId === actor.id) return "You cannot decide your own request.";
   if (t.status !== "pending") return "This request has already been decided.";
-  const step = currentStepOf(t);
-  if (!step || !isWaitingOn(t, actor.id, canApprove)) return "This request isn't waiting on you.";
   const today = todayISO();
   const cleanNote = note?.trim() || undefined;
-  const entry: ExpenseStepDecision = {
-    step: t.currentStep,
-    label: step.label,
-    decision,
-    byId: actor.id,
-    byName: actor.fullName,
-    on: today,
-    note: cleanNote,
-  };
-  const next = decision === "approved" ? t.steps[t.currentStep + 1] : undefined;
-  const updated: TravelRequest = next
-    ? { ...t, stepDecisions: [...t.stepDecisions, entry], currentStep: t.currentStep + 1 }
-    : {
-        ...t,
-        stepDecisions: [...t.stepDecisions, entry],
-        status: decision,
-        decidedById: actor.id,
-        decidedByName: actor.fullName,
-        decidedOn: today,
-        decisionNote: cleanNote,
-      };
+  const result = decideFlowStep(t, actor, decision, cleanNote, canApprove, today);
+  if (typeof result === "string") return result;
+  const { step, outcome } = result;
+  const stepDecisions = [...t.stepDecisions, ...result.entries];
+  const updated: TravelRequest =
+    outcome === "waiting" || outcome === "advanced"
+      ? { ...t, stepDecisions, currentStep: result.currentStep }
+      : {
+          ...t,
+          stepDecisions,
+          status: decision,
+          decidedById: actor.id,
+          decidedByName: actor.fullName,
+          decidedOn: today,
+          decisionNote: cleanNote,
+        };
   write(all.map((item) => (item.id === id ? updated : item)));
   audit(actor, updated, "Updated", [
-    { field: step.label, before: "pending", after: decision },
+    ...result.entries.map((e) => ({ field: e.label, before: "pending", after: decision })),
     ...(updated.status !== t.status ? [{ field: "Status", before: t.status, after: updated.status }] : []),
   ]);
+  if (outcome === "waiting") return null;
+  const next = result.next;
   if (next) {
-    for (const recipientId of next.approverIds) {
+    for (const recipientId of waitingApproverIds(updated)) {
       pushPersonTaskAlert({
         recipientId,
         title: "Travel request to review",

@@ -26,10 +26,11 @@ import { initials } from "../components/OrgChart.tsx";
 import { saveLocalMeeting } from "../data/calendarData.ts";
 import { startDirectChat } from "../data/collabLocal.ts";
 import type { PersonRecord } from "../data/peopleData.ts";
+import { approvedNameFor } from "../data/profileCorrections.ts";
 import { getLifecycleHistory, isScheduled, subscribeLifecycleHistory, timelineFor } from "../data/lifecycleHistory.ts";
 import { canOpenFullRecord, profileAccessFor } from "../data/profileAccess.ts";
 import { skillsFor } from "../data/careerProfile.ts";
-import { getExitDetails, getPerson, isTerminated, listPeople, subscribePeople } from "../data/peopleLocal.ts";
+import { editedPerson, getExitDetails, getPerson, isTerminated, listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { canManagePeople } from "../data/peoplePermissions.ts";
 import {
   addEmployeeSkill,
@@ -48,6 +49,7 @@ import { todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { Employee360View } from "./Employee360View.tsx";
 import { EmployeeFormDialog, saveEmployee } from "./EmployeeFormDialog.tsx";
+import { ProfileDetailsCards } from "./ProfileDetailsCards.tsx";
 
 /** What a coworker sees about someone — no pay, leave balances or other HR-only records. */
 type ProfilePerson = {
@@ -75,9 +77,11 @@ type ProfilePerson = {
 function fromAccount(account: DemoAccount, record?: PersonRecord): ProfilePerson {
   return {
     id: account.id,
-    fullName: account.fullName,
-    designation: account.designation,
-    department: account.department ?? record?.department ?? "",
+    // An approved name correction wins over the sign-in account name.
+    fullName: approvedNameFor(account.id) ?? account.fullName,
+    // Approved lifecycle changes live on the directory record.
+    designation: (editedPerson(account.id) ?? editedPerson(account.employeeCode))?.designation || account.designation,
+    department: (editedPerson(account.id) ?? editedPerson(account.employeeCode))?.department || account.department || record?.department || "",
     email: account.email,
     mobile: account.mobile,
     photo: account.photo,
@@ -454,6 +458,16 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
               </p>
             )}
           </Card>
+
+          {person.record && (
+            <ProfileDetailsCards
+              record={person.record}
+              isMe={isMe && demoProfile.id === person.id}
+              canSeePersonal={canSeePersonal}
+              canSeeWork={access.work}
+              viewer={demoProfile}
+            />
+          )}
 
           {isMe && demoProfile.id === person.id ? (
             <Card title="Skills" action={<Link to="/skills" className="quiet-link">Skills &amp; career</Link>}>

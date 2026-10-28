@@ -523,7 +523,7 @@ function DocDialog({
           </Field>
           {sponsorNeeded && (
             <Field label="Sponsor" wide>
-              <input value={form.sponsor} onChange={(e) => set("sponsor", e.target.value)} placeholder="e.g. Infotech FZ-LLC" />
+              <input value={form.sponsor} onChange={(e) => set("sponsor", e.target.value)} placeholder="e.g. TimeZ FZ-LLC" />
             </Field>
           )}
           {expired && (

@@ -218,14 +218,14 @@ export function receiptThresholdFor(country: CountryCode | undefined): number {
 }
 
 const LEGAL_ENTITY: Record<CountryCode, string> = {
-  IN: "Infotech India Pvt Ltd",
-  US: "Infotech Inc",
-  GB: "Infotech UK Ltd",
-  AU: "Infotech Australia Pty",
-  CA: "Infotech Canada Inc",
-  AE: "Infotech Middle East FZ",
-  SA: "Infotech Saudi LLC",
-  DE: "Infotech Germany GmbH",
+  IN: "TimeZ India Pvt Ltd",
+  US: "TimeZ Inc",
+  GB: "TimeZ UK Ltd",
+  AU: "TimeZ Australia Pty",
+  CA: "TimeZ Canada Inc",
+  AE: "TimeZ Middle East FZ",
+  SA: "TimeZ Saudi LLC",
+  DE: "TimeZ Germany GmbH",
 };
 
 /** The employing legal entity in a country — used when the employee record doesn't carry one. */

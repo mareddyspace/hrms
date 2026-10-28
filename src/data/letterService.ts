@@ -5,20 +5,24 @@
 import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../demoAccounts.ts";
 import { getExitState } from "../features/lifecycle/exitStore.ts";
 import { todayISO } from "../model.ts";
+import { pushPersonTaskAlert } from "./collabLocal.ts";
 import {
   entityFor,
   letterDate,
   letterDocumentHtml,
+  letterInfo,
   localeFor,
   missingFields,
+  needsSecondApproval,
   referenceNumber,
   renderLetterBody,
+  type FullLetterType,
   type LetterFields,
 } from "./letterTemplates.ts";
 import { getPerson, type LocalPersonRecord } from "./peopleLocal.ts";
 import { canManageLetters } from "./rbac.ts";
-import { letterTemplate, type CompHistoryRow, type IssuedLetter, type LetterRequest, type LetterType } from "./rewardData.ts";
-import { addLetterRequest, canApproveLetter, updateReward, type RewardResult } from "./rewardLocal.ts";
+import type { CompHistoryRow, IssuedLetter, LetterRequest, LetterType } from "./rewardData.ts";
+import { addLetterRequest, canApproveLetter, canViewLetter, letterApprovers, updateReward, type RewardResult } from "./rewardLocal.ts";
 
 const isoInText = (text: string) => text.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
 
@@ -45,7 +49,9 @@ export function collectLetterFields(row: LetterRequest, history: CompHistoryRow[
   const person = getPerson(row.employeeId);
   const account = DEMO_ACCOUNTS.find((a) => a.id === row.employeeId);
   const countryCode = String(person?.countryCode ?? account?.countryCode ?? "");
-  const template = letterTemplate(row.type);
+  const template = letterInfo(row.type);
+  const type = row.type as FullLetterType;
+  const record = person as LocalPersonRecord | undefined;
 
   let salary = "";
   let previousSalary = "";
@@ -66,7 +72,9 @@ export function collectLetterFields(row: LetterRequest, history: CompHistoryRow[
   const effectiveDate =
     row.effectiveDate ||
     (row.type === "Promotion" || row.type === "Salary revision" ? compEffective : "") ||
-    (row.type === "Confirmation" ? isoInText(row.note) : "");
+    (row.type === "Confirmation" ? record?.confirmationDate || isoInText(row.note) : "");
+  // Internship end: the date HR enters, else the exit or contract end on the record.
+  const endDate = type === "Internship" ? row.effectiveDate || lastWorkingDayFor(row.employeeId) || record?.contractEndDate || "" : record?.contractEndDate ?? "";
 
   return {
     employeeName: person?.fullName ?? account?.fullName ?? row.employeeName,
@@ -85,6 +93,8 @@ export function collectLetterFields(row: LetterRequest, history: CompHistoryRow[
     previousSalary,
     effectiveDate,
     details: row.details ?? "",
+    nationality: record?.nationality ?? "",
+    endDate,
   };
 }
 
@@ -98,7 +108,7 @@ export function previewLetter(row: LetterRequest, history: CompHistoryRow[]): Le
   return {
     fields,
     missing: missingFields(row.type, fields),
-    html: letterDocumentHtml(body, { title: `${letterTemplate(row.type).label} (draft)`, draft: true, lang: localeFor(fields.countryCode) }),
+    html: letterDocumentHtml(body, { title: `${letterInfo(row.type).label} (draft)`, draft: true, lang: localeFor(fields.countryCode) }),
   };
 }
 
@@ -109,16 +119,71 @@ export function currentIssue(row: LetterRequest, version?: number): IssuedLetter
 
 /** The stored final letter as a print-ready document (no watermark). */
 export function issuedLetterHtml(row: LetterRequest, issue: IssuedLetter): string {
-  return letterDocumentHtml(issue.html, { title: `${letterTemplate(row.type).label} ${issue.referenceNo}`, draft: false });
+  return letterDocumentHtml(issue.html, { title: `${letterInfo(row.type).label} ${issue.referenceNo}`, draft: false });
+}
+
+/* ───────────── Approvers ───────────── */
+
+/**
+ * Who approves this letter. Warning and termination letters need someone other than the HR person who raised
+ * them: other HR, then the employee's reporting line (line manager up to the CEO).
+ */
+export function letterApproversFor(row: LetterRequest): { id: string; fullName: string }[] {
+  if (!needsSecondApproval(row.type)) return letterApprovers(row);
+  const raisedBy = row.requestedById ?? "";
+  const out: { id: string; fullName: string }[] = [];
+  const push = (a: { id: string; fullName: string }) => {
+    if (a.id && a.id !== row.employeeId && a.id !== raisedBy && !out.some((o) => o.id === a.id)) out.push({ id: a.id, fullName: a.fullName });
+  };
+  letterApprovers(row).forEach(push);
+  managementChain(row.employeeId)
+    .filter((m) => DEMO_ACCOUNTS.some((a) => a.id === m.id))
+    .forEach(push);
+  if (!out.length) DEMO_ACCOUNTS.filter((a) => a.role === "executive").forEach(push);
+  return out;
+}
+
+export function canApproveLetterRow(actor: DemoAccount, row: LetterRequest): boolean {
+  if (actor.id === row.employeeId) return false;
+  if (!needsSecondApproval(row.type)) return canApproveLetter(actor, row);
+  return letterApproversFor(row).some((a) => a.id === actor.id);
+}
+
+/** Warning and termination letters stay hidden from the employee until issued; their approvers can see them. */
+export function canSeeLetter(actor: DemoAccount, row: LetterRequest): boolean {
+  if (needsSecondApproval(row.type)) {
+    if (row.employeeId === actor.id) return row.status === "Issued";
+    if (canApproveLetterRow(actor, row)) return true;
+  }
+  return canViewLetter(actor, row);
+}
+
+/** Reject an open request (any letter type). */
+export function rejectLetter(actor: DemoAccount, id: string): RewardResult {
+  return updateReward((s) => {
+    const row = s.letters.find((l) => l.id === id);
+    if (!row) return "Letter request not found.";
+    if (row.status !== "Pending approval" && row.status !== "Approved") return `This letter is ${row.status.toLowerCase()}.`;
+    if (!canApproveLetterRow(actor, row)) return "Only an approver for this letter can reject it.";
+    row.status = "Rejected";
+    row.approver = actor.fullName;
+    row.approverId = actor.id;
+    row.decidedOn = todayISO();
+  });
 }
 
 /* ───────────── Workflow ───────────── */
 
 /** Types this person may request for themselves. HR may issue any type for anyone. */
-export function canRequestType(actor: DemoAccount, type: LetterType, employeeId: string): string | null {
+export function canRequestType(actor: DemoAccount, type: FullLetterType, employeeId: string): string | null {
+  if (needsSecondApproval(type)) {
+    if (!canManageLetters(actor)) return `${letterInfo(type).label}s are issued by HR.`;
+    if (employeeId === actor.id) return "You cannot raise this letter for yourself.";
+    return null;
+  }
   if (canManageLetters(actor)) return null;
   if (employeeId !== actor.id) return "You can only request letters for yourself.";
-  const template = letterTemplate(type);
+  const template = letterInfo(type);
   if (!template.employeeCanRequest) return `${template.label}s are issued by HR.`;
   if (type === "Experience" && !hasExited(actor.id)) return "An experience letter is available after your exit.";
   return null;
@@ -126,23 +191,36 @@ export function canRequestType(actor: DemoAccount, type: LetterType, employeeId:
 
 export function requestLetter(
   actor: DemoAccount,
-  input: { employeeId: string; type: LetterType; note: string; details?: string; effectiveDate?: string },
+  input: { employeeId: string; type: FullLetterType; note: string; details?: string; effectiveDate?: string },
 ): RewardResult {
   const blocked = canRequestType(actor, input.type, input.employeeId);
   if (blocked) return blocked;
-  const template = letterTemplate(input.type);
+  const template = letterInfo(input.type);
   if (template.detailsLabel && !input.details?.trim()) return `Enter ${template.detailsLabel.toLowerCase()}.`;
   const person = getPerson(input.employeeId);
   const name = person?.fullName ?? DEMO_ACCOUNTS.find((a) => a.id === input.employeeId)?.fullName;
   if (!name) return "Employee not found.";
-  return addLetterRequest(actor, {
+  const error = addLetterRequest(actor, {
     employeeId: input.employeeId,
     employeeName: name,
-    type: input.type,
+    // Stored with the request types; the extra letter types share the same record shape.
+    type: input.type as LetterType,
     note: input.note.trim() || "No reason given",
     details: input.details?.trim().slice(0, 200),
     effectiveDate: canManageLetters(actor) ? input.effectiveDate : undefined,
   });
+  if (!error && needsSecondApproval(input.type)) {
+    const draft = { employeeId: input.employeeId, type: input.type as LetterType, requestedById: actor.id } as LetterRequest;
+    for (const approver of letterApproversFor(draft)) {
+      pushPersonTaskAlert({
+        recipientId: approver.id,
+        title: `${template.label} to approve`,
+        body: `${actor.fullName} raised a ${template.label.toLowerCase()} for ${name}.`,
+        href: "/documents",
+      });
+    }
+  }
+  return error;
 }
 
 /** HR (or the requester, for their own details) fills missing inputs before approval. */
@@ -190,7 +268,7 @@ function storeIssue(
   fields: LetterFields,
 ) {
   row.issued = [...(row.issued ?? []), issue];
-  const label = letterTemplate(row.type).label;
+  const label = letterInfo(row.type).label;
   s.library.unshift({
     id: `dl-${issue.docId}`,
     employeeId: row.employeeId,
@@ -215,7 +293,8 @@ export function approveLetter(actor: DemoAccount, id: string): RewardResult {
     if (!row) return "Letter request not found.";
     if (row.employeeId === actor.id) return "You cannot approve your own letter.";
     if (row.status !== "Pending approval" && row.status !== "Approved") return `This letter is ${row.status.toLowerCase()}.`;
-    if (!canApproveLetter(actor, row)) return "Only HR can approve this letter (or the line manager when the letter is for HR).";
+    if (needsSecondApproval(row.type) && row.requestedById === actor.id) return "Someone other than the person who raised this letter must approve it.";
+    if (!canApproveLetterRow(actor, row)) return "Only HR can approve this letter (or the line manager when the letter is for HR).";
     const result = generate(actor, row, s);
     if ("error" in result) return result.error ?? "Cannot generate.";
     row.status = "Issued";
@@ -232,7 +311,7 @@ export function regenerateLetter(actor: DemoAccount, id: string): RewardResult {
     const row = s.letters.find((l) => l.id === id);
     if (!row) return "Letter request not found.";
     if (row.status !== "Issued") return "Only issued letters can be regenerated.";
-    if (!canApproveLetter(actor, row)) return "Only an approver for this letter can regenerate it.";
+    if (!canApproveLetterRow(actor, row)) return "Only an approver for this letter can regenerate it.";
     const result = generate(actor, row, s);
     if ("error" in result) return result.error ?? "Cannot generate.";
     storeIssue(s, row, result.issue, result.fields);

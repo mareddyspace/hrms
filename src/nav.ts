@@ -2,7 +2,7 @@ import type { DemoAccount, NavAccessId } from "./demoAccounts.ts";
 import { accountHasNavAccess } from "./demoAccounts.ts";
 import type { UserRole } from "./model.ts";
 
-/** Navigation groups for the Infotech shell. Visibility is driven by demo navAccess (prototype). */
+/** Navigation groups for the TimeZ shell. Visibility is driven by demo navAccess (prototype). */
 export type NavGroupKey =
   | "me"
   | "myTime"
@@ -150,6 +150,8 @@ export const navGroups: readonly NavGroup[] = [
       { id: "auditlog", label: "Audit log", to: "/admin/audit" },
       { id: "workflowsconfig", label: "Approval steps", to: "/admin/workflows-config" },
       { id: "emailoutbox", label: "Email outbox", to: "/admin/email-outbox" },
+      { id: "accessroles", label: "Roles & permissions", to: "/admin/roles" },
+      { id: "aisettings", label: "AI settings", to: "/admin/ai" },
       { id: "administration", label: "Console", to: "/admin" },
     ],
   },

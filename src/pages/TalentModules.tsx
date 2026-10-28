@@ -52,7 +52,10 @@ import {
   isTaskOwner,
   needsCompApproval,
   offerApprovalNeeded,
+  requisitionApprovalCompletes,
   requisitionApprovers,
+  requisitionFlowSteps,
+  requisitionWaitingFor,
   canAcknowledgePolicies,
   isJoinerSelf,
   canEditGoal,
@@ -317,7 +320,7 @@ export function RecruitingPage() {
         <MetricCard label="Open" value={totalPositions - filledPositions} />
         <MetricCard label="Filled" value={filledPositions} />
         <MetricCard
-          label="Awaiting HR approval"
+          label="Awaiting approval"
           value={awaitingReqs.length}
           hint={`${awaitingReqs.reduce((n, r) => n + r.openings, 0)} positions`}
         />
@@ -423,14 +426,14 @@ export function RecruitingPage() {
                         className="btn btn-tiny"
                         onClick={() => {
                           const error = raiseRequisition(actor, { ...raiseForm, openings: Number(raiseForm.openings) });
-                          setNotice(noticeFor(error, "Requisition raised. Sent to HR."));
+                          setNotice(noticeFor(error, "Requisition raised. Sent for approval."));
                           if (!error) {
                             setRaiseOpen(false);
                             setRaiseForm({ title: "", department: "", country: "", location: "", openings: "1" });
                           }
                         }}
                       >
-                        Send to HR
+                        Send for approval
                       </button>
                       <button type="button" className="btn-ghost btn-tiny" onClick={() => setRaiseOpen(false)}>
                         Cancel
@@ -444,6 +447,17 @@ export function RecruitingPage() {
           {requisition && (
             <Card title={`Requisition · ${requisition.id}`}>
               <RequisitionTracker req={requisition} />
+              <p className="muted">
+                Approval:{" "}
+                {requisitionFlowSteps(requisition)
+                  .map((s) =>
+                    s.groups && s.groups.length > 1
+                      ? `${s.label} (${s.mode === "any" ? "any of" : "all of"} ${s.groups.map((g) => g.label.replace(/ approval$/, "")).join(", ")})`
+                      : s.label,
+                  )
+                  .join(" → ") || "none"}
+                {requisition.workflowVersion ? ` · workflow v${requisition.workflowVersion}` : ""}
+              </p>
               <dl className="info-grid">
                 <div className="info-fact"><dt>Title</dt><dd>{requisition.title}</dd></div>
                 <div className="info-fact"><dt>Hiring manager</dt><dd>{requisition.hiringManager}</dd></div>
@@ -463,7 +477,7 @@ export function RecruitingPage() {
                   {reqMoves.some((m) => m !== "Pending approval") && (
                     <input aria-label="Requisition note" value={reqNote} maxLength={200} onChange={(e) => setReqNote(e.target.value)} placeholder="Note (optional)" />
                   )}
-                  {reqMoves.includes("Approved") && !requisition.recruiterId && (
+                  {reqMoves.includes("Approved") && !requisition.recruiterId && requisitionApprovalCompletes(actor, requisition) && (
                     <Field label="Assign recruiter">
                       <select value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
                         {recruiterOptions().map((a) => (
@@ -479,11 +493,20 @@ export function RecruitingPage() {
                         type="button"
                         className={next === "Approved" || next === "Pending approval" ? "btn btn-tiny" : "btn-ghost btn-tiny"}
                         onClick={() => {
-                          setNotice(noticeFor(setRequisitionApproval(actor, requisition.id, next, reqNote, assignTo), `${requisition.id}: ${next}.`));
+                          const before = requisitionWaitingFor(requisition);
+                          const error = setRequisitionApproval(actor, requisition.id, next, reqNote, assignTo);
+                          const after = getTalentState().requisitions.find((r) => r.id === requisition.id);
+                          const okText =
+                            next === "Approved" && after?.approvalStatus === "Pending approval"
+                              ? `${requisition.id}: approved. ${requisitionWaitingFor(after) === before ? "Waiting for the other approvers." : `Now with ${requisitionWaitingFor(after).split(" · ")[0]!.toLowerCase()}.`}`
+                              : next === "Pending approval"
+                                ? `${requisition.id}: sent for approval.`
+                                : `${requisition.id}: ${next}.`;
+                          setNotice(noticeFor(error, okText));
                           setReqNote("");
                         }}
                       >
-                        {next === "Pending approval" ? "Send to HR" : next === "On hold" ? "Put on hold" : next === "Approved" ? (requisition.recruiterId ? "Approve" : "Approve & assign") : "Reject"}
+                        {next === "Pending approval" ? "Send for approval" : next === "On hold" ? "Put on hold" : next === "Approved" ? (requisition.recruiterId || !requisitionApprovalCompletes(actor, requisition) ? "Approve" : "Approve & assign") : "Reject"}
                       </button>
                     ))}
                   </div>
@@ -491,7 +514,7 @@ export function RecruitingPage() {
               ) : (
                 <p className="muted">
                   {requisition.approvalStatus === "Pending approval" || requisition.approvalStatus === "On hold"
-                    ? `Waiting for HR (${requisitionApprovers(requisition).map((a) => a.fullName).join(" or ") || "no HR available"}).`
+                    ? `Waiting for ${requisitionWaitingFor(requisition) || "HR"} (${requisitionApprovers(requisition).map((a) => a.fullName).join(", ") || "no approver available"}).`
                     : requisition.approvalStatus === "Draft"
                       ? "Draft."
                       : ""}

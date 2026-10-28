@@ -90,6 +90,7 @@ import { BarChart, ChartEmpty, DonutChart, HBarChart, LineChart, paletteColor } 
 import { countInto, dailyCounts, monthlyMovement } from "../../data/adminCharts.ts";
 import { useAuditTrail } from "../../data/auditTrail.ts";
 import { TICKET_STATUSES, useTickets } from "../../data/ticketStore.ts";
+import { TodaySummaryCard, employeeSummary, hrSummary, managerSummary } from "../../features/copilot/homeSummary.tsx";
 
 /** Map dashboard shortcut labels to real routes. */
 const R = {
@@ -420,6 +421,44 @@ export function EmployeeHome() {
     setPunchError(attendanceAction(employee.id, action, dayContext));
   }
 
+  // Today's summary — short lines from the same data as the cards below.
+  const soon = addDaysISO(today, 14);
+  const myNextLeave = state.leaveRequests
+    .filter((r) => r.employeeId === employee.id && r.status === "approved" && r.to >= today && r.from <= soon)
+    .sort((a, b) => a.from.localeCompare(b.from))[0];
+  const myInterviews = talent.interviews.filter((i) => i.panel.includes(employee.fullName));
+  const nextInterview = myInterviews
+    .filter((i) => i.when.slice(0, 10) >= today && i.when.slice(0, 10) <= addDaysISO(today, 2))
+    .sort((a, b) => a.when.localeCompare(b.when))[0];
+  const dueCourse = openCourses.find((e) => e.due && e.due <= soon);
+  const dueTask = myOpenTasks
+    .filter((t) => t.due && t.due >= today && t.due <= addDaysISO(today, 3))
+    .sort((a, b) => (a.due ?? "").localeCompare(b.due ?? ""))[0];
+  const summaryLines = employeeSummary({
+    today,
+    attendanceLabel,
+    checkIn: session.checkIn ? formatHm(session.checkIn) : undefined,
+    checkOut: session.checkOut ? formatHm(session.checkOut) : undefined,
+    shiftHours: employee.shiftHours,
+    offToday,
+    missingCheckOut: missingOut.map((s) => s.date),
+    pendingRequests: requests,
+    waitingOnMe: data.waitingCount,
+    myUpcomingLeave: myNextLeave
+      ? { type: leaveTable.find((l) => l.code === myNextLeave.code)?.name ?? myNextLeave.code.toUpperCase(), from: myNextLeave.from, to: myNextLeave.to }
+      : undefined,
+    available: pto ? { name: pto.name, days: pto.available } : undefined,
+    nextHoliday: data.holidays[0] ? { name: data.holidays[0].name, date: data.holidays[0].date } : undefined,
+    overdueTasks: myOpenTasks.filter((t) => t.due && t.due < today).length,
+    dueSoonTask: dueTask?.due ? { subject: dueTask.subject, due: dueTask.due } : undefined,
+    course: dueCourse
+      ? { title: COURSES.find((c) => c.id === dueCourse.courseId)?.title ?? "A course", due: dueCourse.due, overdue: Boolean(dueCourse.due && dueCourse.due < today) }
+      : undefined,
+    interview: nextInterview ? { candidate: nextInterview.candidateName, role: nextInterview.role, when: nextInterview.when } : undefined,
+    feedbackDue: myInterviews.filter((i) => i.when.slice(0, 10) < today && i.feedbackStatus === "Pending").length,
+    timesheet: { status: weekStatus, hours: weekHours, olderDrafts, weekEnding: [4, 5].includes(new Date().getDay()) },
+  });
+
   useTitle("Home");
 
   const sections: Section[] = [
@@ -684,6 +723,8 @@ export function EmployeeHome() {
         subtitle={`${employee.designation} · ${formatLongDate(today)} · ${employee.timeZone} · ${employee.countryName ?? ""}`}
       />
 
+      <TodaySummaryCard lines={summaryLines} />
+
       <div className="emp-quick-actions" aria-label="Quick actions">
         <Link className="btn" to={R.leave}>
           Apply for leave
@@ -807,6 +848,24 @@ export function ManagerHome() {
         tone: status === "Expired" ? ("danger" as const) : ("warn" as const),
       })),
   ];
+
+  const teamCover = useMemo(
+    () => teamAbsence(data.people, data.people.filter((p) => teamIds.has(p.id)), state, today),
+    // state slices used: holidays, leaveRequests
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data.people, teamIds, state.holidays, state.leaveRequests, today],
+  );
+  const summaryLines = managerSummary({
+    teamSize: data.team.length,
+    outToday: data.statuses.filter((s) => s.status === "On leave").map((s) => s.member.name),
+    wfhToday: m.wfh,
+    notCheckedIn: data.statuses.filter((s) => s.status === "Working" && !checkedIn.has(s.member.id)).length,
+    waiting: data.waitingCount,
+    overdueApprovals: overdue.length,
+    alerts: alerts.filter((a) => a.id !== "overdue").map((a) => a.text),
+    coverage: teamCover.risks,
+    upcomingLeave: upcomingLeave.filter((r) => r.from > today).map((r) => ({ name: personName(r.employeeId, data.people), from: r.from })),
+  });
 
   useTitle("Manager home");
 
@@ -1011,6 +1070,7 @@ export function ManagerHome() {
   return (
     <div className="stack">
       <DashGreeting title="Manager home" subtitle={`${dayGreeting(employee.fullName)} · ${employee.designation} · ${formatLongDate(today)}`} />
+      <TodaySummaryCard lines={summaryLines} />
       <MetricGrid>
         <MetricCard label="Team headcount" value={data.team.length} hint={`${m.direct} direct reports`} />
         <MetricCard label="Working today" value={m.working} hint={`${checkedIn.size} checked in · ${m.wfh} WFH · ${m.onLeave} on leave`} />
@@ -1132,6 +1192,22 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [data.people, scopePeople, state.holidays, state.leaveRequests, today],
   );
+
+  const weekAgo = addDaysISO(today, -6);
+  const summaryLines = hrSummary({
+    scopeName,
+    joinedThisWeek: scopePeople.filter((p) => p.dateOfJoining >= weekAgo && p.dateOfJoining <= today).map((p) => p.fullName),
+    startingSoon: talent.joiners.filter((j) => j.startDate > today && j.startDate <= addDaysISO(today, 7) && (!scopeName || j.country === scopeName)).length,
+    leavingSoon: exitState.cases
+      .filter((c) => c.status === "Accepted" && c.lastWorkingDay >= today && c.lastWorkingDay <= addDaysISO(today, 14) && inScope(c.employeeId))
+      .sort((a, b) => a.lastWorkingDay.localeCompare(b.lastWorkingDay))
+      .map((c) => ({ name: c.employeeName, date: c.lastWorkingDay })),
+    resignationsOpen: openExits.length,
+    overdueActions: hrActions.filter((a) => a.date && a.date.slice(0, 10) < today),
+    openActions: hrActions.length,
+    waiting: data.waitingCount,
+    highRisks: cover.risks.filter((r) => r.severity === "High").length,
+  });
 
   const title = hrbp ? "HRBP home" : "HR home";
   useTitle(title);
@@ -1353,6 +1429,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
   return (
     <div className="stack">
       <DashGreeting title={title} subtitle={`${dayGreeting(employee.fullName)} · ${hrbp ? `People partner · ${scopeName ?? ""}` : "People operations"}`} />
+      <TodaySummaryCard lines={summaryLines} />
       <DateRangeFilter value={range} onChange={setRange} extras={hrbp ? undefined : <RegionalFilter label="Country" />} />
       <MetricGrid>
         <MetricCard label="Global headcount" value={global.headcount} hint={`${global.byCountry.filter((c) => c.count > 0).length} countries`} />
@@ -1503,7 +1580,7 @@ export function ExecutiveHome() {
       label: "Business units",
       node: (
         <Card title="Business units">
-          <MiniBars items={stats.byBusinessUnit.map((b) => ({ label: b.name.replace("Infotech ", ""), value: b.count }))} />
+          <MiniBars items={stats.byBusinessUnit.map((b) => ({ label: b.name.replace("TimeZ ", ""), value: b.count }))} />
         </Card>
       ),
     },

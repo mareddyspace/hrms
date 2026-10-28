@@ -4,28 +4,32 @@ import { LetterDownloadButtons, LetterFrame, printLetter } from "../components/L
 import { Banner, Card, DataTable, Dialog, EmptyState, Field, StatusBadge } from "../components/ui.tsx";
 import {
   approveLetter,
+  canApproveLetterRow,
   canRequestType,
+  canSeeLetter,
   collectLetterFields,
   currentIssue,
   issuedLetterHtml,
+  letterApproversFor,
   previewLetter,
   regenerateLetter,
+  rejectLetter,
   requestLetter,
   updateLetterInputs,
 } from "../data/letterService.ts";
-import { letterDate, letterFileName, missingFields } from "../data/letterTemplates.ts";
+import {
+  ALL_LETTER_TEMPLATES,
+  letterDate,
+  letterFileName,
+  letterInfo,
+  missingFields,
+  needsSecondApproval,
+  type FullLetterType,
+} from "../data/letterTemplates.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { canManageLetters } from "../data/rbac.ts";
-import { LETTER_TEMPLATES, letterTemplate, type LetterRequest, type LetterType } from "../data/rewardData.ts";
-import {
-  canApproveLetter,
-  canViewLetter,
-  getRewardState,
-  letterApprovers,
-  nextLetterStatuses,
-  setLetterStatus,
-  subscribeReward,
-} from "../data/rewardLocal.ts";
+import type { LetterRequest, LetterType } from "../data/rewardData.ts";
+import { getRewardState, nextLetterStatuses, setLetterStatus, subscribeReward } from "../data/rewardLocal.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
 import { getExitState, subscribeExits } from "../features/lifecycle/exitStore.ts";
 import { todayISO } from "../model.ts";
@@ -41,7 +45,7 @@ function useLetterData() {
   return reward;
 }
 
-const label = (type: LetterType) => letterTemplate(type).label;
+const label = (type: FullLetterType) => letterInfo(type).label;
 
 function MissingList({ missing }: { missing: string[] }) {
   if (!missing.length) return null;
@@ -64,22 +68,22 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
   const hr = canManageLetters(actor);
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
   const [employeeId, setEmployeeId] = useState(actor.id);
-  const types = hr ? LETTER_TEMPLATES : LETTER_TEMPLATES.filter((t) => t.employeeCanRequest);
-  const [type, setType] = useState<LetterType>("Employment");
+  const types = hr ? ALL_LETTER_TEMPLATES : ALL_LETTER_TEMPLATES.filter((t) => t.employeeCanRequest);
+  const [type, setType] = useState<FullLetterType>("Employment");
   const [note, setNote] = useState("");
   const [details, setDetails] = useState("");
   const [effectiveDate, setEffectiveDate] = useState("");
   const [msg, setMsg] = useState<Msg>(null);
 
   const subjectId = hr ? employeeId : actor.id;
-  const template = letterTemplate(type);
+  const template = letterInfo(type);
   const blocked = canRequestType(actor, type, subjectId);
   const missing = useMemo(() => {
     const draft = {
       id: "draft",
       employeeId: subjectId,
       employeeName: "",
-      type,
+      type: type as LetterType,
       status: "Draft",
       requestedBy: actor.fullName,
       requestedOn: todayISO(),
@@ -91,7 +95,7 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
     return missingFields(type, collectLetterFields(draft, reward.history));
   }, [subjectId, type, note, details, effectiveDate, actor.fullName, reward.history]);
 
-  const letters = reward.letters.filter((l) => canViewLetter(actor, l));
+  const letters = reward.letters.filter((l) => canSeeLetter(actor, l));
   const sortedPeople = [...people].sort((a, b) => a.fullName.localeCompare(b.fullName));
 
   function act(fn: () => string | null, ok: string) {
@@ -108,7 +112,10 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
             e.preventDefault();
             const error = requestLetter(actor, { employeeId: subjectId, type, note, details, effectiveDate });
             if (error) return setMsg({ tone: "err", text: error });
-            setMsg({ tone: "ok", text: `${template.label} requested — awaiting approval.` });
+            setMsg({
+              tone: "ok",
+              text: needsSecondApproval(type) ? `${template.label} raised. It needs a second approver.` : `${template.label} requested — awaiting approval.`,
+            });
             setNote("");
             setDetails("");
             setEffectiveDate("");
@@ -128,7 +135,7 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
             </Field>
           )}
           <Field label="Letter type">
-            <select value={type} onChange={(e) => setType(e.target.value as LetterType)}>
+            <select value={type} onChange={(e) => setType(e.target.value as FullLetterType)}>
               {types.map((t) => (
                 <option key={t.type} value={t.type}>
                   {t.label}
@@ -142,7 +149,7 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
             </Field>
           )}
           {hr && template.effectiveInput && (
-            <Field label="Effective date">
+            <Field label={type === "Termination" ? "Termination date" : type === "Internship" ? "Internship end date" : "Effective date"}>
               <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} />
             </Field>
           )}
@@ -157,7 +164,7 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
         <h3 style={{ fontSize: 14, marginTop: 16 }}>Templates</h3>
         <DataTable
           headers={["Letter", "Contents", "Requested by"]}
-          rows={LETTER_TEMPLATES.map((t) => [t.label, t.description, t.employeeCanRequest ? "Employee or HR" : "HR only"])}
+          rows={ALL_LETTER_TEMPLATES.map((t) => [t.label, t.description, t.employeeCanRequest ? "Employee or HR" : t.secondApproval ? "HR only, second approver" : "HR only"])}
         />
       </Card>
 
@@ -167,10 +174,10 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
           headers={["Employee", "Letter", "Status", "Version", "Approver", "Actions"]}
           rows={letters.map((l) => {
             const issue = currentIssue(l);
-            const canDecide = canApproveLetter(actor, l) && (l.status === "Pending approval" || l.status === "Approved");
+            const canDecide = canApproveLetterRow(actor, l) && (l.status === "Pending approval" || l.status === "Approved");
             const submit = nextLetterStatuses(actor, l).includes("Pending approval");
             const approverText =
-              l.approver ?? (l.status === "Pending approval" ? letterApprovers(l).map((a) => a.fullName).join(", ") || "None available" : "—");
+              l.approver ?? (l.status === "Pending approval" ? letterApproversFor(l).map((a) => a.fullName).join(", ") || "None available" : "—");
             return [
               l.employeeName,
               label(l.type),
@@ -191,12 +198,12 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
                     <button type="button" className="btn" onClick={() => act(() => approveLetter(actor, l.id), `${label(l.type)} approved and generated.`)}>
                       Approve &amp; generate
                     </button>
-                    <button type="button" className="btn-ghost" onClick={() => act(() => setLetterStatus(actor, l.id, "Rejected"), "Request rejected.")}>
+                    <button type="button" className="btn-ghost" onClick={() => act(() => rejectLetter(actor, l.id), "Request rejected.")}>
                       Reject
                     </button>
                   </>
                 )}
-                {l.status === "Issued" && canApproveLetter(actor, l) && (
+                {l.status === "Issued" && canApproveLetterRow(actor, l) && (
                   <button
                     type="button"
                     className="btn-ghost"
@@ -224,7 +231,7 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
 
 export function LetterHistoryPanel({ actor, onOpen }: { actor: DemoAccount; onOpen: (open: OpenLetter) => void }) {
   const reward = useLetterData();
-  const letters = reward.letters.filter((l) => canViewLetter(actor, l));
+  const letters = reward.letters.filter((l) => canSeeLetter(actor, l));
   return (
     <Card title="Request and approval history">
       <DataTable
@@ -300,7 +307,7 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
   const [effectiveDate, setEffectiveDate] = useState("");
 
   if (!open) return null;
-  if (!row || !canViewLetter(actor, row)) {
+  if (!row || !canSeeLetter(actor, row)) {
     return (
       <Dialog open title="Letter" onClose={onClose}>
         <EmptyState title="Letter not available" />
@@ -319,11 +326,11 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
 
   const issues = row.issued ?? [];
   const issue = issues.find((i) => i.docId === docId) ?? currentIssue(row);
-  const template = letterTemplate(row.type);
+  const template = letterInfo(row.type);
   const open_ = row.status === "Pending approval" || row.status === "Draft" || row.status === "Approved";
   const hr = canManageLetters(actor) && actor.id !== row.employeeId;
   const canEdit = open_ && (hr || row.requestedById === actor.id);
-  const canDecide = canApproveLetter(actor, row) && (row.status === "Pending approval" || row.status === "Approved");
+  const canDecide = canApproveLetterRow(actor, row) && (row.status === "Pending approval" || row.status === "Approved");
 
   if (issue) {
     const html = issuedLetterHtml(row, issue);
@@ -369,7 +376,7 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
               type="button"
               className="btn-ghost"
               onClick={() => {
-                const error = setLetterStatus(actor, row.id, "Rejected");
+                const error = rejectLetter(actor, row.id);
                 setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: "Request rejected." });
               }}
             >
@@ -393,7 +400,7 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
       <Banner message={msg} />
       <p className="letter-meta">
         Status: {row.status}
-        {row.status === "Pending approval" && ` · approver: ${letterApprovers(row).map((a) => a.fullName).join(", ") || "none available"}`}
+        {row.status === "Pending approval" && ` · approver: ${letterApproversFor(row).map((a) => a.fullName).join(", ") || "none available"}`}
         {` · ${letterDate(todayISO(), preview.fields.countryCode)}`}
       </p>
       <MissingList missing={preview.missing} />
@@ -415,7 +422,7 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
             </Field>
           )}
           {hr && (
-            <Field label="Effective date">
+            <Field label={row.type === ("Termination" as string) ? "Termination date" : row.type === ("Internship" as string) ? "Internship end date" : "Effective date"}>
               <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} />
             </Field>
           )}

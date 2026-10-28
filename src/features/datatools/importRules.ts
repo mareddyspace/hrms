@@ -344,7 +344,7 @@ export function buildImportRecords(rows: ValidatedRow[], people: readonly Person
     const managerId = managerRow?.targetId ?? manager?.id ?? "";
     const managerName = managerRow?.values.fullName ?? manager?.fullName ?? "";
     const country = TIMEZ_COUNTRIES.find((c) => c.name === v.countryName) ?? TIMEZ_COUNTRIES[0];
-    const legalEntity = people.find((p) => p.countryCode === country.code)?.legalEntity ?? "Infotech";
+    const legalEntity = people.find((p) => p.countryCode === country.code)?.legalEntity ?? "TimeZ";
     const status = v.employmentStatus as EmploymentStatus;
     const existing = row.existingId ? byId.get(row.existingId) : undefined;
 
@@ -390,7 +390,7 @@ export function buildImportRecords(rows: ValidatedRow[], people: readonly Person
         grade: "L4",
         department: v.department,
         division: `${v.department} Delivery`,
-        businessUnit: `Infotech ${country.name}`,
+        businessUnit: `TimeZ ${country.name}`,
         costCenter: `CC-${country.code}-1`,
         location: v.location,
         countryCode: country.code,
@@ -433,7 +433,7 @@ export function templateSheets(exampleManagerCode: string): { name: string; rows
       name: "Example",
       rows: [
         [...IMPORT_COLUMNS],
-        ["TZ9001", "Priya Nair", "priya.nair@infotech.com", FILTER_OPTIONS.departments[0] ?? "Engineering", "Software engineer", "India", "Bengaluru", exampleManagerCode, "2026-09-01", "Full Time", "Active"],
+        ["TZ9001", "Priya Nair", "priya.nair@timez.com", FILTER_OPTIONS.departments[0] ?? "Engineering", "Software engineer", "India", "Bengaluru", exampleManagerCode, "2026-09-01", "Full Time", "Active"],
       ],
     },
     { name: "Allowed values", rows: allowed },

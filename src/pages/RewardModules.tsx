@@ -23,6 +23,7 @@ import {
   hasModuleAccess,
 } from "../data/peoplePermissions.ts";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
+import { stepRoles, roleLabel, useApprovalWorkflows, type ApprovalStep } from "../data/approvalWorkflows.ts";
 import { BENEFIT_PLANS, LEGAL_DISCLAIMER, LIFE_EVENT_TYPES, type Dependent, type GradeBand } from "../data/rewardData.ts";
 import {
   UPLOAD_EXTENSIONS,
@@ -32,6 +33,7 @@ import {
   canDecideBenefitFor,
   canDecideCompReview,
   canProposeFor,
+  compApprovalText,
   changeWindowFor,
   closeLifeEvent,
   cycleBudgetUse,
@@ -75,6 +77,12 @@ function ScopeNote({ text }: { text: string }) {
 }
 
 /* ───────────────────────────── COMPENSATION ── */
+
+/** "HR", "Finance or Admin", "Executive (from 10%)". */
+function stepSummary(step: ApprovalStep): string {
+  const roles = stepRoles(step).map(roleLabel).join(step.mode === "any" ? " or " : " + ");
+  return step.minPercent ? `${roles} (from ${step.minPercent}%)` : roles;
+}
 
 const STRUCTURE_ROLES = ["finance", "hr", "hr_admin", "hrbp", "manager", "executive", "founder", "cofounder"];
 
@@ -139,6 +147,7 @@ export function CompensationPage() {
   const amountAccess = (employeeId: string) =>
     isAboveInLine(me.id, employeeId) ? ("full" as const) : canViewSalaryAmount(me, employeeId, { selfId: me.id });
   const myDecisions = reward.reviews.filter((r) => canDecideCompReview(me, r)).length;
+  const compSteps = useApprovalWorkflows().compensation;
 
   if (!moduleOk) {
     return (
@@ -274,14 +283,16 @@ export function CompensationPage() {
               ) : undefined
             }
           >
-            <p className="note">Approval: someone above the employee (not the proposer), then HR. HR's own pay is finalised by their line manager.</p>
+            <p className="note">
+              Approval: {compSteps.length ? compSteps.map(stepSummary).join(" → ") : "HR"}. The proposer never approves. Proposals keep the steps they were submitted with.
+            </p>
             {cycle && !cycleTakesProposals(cycle) && (
               <Banner
                 message={{ tone: "info", text: cycle.status === "Closed" ? "This cycle is closed." : `This cycle is in ${cycle.status.toLowerCase()} and not taking proposals.` }}
               />
             )}
             <DataTable
-              headers={["Employee", "Proposed by", "Grade", "Current", "Proposed", "Incr %", "Bonus", "Status", "Line approval", "Final", "Action"]}
+              headers={["Employee", "Proposed by", "Grade", "Current", "Proposed", "Incr %", "Bonus", "Status", "Approvals", "Final", "Action"]}
               rows={visibleReviews.map((r) => {
                 const vis = amountAccess(r.employeeId);
                 let action: ReactNode = <span className="muted">—</span>;
@@ -312,7 +323,7 @@ export function CompensationPage() {
                   formatCompAmount(vis, `${r.proposedIncreasePct}%`, "•••"),
                   displayMoney(r.bonusProposal, vis),
                   <StatusBadge key={r.id} status={r.status} tone={COMP_STATUS_TONE[r.status]} literal />,
-                  r.lineApprover ? `${r.lineApprover} · ${r.lineApprovedOn ?? ""}` : "—",
+                  compApprovalText(r),
                   r.approver ? `${r.approver} · ${r.decidedOn ?? ""}` : "—",
                   <span key={`${r.id}-a`}>{action}</span>,
                 ];

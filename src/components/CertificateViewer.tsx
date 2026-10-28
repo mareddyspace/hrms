@@ -6,7 +6,7 @@ import { Dialog } from "./ui.tsx";
 /** Everything needed to draw a certificate, for internal course completions and external certifications. */
 export type CertificateDoc = {
   id: string;
-  /** "course": issued by Info Tech when a course is completed. "professional": an external certification on file. */
+  /** "course": issued by TimeZ when a course is completed. "professional": an external certification on file. */
   kind: "course" | "professional";
   title: string;
   recipient: string;

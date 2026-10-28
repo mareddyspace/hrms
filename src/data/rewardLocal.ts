@@ -2,6 +2,8 @@ import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../demoAccount
 import { formatShortDate, parseISODate, toISO, todayISO } from "../model.ts";
 import { appendAuditEntries, type AuditEntry } from "./auditTrail.ts";
 import { pushPersonTaskAlert } from "./collabLocal.ts";
+import { resolveFlow, workflowVersion, type FlowDecision, type FlowStep } from "./approvalWorkflows.ts";
+import { decideFlowStep, isWaitingOn, stepText, waitingApproverIds, type SteppedRequest } from "./expenseFlow.ts";
 import { getBasePeople } from "./peopleData.ts";
 import { canManagePeople } from "./peoplePermissions.ts";
 import { canManageLetters } from "./rbac.ts";
@@ -179,11 +181,6 @@ export function isAboveInLine(actorId: string, employeeId: string): boolean {
   return actorId !== employeeId && chainIds(employeeId).includes(actorId);
 }
 
-/** Someone above the employee who isn't the proposer, so the line step can happen at all. */
-function hasLineApprover(row: CompReviewItem): boolean {
-  return chainIds(row.employeeId).some((id) => id !== row.managerId);
-}
-
 /** HR roles that own compensation & benefits decisions. */
 const PAY_HR_ROLES = new Set<string>(["hr", "hr_admin"]);
 
@@ -349,7 +346,8 @@ export function createCompProposal(
   const person = DEMO_ACCOUNTS.find((a) => a.id === input.employeeId);
   if (!person) return "Employee not found.";
   if (!canProposeFor(actor, person.id)) return "You can only propose for people below you in the reporting line.";
-  return withCompAudit(actor, (s, log) => {
+  let submitted: { ids: string[]; employeeName: string; body: string } | null = null;
+  const result = withCompAudit(actor, (s, log) => {
     const cycle = cycleById(s, input.cycleId);
     if (!cycle) return "Cycle not found.";
     if (!cycleTakesProposals(cycle)) return `${cycle.name} is not open for proposals.`;
@@ -371,12 +369,7 @@ export function createCompProposal(
     const id = `cr-local-${Date.now()}`;
     const proposedBase = formatAmount(input.proposedBase, currency);
     const bonus = input.bonus ? formatAmount(input.bonus, currency) : "";
-    const status: CompReviewItem["status"] = !input.submit
-      ? "Draft"
-      : chainIds(person.id).some((m) => m !== actor.id)
-        ? "Pending approval"
-        : "Pending final approval";
-    s.reviews.unshift({
+    const row: CompProposal = {
       id,
       cycleId: cycle.id,
       employeeId: person.id,
@@ -389,9 +382,16 @@ export function createCompProposal(
       proposedBase,
       proposedIncreasePct: pct,
       currency,
-      status,
+      status: "Draft",
       bonusProposal: bonus,
-    });
+    };
+    if (input.submit) {
+      startCompApproval(row, actor.id);
+      if (!row.steps?.length) return "No one can approve this proposal.";
+      submitted = { ids: waitingApproverIds(compFlow(row)), employeeName: row.employeeName, body: `${row.steps[0]!.label} · proposed by ${actor.fullName}` };
+    }
+    const status = row.status;
+    s.reviews.unshift(row);
     log(id, person.id, "Created", [
       { field: "Cycle", before: "", after: cycle.name },
       { field: "Base", before: formatAmount(currentBase, currency), after: proposedBase },
@@ -400,12 +400,64 @@ export function createCompProposal(
       { field: "Status", before: "", after: status },
     ]);
   });
+  const sent = submitted as { ids: string[]; employeeName: string; body: string } | null;
+  if (!result && sent) compAlert(sent.ids, sent.employeeName, sent.body);
+  return result;
 }
 
-/** Who may decide the row now: line step = above the employee, never the proposer; final step = HR (or, for HR's own pay, their line manager). */
-export function canDecideCompReview(actor: Actor, row: CompReviewItem): boolean {
+/* Proposals submitted now follow the "compensation" approval workflow (HR → finance/admin → an executive for large
+   increases by default), fixed at submission. Older proposals (no steps) keep the line → HR rule. */
+
+/** A proposal row with the workflow fields newer proposals carry. */
+export type CompProposal = CompReviewItem & {
+  steps?: FlowStep[];
+  currentStep?: number;
+  stepDecisions?: FlowDecision[];
+  submittedOn?: string;
+  workflowVersion?: number;
+};
+
+const NO_LINE_OVERRIDE = () => false;
+
+function compFlow(row: CompProposal): SteppedRequest {
+  const open = row.status === "Pending approval" || row.status === "Pending final approval";
+  return { employeeId: row.employeeId, status: open ? "pending" : "closed", steps: row.steps, currentStep: row.currentStep ?? 0, stepDecisions: row.stepDecisions ?? [] };
+}
+
+/** Status for the open step: the last step shows as final approval. */
+function stepStatus(row: CompProposal): CompReviewItem["status"] {
+  return (row.currentStep ?? 0) >= (row.steps?.length ?? 1) - 1 ? "Pending final approval" : "Pending approval";
+}
+
+/** Fix the workflow steps when a proposal is submitted. With nobody to approve, HR (or, for HR's pay, their line manager) decides. */
+function startCompApproval(row: CompProposal, proposerId: string) {
+  let steps = resolveFlow("compensation", row.employeeId, { percent: row.proposedIncreasePct, excludeIds: [proposerId] });
+  if (!steps.length) {
+    const ids = payDecidersFor(row.employeeId, isPayHr, (a) => a.id === proposerId).map((a) => a.id);
+    steps = ids.length ? [{ role: "hr", label: "Final approval", approverIds: ids }] : [];
+  }
+  row.steps = steps;
+  row.currentStep = 0;
+  row.stepDecisions = [];
+  row.submittedOn = todayISO();
+  row.workflowVersion = workflowVersion("compensation");
+  row.status = stepStatus(row);
+}
+
+function compAlert(ids: string[], employeeName: string, body: string) {
+  for (const recipientId of new Set(ids)) {
+    pushPersonTaskAlert({ recipientId, title: `Pay proposal to approve · ${employeeName}`, body, href: "/compensation" });
+  }
+}
+
+/**
+ * Who may decide the row now. Workflow proposals: the open step's approvers. Older ones: line step = above the
+ * employee, never the proposer; final step = HR (or, for HR's own pay, their line manager).
+ */
+export function canDecideCompReview(actor: Actor, row: CompProposal): boolean {
   if (actor.id === row.employeeId || actor.id === row.managerId) return false;
   if (cycleById(getRewardState(), row.cycleId)?.status === "Closed") return false;
+  if (row.steps?.length) return isWaitingOn(compFlow(row), actor.id, NO_LINE_OVERRIDE);
   if (row.status === "Pending approval") return isAboveInLine(actor.id, row.employeeId);
   if (row.status === "Pending final approval") {
     if (row.lineApprover === actor.fullName) return false;
@@ -416,34 +468,135 @@ export function canDecideCompReview(actor: Actor, row: CompReviewItem): boolean 
   return false;
 }
 
+/** "HR approval ✓ Farhan · Compensation approval (waiting)" for workflow proposals; older ones show the line approver. */
+export function compApprovalText(row: CompProposal): string {
+  if (!row.steps?.length) return row.lineApprover ? `${row.lineApprover} · ${row.lineApprovedOn ?? ""}` : "—";
+  const decisions = row.stepDecisions ?? [];
+  const open = row.status === "Pending approval" || row.status === "Pending final approval";
+  return row.steps
+    .map((step, index) => {
+      const done = decisions.filter((d) => d.step === index);
+      const waiting = open && index === (row.currentStep ?? 0);
+      if (done.length && !waiting) return `${step.label} ${done.some((d) => d.decision === "rejected") ? "✗" : "✓"} ${done.map((d) => d.byName).join(", ")}`;
+      if (waiting) return `${step.label} (waiting${done.length ? `; ✓ ${done.map((d) => d.byName).join(", ")}` : ""})`;
+      return step.label;
+    })
+    .join(" · ");
+}
+
 /** The proposer sends a draft for approval. */
 export function submitCompReview(actor: Actor, id: string): RewardResult {
-  return withCompAudit(actor, (s, log) => {
-    const row = s.reviews.find((r) => r.id === id);
+  let alert: { ids: string[]; employeeName: string; body: string } | null = null;
+  const result = withCompAudit(actor, (s, log) => {
+    const row = s.reviews.find((r) => r.id === id) as CompProposal | undefined;
     if (!row) return "Proposal not found.";
     if (row.managerId !== actor.id) return "Only the person who proposed this can submit it.";
     if (row.status !== "Draft") return "Only drafts can be submitted.";
     if (!cycleTakesProposals(cycleById(s, row.cycleId))) return "This review cycle is not open.";
-    // With no one above the proposer in the line (e.g. the CEO's own reports), it goes straight to HR for the final decision.
-    row.status = hasLineApprover(row) ? "Pending approval" : "Pending final approval";
+    startCompApproval(row, actor.id);
+    if (!row.steps?.length) return "No one can approve this proposal.";
     log(row.id, row.employeeId, "Updated", [{ field: "Status", before: "Draft", after: row.status }]);
+    alert = { ids: waitingApproverIds(compFlow(row)), employeeName: row.employeeName, body: `${row.steps[0]!.label} · proposed by ${actor.fullName}` };
   });
+  const sent = alert as { ids: string[]; employeeName: string; body: string } | null;
+  if (!result && sent) compAlert(sent.ids, sent.employeeName, sent.body);
+  return result;
+}
+
+/** Final approval: record the new pay (and bonus) in history. */
+function applyApprovedProposal(s: RewardState, row: CompProposal, log: AuditLog, before: string, today: string) {
+  const cycle = cycleById(s, row.cycleId);
+  const effective = cycle?.effectiveDate ?? today;
+  s.history.unshift({
+    id: `ch-${row.id}`,
+    employeeId: row.employeeId,
+    employeeName: row.employeeName,
+    effective,
+    event: cycle?.name ?? "Compensation review",
+    grade: row.proposedGrade,
+    base: row.proposedBase,
+    currency: row.currency,
+    managerId: row.managerId,
+  });
+  log(row.id, row.employeeId, "Updated", [
+    { field: "Status", before, after: "Approved" },
+    { field: "Base", before: row.currentBase, after: row.proposedBase },
+    ...(row.currentGrade !== row.proposedGrade ? [{ field: "Grade", before: row.currentGrade, after: row.proposedGrade }] : []),
+    { field: "Effective", before: "", after: effective },
+  ]);
+  if (row.bonusProposal) {
+    s.bonuses.unshift({
+      id: `bn-${row.id}`,
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      type: "Annual incentive",
+      period: cycle?.name.split(" ")[0] ?? today.slice(0, 4),
+      amount: row.bonusProposal,
+      currency: row.currency,
+      status: "Accrued",
+    });
+    log(`bn-${row.id}`, row.employeeId, "Created", [{ field: "Bonus", before: "", after: row.bonusProposal }]);
+  }
 }
 
 export function decideCompReview(actor: Actor, id: string, decision: "Approved" | "Rejected"): RewardResult {
   let notify: { to: string; title: string; body: string } | null = null;
+  let nextAlert: { ids: string[]; employeeName: string; body: string } | null = null;
   const result = withCompAudit(actor, (s, log) => {
-    const row = s.reviews.find((r) => r.id === id);
+    const row = s.reviews.find((r) => r.id === id) as CompProposal | undefined;
     if (!row) return "Proposal not found.";
     if (row.employeeId === actor.id) return "You cannot decide your own compensation.";
     if (row.managerId === actor.id) return "You cannot approve your own proposal.";
     if (!canDecideCompReview(actor, row)) {
+      if (row.steps?.length) {
+        const flow = compFlow(row);
+        return flow.status === "pending" ? `This proposal is waiting for ${stepText(flow).split(" · ")[0]!.toLowerCase()}.` : "This proposal has already been decided.";
+      }
       return row.status === "Pending final approval"
         ? "HR makes the final decision (for HR's own pay, their line manager)."
         : "Only someone above the employee in their reporting line can approve this.";
     }
     const today = todayISO();
     const before = row.status;
+
+    // Workflow proposals: decide the open step.
+    if (row.steps?.length) {
+      const res = decideFlowStep(compFlow(row), actor, decision === "Approved" ? "approved" : "rejected", undefined, NO_LINE_OVERRIDE, today);
+      if (typeof res === "string") return res;
+      if (!(row.stepDecisions ?? []).length && decision === "Approved") {
+        row.lineApprover = actor.fullName;
+        row.lineApprovedOn = today;
+      }
+      row.stepDecisions = [...(row.stepDecisions ?? []), ...res.entries];
+      if (res.outcome === "rejected") {
+        row.status = "Rejected";
+        row.approver = actor.fullName;
+        row.decidedOn = today;
+        log(row.id, row.employeeId, "Updated", [{ field: "Status", before, after: "Rejected" }]);
+        notify = { to: row.managerId, title: `Pay proposal rejected · ${row.employeeName}`, body: `${actor.fullName} rejected the proposal (${res.step.label.toLowerCase()}).` };
+        return;
+      }
+      if (res.outcome === "waiting" || res.outcome === "advanced") {
+        row.currentStep = res.currentStep;
+        row.status = stepStatus(row);
+        log(row.id, row.employeeId, "Updated", [
+          ...res.entries.map((e) => ({ field: e.label, before: "Pending", after: "Approved" })),
+          ...(row.status !== before ? [{ field: "Status", before, after: row.status }] : []),
+        ]);
+        if (res.outcome === "advanced") {
+          nextAlert = { ids: waitingApproverIds(compFlow(row)), employeeName: row.employeeName, body: `${res.next?.label ?? "Next step"} · ${row.proposedIncreasePct}% increase` };
+        }
+        return;
+      }
+      row.status = "Approved";
+      row.approver = actor.fullName;
+      row.decidedOn = today;
+      applyApprovedProposal(s, row, log, before, today);
+      notify = { to: row.managerId, title: `Pay proposal approved · ${row.employeeName}`, body: `${actor.fullName} gave final approval.` };
+      return;
+    }
+
+    // Older proposals: line approval, then HR's final decision.
     if (decision === "Rejected") {
       row.status = "Rejected";
       row.approver = actor.fullName;
@@ -462,42 +615,13 @@ export function decideCompReview(actor: Actor, id: string, decision: "Approved" 
     row.status = "Approved";
     row.approver = actor.fullName;
     row.decidedOn = today;
-    const cycle = cycleById(s, row.cycleId);
-    const effective = cycle?.effectiveDate ?? today;
-    s.history.unshift({
-      id: `ch-${row.id}`,
-      employeeId: row.employeeId,
-      employeeName: row.employeeName,
-      effective,
-      event: cycle?.name ?? "Compensation review",
-      grade: row.proposedGrade,
-      base: row.proposedBase,
-      currency: row.currency,
-      managerId: row.managerId,
-    });
-    log(row.id, row.employeeId, "Updated", [
-      { field: "Status", before, after: "Approved" },
-      { field: "Base", before: row.currentBase, after: row.proposedBase },
-      ...(row.currentGrade !== row.proposedGrade ? [{ field: "Grade", before: row.currentGrade, after: row.proposedGrade }] : []),
-      { field: "Effective", before: "", after: effective },
-    ]);
-    if (row.bonusProposal) {
-      s.bonuses.unshift({
-        id: `bn-${row.id}`,
-        employeeId: row.employeeId,
-        employeeName: row.employeeName,
-        type: "Annual incentive",
-        period: cycle?.name.split(" ")[0] ?? today.slice(0, 4),
-        amount: row.bonusProposal,
-        currency: row.currency,
-        status: "Accrued",
-      });
-      log(`bn-${row.id}`, row.employeeId, "Created", [{ field: "Bonus", before: "", after: row.bonusProposal }]);
-    }
+    applyApprovedProposal(s, row, log, before, today);
     notify = { to: row.managerId, title: `Pay proposal approved · ${row.employeeName}`, body: `${actor.fullName} gave final approval.` };
   });
   const sent = notify as { to: string; title: string; body: string } | null;
   if (!result && sent) pushPersonTaskAlert({ recipientId: sent.to, title: sent.title, body: sent.body, href: "/compensation" });
+  const next = nextAlert as { ids: string[]; employeeName: string; body: string } | null;
+  if (!result && next) compAlert(next.ids, next.employeeName, next.body);
   return result;
 }
 

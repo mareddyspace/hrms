@@ -81,7 +81,9 @@ export type NavAccessId =
   | "workflowsconfig"
   | "emailoutbox"
   | "lifecycleactions"
-  | "recognition";
+  | "recognition"
+  | "accessroles"
+  | "aisettings";
 
 export interface DemoAccount extends Employee {
   /** Prototype-only plain-text password (frontend mock). */
@@ -185,6 +187,8 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "workflowsconfig",
   "emailoutbox",
   "lifecycleactions",
+  "accessroles", // Roles & permissions (/admin/roles)
+  "aisettings", // AI settings (/admin/ai)
 ];
 
 function account(
@@ -197,7 +201,7 @@ function account(
     shiftHours: "09:30 AM to 06:30 PM",
     photo: "/profile.svg",
     mobile: "+91 90000 00000",
-    address: "Infotech",
+    address: "TimeZ",
     ...partial,
   };
 }
@@ -224,14 +228,14 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personaLabel: "Employee",
     role: "employee",
     designation: "Software Engineer",
-    email: "babu.menon@infotech.com",
+    email: "babu.menon@timez.com",
     password: "Employee@1184",
     mobile: "+91 98450 22110",
     address: "Bengaluru, India",
     timeZone: "Asia/Kolkata",
     countryCode: "IN",
     countryName: "India",
-    legalEntity: "Infotech India Pvt Ltd",
+    legalEntity: "TimeZ India Pvt Ltd",
     location: "Bengaluru",
     department: "Engineering",
     currency: "INR",
@@ -245,14 +249,14 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personaLabel: "Manager",
     role: "manager",
     designation: "Engineering Manager",
-    email: "ram.krishnan@infotech.com",
+    email: "ram.krishnan@timez.com",
     password: "Manager@1001",
     mobile: "+91 98450 11001",
     address: "Bengaluru, India",
     timeZone: "Asia/Kolkata",
     countryCode: "IN",
     countryName: "India",
-    legalEntity: "Infotech India Pvt Ltd",
+    legalEntity: "TimeZ India Pvt Ltd",
     location: "Bengaluru",
     department: "Engineering",
     currency: "INR",
@@ -266,14 +270,14 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personaLabel: "HR",
     role: "hr_admin",
     designation: "HR Director",
-    email: "farhan.ali@infotech.com",
+    email: "farhan.ali@timez.com",
     password: "HrAdmin@2001",
     mobile: "+91 98450 44001",
     address: "Bengaluru, India",
     timeZone: "Asia/Kolkata",
     countryCode: "IN",
     countryName: "India",
-    legalEntity: "Infotech India Pvt Ltd",
+    legalEntity: "TimeZ India Pvt Ltd",
     location: "Bengaluru",
     department: "People",
     currency: "INR",
@@ -305,14 +309,14 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personaLabel: "Recruiter",
     role: "recruiter",
     designation: "Talent Acquisition Lead",
-    email: "sophie.clark@infotech.com",
+    email: "sophie.clark@timez.com",
     password: "Recruiter@3001",
     mobile: "+1 212 555 0188",
     address: "New York, USA",
     timeZone: "America/New_York",
     countryCode: "US",
     countryName: "United States",
-    legalEntity: "Infotech Inc",
+    legalEntity: "TimeZ Inc",
     location: "New York",
     department: "Talent Acquisition",
     currency: "USD",
@@ -337,14 +341,14 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personaLabel: "Executive",
     role: "executive",
     designation: "Chief Executive Officer",
-    email: "jordan.blake@infotech.com",
+    email: "jordan.blake@timez.com",
     password: "Executive@5001",
     mobile: "+1 415 555 0142",
     address: "San Francisco, USA",
     timeZone: "America/Los_Angeles",
     countryCode: "US",
     countryName: "United States",
-    legalEntity: "Infotech Inc",
+    legalEntity: "TimeZ Inc",
     location: "San Francisco",
     department: "Executive",
     currency: "USD",
@@ -368,14 +372,14 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personaLabel: "Admin",
     role: "admin",
     designation: "Platform Administrator",
-    email: "alex.morgan@infotech.com",
+    email: "alex.morgan@timez.com",
     password: "Admin@8001",
     mobile: "+44 20 7946 0991",
     address: "London, UK",
     timeZone: "Europe/London",
     countryCode: "GB",
     countryName: "United Kingdom",
-    legalEntity: "Infotech UK Ltd",
+    legalEntity: "TimeZ UK Ltd",
     location: "London",
     department: "IT",
     currency: "GBP",
@@ -530,12 +534,52 @@ export function setNavOverrideSource(source: (accountId: string) => { grant: str
   navOverrideSource = source;
 }
 
-export function accountHasNavAccess(account: DemoAccount, linkId: string): boolean {
+/**
+ * Page access set in Admin → Roles & permissions (src/data/accessControl.ts). When an account has an entry here it
+ * fully decides that account's pages: role baseline plus its grants, minus its revokes. Read straight from storage so
+ * it applies from the first render, before any page loads the access store.
+ */
+export const PAGE_ACCESS_KEY = "timez.access.pages.v1";
+export type PageAccessOverride = { grant: string[]; revoke: string[] };
+let pageAccessCache: Record<string, PageAccessOverride> | null = null;
+
+export function getPageAccessOverrides(): Record<string, PageAccessOverride> {
+  if (pageAccessCache) return pageAccessCache;
+  try {
+    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(PAGE_ACCESS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, Partial<PageAccessOverride>>) : {};
+    const clean = (list: unknown) => (Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : []);
+    pageAccessCache = Object.fromEntries(
+      Object.entries(parsed && typeof parsed === "object" ? parsed : {}).map(([id, v]) => [id, { grant: clean(v?.grant), revoke: clean(v?.revoke) }]),
+    );
+  } catch {
+    pageAccessCache = {};
+  }
+  return pageAccessCache;
+}
+
+/** Called by the access store after it saves, so the sidebar and route guards follow at once. */
+export function setPageAccessOverrides(map: Record<string, PageAccessOverride>): void {
+  pageAccessCache = map;
+}
+
+/** Page access without the Roles & permissions page edits (role baseline plus Console role edits). */
+export function accountDefaultNavAccess(account: DemoAccount, linkId: string): boolean {
   const override = navOverrideSource(account.id);
   if (override?.revoke.includes(linkId)) return false;
   if (override?.grant.includes(linkId)) return true;
   if (account.navAccess.includes("*")) return true;
   return account.navAccess.includes(linkId as NavAccessId);
+}
+
+export function accountHasNavAccess(account: DemoAccount, linkId: string): boolean {
+  const page = getPageAccessOverrides()[account.id];
+  if (page) {
+    if (page.revoke.includes(linkId)) return false;
+    if (page.grant.includes(linkId)) return true;
+    return account.navAccess.includes("*") || account.navAccess.includes(linkId as NavAccessId);
+  }
+  return accountDefaultNavAccess(account, linkId);
 }
 
 /** @deprecated Prefer DEMO_ACCOUNTS from this module */

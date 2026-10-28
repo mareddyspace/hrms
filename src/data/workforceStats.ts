@@ -21,14 +21,14 @@ export type RangeKey = "7d" | "30d" | "90d" | "ytd";
 /* ───────────── Business units (derived from country so totals always match the country table) ───────────── */
 
 const BU_BY_COUNTRY: Record<CountryCode, string> = {
-  IN: "Infotech India",
-  US: "Infotech Americas",
-  CA: "Infotech Americas",
-  GB: "Infotech EMEA",
-  DE: "Infotech EMEA",
-  AE: "Infotech EMEA",
-  SA: "Infotech EMEA",
-  AU: "Infotech APAC",
+  IN: "TimeZ India",
+  US: "TimeZ Americas",
+  CA: "TimeZ Americas",
+  GB: "TimeZ EMEA",
+  DE: "TimeZ EMEA",
+  AE: "TimeZ EMEA",
+  SA: "TimeZ EMEA",
+  AU: "TimeZ APAC",
 };
 
 export function businessUnitFor(code: string): string {

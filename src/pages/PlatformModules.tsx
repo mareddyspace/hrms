@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { PRODUCT_NAME } from "../brand.ts";
@@ -47,7 +47,9 @@ import {
 } from "../data/workforceStats.ts";
 import { countWaitingOnMe } from "./ApprovalsCenter.tsx";
 import { useAskCopilot } from "../features/copilot/askCopilot.ts";
+import { agentEnabled } from "../data/aiSettings.ts";
 import { CopilotSources } from "../features/copilot/CopilotSources.tsx";
+import { CopilotExtras } from "../features/copilot/CopilotExtras.tsx";
 import { getCompensationAccess, hasModuleAccess } from "../data/peoplePermissions.ts";
 import { canViewReport } from "../data/rbac.ts";
 import {
@@ -59,9 +61,11 @@ import {
   PAYROLL_PROVIDERS,
   PAYROLL_STATUS,
   ROLE_PERMISSION_CATALOG,
+  SYNC_SCHEDULES,
   copilotPersonaFromRole,
   type AnalyticsRange,
   type CopilotAnswer,
+  type SyncSchedule,
 } from "../data/platformData.ts";
 import {
   COST_CENTRES,
@@ -71,15 +75,20 @@ import {
   effectiveCatalogIds,
   fixAndRetryQuarantined,
   getPlatformVersion,
+  integrationRuns,
+  integrationSchedule,
+  integrationTotals,
   listAuditLog,
   listIntegrations,
   listNotificationPrefs,
   listQuarantine,
+  nextRunAt,
   retryAllQuarantined,
   retryIntegration,
   retryQuarantined,
   runIntegrationSync,
   saveRoleEdit,
+  setIntegrationSchedule,
   subscribePlatform,
   updateNotificationPref,
   type QuarantineField,
@@ -560,6 +569,16 @@ export function AiCopilotPage() {
     ask(prompt);
   }
 
+  const [askParams, setAskParams] = useSearchParams();
+  useEffect(() => {
+    const linked = askParams.get("ask");
+    if (!linked) return;
+    ask(linked);
+    setAskParams({}, { replace: true });
+    // ask is stable enough for a one-off linked question
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askParams]);
+
   const conversations = useMemo(() => {
     const starts: { id: string; title: string }[] = [];
     for (let i = 0; i < history.length; i += 2) {
@@ -657,6 +676,7 @@ function CopilotAnswerCard({ answer, highlight }: { answer: CopilotAnswer; highl
           rows={answer.table.rows.map((r) => r.map((c) => c))}
         />
       )}
+      <CopilotExtras answer={answer} />
       <CopilotSources sources={answer.sources} />
       {answer.links && (
         <p className="chip-row">
@@ -673,6 +693,17 @@ function CopilotAnswerCard({ answer, highlight }: { answer: CopilotAnswer; highl
 
 /* ───────────────── AI Agents ───────────────── */
 
+/** Questions each agent can start with; they open in the Copilot. */
+const AGENT_STARTERS: Record<string, string[]> = {
+  employee: ["How many leave days do I have?", "Apply leave next Friday", "I moved to a new address"],
+  manager: ["Who is on leave this week?", "What approvals are waiting for me?", "Overtime by person this month"],
+  hr: ["Headcount by country", "Who hasn't finished mandatory training?", "Prepare a promotion letter for Babu"],
+  recruiter: ["Joiners this quarter by department", "Attrition by department", "Headcount by location"],
+  knowledge: ["What is the leave policy?", "What is the remote work policy?", "What is the travel policy?"],
+  analytics: ["Headcount by country", "Leave taken by department this month", "Late arrivals by location this month"],
+  document: ["Prepare an employment letter for me", "Prepare an experience letter for Babu", "Prepare a promotion letter for Babu"],
+};
+
 export function AiAgentsPage() {
   const { demoProfile } = usePortal();
   if (!hasModuleAccess(demoProfile, "agents")) {
@@ -683,10 +714,12 @@ export function AiAgentsPage() {
     );
   }
 
+  const agents = AI_AGENTS.filter((agent) => agentEnabled(agent.id));
   return (
     <Page title="AI Agents">
+      {agents.length === 0 && <EmptyState title="No agents switched on" description="An admin can switch agents on in AI settings." />}
       <div className="agent-grid">
-        {AI_AGENTS.map((agent) => (
+        {agents.map((agent) => (
           <Card key={agent.id} title={agent.name} className="agent-card">
             <p className="note">{agent.audience}</p>
             <p>{agent.purpose}</p>
@@ -706,6 +739,13 @@ export function AiAgentsPage() {
                 </dd>
               </div>
             </dl>
+            <div className="agent-starters">
+              {(AGENT_STARTERS[agent.id] ?? []).map((q) => (
+                <Link key={q} className="btn-ghost btn-tiny" to={`/ai/copilot?ask=${encodeURIComponent(q)}`}>
+                  {q}
+                </Link>
+              ))}
+            </div>
           </Card>
         ))}
       </div>
@@ -714,6 +754,16 @@ export function AiAgentsPage() {
 }
 
 /* ───────────────── Integration Center ───────────────── */
+
+function runTime(value: Date | string | null): string {
+  if (!value) return "—";
+  const d = typeof value === "string" ? new Date(value) : value;
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function scheduleLabel(id: SyncSchedule): string {
+  return SYNC_SCHEDULES.find((s) => s.id === id)?.label ?? id;
+}
 
 export function IntegrationsPage() {
   usePlatformTick();
@@ -766,6 +816,9 @@ export function IntegrationsPage() {
       <div className="grid-2">
         {integrations.map((item) => {
           const held = listQuarantine(item.id).length;
+          const totals = integrationTotals(item);
+          const schedule = integrationSchedule(item);
+          const next = nextRunAt(item);
           return (
             <button
               key={item.id}
@@ -784,16 +837,23 @@ export function IntegrationsPage() {
               <p>{item.description}</p>
               <dl className="info-grid">
                 <div className="info-fact">
-                  <dt>Last sync</dt>
+                  <dt>Last run</dt>
                   <dd>{item.lastSync}</dd>
                 </div>
                 <div className="info-fact">
-                  <dt>Records</dt>
-                  <dd>{item.recordsProcessed.toLocaleString()}</dd>
+                  <dt>Next run</dt>
+                  <dd>
+                    {next ? runTime(next) : item.status === "Not configured" ? "—" : schedule === "manual" ? "Manual only" : "Paused"}
+                    {next && <small className="note"> · {scheduleLabel(schedule)}</small>}
+                  </dd>
                 </div>
                 <div className="info-fact">
-                  <dt>Errors</dt>
-                  <dd>{item.errorCount}</dd>
+                  <dt>Succeeded</dt>
+                  <dd>{totals.succeeded.toLocaleString()}</dd>
+                </div>
+                <div className="info-fact">
+                  <dt>Failed</dt>
+                  <dd>{totals.failed.toLocaleString()}</dd>
                 </div>
               </dl>
             </button>
@@ -821,6 +881,41 @@ export function IntegrationsPage() {
               l.at,
               <StatusBadge key={`${i}-${l.at}`} status={l.level} tone={l.level === "error" ? "danger" : l.level === "warn" ? "warn" : "info"} />,
               l.message,
+            ])}
+          />
+        </Card>
+      )}
+
+      {active && (
+        <Card
+          title={`${active.name} · runs`}
+          action={
+            <label className="filter-label">
+              Schedule
+              <select
+                value={integrationSchedule(active)}
+                disabled={active.status === "Not configured"}
+                onChange={(e) => {
+                  setIntegrationSchedule(active.id, e.target.value as SyncSchedule, employee.fullName);
+                  setToast({ tone: "ok", text: `${active.name} now syncs: ${scheduleLabel(e.target.value as SyncSchedule).toLowerCase()}.` });
+                }}
+              >
+                {SYNC_SCHEDULES.map((s) => (
+                  <option key={s.id} value={s.id}>{s.label}</option>
+                ))}
+              </select>
+            </label>
+          }
+        >
+          <DataTable
+            headers={["Time", "Processed", "Succeeded", "Failed", "By"]}
+            empty={<p className="note">No runs yet.</p>}
+            rows={integrationRuns(active).map((r) => [
+              runTime(r.at),
+              r.processed,
+              r.succeeded,
+              r.failed ? <StatusBadge key="f" status={String(r.failed)} tone="danger" literal /> : 0,
+              r.by,
             ])}
           />
         </Card>

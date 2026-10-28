@@ -97,7 +97,8 @@ export function ProfileEditForm({
       setMessage({ tone: "err", text: error });
       return;
     }
-    saveProfileExtras(employee.id, extras);
+    // Preferred name is edited under Personal; keep the latest saved value rather than the one loaded with this form.
+    saveProfileExtras(employee.id, { ...extras, preferredName: profileExtrasFor(employee.id).preferredName });
     setMessage({ tone: "ok", text: "Profile updated." });
     setOtp("");
     setOtpSent(false);
@@ -118,14 +119,7 @@ export function ProfileEditForm({
         </Field>
         <Field label="Legal name">
           <input value={employee.fullName} readOnly disabled />
-          <span className="note">Ask HR to change.</span>
-        </Field>
-        <Field label="Preferred name">
-          <input
-            value={extras.preferredName}
-            maxLength={40}
-            onChange={(event) => setExtras({ ...extras, preferredName: event.target.value })}
-          />
+          <span className="note">Use Request correction under Personal.</span>
         </Field>
         <Field label="Work email">
           <input type="email" value={employee.email} readOnly disabled />

@@ -237,7 +237,7 @@ export function listOrgUnits(people: PersonRecord[], overlay = getOrgOverlay()):
   for (const country of TIMEZ_COUNTRIES) {
     const cc = country.code;
     const le = LEGAL_BY_COUNTRY[cc];
-    const bu = `Infotech ${country.name}`;
+    const bu = `TimeZ ${country.name}`;
     const leKey = seedUnitKey("legalEntity", cc, le);
     const buKey = seedUnitKey("businessUnit", cc, bu);
     // Country-level units exist even with nobody there yet.

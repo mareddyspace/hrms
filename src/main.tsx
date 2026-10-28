@@ -10,13 +10,23 @@ import "./styles.css";
 // A new hosted build replaces sample data saved by an older version, so the site matches the code.
 // Personal settings, notes and the signed-in session are kept.
 const BUILD_KEY = "kastech.build";
-if (import.meta.env.PROD && localStorage.getItem(BUILD_KEY) !== __APP_BUILD__) {
-  const keep = /^(kastech\.prefs\.|kastech\.notes|kastech\.ess\.(user|session|theme|last-active|remember)|kastech\.build$)/;
+const KEEP_KEYS = /^(kastech\.prefs\.|kastech\.notes|kastech\.ess\.(user|session|theme|last-active|remember)|kastech\.build$|kastech\.migrate\.)/;
+function clearSavedSampleData() {
   for (const key of Object.keys(localStorage)) {
-    if (!/^(kastech|timez|hrms)\./.test(key) || keep.test(key)) continue;
+    if (!/^(kastech|timez|hrms|infotech)\./.test(key) || KEEP_KEYS.test(key)) continue;
     localStorage.removeItem(key);
   }
+}
+if (import.meta.env.PROD && localStorage.getItem(BUILD_KEY) !== __APP_BUILD__) {
+  clearSavedSampleData();
   localStorage.setItem(BUILD_KEY, __APP_BUILD__);
+}
+
+// One-time reset after the company was renamed to TimeZ, so saved records don't keep the old name.
+const BRAND_KEY = "kastech.migrate.timez-brand";
+if (!localStorage.getItem(BRAND_KEY)) {
+  clearSavedSampleData();
+  localStorage.setItem(BRAND_KEY, "1");
 }
 
 // One-time rename in data saved by earlier versions: "Isha Reddy" was replaced by "Riya Kapoor"

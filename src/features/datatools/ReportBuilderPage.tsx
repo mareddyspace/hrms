@@ -636,8 +636,8 @@ function SchedulesPanel({
                   <option value="csv">CSV</option>
                 </select>
               </Field>
-              <Field label={`Recipients (@infotech.com only, up to ${MAX_RECIPIENTS})`} wide>
-                <textarea value={draft.recipientsText} onChange={(e) => setDraft({ ...draft, recipientsText: e.target.value })} maxLength={1500} placeholder="name@infotech.com, team@infotech.com" />
+              <Field label={`Recipients (@timez.com only, up to ${MAX_RECIPIENTS})`} wide>
+                <textarea value={draft.recipientsText} onChange={(e) => setDraft({ ...draft, recipientsText: e.target.value })} maxLength={1500} placeholder="name@timez.com, team@timez.com" />
               </Field>
             </div>
             {/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time) && <p className="dt-subtle">Next run: {formatWhen(nextRun(draft))}</p>}

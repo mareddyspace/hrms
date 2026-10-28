@@ -63,6 +63,7 @@ import { Banner, Dropdown, Field } from "./ui.tsx";
 import { updatePreferences, useApplyPreferences } from "../data/preferences.ts";
 import { useApprovalReminders } from "../data/approvalReminders.ts";
 import { applyDueLifecycleActions } from "../features/lifecycle/lifecycleActionsStore.ts";
+import { useScheduledSyncs } from "../data/useScheduledSyncs.ts";
 import { useTaskAutoReminders } from "../data/taskAutoReminders.ts";
 
 
@@ -305,6 +306,8 @@ export function Shell() {
   useTaskAutoReminders();
   // Approvers are reminded of items waiting on them for more than two days.
   useApprovalReminders();
+  // Integrations run on their schedule while an admin is signed in.
+  useScheduledSyncs(["admin", "super_admin", "it_admin"].includes(demoProfile.role));
   // Approved transfers and promotions take effect on their date.
   useEffect(() => {
     applyDueLifecycleActions();

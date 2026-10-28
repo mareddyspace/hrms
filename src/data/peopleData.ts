@@ -83,7 +83,38 @@ export interface PersonRecord {
   education?: EducationRecord[];
   experience?: ExperienceRecord[];
   dependents?: DependentRecord[];
+  /** Language the person prefers for communication. Employee-editable. */
+  preferredLanguage?: string;
+  /** Languages the person speaks. Employee-editable. */
+  spokenLanguages?: string[];
+  /** Where the person wants their career to go. Employee-editable. */
+  careerGoals?: string;
+  /** Fixed-term / contractor end date (contract extensions move it). */
+  contractEndDate?: string;
+  /** Date probation was completed (probation completion action). */
+  confirmationDate?: string;
+  /** Latest rehire date, when the person left and came back. */
+  rehireDate?: string;
+  /** Current leave of absence, while the person is on one. */
+  leaveOfAbsence?: { type: string; start: string; end: string };
 }
+
+/** Languages offered in profile forms. */
+export const PROFILE_LANGUAGES = [
+  "English",
+  "Hindi",
+  "Tamil",
+  "Malayalam",
+  "Telugu",
+  "Kannada",
+  "Arabic",
+  "German",
+  "French",
+  "Spanish",
+  "Urdu",
+  "Tagalog",
+  "Mandarin",
+];
 
 /** Fill any missing personal/background fields (older stored records, records built by other modules). */
 export function ensureProfileDetails<T extends PersonRecord>(person: T): T & PersonProfileDetails {
@@ -199,14 +230,14 @@ export interface PositionRecord {
 }
 
 export const LEGAL_BY_COUNTRY: Record<string, string> = {
-  IN: "Infotech India Pvt Ltd",
-  US: "Infotech Inc",
-  GB: "Infotech UK Ltd",
-  AU: "Infotech Australia Pty",
-  CA: "Infotech Canada Inc",
-  AE: "Infotech Middle East FZ",
-  SA: "Infotech Saudi LLC",
-  DE: "Infotech Germany GmbH",
+  IN: "TimeZ India Pvt Ltd",
+  US: "TimeZ Inc",
+  GB: "TimeZ UK Ltd",
+  AU: "TimeZ Australia Pty",
+  CA: "TimeZ Canada Inc",
+  AE: "TimeZ Middle East FZ",
+  SA: "TimeZ Saudi LLC",
+  DE: "TimeZ Germany GmbH",
 };
 
 /* ───────────── Job catalog ───────────── */
@@ -351,7 +382,7 @@ function buildBasePeople(): PersonRecord[] {
       location: row.location,
       countryCode: country.code,
       countryName: country.name,
-      legalEntity: LEGAL_BY_COUNTRY[country.code] ?? "Infotech",
+      legalEntity: LEGAL_BY_COUNTRY[country.code] ?? "TimeZ",
       managerId: row.managerId,
       managerName: nameById.get(row.managerId) ?? "",
       availability: row.availability,
@@ -372,7 +403,7 @@ function buildBasePeople(): PersonRecord[] {
       employeeCode: account.employeeCode,
       fullName: account.fullName,
       email: account.email,
-      personalEmail: account.email.replace("@infotech.com", "@mail.example"),
+      personalEmail: account.email.replace("@timez.com", "@mail.example"),
       mobile: account.mobile,
       photo: account.photo,
       gender: facts.gender,
@@ -386,7 +417,7 @@ function buildBasePeople(): PersonRecord[] {
       grade: gradeForTitle(account.designation),
       department,
       division: divisionForDepartment(department),
-      businessUnit: `Infotech ${country.name}`,
+      businessUnit: `TimeZ ${country.name}`,
       costCenter: costCenterFor(country.code, department),
       location: account.location ?? "Bengaluru",
       countryCode: country.code,
@@ -406,7 +437,7 @@ function buildBasePeople(): PersonRecord[] {
     id: t.id,
     employeeCode: t.employeeCode,
     fullName: t.name,
-    email: `${t.name.toLowerCase().replace(" ", ".")}@infotech.com`,
+    email: `${t.name.toLowerCase().replace(" ", ".")}@timez.com`,
     personalEmail: `${t.name.toLowerCase().replace(" ", ".")}@mail.example`,
     mobile: t.mobile,
     photo: "/profile.svg",
@@ -421,7 +452,7 @@ function buildBasePeople(): PersonRecord[] {
     grade: gradeForTitle(t.title),
     department: "Engineering",
     division: divisionForDepartment("Engineering"),
-    businessUnit: `Infotech ${india.name}`,
+    businessUnit: `TimeZ ${india.name}`,
     costCenter: costCenterFor("IN", "Engineering"),
     location: "Bengaluru",
     countryCode: "IN",
@@ -658,7 +689,7 @@ export function buildOrgTree(people: PersonRecord[]): OrgNode {
             {
               id: `bu-${country.code}`,
               type: "businessUnit" as const,
-              name: `Infotech ${country.name}`,
+              name: `TimeZ ${country.name}`,
               headcount: inCountry.length,
               children: divisions.map((division) => {
                 const inDivision = inCountry.filter((p) => (p.division || divisionForDepartment(p.department)) === division);
@@ -712,7 +743,7 @@ export function buildOrgTree(people: PersonRecord[]): OrgNode {
   return {
     id: "company-timez",
     type: "company",
-    name: "Infotech",
+    name: "TimeZ",
     headcount: active.length,
     children: byCountry,
   };
@@ -725,7 +756,7 @@ export const FILTER_OPTIONS = {
   departments: [...new Set(getBasePeople().map((p) => p.department))].sort(departmentSort),
   employmentStatuses: ["Active", "On Leave", "Contractor", "Terminated"] as EmploymentStatus[],
   jobFamilies: JOB_FAMILY_LIST,
-  businessUnits: TIMEZ_COUNTRIES.map((c) => `Infotech ${c.name}`),
+  businessUnits: TIMEZ_COUNTRIES.map((c) => `TimeZ ${c.name}`),
   grades: GRADE_RANK,
 };
 

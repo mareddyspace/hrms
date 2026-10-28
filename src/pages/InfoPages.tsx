@@ -172,7 +172,7 @@ export function LoginPage() {
                     setFieldErrors((prev) => ({ ...prev, email: undefined }));
                   }}
                   autoComplete="username"
-                  placeholder="name@infotech.com"
+                  placeholder="name@timez.com"
                   aria-invalid={Boolean(fieldErrors.email)}
                 />
               </Field>

@@ -150,6 +150,13 @@ export function listPeople(): PersonRecord[] {
   return snapshot;
 }
 
+/** The directory record when HR or an approved change has edited it locally (not just the seed). */
+export function editedPerson(id: string): PersonRecord | undefined {
+  const { upserts } = readOverlay();
+  if (!upserts.some((p) => p.id === id || p.employeeCode === id)) return undefined;
+  return getPerson(id);
+}
+
 export function getPerson(id: string): PersonRecord | undefined {
   return listPeople().find((p) => p.id === id || p.employeeCode === id);
 }

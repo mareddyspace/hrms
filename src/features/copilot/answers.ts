@@ -13,7 +13,7 @@ export type RawCopilotAnswer = CopilotAnswer & { requires?: NavAccessId };
 
 const POLICY_WORDS = ["policy", "policies", "handbook", "acknowledge", "acknowledgement", "procedure", "procedures", "code of conduct", "contractor terms", "notice period", "probation"];
 
-export const NO_DECISIONS = "I can't approve, reject or change anything — decisions are made in Approvals.";
+export const NO_DECISIONS = "I can't approve or reject anything — decisions are made in Approvals. Changes I prepare only happen after you confirm.";
 
 const SUMMARY_INTENT =
   /^(?:please |pls |can you |could you )?(?:summari[sz]e|give me (?:a )?summary of|summary of|summary for|tell me about|employee 360 (?:for|of)|ai employee 360 (?:for|of)|360 (?:view )?(?:for|of)|profile of)\s+(.+)$/;
@@ -661,7 +661,7 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
   if (hasWord(q, ["copilot", "how do you work", "are you real", "llm", "chatgpt", "what can you do", "what can i ask", "help me"])) {
     return {
       kind: "text",
-      summary: `I answer from your own portal data and your team's, within your access — leave, holidays, payslips, approvals, timesheet, goals, learning. Ask "Summarise <name>" for someone below you. ${NO_DECISIONS}`,
+      summary: `I answer from your own portal data and your team's, within your access — leave, holidays, payslips, approvals, timesheet, goals, learning. Ask "Summarise <name>" for someone below you, "headcount by country" or "leave taken by department this month" for numbers, "experience letter for me" for a letter draft, or "apply leave next Friday" and I'll prepare it for you to confirm. ${NO_DECISIONS}`,
       links: [{ label: "Help", to: "/help" }],
     };
   }

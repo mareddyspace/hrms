@@ -54,6 +54,8 @@ import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import { TIMEZ_COUNTRIES } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { JobDescriptionWriter } from "../features/ai/JobDescriptionWriter.tsx";
+import { useAiOn } from "../features/ai/flags.ts";
 import "../features/lifecycle/lifecycle.css";
 
 type Message = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -466,8 +468,20 @@ export function OrganizationPage() {
 
 /* ───────────── Job profile and position dialogs ───────────── */
 
-function ProfileForm({ profile, families, onDone }: { profile: JobProfile | null; families: string[]; onDone: (m: Message) => void }) {
+function ProfileForm({
+  profile,
+  families,
+  profiles,
+  onDone,
+}: {
+  profile: JobProfile | null;
+  families: string[];
+  profiles: JobProfile[];
+  onDone: (m: Message) => void;
+}) {
   const { demoProfile } = usePortal();
+  const [writerOpen, setWriterOpen] = useState(false);
+  const jdOn = useAiOn("jobDescription");
   const [title, setTitle] = useState(profile?.title ?? "");
   const [familyName, setFamilyName] = useState(profile?.familyName ?? families[0] ?? "");
   const [gradeBand, setGradeBand] = useState(profile?.gradeBand ?? "L4");
@@ -510,9 +524,29 @@ function ProfileForm({ profile, families, onDone }: { profile: JobProfile | null
           </select>
         </Field>
         <Field label="Description" wide>
-          <textarea value={description} maxLength={500} onChange={(e) => setDescription(e.target.value)} />
+          <textarea value={description} maxLength={4000} rows={description.length > 200 ? 10 : 3} onChange={(e) => setDescription(e.target.value)} />
         </Field>
       </div>
+      {jdOn &&
+        (writerOpen ? (
+          <JobDescriptionWriter
+            input={{ title, familyName, gradeBand }}
+            profile={profile}
+            profiles={profiles}
+            actor={demoProfile}
+            canSave={false}
+            onUseText={(text) => {
+              setDescription(text);
+              setWriterOpen(false);
+            }}
+          />
+        ) : (
+          <div>
+            <button type="button" className="btn-ghost btn-tiny" disabled={!title.trim()} onClick={() => setWriterOpen(true)}>
+              Draft description
+            </button>
+          </div>
+        ))}
       <div className="row-gap">
         <button className="btn" type="submit">
           {profile ? "Save" : "Add profile"}
@@ -692,6 +726,7 @@ export function JobsPage() {
   const [positionDialog, setPositionDialog] = useState<{ id: string | null } | null>(null);
   const { id } = useParams();
   const canEdit = canEditOrganisation(demoProfile.role);
+  const jdOn = useAiOn("jobDescription");
 
   const profiles = useMemo(() => {
     return allProfiles.filter((p) => {
@@ -827,7 +862,7 @@ export function JobsPage() {
                 p.title,
                 p.familyName,
                 p.gradeBand,
-                p.description,
+                p.description.length > 120 ? `${p.description.slice(0, 120).replace(/\s+/g, " ")}…` : p.description,
                 <StatusBadge key={`ps-${p.id}`} status={p.inactive ? "Inactive" : "Active"} tone={p.inactive ? "neutral" : "ok"} literal />,
                 canEdit ? (
                   <button key={`pe-${p.id}`} type="button" className="btn-ghost btn-tiny" onClick={() => setProfileDialog({ id: p.id })}>
@@ -983,11 +1018,32 @@ export function JobsPage() {
               ))}
             </ul>
           </Card>
+          {jdOn && (
+            <Card title="Job description">
+              <JobDescriptionWriter
+                key={selected.id}
+                input={{
+                  title: selected.title,
+                  familyName: selected.jobFamily,
+                  gradeBand: selected.grade,
+                  department: selected.department,
+                  location: selected.location,
+                  requirements: selected.requirements,
+                }}
+                profile={allProfiles.find((p) => p.id === selected.jobProfileId) ?? null}
+                profiles={allProfiles}
+                actor={demoProfile}
+                canSave={canEdit}
+              />
+            </Card>
+          )}
         </div>
       )}
 
       <Dialog open={Boolean(profileDialog) && canEdit} title={editingProfile ? "Edit job profile" : "Add job profile"} onClose={() => setProfileDialog(null)}>
-        {profileDialog && <ProfileForm key={profileDialog.id ?? "new"} profile={editingProfile} families={familyNames} onDone={done} />}
+        {profileDialog && (
+          <ProfileForm key={profileDialog.id ?? "new"} profile={editingProfile} families={familyNames} profiles={allProfiles} onDone={done} />
+        )}
       </Dialog>
       <Dialog open={Boolean(positionDialog) && canEdit} title={editingPosition ? "Edit position" : "Add position"} onClose={() => setPositionDialog(null)}>
         {positionDialog && (

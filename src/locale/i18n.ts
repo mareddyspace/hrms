@@ -9,7 +9,7 @@ export type I18nKey =
   | "locale.region"
   | "locale.language"
   | "locale.currency"
-  | "locale.timezone"
+  | "locale.timezone"
   | "locale.viewOnly"
   | "common.search"
   | "common.filter"
@@ -24,14 +24,14 @@ export type I18nKey =
   | "admin.countries";
 
 const EN: Record<I18nKey, string> = {
-  "app.name": "Info Tech",
+  "app.name": "TimeZ",
   "nav.home": "Home",
   "nav.people": "People",
   "nav.settings": "Locale settings",
   "locale.region": "Region",
   "locale.language": "Language",
   "locale.currency": "Currency",
-  "locale.timezone": "Time zone",
+  "locale.timezone": "Time zone",
   "locale.viewOnly": "View context",
   "common.search": "Search",
   "common.filter": "Filter",
@@ -48,14 +48,14 @@ const EN: Record<I18nKey, string> = {
 
 /** Hindi — limited reliable UI strings only */
 const HI: Partial<Record<I18nKey, string>> = {
-  "app.name": "Info Tech",
+  "app.name": "TimeZ",
   "nav.home": "होम",
   "nav.people": "लोग",
   "nav.settings": "स्थानीय सेटिंग्स",
   "locale.region": "क्षेत्र",
   "locale.language": "भाषा",
   "locale.currency": "मुद्रा",
-  "locale.timezone": "समय क्षेत्र",
+  "locale.timezone": "समय क्षेत्र",
   "locale.viewOnly": "दृश्य संदर्भ",
   "common.search": "खोजें",
   "common.filter": "फ़िल्टर",
@@ -72,14 +72,14 @@ const HI: Partial<Record<I18nKey, string>> = {
 
 /** German — limited reliable UI strings only */
 const DE: Partial<Record<I18nKey, string>> = {
-  "app.name": "Info Tech",
+  "app.name": "TimeZ",
   "nav.home": "Startseite",
   "nav.people": "Personen",
   "nav.settings": "Gebietseinstellungen",
   "locale.region": "Region",
   "locale.language": "Sprache",
   "locale.currency": "Währung",
-  "locale.timezone": "Zeitzone",
+  "locale.timezone": "Zeitzone",
   "locale.viewOnly": "Ansichtskontext",
   "common.search": "Suchen",
   "common.filter": "Filter",
@@ -96,14 +96,14 @@ const DE: Partial<Record<I18nKey, string>> = {
 
 /** Arabic — limited reliable UI strings only */
 const AR: Partial<Record<I18nKey, string>> = {
-  "app.name": "Info Tech",
+  "app.name": "TimeZ",
   "nav.home": "الرئيسية",
   "nav.people": "الأشخاص",
   "nav.settings": "إعدادات المنطقة",
   "locale.region": "المنطقة",
   "locale.language": "اللغة",
   "locale.currency": "العملة",
-  "locale.timezone": "المنطقة الزمنية",
+  "locale.timezone": "المنطقة الزمنية",
   "locale.viewOnly": "سياق العرض",
   "common.search": "بحث",
   "common.filter": "تصفية",

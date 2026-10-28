@@ -14,6 +14,8 @@ import { usePortal } from "./store.tsx";
 const EmailOutboxPage = lazy(() => import("./pages/EmailOutboxPage.tsx").then((m) => ({ default: m.EmailOutboxPage })));
 const LifecycleActionsPage = lazy(() => import("./features/lifecycle/LifecycleActionsPage.tsx").then((m) => ({ default: m.LifecycleActionsPage })));
 const RecognitionPage = lazy(() => import("./pages/RecognitionPage.tsx").then((m) => ({ default: m.RecognitionPage })));
+const RolesPermissionsPage = lazy(() => import("./pages/RolesPermissionsPage.tsx").then((m) => ({ default: m.RolesPermissionsPage })));
+const AiSettingsPage = lazy(() => import("./pages/AiSettingsPage.tsx").then((m) => ({ default: m.AiSettingsPage })));
 const TravelPage = lazy(() => import("./pages/TravelPage.tsx").then((m) => ({ default: m.TravelPage })));
 const ApprovalWorkflowsPage = lazy(() => import("./pages/ApprovalWorkflowsPage.tsx").then((m) => ({ default: m.ApprovalWorkflowsPage })));
 const PersonalisationPage = lazy(() => import("./pages/PersonalisationPage.tsx").then((m) => ({ default: m.PersonalisationPage })));
@@ -171,6 +173,8 @@ export function App() {
         <Route path="/admin/email-outbox" element={<Allowed id="emailoutbox"><EmailOutboxPage /></Allowed>} />
         <Route path="/lifecycle/actions" element={<Allowed id="lifecycleactions"><LifecycleActionsPage /></Allowed>} />
         <Route path="/recognition" element={<Allowed id="recognition"><RecognitionPage /></Allowed>} />
+        <Route path="/admin/roles" element={<Allowed id="accessroles"><RolesPermissionsPage /></Allowed>} />
+        <Route path="/admin/ai" element={<Allowed id="aisettings"><AiSettingsPage /></Allowed>} />
         <Route path="/admin/workflows-config" element={<Allowed id="workflowsconfig"><ApprovalWorkflowsPage /></Allowed>} />
         <Route path="/approvals" element={<ApprovalsCenterPage />} />
         <Route path="/chat" element={<Allowed id="messages"><ChatPage /></Allowed>} />

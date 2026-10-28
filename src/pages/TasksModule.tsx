@@ -444,11 +444,6 @@ export function TasksPage() {
           />
           <strong>Automatic mode</strong>
         </label>
-        <span className="muted">
-          {autoMode
-            ? "Automatic mode on — status and reminders update by themselves."
-            : "Automatic mode off — update status yourself."}
-        </span>
       </div>
       <MetricGrid>
         <button type="button" className="metric-as-btn" onClick={() => applySummaryFocus("all")}>

@@ -117,17 +117,17 @@ function defaults(): ImmigrationState {
   const [ae1, ae2, ae3] = peopleIn("AE", 3);
   if (ae1) {
     docs.push(seedDoc(ae1, "Passport", "P8812094", "India", "2020-02-14", "2030-02-13"));
-    docs.push(seedDoc(ae1, "Emirates ID", "784-1990-4821937-2", "United Arab Emirates", "2024-11-02", relDay(22), { sponsor: "Infotech FZ-LLC" }));
-    docs.push(seedDoc(ae1, "Visa", "201/2024/7/118204", "United Arab Emirates", "2024-11-01", relDay(21), { sponsor: "Infotech FZ-LLC" }));
+    docs.push(seedDoc(ae1, "Emirates ID", "784-1990-4821937-2", "United Arab Emirates", "2024-11-02", relDay(22), { sponsor: "TimeZ FZ-LLC" }));
+    docs.push(seedDoc(ae1, "Visa", "201/2024/7/118204", "United Arab Emirates", "2024-11-01", relDay(21), { sponsor: "TimeZ FZ-LLC" }));
   }
   if (ae2) {
     docs.push(seedDoc(ae2, "Passport", "EP7710432", "Egypt", "2017-09-18", relDay(-12)));
-    docs.push(seedDoc(ae2, "Emirates ID", "784-1987-1130554-8", "United Arab Emirates", "2023-06-10", relDay(310), { sponsor: "Infotech FZ-LLC" }));
+    docs.push(seedDoc(ae2, "Emirates ID", "784-1987-1130554-8", "United Arab Emirates", "2023-06-10", relDay(310), { sponsor: "TimeZ FZ-LLC" }));
   }
   if (ae3) {
     docs.push(
       seedDoc(ae3, "Work permit", "MOHRE-4419027", "United Arab Emirates", "2024-10-20", relDay(48), {
-        sponsor: "Infotech FZ-LLC",
+        sponsor: "TimeZ FZ-LLC",
         renewalInProgress: true,
       }),
     );
@@ -144,11 +144,11 @@ function defaults(): ImmigrationState {
 
   const [sa1, sa2] = peopleIn("SA", 2);
   if (sa1) {
-    docs.push(seedDoc(sa1, "Residence ID/Iqama", "2398104472", "Saudi Arabia", "2025-01-12", relDay(81), { sponsor: "Infotech Arabia LLC" }));
+    docs.push(seedDoc(sa1, "Residence ID/Iqama", "2398104472", "Saudi Arabia", "2025-01-12", relDay(81), { sponsor: "TimeZ Arabia LLC" }));
     docs.push(seedDoc(sa1, "Passport", "K1180397", "Pakistan", "2019-12-01", "2029-11-30"));
   }
   if (sa2) {
-    docs.push(seedDoc(sa2, "Residence ID/Iqama", "2471003856", "Saudi Arabia", "2024-08-30", relDay(-5), { sponsor: "Infotech Arabia LLC" }));
+    docs.push(seedDoc(sa2, "Residence ID/Iqama", "2471003856", "Saudi Arabia", "2024-08-30", relDay(-5), { sponsor: "TimeZ Arabia LLC" }));
   }
 
   const [de1, de2] = peopleIn("DE", 2);
