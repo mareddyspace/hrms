@@ -1,4 +1,4 @@
-import { addDaysISO, parseISODate, todayISO, type Holiday, type LeaveRequest } from "../../model.ts";
+import { addDaysISO, holidaysForPerson, parseISODate, todayISO, type Holiday, type LeaveRequest } from "../../model.ts";
 import { taskTeamFor } from "../../data/taskTeam.ts";
 import { appendAuditEntries } from "../../data/auditTrail.ts";
 import {
@@ -655,7 +655,7 @@ export function compOffCandidates(actor: WorkforceActor, ctx: RosterContext, sta
         !leaveOn(a.personId, a.date, ctx.leaves) &&
         !state.credits.some((c) => c.personId === a.personId && c.workedDate === a.date),
     )
-    .map((a) => ({ assignment: a, reason: compOffReason(a.date, ctx.holidays) ?? "" }))
+    .map((a) => ({ assignment: a, reason: compOffReason(a.date, holidaysForPerson(ctx.holidays, a.personId)) ?? "" }))
     .filter((c) => c.reason)
     .sort((x, y) => y.assignment.date.localeCompare(x.assignment.date));
 }
@@ -665,7 +665,7 @@ export function grantCompOff(actor: WorkforceActor, ctx: RosterContext, personId
   const today = todayISO();
   if (date >= today) return "Comp-off can be granted only after the day has passed.";
   if (addDaysISO(date, COMP_OFF_VALID_DAYS) < today) return `Too late — that day is more than ${COMP_OFF_VALID_DAYS} days ago.`;
-  const reason = compOffReason(date, ctx.holidays);
+  const reason = compOffReason(date, holidaysForPerson(ctx.holidays, personId));
   if (!reason) return `${fmt(date)} is a regular working day — no comp-off.`;
   return store.mutate((s) => {
     const row = s.assignments.find((a) => a.personId === personId && a.date === date);
@@ -762,7 +762,7 @@ export function hasOwnCoverageRule(scope: string, shiftId: string, weekday: numb
 
 /** Required headcount on a manager's roster for a date; holidays need no one. */
 export function requiredOn(state: ShiftState, ctx: RosterContext, managerId: string, shiftId: string, date: string): number {
-  if (holidayOn(date, ctx.holidays)) return 0;
+  if (holidayOn(date, holidaysForPerson(ctx.holidays, managerId))) return 0;
   const shift = shiftById(shiftId, state);
   if (!shift || !shift.active) return 0;
   if (shift.weekendOnly && !isWeekend(date)) return 0;

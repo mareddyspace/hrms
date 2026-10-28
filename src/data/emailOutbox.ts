@@ -148,7 +148,10 @@ export function queueEmailForNotification(input: {
   body: string;
   href?: string;
 }): EmailEvent | null {
-  if (!emailAllowedFor(input.category)) return null;
+  // "System" covers integration alerts and plain task alerts; only connector alerts belong to Integration alerts.
+  const isIntegration = input.category === "System" && (input.href ?? "").startsWith("/integrations");
+  const channel = input.category === "System" && !isIntegration ? "general" : (emailChannelFor(input.category) ?? "general");
+  if (channel !== "general" && !emailAllowedFor(input.category)) return null;
   const to = addressFor(input.recipientId);
   if (!to) return null;
   seq += 1;
@@ -160,7 +163,7 @@ export function queueEmailForNotification(input: {
     subject: input.title.trim(),
     body: input.body.trim(),
     link: absoluteLink(input.href),
-    channel: emailChannelFor(input.category) ?? "general",
+    channel,
     category: input.category,
     createdAt: new Date().toISOString(),
     status: "Queued",

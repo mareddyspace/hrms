@@ -13,7 +13,7 @@ import { FIELD_LABELS, type LetterFields } from "../../data/letterTemplates.ts";
 import { canManageLetters } from "../../data/rbac.ts";
 import { LETTER_TEMPLATES, letterTemplate, type CompHistoryRow, type LetterRequest, type LetterType } from "../../data/rewardData.ts";
 import { addDaysISO, maskMobile, parseISODate, toISO, type LeaveCode } from "../../model.ts";
-import { analyticsAnswer, plainText, type AnalyticsSources } from "./analytics.ts";
+import { analyticsAnswer, isAnalyticsQuestion, plainText, type AnalyticsSources } from "./analytics.ts";
 
 type Raw = CopilotAnswer;
 
@@ -380,6 +380,8 @@ export function buildAssist(src: AssistSources): (question: string) => Raw | nul
     if (aiFeatureOn("plainAnalytics")) {
       const analytics = analyticsAnswer(question, src.analytics());
       if (analytics) return analytics;
+    } else if (isAnalyticsQuestion(question)) {
+      return { kind: "text", summary: "Analytics questions are turned off in AI settings.", links: [{ label: "Analytics", to: "/analytics" }] };
     }
     return null;
   };

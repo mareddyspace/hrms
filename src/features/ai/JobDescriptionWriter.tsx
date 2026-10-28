@@ -17,6 +17,7 @@ export function JobDescriptionWriter({
   actor,
   canSave,
   onUseText,
+  autoStart = false,
 }: {
   input: JobDraftInput;
   /** The job profile the text saves to; without one, Save is hidden. */
@@ -26,9 +27,11 @@ export function JobDescriptionWriter({
   canSave: boolean;
   /** When set (e.g. inside the profile form), offers "Use in form" instead of saving directly. */
   onUseText?: (text: string) => void;
+  /** Draft straight away (the writer was opened with a "Draft description" button). */
+  autoStart?: boolean;
 }) {
   const [variant, setVariant] = useState(0);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => (autoStart && input.title.trim() ? formatJobDraft(input.title, draftJobDescription(input, 0)) : ""));
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const draft = useMemo(() => draftJobDescription(input, variant), [input, variant]);
   const similar = useMemo(

@@ -128,8 +128,19 @@ export function issuedLetterHtml(row: LetterRequest, issue: IssuedLetter): strin
  * Who approves this letter. Warning and termination letters need someone other than the HR person who raised
  * them: other HR, then the employee's reporting line (line manager up to the CEO).
  */
+/** HR raised this letter for someone else, so the same HR person cannot also approve it. */
+function raisedByApprover(row: Pick<LetterRequest, "employeeId" | "requestedById">): boolean {
+  const by = row.requestedById;
+  return Boolean(by) && by !== row.employeeId && letterApprovers(row).some((a) => a.id === by);
+}
+
+/** Needs someone other than the person who raised it: warning / termination letters, and any letter HR raised. */
+export function needsChecker(row: { employeeId: string; requestedById?: string; type: string }): boolean {
+  return needsSecondApproval(row.type) || raisedByApprover(row);
+}
+
 export function letterApproversFor(row: LetterRequest): { id: string; fullName: string }[] {
-  if (!needsSecondApproval(row.type)) return letterApprovers(row);
+  if (!needsChecker(row)) return letterApprovers(row);
   const raisedBy = row.requestedById ?? "";
   const out: { id: string; fullName: string }[] = [];
   const push = (a: { id: string; fullName: string }) => {
@@ -145,7 +156,7 @@ export function letterApproversFor(row: LetterRequest): { id: string; fullName: 
 
 export function canApproveLetterRow(actor: DemoAccount, row: LetterRequest): boolean {
   if (actor.id === row.employeeId) return false;
-  if (!needsSecondApproval(row.type)) return canApproveLetter(actor, row);
+  if (!needsChecker(row)) return canApproveLetter(actor, row);
   return letterApproversFor(row).some((a) => a.id === actor.id);
 }
 
@@ -153,8 +164,8 @@ export function canApproveLetterRow(actor: DemoAccount, row: LetterRequest): boo
 export function canSeeLetter(actor: DemoAccount, row: LetterRequest): boolean {
   if (needsSecondApproval(row.type)) {
     if (row.employeeId === actor.id) return row.status === "Issued";
-    if (canApproveLetterRow(actor, row)) return true;
   }
+  if (row.employeeId !== actor.id && row.status !== "Draft" && needsChecker(row) && canApproveLetterRow(actor, row)) return true;
   return canViewLetter(actor, row);
 }
 
@@ -209,7 +220,7 @@ export function requestLetter(
     details: input.details?.trim().slice(0, 200),
     effectiveDate: canManageLetters(actor) ? input.effectiveDate : undefined,
   });
-  if (!error && needsSecondApproval(input.type)) {
+  if (!error && needsChecker({ employeeId: input.employeeId, type: input.type, requestedById: actor.id })) {
     const draft = { employeeId: input.employeeId, type: input.type as LetterType, requestedById: actor.id } as LetterRequest;
     for (const approver of letterApproversFor(draft)) {
       pushPersonTaskAlert({
@@ -288,12 +299,13 @@ function storeIssue(
 
 /** Approve, generate the final letter and store it (v1). */
 export function approveLetter(actor: DemoAccount, id: string): RewardResult {
-  return updateReward((s) => {
+  let issued: { employeeId: string; label: string } | null = null;
+  const error = updateReward((s) => {
     const row = s.letters.find((l) => l.id === id);
     if (!row) return "Letter request not found.";
     if (row.employeeId === actor.id) return "You cannot approve your own letter.";
     if (row.status !== "Pending approval" && row.status !== "Approved") return `This letter is ${row.status.toLowerCase()}.`;
-    if (needsSecondApproval(row.type) && row.requestedById === actor.id) return "Someone other than the person who raised this letter must approve it.";
+    if (needsChecker(row) && row.requestedById === actor.id) return "Someone other than the person who raised this letter must approve it.";
     if (!canApproveLetterRow(actor, row)) return "Only HR can approve this letter (or the line manager when the letter is for HR).";
     const result = generate(actor, row, s);
     if ("error" in result) return result.error ?? "Cannot generate.";
@@ -302,7 +314,13 @@ export function approveLetter(actor: DemoAccount, id: string): RewardResult {
     row.approverId = actor.id;
     row.decidedOn = todayISO();
     storeIssue(s, row, result.issue, result.fields);
+    issued = { employeeId: row.employeeId, label: letterInfo(row.type).label };
   });
+  const done = issued as { employeeId: string; label: string } | null;
+  if (!error && done) {
+    pushPersonTaskAlert({ recipientId: done.employeeId, title: `${done.label} issued`, body: `Your ${done.label.toLowerCase()} is ready.`, href: "/documents" });
+  }
+  return error;
 }
 
 /** Re-generate an issued letter from current data — a new version, approved by the person regenerating. */

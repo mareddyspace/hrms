@@ -11,6 +11,7 @@ import {
   currentIssue,
   issuedLetterHtml,
   letterApproversFor,
+  needsChecker,
   previewLetter,
   regenerateLetter,
   rejectLetter,
@@ -23,7 +24,6 @@ import {
   letterFileName,
   letterInfo,
   missingFields,
-  needsSecondApproval,
   type FullLetterType,
 } from "../data/letterTemplates.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
@@ -114,7 +114,7 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
             if (error) return setMsg({ tone: "err", text: error });
             setMsg({
               tone: "ok",
-              text: needsSecondApproval(type) ? `${template.label} raised. It needs a second approver.` : `${template.label} requested — awaiting approval.`,
+              text: needsChecker({ employeeId: subjectId, type, requestedById: actor.id }) ? `${template.label} raised. It needs a second approver.` : `${template.label} requested — awaiting approval.`,
             });
             setNote("");
             setDetails("");

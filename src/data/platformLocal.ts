@@ -80,7 +80,7 @@ export function retryIntegration(id: string, actorName: string): RetryOutcome | 
   const attempt = item.logs.filter((l) => l.message.startsWith("Manual retry")).length + 1;
   const ok = retrySucceeds(item, attempt);
   if (ok) {
-    item.lastSync = now.toISOString().slice(0, 16).replace("T", " ");
+    item.lastSync = syncStamp(now);
     item.status = "Connected";
     item.errorCount = Math.max(0, item.errorCount - 1);
     item.recordsProcessed += 25;
@@ -382,7 +382,11 @@ export function listQuarantine(connectorId: string): QuarantineRecord[] {
 }
 
 const nowStamp = () => new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
-const syncStamp = () => new Date().toISOString().slice(0, 16).replace("T", " ");
+/** Local "YYYY-MM-DD HH:mm" — parseSyncStamp reads it back as local time. */
+function syncStamp(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 type Actor = { id: string; name: string };
 const GONE = "That record is no longer in quarantine.";

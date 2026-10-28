@@ -15,6 +15,10 @@ import {
 import type { PersonRecord } from "./peopleData.ts";
 import { getExitDetails } from "./peopleLocal.ts";
 import { taskPersonById } from "./taskTeam.ts";
+import { getAttendanceState } from "./attendanceLocal.ts";
+import { isWaitingOn } from "./expenseFlow.ts";
+import { getTravelRequests } from "./travelStore.ts";
+import { getShiftState } from "../features/workforce/shiftsStore.ts";
 
 export type RangeKey = "7d" | "30d" | "90d" | "ytd";
 
@@ -278,7 +282,21 @@ export function waitingItems(
   add(state.backdatedPermissions, "Past-date leave", () => "Permission request", (x: { from?: string }) => x.from ?? "");
   add(state.leaveRequests, "Leave", (x: { code: string }) => x.code.toUpperCase(), (x: { from: string }) => x.from);
   add(state.encashments, "Encashment", (x: { days: number }) => `${x.days} days`, (x: { appliedOn: string }) => x.appliedOn);
-  add(state.expenses, "Expense", (x: { category: string }) => x.category, (x: { date: string }) => x.date);
+  // Expense claims and travel follow their approval steps, like the Approvals count.
+  for (const x of state.expenses) {
+    if (isWaitingOn(x, myId, canDecideFor)) items.push({ id: x.id, employeeId: x.employeeId, kind: "Expense", detail: x.category, date: x.date });
+  }
+  for (const x of getTravelRequests()) {
+    if (isWaitingOn(x, myId, canDecideFor)) items.push({ id: x.id, employeeId: x.employeeId, kind: "Travel", detail: x.toCity, date: x.departOn });
+  }
+  for (const c of getAttendanceState().corrections) {
+    if (c.status === "Pending" && mine(c.employeeId)) items.push({ id: c.id, employeeId: c.employeeId, kind: "Attendance fix", detail: "Correction", date: c.date });
+  }
+  for (const w of getShiftState().swaps) {
+    const teammate = w.status === "awaiting_teammate" && w.teammateId === myId;
+    const manager = w.status === "awaiting_manager" && mine(w.requesterId) && mine(w.teammateId);
+    if (teammate || manager) items.push({ id: w.id, employeeId: w.requesterId, kind: "Shift swap", detail: teammate ? "Asked you to swap" : "Swap", date: w.date });
+  }
   add(state.reimbursements, "Reimbursement", (x: { category: string }) => x.category, (x: { date: string }) => x.date);
   add(state.cashAdvances, "Cash advance", (x: { category: string }) => x.category, (x: { date: string }) => x.date);
   add(state.assetRequests, "Asset", (x: { item: string }) => x.item, (x: { date: string }) => x.date);

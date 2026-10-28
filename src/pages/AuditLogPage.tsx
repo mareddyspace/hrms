@@ -106,8 +106,8 @@ export function AuditLogPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 300).map((e) => (
-                  <tr key={e.id}>
+                {rows.slice(0, 300).map((e, i) => (
+                  <tr key={`${e.id}-${i}`}>
                     <td>{when(e.at, employee.timeZone)}</td>
                     <td>{e.actorName}</td>
                     <td>{e.action}</td>

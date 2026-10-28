@@ -123,7 +123,7 @@ export function managerSummary(input: {
   lines.push({
     text: input.outToday.length
       ? `Off today: ${names(input.outToday)}.${input.wfhToday ? ` ${input.wfhToday} working from home.` : ""}`
-      : `Everyone in your team is working today${input.wfhToday ? ` (${input.wfhToday} from home)` : ""}.`,
+      : `Nobody in your team is off today${input.wfhToday ? ` (${input.wfhToday} from home)` : ""}.`,
     to: "/team",
   });
   if (input.waiting) {

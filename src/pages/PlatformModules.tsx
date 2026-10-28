@@ -51,7 +51,7 @@ import { agentEnabled } from "../data/aiSettings.ts";
 import { CopilotSources } from "../features/copilot/CopilotSources.tsx";
 import { CopilotExtras } from "../features/copilot/CopilotExtras.tsx";
 import { getCompensationAccess, hasModuleAccess } from "../data/peoplePermissions.ts";
-import { canViewReport } from "../data/rbac.ts";
+import { canManageLetters, canViewReport } from "../data/rbac.ts";
 import {
   ADMIN_LOCATIONS,
   ADMIN_ORG_SETTINGS,
@@ -704,6 +704,17 @@ const AGENT_STARTERS: Record<string, string[]> = {
   document: ["Prepare an employment letter for me", "Prepare an experience letter for Babu", "Prepare a promotion letter for Babu"],
 };
 
+/** Starters for people who can only request their own letters. */
+const SELF_DOCUMENT_STARTERS = ["Prepare an employment letter for me", "Prepare an address proof letter for me", "Prepare a visa letter for me"];
+
+/** Who each agent is for; agents not listed are for everyone. */
+const AGENT_ROLES: Record<string, readonly string[]> = {
+  manager: ["manager", "executive"],
+  hr: ["hr_admin", "super_admin"],
+  recruiter: ["recruiter", "hr_admin", "super_admin"],
+  analytics: ["manager", "hr_admin", "executive", "super_admin"],
+};
+
 export function AiAgentsPage() {
   const { demoProfile } = usePortal();
   if (!hasModuleAccess(demoProfile, "agents")) {
@@ -714,7 +725,9 @@ export function AiAgentsPage() {
     );
   }
 
-  const agents = AI_AGENTS.filter((agent) => agentEnabled(agent.id));
+  const agents = AI_AGENTS.filter((agent) => agentEnabled(agent.id) && (!AGENT_ROLES[agent.id] || AGENT_ROLES[agent.id].includes(demoProfile.role)));
+  const hrLetters = canManageLetters(demoProfile);
+  const startersFor = (id: string) => (id === "document" && !hrLetters ? SELF_DOCUMENT_STARTERS : (AGENT_STARTERS[id] ?? []));
   return (
     <Page title="AI Agents">
       {agents.length === 0 && <EmptyState title="No agents switched on" description="An admin can switch agents on in AI settings." />}
@@ -740,7 +753,7 @@ export function AiAgentsPage() {
               </div>
             </dl>
             <div className="agent-starters">
-              {(AGENT_STARTERS[agent.id] ?? []).map((q) => (
+              {startersFor(agent.id).map((q) => (
                 <Link key={q} className="btn-ghost btn-tiny" to={`/ai/copilot?ask=${encodeURIComponent(q)}`}>
                   {q}
                 </Link>

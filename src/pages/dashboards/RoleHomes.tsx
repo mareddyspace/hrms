@@ -5,7 +5,9 @@ import { COMPANY_NAME } from "../../brand.ts";
 import { Card, DataTable, LeaveTable, MetricCard, MetricGrid, StatusBadge, StatusPill } from "../../components/ui.tsx";
 import { DEMO_ACCOUNTS, accountHasNavAccess, type DemoAccount } from "../../demoAccounts.ts";
 import { COURSES } from "../../data/talentData.ts";
-import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
+import { getTalentState, requisitionApprovers, subscribeTalent } from "../../data/talentLocal.ts";
+import { useProfileCorrections } from "../../data/profileCorrections.ts";
+import { canDecide as canDecideLifecycle, getLifecycleActions, subscribeLifecycleActions } from "../../features/lifecycle/lifecycleActionsStore.ts";
 import { listPeople, subscribePeople, getExitDetails } from "../../data/peopleLocal.ts";
 import { TASK_TEAM } from "../../data/taskTeam.ts";
 import { getPlatformVersion, listAuditLog, listIntegrations, subscribePlatform } from "../../data/platformLocal.ts";
@@ -1124,6 +1126,8 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
   const openExits = exitState.cases.filter((c) => (c.status === "Submitted" || c.status === "Accepted") && inScope(c.employeeId));
   const funnel = pipelineFunnel(talent.candidates, scopeName);
 
+  const lifecycle = useSyncExternalStore(subscribeLifecycleActions, getLifecycleActions, getLifecycleActions);
+  const corrections = useProfileCorrections();
   // Pending HR actions from the real queues.
   const hrActions: HrAction[] = [
     ...talent.tasks
@@ -1146,6 +1150,15 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
         date: c.lastWorkingDay,
         to: R.exits,
       })),
+    ...lifecycle
+      .filter((a) => canDecideLifecycle(demoProfile, a) && inScope(a.employeeId))
+      .map((a) => ({ id: a.id, kind: "Lifecycle action", who: a.employeeName, detail: a.type, date: a.effectiveDate, to: "/lifecycle/actions" })),
+    ...corrections
+      .filter((c) => c.status === "Pending" && c.personId !== employee.id && inScope(c.personId))
+      .map((c) => ({ id: c.id, kind: "Profile correction", who: c.personName, detail: c.field, date: addDaysISO(c.requestedOn.slice(0, 10), 3), to: `/people/${c.personId}` })),
+    ...talent.requisitions
+      .filter((r) => r.approvalStatus !== "Approved" && r.approvalStatus !== "Rejected" && requisitionApprovers(r).some((a) => a.id === employee.id))
+      .map((r) => ({ id: r.id, kind: "Requisition", who: r.hiringManager, detail: `${r.id} · ${r.title}`, date: addDaysISO(r.created.slice(0, 10), 3), to: "/recruiting" })),
     ...bgv.records
       .map((r) => ({ r, result: overallResult(r) }))
       .filter(({ result }) => result !== "Clear")

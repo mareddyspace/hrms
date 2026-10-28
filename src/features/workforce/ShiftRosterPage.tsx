@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
 import { Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
-import { addDaysISO, todayISO } from "../../model.ts";
+import { addDaysISO, holidaysForPerson, todayISO } from "../../model.ts";
 import { taskTeamFor } from "../../data/taskTeam.ts";
 import {
   assignShift,
@@ -481,7 +481,7 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
   const headers = [
     "Person",
     ...dates.map((d) => {
-      const holiday = holidayOn(d, ctx.holidays);
+      const holiday = holidayOn(d, holidaysForPerson(ctx.holidays, actor.id));
       return `${shortDay(d)}${holiday ? " · Holiday" : ""}`;
     }),
   ];
