@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import func, select
 
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
@@ -414,10 +414,8 @@ async def upload_cv(
     if not _sniff_cv(bytes(data), ext):
         raise HTTPException(415, "The file content doesn't match its type.")
     relative = f"cvs/{cand.id}.{ext}"
-    path = storage.storage_root() / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
     old = cand.cv_file
-    path.write_bytes(bytes(data))
+    storage.put_bytes(relative, bytes(data), CV_TYPES[ext])
     if old and old != relative:
         storage.delete_quietly(old)
     clean = re.sub(r"[^\w.\- ()]", "_", re.split(r"[\\/]", filename)[-1]).strip(" .")[:200]
@@ -429,17 +427,15 @@ async def upload_cv(
 
 
 @router.get("/candidates/{cand_id}/cv")
-def download_cv(cand_id: str, db: DbSession, user: CurrentUserDep) -> FileResponse:
+def download_cv(cand_id: str, db: DbSession, user: CurrentUserDep) -> Response:
     cand, _ = _visible_cand(db, user, cand_id)
     if not cand.cv_file:
         raise HTTPException(404, "No CV uploaded.")
     try:
-        path = storage.resolve(cand.cv_file)
-    except storage.StorageError as exc:
+        return storage.download(cand.cv_file, media_type=cand.cv_content_type or "application/octet-stream",
+                                filename=cand.cv_filename)
+    except storage.StorageError as exc:  # includes FileMissing
         raise HTTPException(404, "No CV uploaded.") from exc
-    if not path.exists():
-        raise HTTPException(404, "No CV uploaded.")
-    return FileResponse(path, media_type=cand.cv_content_type or "application/octet-stream", filename=cand.cv_filename)
 
 
 @router.get("/candidates/{cand_id}/match", response_model=MatchOut)

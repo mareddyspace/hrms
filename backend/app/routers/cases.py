@@ -12,7 +12,7 @@ import secrets
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import or_, select
 
 from app.db import utcnow
@@ -314,7 +314,7 @@ async def upload_file(
 
 
 @router.get("/{case_id}/files/{file_id}", response_class=FileResponse)
-def download_file(case_id: str, file_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> FileResponse:
+def download_file(case_id: str, file_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> Response:
     case = _visible(db, user, case_id)
     row = db.get(HrCaseFile, file_id)
     if row is None or row.case_id != case.id:
@@ -322,13 +322,12 @@ def download_file(case_id: str, file_id: str, request: Request, db: DbSession, u
     if row.confidential and not rules.can_manage(db, case, user.employee_id, _role(user)):
         raise NOT_FOUND
     try:
-        path = storage.resolve(row.storage_path)
+        response = storage.download(row.storage_path, media_type=row.content_type, filename=row.file_name)
+    except storage.FileMissing as exc:
+        raise HTTPException(410, "The file is no longer available.") from exc
     except storage.StorageError as exc:
         raise NOT_FOUND from exc
-    if not path.is_file():
-        raise HTTPException(410, "The file is no longer available.")
     record_audit(db, actor_id=user.id, action="hr_case_file_downloaded", entity="hr_case", entity_id=case.id,
                  after={"file_id": row.id}, ip=client_ip(request))
     db.commit()
-    return FileResponse(path, media_type=row.content_type, filename=row.file_name,
-                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+    return response

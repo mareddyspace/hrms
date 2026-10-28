@@ -22,16 +22,25 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _run_with(connection) -> None:  # type: ignore[no-untyped-def]
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        render_item=render_item,
+        render_as_batch=connection.dialect.name == "sqlite",
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 def run_migrations_online() -> None:
+    # app/migrate.py passes its own connection (holding the advisory lock inside an open transaction).
+    given = context.config.attributes.get("connection")
+    if given is not None:
+        _run_with(given)
+        return
     with engine.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            render_item=render_item,
-            render_as_batch=connection.dialect.name == "sqlite",
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+        _run_with(connection)
 
 
 if context.is_offline_mode():

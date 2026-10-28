@@ -10,7 +10,7 @@ import secrets
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 
 from app.db import utcnow
@@ -318,18 +318,16 @@ async def upload_file(ticket_id: str, request: Request, db: DbSession, user: Cur
 
 
 @router.get("/requests/{ticket_id}/files/{file_id}", response_class=FileResponse)
-def download_file(ticket_id: str, file_id: str, db: DbSession, user: CurrentUserDep) -> FileResponse:
+def download_file(ticket_id: str, file_id: str, db: DbSession, user: CurrentUserDep) -> Response:
     t = _get(db, user, ticket_id)
     row = db.get(DeskTicketFile, file_id)
     if row is None or row.ticket_id != t.id:
         raise NOT_FOUND
     try:
-        path = storage.resolve(row.storage_path)
+        return storage.download(row.storage_path, media_type=row.content_type, filename=row.file_name)
+    except storage.FileMissing as exc:
+        raise HTTPException(410, "The file is no longer available.") from exc
     except storage.StorageError as exc:
         raise NOT_FOUND from exc
-    if not path.is_file():
-        raise HTTPException(410, "The file is no longer available.")
-    return FileResponse(path, media_type=row.content_type, filename=row.file_name,
-                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
 
 

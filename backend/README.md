@@ -47,7 +47,13 @@ Without it (as on Vercel today) everything stays in the browser as before.
 - The portal must be allowed in `CORS_ORIGINS` in `.env` (comma-separated; default `http://localhost:5173,http://localhost:5174`).
 - Sign-in tokens are kept for the browser tab only (sessionStorage). After 5 wrong passwords the account is
   locked for 15 minutes; `python -m app.seed --reset-passwords` unlocks it.
-- Don't put `VITE_API_URL` in `.env.production` until the API is hosted.
+- For the hosted portal, set `VITE_API_URL` in Vercel's Environment Variables (not in `.env.production`).
+
+## Hosting
+
+Render (API) + Backblaze B2 (files) + Neon (database) + Vercel (portal): see `../DEPLOY.md` and `../render.yaml`.
+`python -m app.migrate` applies migrations under a PostgreSQL advisory lock (the API does the same at start-up
+when `RUN_MIGRATIONS_ON_START=true`). Files go to the bucket when `STORAGE_BACKEND=s3`.
 
 ## Tests
 

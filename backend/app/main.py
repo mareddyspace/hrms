@@ -2,25 +2,48 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.config import get_settings
 from app.db import engine
 from app.routers import approvals, attendance, auth, leave, notifications, people, timesheets
+from app.security_headers import SecurityHeadersMiddleware
 
 settings = get_settings()
 
-app = FastAPI(title="TimeZ HRMS API", version="1.0.0", docs_url="/docs", redoc_url=None)
+logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("timez")
+for _noisy in ("httpx", "httpcore", "botocore", "boto3", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+app = FastAPI(
+    title="TimeZ HRMS API", version="1.0.0", redoc_url=None,
+    docs_url="/docs" if settings.docs_enabled else None,
+    openapi_url="/openapi.json" if settings.docs_enabled else None,
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
+    allow_origin_regex=settings.cors_origin_regex.strip() or None,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+# Added last = outermost, so every response (errors and CORS preflights too) gets the headers.
+app.add_middleware(SecurityHeadersMiddleware, hsts=settings.is_production)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+    """Log the stack trace on the server; the client only gets a plain message."""
+    log.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Something went wrong on the server. Please try again."})
 
 API_PREFIX = "/api/v1"
 for module in (auth, people, leave, attendance, timesheets, approvals, notifications):
@@ -136,3 +159,22 @@ app.include_router(ai_drafts.recruiting_router, prefix=API_PREFIX)
 from app.routers import delegations  # noqa: E402
 
 app.include_router(delegations.router, prefix=API_PREFIX)
+
+# ---------- start-up: optional migrations (outermost hook, so it runs before the jobs above touch the database) ----------
+from app import migrate as _migrate  # noqa: E402
+from app.services import storage as _storage  # noqa: E402
+
+_lifespan_before_migrations = app.router.lifespan_context
+
+
+@asynccontextmanager
+async def _lifespan_migrate(app_: FastAPI):  # type: ignore[no-untyped-def]
+    log.info("Starting TimeZ HRMS API (env=%s, database=%s, docs=%s)", settings.app_env, engine.dialect.name,
+             "on" if settings.docs_enabled else "off")
+    _migrate.run_if_enabled()
+    log.info("File storage: %s", _storage.check_configuration())
+    async with _lifespan_before_migrations(app_) as state:
+        yield state
+
+
+app.router.lifespan_context = _lifespan_migrate

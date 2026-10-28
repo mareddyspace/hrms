@@ -13,6 +13,7 @@ openpyxl==3.1.5
 reportlab==4.4.10
 httpx==0.28.1  # HR Copilot calls OpenRouter (also used by the test client)
 pyotp==2.10.0  # two-step sign-in (TOTP codes)
+boto3==1.43.121  # STORAGE_BACKEND=s3 (Backblaze B2 / any S3-compatible bucket)
 
 # Tests
 pytest==9.2.0
