@@ -15,9 +15,14 @@ import {
   scheduleInterview,
   setCandidateStage,
   stageMovesFor,
+  updateTalent,
   type TalentActor,
   type TalentResult,
 } from "../../data/talentLocal.ts";
+import { CandidateMatchCard } from "../../features/ai/CandidateMatchCard.tsx";
+import { CvReader } from "../../features/ai/CvReader.tsx";
+import type { CvFields } from "../../features/ai/cvReader.ts";
+import { useAiOn } from "../../features/ai/flags.ts";
 import "./candidatePipeline.css";
 
 type Talent = ReturnType<typeof getTalentState>;
@@ -231,6 +236,7 @@ export function CandidatePipelineView({
 
   const [target, setTarget] = useState("");
   const [note, setNote] = useState("");
+  const matchOn = useAiOn("cv");
   const [iv, setIv] = useState({ when: "", panel: req?.hiringManager ?? "", type: "Interview" });
 
   const log = [...info.history].reverse();
@@ -270,6 +276,7 @@ export function CandidatePipelineView({
         </p>
       )}
       {candidate.resumeNote && <p className="muted">{candidate.resumeNote}</p>}
+      {matchOn && <CandidateMatchCard candidate={candidate} req={req} />}
 
       <h3 className="cp-section-title">Progress</h3>
       <dl className="cp-facts">
@@ -521,9 +528,32 @@ export function AddCandidateForm({
   const [open, setOpen] = useState(false);
   const [reqId, setReqId] = useState("");
   const [form, setForm] = useState(() => ({ ...EMPTY_CANDIDATE, appliedOn: nowStamp().slice(0, 10) }));
+  const [cvOpen, setCvOpen] = useState(false);
+  const [cv, setCv] = useState<CvFields | null>(null);
+  const cvOn = useAiOn("cv");
   if (reqs.length === 0) return null;
   const req = reqs.find((r) => r.id === reqId) ?? reqs[0];
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+
+  /** Store the confirmed CV details on the candidate just added. */
+  function applyCv(email: string) {
+    if (!cv) return;
+    const lower = email.trim().toLowerCase();
+    const note = [
+      cv.currentTitle || cv.currentCompany ? `Current: ${[cv.currentTitle, cv.currentCompany].filter(Boolean).join(" at ")}.` : "",
+      cv.education.length ? `Education: ${cv.education.join("; ")}.` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    updateTalent((s) => {
+      const row = s.candidates.find((c) => c.requisitionId === req.id && c.email.toLowerCase() === lower);
+      if (!row) return;
+      if (cv.phone) row.phone = cv.phone.slice(0, 30);
+      if (cv.experienceYears !== null) row.experienceYears = cv.experienceYears;
+      row.skills = [...new Set([...row.skills, ...cv.librarySkills, ...cv.otherSkills])];
+      if (note) row.resumeNote = `${note} (from CV, checked by ${actor.fullName})`.slice(0, 400);
+    });
+  }
 
   if (!open) {
     return (
@@ -541,13 +571,43 @@ export function AddCandidateForm({
       onSubmit={(e) => {
         e.preventDefault();
         const error = addCandidate(actor, { requisitionId: req.id, ...form });
+        if (!error) applyCv(form.email);
         onResult(error, `${form.name.trim()} added to ${req.id} at ${PIPELINE_STAGES[0]}.`);
         if (!error) {
           setForm({ ...EMPTY_CANDIDATE, appliedOn: nowStamp().slice(0, 10) });
+          setCv(null);
+          setCvOpen(false);
           setOpen(false);
         }
       }}
     >
+      {cvOn && !cvOpen && (
+        <div className="row-gap" style={{ width: "100%" }}>
+          <button type="button" className="btn-ghost btn-tiny" onClick={() => setCvOpen(true)}>
+            {cv ? "Read another CV" : "Paste CV text"}
+          </button>
+          {cv && (
+            <span className="muted">
+              From CV: {[cv.phone, cv.experienceYears !== null ? `${cv.experienceYears} yrs` : "", [cv.currentTitle, cv.currentCompany].filter(Boolean).join(" at "), [...cv.librarySkills, ...cv.otherSkills].join(", ")]
+                .filter(Boolean)
+                .join(" · ")}{" "}
+              <button type="button" className="quiet-link" onClick={() => setCv(null)}>
+                Clear
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+      {cvOn && cvOpen && (
+        <CvReader
+          onClose={() => setCvOpen(false)}
+          onApply={(fields) => {
+            setCv(fields);
+            set({ name: fields.name || form.name, email: fields.email || form.email });
+            setCvOpen(false);
+          }}
+        />
+      )}
       <Field label="Requisition">
         <select value={req.id} onChange={(e) => setReqId(e.target.value)}>
           {reqs.map((r) => (
@@ -576,7 +636,15 @@ export function AddCandidateForm({
         <button type="submit" className="btn btn-tiny" disabled={!form.name.trim() || !form.email.trim() || !form.source.trim() || !form.appliedOn}>
           Add
         </button>
-        <button type="button" className="btn-ghost btn-tiny" onClick={() => setOpen(false)}>
+        <button
+          type="button"
+          className="btn-ghost btn-tiny"
+          onClick={() => {
+            setOpen(false);
+            setCv(null);
+            setCvOpen(false);
+          }}
+        >
           Cancel
         </button>
       </div>

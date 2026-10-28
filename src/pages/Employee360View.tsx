@@ -19,6 +19,8 @@ import { scheduleForEmployee } from "../data/workSchedule.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
 import { leaveRows, maskAddress, maskEmail, maskMobile, parseISODate, toISO, todayISO, type CountryCode } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { DraftTag } from "../features/ai/DraftTag.tsx";
+import { useAiOn } from "../features/ai/flags.ts";
 
 function Progress({ value, label }: { value: number; label: string }) {
   const pct = Math.max(0, Math.min(100, Math.round(value)));
@@ -278,62 +280,119 @@ export function Employee360View({
   ];
   const activeTab = tabs.some((t) => t.id === tab) ? tab : "personal";
 
-  /* ───── AI summary: built only from what this viewer can see above ───── */
+  /* ───── Summary draft: built only from sections this viewer can already see ───── */
+  const summaryOn = useAiOn("employee360");
+  const [summaryRun, setSummaryRun] = useState(0);
+  const [summaryAt, setSummaryAt] = useState(() => new Date());
   const summary = useMemo(() => {
-    const lines: string[] = [];
+    const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
     const tenure = tenureText(person.dateOfJoining, today);
-    lines.push(
-      terminated
-        ? `${firstName} was a ${person.designation} in ${person.department} and left${exit.exitDate ? ` on ${exit.exitDate}` : ""}.`
-        : `${firstName} is a ${person.designation} (${person.grade}) in ${person.department}, ${person.location}, with ${tenure} at ${COMPANY_NAME}.`,
-    );
-    if (manager) {
-      lines.push(
-        `Reports to ${manager.fullName}${manager.designation ? `, ${manager.designation}` : ""}${
-          reports.length ? `, and leads ${reports.length} direct report${reports.length > 1 ? "s" : ""}` : ""
-        }.`,
-      );
-    } else if (reports.length) {
-      lines.push(`Leads ${reports.length} direct report${reports.length > 1 ? "s" : ""}.`);
-    }
+    const bullets: { label: string; text: string }[] = [];
+    const sentences: string[] = [];
+
+    // Role and tenure: shown on the Job, Manager and Employment tabs to every viewer.
+    const roleText = `${person.designation} (${person.grade}) in ${person.department}, ${person.location}${
+      manager ? `; reports to ${manager.fullName}` : ""
+    }${reports.length ? `; leads ${plural(reports.length, "direct report")}` : ""}.`;
+    bullets.push({ label: "Current role", text: roleText });
+    const recent = access.work
+      ? timeline.find((e) => e.type !== "Hire" && !isScheduled(e, today) && e.type !== "Compensation change")
+      : undefined;
+    bullets.push({
+      label: "Tenure",
+      text: terminated
+        ? `Joined ${person.dateOfJoining}; left${exit.exitDate ? ` on ${exit.exitDate}` : ""}.`
+        : `${tenure} since ${person.dateOfJoining}${recent ? `; last change was a ${recent.type.toLowerCase()} on ${recent.effectiveDate}` : ""}.`,
+    });
+
+    const openers = terminated
+      ? [`${firstName} was a ${person.designation} in ${person.department}.`]
+      : [
+          `${firstName} is a ${person.designation} in ${person.department} with ${tenure} at ${COMPANY_NAME}.`,
+          `${firstName} has been with ${COMPANY_NAME} for ${tenure} and works as a ${person.designation} in ${person.department}.`,
+          `In ${tenure} at ${COMPANY_NAME}, ${firstName} has grown into a ${person.designation} role in ${person.department}.`,
+        ];
+    sentences.push(openers[summaryRun % openers.length]);
+
+    const dev: string[] = [];
     if (access.work) {
-      if (goals.length) {
-        const lowest = [...goals].sort((a, b) => a.progress - b.progress)[0];
-        lines.push(
-          `Goal progress is ${Math.round(goalProgress)}% across ${goals.length} goal${goals.length > 1 ? "s" : ""}; "${lowest.title}" is lowest at ${lowest.progress}%.`,
-        );
-      }
+      // Performance: rating only when this viewer may see it (released, or HR/manager access).
       const rated = reviews.map((r) => ({ r, rating: ratingFor(r) })).find((x) => x.rating);
+      const lowest = goals.length ? [...goals].sort((a, b) => a.progress - b.progress)[0] : undefined;
+      const perf: string[] = [];
       if (rated) {
-        const cycle = PERF_CYCLES.find((c) => c.id === rated.r.cycleId)?.name ?? "latest cycle";
-        lines.push(`Rated ${rated.rating} in the ${cycle}${rated.r.released ? "" : " (not yet released)"}.`);
+        const cycle = PERF_CYCLES.find((c) => c.id === rated.r.cycleId)?.name ?? "the latest cycle";
+        perf.push(`rated ${rated.rating} in ${cycle}${rated.r.released ? "" : " (not released)"}`);
       }
-      const top = [...skills].sort((a, b) => rank(b.level) - rank(a.level)).slice(0, 2);
-      if (top.length) {
-        lines.push(
-          `Strongest skills: ${top.map((s) => `${s.skillName} (${s.level})`).join(", ")}${
-            career && openGaps.length
-              ? `; for ${career.role.title} the gaps are ${openGaps.map((g) => g.name).join(", ")}`
-              : ""
-          }.`,
+      if (goals.length) perf.push(`${Math.round(goalProgress)}% through ${plural(goals.length, "goal")}${lowest ? `, lowest is "${lowest.title}" at ${lowest.progress}%` : ""}`);
+      if (praise.length) perf.push(`${plural(praise.length, "recognition")} received`);
+      if (perf.length) bullets.push({ label: "Performance", text: `${perf.join("; ")}.` });
+      if (goals.length) {
+        sentences.push(
+          goalProgress >= 70
+            ? `Goals are on track at ${Math.round(goalProgress)}% overall.`
+            : goalProgress >= 40
+              ? `Goals are moving at ${Math.round(goalProgress)}% overall, with room to push the slower ones.`
+              : `Goal progress is early at ${Math.round(goalProgress)}% overall.`,
         );
       }
-      const recent = timeline.find((e) => e.type !== "Hire" && !isScheduled(e, today) && e.type !== "Compensation change");
-      if (recent) lines.push(`Last change: ${recent.type.toLowerCase()} on ${recent.effectiveDate} (${recent.after}).`);
-      const ideas: string[] = [];
+
+      // Skills: strengths and gaps for the next role.
+      const top = [...skills].sort((a, b) => rank(b.level) - rank(a.level)).slice(0, 3);
+      if (top.length) {
+        bullets.push({
+          label: "Skills",
+          text: `Strongest in ${top.map((s) => `${s.skillName} (${s.level})`).join(", ")}${
+            career && openGaps.length ? `. For ${career.role.title}, gaps are ${openGaps.map((g) => `${g.name} (${g.have} → ${g.need})`).join(", ")}` : ""
+          }.`,
+        });
+        sentences.push(`Main strength is ${top[0].skillName}${career && openGaps.length ? `, and the next step toward ${career.role.title} is ${openGaps[0].name}` : ""}.`);
+      }
+
+      // Learning.
+      const done = learning.filter((l) => l.status === "Completed").length;
+      const active = learning.filter((l) => l.status !== "Completed");
+      const soon = certifications.filter((c) => c.expiresOn && c.expiresOn >= today && c.expiresOn <= shiftISO(today, 90));
+      if (learning.length || certifications.length) {
+        bullets.push({
+          label: "Learning",
+          text: `${plural(done, "course")} completed${active.length ? `, ${active.length} in progress` : ""}${
+            certifications.length ? `; ${plural(certifications.length, "certification")}` : ""
+          }${soon.length ? ` (${soon.map((c) => c.name).join(", ")} expires within 90 days)` : ""}.`,
+        });
+      }
+
+      // Attendance and leave, last 30 days.
+      if (attendance.length) {
+        const leaveLeft = leaveBalances.reduce((s, r) => s + Number(r.available || 0), 0);
+        const pending = leaveRequests.filter((l) => l.status === "pending").length;
+        bullets.push({
+          label: "Attendance & leave",
+          text: `Last 30 days: ${attendanceStats.present} days worked, ${attendanceStats.leave} on leave, ${attendanceStats.absent} absent, ${plural(
+            attendanceStats.late,
+            "late arrival",
+          )}, ${attendanceStats.avgHours.toFixed(1)} h/day on average. ${leaveLeft} leave days left this year${pending ? `, ${pending} pending` : ""}.`,
+        });
+        if (attendanceStats.late >= 3) dev.push(`look at start times (${attendanceStats.late} late arrivals in 30 days)`);
+        if (attendanceStats.absent >= 2) dev.push(`check in on ${attendanceStats.absent} unplanned absences`);
+      }
+
+      // Development areas.
       for (const g of openGaps.slice(0, 2)) {
         const course = courseFor(g.skillId);
-        ideas.push(course ? `${g.name} through "${course.title}"` : `${g.name} (${g.have} → ${g.need})`);
+        dev.unshift(course ? `build ${g.name} through "${course.title}"` : `build ${g.name} (${g.have} → ${g.need})`);
       }
-      if (!ideas.length && goals.length) {
-        const lowest = [...goals].sort((a, b) => a.progress - b.progress)[0];
-        if (lowest.progress < 60) ideas.push(`closing out "${lowest.title}"`);
+      if (lowest && lowest.progress < 50) dev.push(`agree a plan for "${lowest.title}"`);
+      if (soon.length) dev.push(`renew ${soon[0].name}`);
+      if (dev.length) {
+        bullets.push({ label: "Development areas", text: `${dev.slice(0, 3).map((d, i) => (i ? d : d[0].toUpperCase() + d.slice(1))).join("; ")}.` });
+        sentences.push(`A good focus for the next quarter: ${dev[0]}.`);
       }
-      if (ideas.length) lines.push(`Suggested development: ${ideas.join("; ")}.`);
     }
-    return lines.slice(0, 6);
+
+    return { paragraph: sentences.join(" "), bullets };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [person, manager, reports.length, access.work, goals, reviews, skills, career, timeline, today, terminated]);
+  }, [person, manager, reports.length, access.work, goals, reviews, skills, career, timeline, today, terminated, attendance, leaveBalances, learning, certifications, praise.length, summaryRun]);
 
   return (
     <div className="stack">
@@ -361,6 +420,41 @@ export function Employee360View({
               </button>
             )}
           </div>
+        </Card>
+      )}
+
+      {summaryOn && (
+        <Card
+          title="Summary"
+          action={
+            <div className="ai-row">
+              <DraftTag />
+              <button
+                type="button"
+                className="btn-ghost btn-tiny"
+                onClick={() => {
+                  setSummaryRun((n) => n + 1);
+                  setSummaryAt(new Date());
+                }}
+              >
+                Regenerate
+              </button>
+            </div>
+          }
+        >
+          <p>{summary.paragraph}</p>
+          <ul className="ai-bullets">
+            {summary.bullets.map((b) => (
+              <li key={b.label}>
+                <strong>{b.label}:</strong>
+                {b.text}
+              </li>
+            ))}
+          </ul>
+          <p className="ai-note">
+            Generated {summaryAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} from the sections you can see on this profile
+            {access.work ? "" : " (role and tenure only)"}. Pay, personal and document details are never included. Check it before sharing.
+          </p>
         </Card>
       )}
 
@@ -799,12 +893,6 @@ export function Employee360View({
         </Card>
       )}
 
-      {summary.length > 0 && (
-        <Card title="AI summary">
-          <p>{summary.join(" ")}</p>
-          <p className="muted">Generated from this profile; review before acting.</p>
-        </Card>
-      )}
     </div>
   );
 }

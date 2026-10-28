@@ -22,7 +22,7 @@ export function hasOrgWideReports(role: UserRole): boolean {
 }
 
 /** Scheduled report files may only go to company mailboxes. */
-export const INTERNAL_EMAIL_DOMAIN = "@infotech.com";
+export const INTERNAL_EMAIL_DOMAIN = "@timez.com";
 
 export function isInternalEmail(value: string): boolean {
   return value.toLowerCase().endsWith(INTERNAL_EMAIL_DOMAIN);

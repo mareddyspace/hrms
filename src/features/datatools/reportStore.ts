@@ -183,7 +183,7 @@ export function parseRecipients(text: string): { emails: string[] } | { error: s
   const bad = parts.filter((p) => !isValidEmail(p));
   if (bad.length) return { error: `Not a valid email: ${bad.slice(0, 3).join(", ")}${bad.length > 3 ? "…" : ""}` };
   const external = parts.filter((p) => !isInternalEmail(p));
-  if (external.length) return { error: `Only @infotech.com addresses can receive reports: ${external.slice(0, 3).join(", ")}${external.length > 3 ? "…" : ""}` };
+  if (external.length) return { error: `Only @timez.com addresses can receive reports: ${external.slice(0, 3).join(", ")}${external.length > 3 ? "…" : ""}` };
   const emails = [...new Set(parts)];
   if (emails.length > MAX_RECIPIENTS) return { error: `Up to ${MAX_RECIPIENTS} recipients per schedule.` };
   return { emails };

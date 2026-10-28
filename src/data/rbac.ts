@@ -1,5 +1,5 @@
 /**
- * Infotech frontend RBAC — single source of truth for the 8 demo roles.
+ * TimeZ frontend RBAC — single source of truth for the 8 demo roles.
  * Frontend-only checks today; shape is ready for backend policy claims later.
  *
  * Roles: Employee · Manager · HR (incl. compensation & benefits) · Recruiter · Executive · Admin

@@ -1,5 +1,5 @@
 :root {
-  /* —— Infotech design tokens —— */
+  /* —— TimeZ design tokens —— */
   --font-sans: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
   --text-xs: 11.5px;
@@ -2636,7 +2636,7 @@ html[data-theme="night"] .help-ticket-btn:hover {
   body, .workspace { background: white; }
 }
 
-/* —— Infotech foundation shell & primitives —— */
+/* —— TimeZ foundation shell & primitives —— */
 .sidebar .mark {
   width: 40px;
   height: 40px;
@@ -4092,7 +4092,7 @@ html[data-theme="night"] .orgchart-you {
   .tz-bar-value { text-align: left; }
 }
 
-/* —— Infotech foundation shell & primitives —— */
+/* —— TimeZ foundation shell & primitives —— */
 .sidebar .mark {
   width: 40px;
   height: 40px;
@@ -6441,3 +6441,5 @@ html[data-theme="night"] .todo .ok { color: var(--ok); }
 
 /* Search fields hide the input outline, so show focus on the wrapper. */
 .topbar-search:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.agent-starters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }

@@ -5,9 +5,13 @@ import {
   ROLE_PERMISSION_CATALOG,
   INTEGRATION_SEED,
   NOTIFICATION_PREF_SEED,
+  SYNC_SCHEDULES,
+  SYNC_SCHEDULE_DEFAULT,
   type AuditLogRow,
   type IntegrationCard,
   type NotificationPref,
+  type SyncRun,
+  type SyncSchedule,
 } from "./platformData.ts";
 
 const INT_KEY = "timez.platform.integrations.v2";
@@ -213,6 +217,84 @@ export function effectiveCatalogIds(account: { id: string; navAccess: readonly s
   });
 }
 
+/* —— Sync schedule and run history —— */
+
+export function integrationSchedule(item: IntegrationCard): SyncSchedule {
+  return item.schedule ?? SYNC_SCHEDULE_DEFAULT[item.id] ?? "hourly";
+}
+
+function scheduleMinutes(schedule: SyncSchedule): number {
+  return SYNC_SCHEDULES.find((s) => s.id === schedule)?.minutes ?? 0;
+}
+
+/** Reads "2026-10-14 08:40 IST" / "2026-10-14 08:40" as a local time. */
+function parseSyncStamp(value: string): Date | null {
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/.exec(value);
+  if (!m) return null;
+  const d = new Date(`${m[1]}T${m[2]}:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** A believable history for connectors that haven't run here yet: three scheduled runs up to the last sync. */
+function seededRuns(item: IntegrationCard): SyncRun[] {
+  if (item.status === "Not configured") return [];
+  const last = parseSyncStamp(item.lastSync);
+  if (!last) return [];
+  const step = (scheduleMinutes(integrationSchedule(item)) || 60) * 60_000;
+  const size = BATCH_SIZE[item.id] ?? 12;
+  return [0, 1, 2].map((i) => {
+    const failed = i === 0 ? Math.min(item.errorCount, 2) : hash(item.id, "seed", i) % 100 < 20 ? 1 : 0;
+    return { at: new Date(last.getTime() - i * step).toISOString(), processed: size, succeeded: size - failed, failed, by: "Scheduler" };
+  });
+}
+
+/** Last 10 runs, newest first. */
+export function integrationRuns(item: IntegrationCard): SyncRun[] {
+  return item.runs ?? seededRuns(item);
+}
+
+/** Records that passed and failed across all runs. */
+export function integrationTotals(item: IntegrationCard): { succeeded: number; failed: number } {
+  if (item.successCount !== undefined && item.failedCount !== undefined) return { succeeded: item.successCount, failed: item.failedCount };
+  const runs = integrationRuns(item);
+  return {
+    succeeded: item.successCount ?? runs.reduce((n, r) => n + r.succeeded, 0),
+    failed: item.failedCount ?? runs.reduce((n, r) => n + r.failed, 0),
+  };
+}
+
+/** When the next scheduled run is due, or null for manual-only / not set up. */
+export function nextRunAt(item: IntegrationCard, now: Date = new Date()): Date | null {
+  if (item.status === "Not configured" || item.status === "Disconnected") return null;
+  const minutes = scheduleMinutes(integrationSchedule(item));
+  if (!minutes) return null;
+  const runs = integrationRuns(item);
+  const last = runs[0] ? new Date(runs[0].at) : parseSyncStamp(item.lastSync);
+  const step = minutes * 60_000;
+  if (!last || Number.isNaN(last.getTime())) return new Date(Math.ceil(now.getTime() / step) * step);
+  let next = last.getTime() + step;
+  if (next <= now.getTime()) next += Math.ceil((now.getTime() - next) / step) * step;
+  if (next <= now.getTime()) next += step;
+  return new Date(next);
+}
+
+export function setIntegrationSchedule(connectorId: string, schedule: SyncSchedule, actorName: string): void {
+  const list = listIntegrations();
+  const item = list.find((i) => i.id === connectorId);
+  if (!item) return;
+  const before = integrationSchedule(item);
+  if (before === schedule) return;
+  // Keep the seeded history so counts don't jump when the schedule changes.
+  const runs = integrationRuns(item);
+  const totals = integrationTotals(item);
+  writeJson(
+    INT_KEY,
+    list.map((i) => (i.id === connectorId ? { ...i, schedule, runs, successCount: totals.succeeded, failedCount: totals.failed } : i)),
+  );
+  const label = (id: SyncSchedule) => SYNC_SCHEDULES.find((s) => s.id === id)?.label ?? id;
+  appendAudit({ actor: actorName, action: `Changed sync schedule · ${label(before)} → ${label(schedule)}`, target: item.name, outcome: "Success" });
+}
+
 /* —— Sync runs and quarantine —— */
 
 const QUAR_KEY = "timez.platform.quarantine.v1";
@@ -364,6 +446,13 @@ export function runIntegrationSync(connectorId: string, actor: Actor): SyncRunRe
     state,
     connectorId,
     (it) => {
+      const totals = integrationTotals(it);
+      it.runs = [
+        { at: new Date().toISOString(), processed: size, succeeded: passed, failed: failed.length, by: actor.name },
+        ...integrationRuns(it),
+      ].slice(0, 10);
+      it.successCount = totals.succeeded + passed;
+      it.failedCount = totals.failed + failed.length;
       it.recordsProcessed += passed;
       it.lastSync = syncStamp();
     },
@@ -465,4 +554,19 @@ export function retryAllQuarantined(connectorId: string, actor: Actor): { passed
     outcome: failed ? "Failed" : "Success",
   });
   return { passed: passedIds.size, failed };
+}
+
+/** Runs every connector whose scheduled time has passed since its last run. Returns how many ran. */
+export function runDueSyncs(now: Date = new Date()): number {
+  let ran = 0;
+  for (const item of listIntegrations()) {
+    if (item.status === "Not configured" || item.status === "Disconnected") continue;
+    const minutes = scheduleMinutes(integrationSchedule(item));
+    if (!minutes) continue;
+    const runs = integrationRuns(item);
+    const last = runs[0] ? new Date(runs[0].at) : parseSyncStamp(item.lastSync);
+    if (last && !Number.isNaN(last.getTime()) && last.getTime() + minutes * 60_000 > now.getTime()) continue;
+    if (runIntegrationSync(item.id, { id: "system", name: "Scheduler" })) ran += 1;
+  }
+  return ran;
 }

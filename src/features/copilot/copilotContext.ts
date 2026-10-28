@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import type { CopilotContext } from "../../data/platformData.ts";
+import { copilotPersonaFromRole, type CopilotContext } from "../../data/platformData.ts";
+import { buildAssist } from "./assist.ts";
 import { getAttendanceState } from "../../data/attendanceLocal.ts";
 import { compReviewStatus } from "../../data/homeInsights.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
@@ -59,6 +60,28 @@ export function useCopilotContext(): () => CopilotContext {
       todayShift: rosteredShift ? shiftLabel(rosteredShift) : undefined,
       compReview: comp ?? undefined,
       summarisePerson: (query: string) => summarisePersonFor(demoProfile, query),
+      assist: buildAssist({
+        analytics: () => ({
+          today,
+          // Company-wide numbers: HR, executives and admins. Managers get their reporting line only.
+          scope: orgWide || ["hr", "executive", "admin"].includes(copilotPersonaFromRole(demoProfile.role)) ? "org" : team.length ? "team" : "none",
+          viewerId: employee.id,
+          people,
+          teamIds: new Set(team.map((m) => m.id)),
+          state,
+          attendance: getAttendanceState(),
+          enrollments: getTalentState().enrollments,
+        }),
+        letters: () => ({ viewer: demoProfile, today, people, history: getRewardState().history }),
+        actions: () => ({
+          today,
+          currentAddress: employee.address ?? "",
+          currentMobile: employee.mobile ?? "",
+          leaveRows: leaveTable.filter((r) => r.quota > 0 || r.code === "unpaid").map((r) => ({ code: r.code, name: r.name, available: r.available })),
+          isPersonName: (word: string) =>
+            word !== employee.fullName.split(" ")[0].toLowerCase() && people.some((p) => p.fullName.toLowerCase().split(" ")[0] === word),
+        }),
+      }),
     });
   }, [team, state, people, demoProfile, employee, demoAccounts, leaveTable, payslipViews, canDecideFor, canVerifyProofs]);
 }

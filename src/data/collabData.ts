@@ -1,5 +1,5 @@
 import { findDemoById } from "../demoAccounts.ts";
-/** Infotech collaboration & workflow — fictional demo data only. */
+/** TimeZ collaboration & workflow — fictional demo data only. */
 
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 
@@ -750,7 +750,7 @@ export const ANNOUNCEMENTS_SEED: Announcement[] = [
     title: "Q4 All-hands",
     body: "Join the global all-hands on 22 Oct. Agenda covers roadmap, hiring, and wellbeing resources.",
     scope: "Company",
-    audience: "All Infotech",
+    audience: "All TimeZ",
     state: "Published",
     publishedAt: "2026-10-08T10:00:00",
     author: "Internal Comms",

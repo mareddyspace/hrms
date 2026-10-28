@@ -278,7 +278,7 @@ function allocate(total: number, min: (dept: string) => number): Record<string, 
 }
 
 /**
- * Build the Infotech workforce across 8 countries. Personas and Ram's named teammates count towards
+ * Build the TimeZ workforce across 8 countries. Personas and Ram's named teammates count towards
  * each country's headcount, so the whole company (generated + named) adds up to the blueprint.
  *
  * Reporting line in every country: country head (reports to the CEO) → department head → team leads
@@ -324,13 +324,13 @@ export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
         employeeCode: code,
         designation: input.title,
         department: input.dept,
-        email: `${first.toLowerCase()}.${last.toLowerCase()}.${code.toLowerCase()}@infotech.com`,
+        email: `${first.toLowerCase()}.${last.toLowerCase()}.${code.toLowerCase()}@timez.com`,
         personalEmail: `${first.toLowerCase()}.${last.toLowerCase()}@example.com`,
         mobile: phoneFor(country.code, input.location, seq),
         managerName: "",
         availability: status === "On Leave" ? "On Leave" : AVAIL[seq % AVAIL.length],
-        companyCode: "Infotech",
-        businessUnit: `Infotech ${country.name}`,
+        companyCode: "TimeZ",
+        businessUnit: `TimeZ ${country.name}`,
         practice: input.dept,
         subPractice: input.title,
         gender: FIRST_GENDER[first] ?? "Female",

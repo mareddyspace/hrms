@@ -1,6 +1,7 @@
 import type { DemoAccount, NavAccessId } from "../demoAccounts.ts";
-import type { CountryCode, UserRole } from "../model.ts";
+import type { CountryCode, LeaveCode, UserRole } from "../model.ts";
 import type { Policy } from "./policyLibrary.ts";
+import type { LetterType } from "./rewardData.ts";
 import { TIMEZ_COUNTRIES } from "../model.ts";
 
 export type AnalyticsRange = "7d" | "30d" | "90d" | "ytd";
@@ -91,7 +92,42 @@ export interface CopilotAnswer {
   sources?: CopilotSource[];
   /** True when the question asked for something the viewer may not see. */
   denied?: boolean;
+  /** Simple bar chart for analytics answers. */
+  chart?: CopilotChart;
+  /** Filters the analytics answer used (scope, period, country…). */
+  filters?: string[];
+  /** Letter prepared from a template — only created after the person confirms, and always goes to approval. */
+  letterDraft?: CopilotLetterDraft;
+  /** A change Copilot prepared from the message — submitted only after the person confirms. */
+  action?: CopilotAction;
 }
+
+export interface CopilotChart {
+  title: string;
+  /** Shown after each value, e.g. "h" or "days". */
+  unit?: string;
+  bars: { label: string; value: number }[];
+}
+
+export interface CopilotLetterDraft {
+  employeeId: string;
+  employeeName: string;
+  type: LetterType;
+  label: string;
+  /** Fields filled from the employee record. */
+  fields: { label: string; value: string }[];
+  /** Required fields that are still empty. */
+  missing: string[];
+  /** Label of the type-specific input (purpose, destination…), when the template needs one. */
+  detailsLabel?: string;
+  details?: string;
+  /** HR may enter the effective date when the record has none. */
+  needsEffectiveDate?: boolean;
+}
+
+export type CopilotAction =
+  | { kind: "profile"; field: "address" | "mobile"; current: string; proposed: string }
+  | { kind: "leave"; code: LeaveCode; codeName: string; from: string; to: string; half?: "first" | "second"; reason: string; options: { code: LeaveCode; name: string; available: number }[] };
 
 export interface CopilotSource {
   title: string;
@@ -188,6 +224,11 @@ export interface CopilotContext {
    * the person themselves, or above them in the reporting line. Never includes pay.
    */
   summarisePerson?: (query: string) => CopilotPersonLookup;
+  /**
+   * Analytics, letter drafts and prepared actions. Returns null when the question is not one of these,
+   * so the regular answers take over. Access is checked inside.
+   */
+  assist?: (question: string) => (CopilotAnswer & { requires?: NavAccessId }) | null;
 }
 
 /** Result of an Employee 360 lookup. Denied results carry no data about the person. */
@@ -284,7 +325,7 @@ export function answerCopilot(question: string, input: CopilotContext | CopilotV
       };
     }
   }
-  const { requires, ...raw } = copilotAnswer(question, ctx);
+  const { requires, ...raw } = ctx.assist?.(question) ?? copilotAnswer(question, ctx);
   const allowedLink = (l: { to: string }) => {
     const id = COPILOT_LINK_ACCESS[l.to];
     return !id || viewerHas(viewer, id);
@@ -387,6 +428,42 @@ export interface IntegrationCard {
   recordsProcessed: number;
   errorCount: number;
   logs: { at: string; level: "info" | "warn" | "error"; message: string }[];
+  /** How often the connector syncs. Missing = the connector's default (SYNC_SCHEDULE_DEFAULT). */
+  schedule?: SyncSchedule;
+  /** Last 10 sync runs, newest first. Missing = seeded history (see integrationRuns). */
+  runs?: SyncRun[];
+  /** Records that passed / failed across all runs. Missing = totals of the seeded history. */
+  successCount?: number;
+  failedCount?: number;
+}
+
+export type SyncSchedule = "15m" | "hourly" | "daily" | "manual";
+
+export const SYNC_SCHEDULES: { id: SyncSchedule; label: string; minutes: number }[] = [
+  { id: "15m", label: "Every 15 min", minutes: 15 },
+  { id: "hourly", label: "Hourly", minutes: 60 },
+  { id: "daily", label: "Daily", minutes: 1440 },
+  { id: "manual", label: "Manual only", minutes: 0 },
+];
+
+export const SYNC_SCHEDULE_DEFAULT: Record<string, SyncSchedule> = {
+  sso: "15m",
+  email: "15m",
+  teams: "15m",
+  slack: "hourly",
+  attendance: "15m",
+  learning: "daily",
+  benefits: "daily",
+  payroll: "daily",
+};
+
+export interface SyncRun {
+  /** ISO time the run finished. */
+  at: string;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  by: string;
 }
 
 export const INTEGRATION_SEED: IntegrationCard[] = [
@@ -544,7 +621,7 @@ export const ADMIN_LOCATIONS = [
 ];
 
 export const ADMIN_ORG_SETTINGS = {
-  company: "Infotech",
+  company: "TimeZ",
   fiscalYearStart: "April",
   weekStartDefault: "Monday",
   legalEntities: TIMEZ_COUNTRIES.length,

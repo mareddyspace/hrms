@@ -53,7 +53,7 @@ export interface CountrySettings {
 const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currency" | "timeZone">> = {
   IN: {
     currencyLocale: "en-IN",
-    legalEntity: "Infotech India Pvt Ltd",
+    legalEntity: "TimeZ India Pvt Ltd",
     languages: ["en", "hi"],
     holidays: [
       { date: "2026-01-26", name: "Republic Day" },
@@ -84,7 +84,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   US: {
     currencyLocale: "en-US",
-    legalEntity: "Infotech Inc",
+    legalEntity: "TimeZ Inc",
     languages: ["en"],
     holidays: [
       { date: "2026-01-01", name: "New Year's Day" },
@@ -115,7 +115,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   GB: {
     currencyLocale: "en-GB",
-    legalEntity: "Infotech UK Ltd",
+    legalEntity: "TimeZ UK Ltd",
     languages: ["en"],
     holidays: [
       { date: "2026-01-01", name: "New Year's Day" },
@@ -146,7 +146,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   AU: {
     currencyLocale: "en-AU",
-    legalEntity: "Infotech Australia Pty",
+    legalEntity: "TimeZ Australia Pty",
     languages: ["en"],
     holidays: [
       { date: "2026-01-26", name: "Australia Day" },
@@ -172,7 +172,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   CA: {
     currencyLocale: "en-CA",
-    legalEntity: "Infotech Canada Inc",
+    legalEntity: "TimeZ Canada Inc",
     languages: ["en"],
     holidays: [
       { date: "2026-07-01", name: "Canada Day" },
@@ -198,7 +198,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   AE: {
     currencyLocale: "en-AE",
-    legalEntity: "Infotech Middle East FZ",
+    legalEntity: "TimeZ Middle East FZ",
     languages: ["en", "ar"],
     holidays: [
       { date: "2026-01-01", name: "New Year's Day" },
@@ -223,7 +223,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   SA: {
     currencyLocale: "ar-SA",
-    legalEntity: "Infotech Saudi LLC",
+    legalEntity: "TimeZ Saudi LLC",
     languages: ["en", "ar"],
     holidays: [
       { date: "2026-02-20", name: "Founding Day" },
@@ -248,7 +248,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   DE: {
     currencyLocale: "de-DE",
-    legalEntity: "Infotech Germany GmbH",
+    legalEntity: "TimeZ Germany GmbH",
     languages: ["en", "de"],
     holidays: [
       { date: "2026-01-01", name: "Neujahr" },

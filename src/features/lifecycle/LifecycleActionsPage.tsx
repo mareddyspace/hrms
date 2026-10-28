@@ -13,14 +13,17 @@ import {
   StatusBadge,
   Tabs,
 } from "../../components/ui.tsx";
-import { GRADE_OPTIONS, locationOptions, subscribeOrgOverlay, getOrgOverlay, unitOptions } from "../../data/orgStructureLocal.ts";
+import { GRADE_OPTIONS, listJobProfiles, locationOptions, subscribeOrgOverlay, getOrgOverlay, unitOptions } from "../../data/orgStructureLocal.ts";
 import { allReportIds, getPerson, listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import type { PersonRecord } from "../../data/peopleData.ts";
 import { formatShortDate, todayISO } from "../../model.ts";
 import { usePortal } from "../../store.tsx";
 import {
   FIELDS_BY_TYPE,
+  HR_ONLY_ACTION_TYPES,
+  LEAVE_OF_ABSENCE_TYPES,
   LIFECYCLE_ACTION_TYPES,
+  actionBlocker,
   applyDueLifecycleActions,
   approverNames,
   canDecide,
@@ -33,6 +36,8 @@ import {
   raiseLifecycleAction,
   subscribeLifecycleActions,
   withdrawLifecycleAction,
+  pendingGroupsOf,
+  type ActionStep,
   type LifecycleAction,
   type LifecycleActionStatus,
   type LifecycleActionType,
@@ -52,10 +57,17 @@ function statusTone(status: LifecycleActionStatus): "ok" | "warn" | "danger" | "
 
 function StatusCell({ action }: { action: LifecycleAction }) {
   const step = action.steps[currentStepIndex(action)];
+  const waiting = pendingGroupsOf(step);
+  const partly = waiting.length > 0 && waiting.length < (step?.groups?.length ?? 0);
   return (
     <div>
       <StatusBadge status={action.status} tone={statusTone(action.status)} literal />
-      {action.status === "Pending" && step && <p className="muted">{step.label}</p>}
+      {action.status === "Pending" && step && (
+        <p className="muted">
+          {step.label}
+          {partly ? ` · waiting on ${waiting.map((g) => g.label.replace(/ approval$/, "")).join(" + ")}` : ""}
+        </p>
+      )}
     </div>
   );
 }
@@ -115,9 +127,16 @@ function PersonPicker({
   );
 }
 
+const DATE_LABEL: Partial<Record<LifecycleActionType, string>> = {
+  "Leave of absence": "First day of leave",
+  "Return from leave": "Return date",
+  "Probation completion": "Confirmation date",
+  Rehire: "Rehire date",
+};
+
 function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[]; people: PersonRecord[]; onDone: (m: Message) => void }) {
   const { demoProfile } = usePortal();
-  useSyncExternalStore(subscribeOrgOverlay, getOrgOverlay);
+  const orgOverlay = useSyncExternalStore(subscribeOrgOverlay, getOrgOverlay);
   const [employeeId, setEmployeeId] = useState("");
   const [type, setType] = useState<LifecycleActionType>("Transfer");
   const [effectiveDate, setEffectiveDate] = useState(todayISO());
@@ -127,9 +146,20 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
   const [designation, setDesignation] = useState("");
   const [grade, setGrade] = useState("");
   const [managerId, setManagerId] = useState("");
+  const [jobProfileId, setJobProfileId] = useState("");
+  const [contractEndDate, setContractEndDate] = useState("");
+  const [leaveType, setLeaveType] = useState(LEAVE_OF_ABSENCE_TYPES[0]);
+  const [leaveEnd, setLeaveEnd] = useState("");
   const [error, setError] = useState<string | null>(null);
   const person = employeeId ? getPerson(employeeId) : undefined;
   const fields = FIELDS_BY_TYPE[type];
+  const types = isHrRole(demoProfile.role) ? LIFECYCLE_ACTION_TYPES : LIFECYCLE_ACTION_TYPES.filter((t) => !HR_ONLY_ACTION_TYPES.includes(t));
+  // Only people this action fits: leavers for a rehire, people on leave for a return, and so on.
+  const eligible = useMemo(
+    () => candidates.filter((p) => !actionBlocker(p, type) && canRaiseFor(demoProfile, p.id, type)),
+    [candidates, type, demoProfile],
+  );
+  const profiles = useMemo(() => listJobProfiles(orgOverlay).filter((p) => !p.inactive), [orgOverlay]);
   const departments = useMemo(() => unitOptions(people, "department"), [people]);
   const locations = useMemo(() => locationOptions(people), [people]);
   const managers = useMemo(() => people.filter((p) => p.employmentStatus !== "Terminated"), [people]);
@@ -142,6 +172,15 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
     setDesignation(p?.designation ?? "");
     setGrade(p?.grade ?? "");
     setManagerId(p?.managerId ?? "");
+    setJobProfileId(p?.jobProfileId ?? "");
+    setContractEndDate(p?.contractEndDate ?? "");
+  }
+
+  function pickType(next: LifecycleActionType) {
+    setType(next);
+    setError(null);
+    const current = employeeId ? getPerson(employeeId) : undefined;
+    if (current && actionBlocker(current, next)) pickEmployee("");
   }
 
   function submit(event: FormEvent) {
@@ -158,6 +197,10 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
       designation,
       grade,
       managerId,
+      jobProfileId,
+      contractEndDate,
+      leaveType,
+      leaveEnd,
     });
     if (result) setError(result);
     else onDone({ tone: "ok", text: `${type} for ${person?.fullName ?? "the employee"} raised.` });
@@ -167,23 +210,52 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
     <form className="stack" onSubmit={submit}>
       <Banner message={error ? { tone: "err", text: error } : null} />
       <div className="lc-grid">
-        <PersonPicker label="Employee" people={candidates} value={employeeId} onChange={pickEmployee} />
-        {person && (
-          <p className="muted" style={{ gridColumn: "1 / -1", margin: 0 }}>
-            Now: {person.designation} · {person.grade} · {person.department} · {person.location}, {person.countryName} · Manager{" "}
-            {person.managerName || "none"}
-          </p>
-        )}
         <Field label="Action">
-          <select value={type} onChange={(e) => setType(e.target.value as LifecycleActionType)}>
-            {LIFECYCLE_ACTION_TYPES.map((t) => (
+          <select value={type} onChange={(e) => pickType(e.target.value as LifecycleActionType)}>
+            {types.map((t) => (
               <option key={t}>{t}</option>
             ))}
           </select>
         </Field>
-        <Field label="Effective date">
+        <PersonPicker label="Employee" people={eligible} value={employeeId} onChange={pickEmployee} />
+        {eligible.length === 0 && (
+          <p className="muted" style={{ gridColumn: "1 / -1", margin: 0 }}>
+            No one you can raise this for right now.
+          </p>
+        )}
+        {person && (
+          <p className="muted" style={{ gridColumn: "1 / -1", margin: 0 }}>
+            Now: {person.employmentStatus} · {person.designation} · {person.grade} · {person.department} · {person.location}, {person.countryName} ·
+            Manager {person.managerName || "none"}
+            {person.contractEndDate ? ` · Contract ends ${formatShortDate(person.contractEndDate)}` : ""}
+            {person.leaveOfAbsence ? ` · On ${person.leaveOfAbsence.type.toLowerCase()} leave until ${formatShortDate(person.leaveOfAbsence.end)}` : ""}
+          </p>
+        )}
+        <Field label={DATE_LABEL[type] ?? "Effective date"}>
           <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} required />
         </Field>
+        {type === "Leave of absence" && (
+          <>
+            <Field label="Type of leave">
+              <select value={leaveType} onChange={(e) => setLeaveType(e.target.value)}>
+                {LEAVE_OF_ABSENCE_TYPES.map((t) => (
+                  <option key={t}>{t}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Last day of leave">
+              <input type="date" value={leaveEnd} min={effectiveDate} onChange={(e) => setLeaveEnd(e.target.value)} required />
+            </Field>
+            <p className="muted" style={{ gridColumn: "1 / -1", margin: 0 }}>
+              They go back to active automatically on the last day.
+            </p>
+          </>
+        )}
+        {fields.includes("contractEndDate") && (
+          <Field label="New contract end date">
+            <input type="date" value={contractEndDate} onChange={(e) => setContractEndDate(e.target.value)} required />
+          </Field>
+        )}
         {fields.includes("department") && (
           <Field label="New department">
             <select value={department} onChange={(e) => setDepartment(e.target.value)}>
@@ -211,12 +283,24 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
           </Field>
         )}
         {fields.includes("designation") && (
-          <Field label="New title">
+          <Field label={type === "Rehire" ? "Title" : "New title"}>
             <input value={designation} maxLength={80} onChange={(e) => setDesignation(e.target.value)} required />
           </Field>
         )}
+        {fields.includes("jobProfileId") && (
+          <Field label="Job profile">
+            <select value={jobProfileId} onChange={(e) => setJobProfileId(e.target.value)}>
+              {person && !profiles.some((p) => p.id === person.jobProfileId) && <option value={person.jobProfileId}>Current profile</option>}
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title} · {p.familyName}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         {fields.includes("grade") && (
-          <Field label="New grade">
+          <Field label={type === "Job change" ? "Grade (same or lower)" : "New grade"}>
             <select value={grade} onChange={(e) => setGrade(e.target.value)}>
               {GRADE_OPTIONS.map((g) => (
                 <option key={g}>{g}</option>
@@ -293,6 +377,15 @@ function ActionDetail({ action, onDone }: { action: LifecycleAction; onDone: (m:
             <dd>{formatShortDate(action.appliedOn)}</dd>
           </div>
         )}
+        {action.leave && (
+          <div>
+            <dt>Leave</dt>
+            <dd>
+              {action.leave.type} · {formatShortDate(action.leave.start)} – {formatShortDate(action.leave.end)}
+              {action.returnedOn ? ` · returned ${formatShortDate(action.returnedOn)}` : ""}
+            </dd>
+          </div>
+        )}
         <div style={{ gridColumn: "1 / -1" }}>
           <dt>Reason</dt>
           <dd>{action.reason}</dd>
@@ -307,19 +400,37 @@ function ActionDetail({ action, onDone }: { action: LifecycleAction; onDone: (m:
       <DataTable headers={["Field", "From", "To"]} rows={changedFields(action).map((c) => [c.field, c.before, c.after])} />
       <DataTable
         headers={["Step", "Approvers", "Decision", "By", "Note"]}
-        rows={action.steps.map((s, i) => [
-          s.label,
-          approverNames(s),
-          s.decision ? (
-            <StatusBadge status={s.decision} tone={s.decision === "Approved" ? "ok" : "danger"} literal />
-          ) : action.status === "Pending" && i === currentStepIndex(action) ? (
-            <StatusBadge status="Waiting" tone="warn" literal />
-          ) : (
-            <span className="muted">—</span>
-          ),
-          s.by ? `${s.by} · ${formatShortDate(s.on ?? "")}` : "—",
-          s.note || "—",
-        ])}
+        rows={action.steps.flatMap((s, i) => {
+          const open = action.status === "Pending" && i === currentStepIndex(action);
+          const badge = (d: ActionStep["decision"], waiting: boolean) =>
+            d ? (
+              <StatusBadge status={d} tone={d === "Approved" ? "ok" : "danger"} literal />
+            ) : waiting ? (
+              <StatusBadge status="Waiting" tone="warn" literal />
+            ) : (
+              <span className="muted">—</span>
+            );
+          const parallel = (s.groups?.length ?? 0) > 1;
+          const head = [
+            parallel ? `${s.label} (${s.mode === "any" ? "any one" : "all must approve"})` : s.label,
+            approverNames(s),
+            badge(s.decision, open),
+            s.by ? `${s.by} · ${formatShortDate(s.on ?? "")}` : "—",
+            s.note || "—",
+          ];
+          if (!parallel) return [head];
+          // Parallel step: one row per approver group.
+          return [
+            head,
+            ...(s.groups ?? []).map((g) => [
+              <span style={{ paddingLeft: 16 }}>{g.label}</span>,
+              approverNames(g),
+              badge(g.decision, open && !s.decision),
+              g.by ? `${g.by} · ${formatShortDate(g.on ?? "")}` : "—",
+              g.note || "—",
+            ]),
+          ];
+        })}
         empty={<p className="muted">No approval steps. Applied on submit.</p>}
       />
       {decidable && (
@@ -367,8 +478,9 @@ export function LifecycleActionsPage() {
   }, []);
 
   const candidates = useMemo(() => {
+    // HR also gets people who have left (for a rehire); the form narrows the list to the chosen action.
+    if (hr) return people.filter((p) => p.id !== actor.id);
     const active = people.filter((p) => p.employmentStatus !== "Terminated" && p.id !== actor.id);
-    if (hr) return active;
     const below = new Set(allReportIds(actor.id));
     return active.filter((p) => below.has(p.id) && canRaiseFor(actor, p.id));
   }, [people, actor, hr]);

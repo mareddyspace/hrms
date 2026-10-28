@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { appendAuditEntries } from "../../data/auditTrail.ts";
 import { answerCopilot, type CopilotAnswer } from "../../data/platformData.ts";
 import { usePortal } from "../../store.tsx";
+import { logCopilotAction } from "./assist.ts";
 import { useCopilotContext } from "./copilotContext.ts";
 
 /** Records one Copilot question in the audit trail: who asked, what, which sources, and whether access was denied. */
@@ -34,7 +35,9 @@ export function useAskCopilot(): (question: string) => CopilotAnswer {
   return useCallback(
     (question: string) => {
       const answer = answerCopilot(question, buildContext());
-      logCopilotQuestion(question, answer, { id: employee.id, name: employee.fullName });
+      const asker = { id: employee.id, name: employee.fullName };
+      logCopilotQuestion(question, answer, asker);
+      if (answer.action || answer.letterDraft) logCopilotAction("Proposed", asker, { action: answer.action, letter: answer.letterDraft });
       return answer;
     },
     [buildContext, employee.id, employee.fullName],

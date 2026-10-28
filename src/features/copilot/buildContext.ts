@@ -56,6 +56,7 @@ export interface CopilotSources {
   todayShift?: string;
   compReview?: CopilotContext["compReview"];
   summarisePerson?: CopilotContext["summarisePerson"];
+  assist?: CopilotContext["assist"];
 }
 
 /** Monday of the week that holds `iso`. */
@@ -295,5 +296,6 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
       ...state.reimbursements.filter((x) => x.employeeId === me).map((x) => ({ kind: "Reimbursement", category: x.category, amount: x.amount, currency: (x as { currency?: string }).currency ?? employee.currency ?? "INR", status: x.status, date: x.date })),
     ],
     summarisePerson: src.summarisePerson,
+    assist: src.assist,
   };
 }

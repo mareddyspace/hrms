@@ -56,6 +56,8 @@ import type { EmploymentStatus } from "./peopleData.ts";
 import { starterSkills } from "./careerProfile.ts";
 import { pushPersonTaskAlert } from "./collabLocal.ts";
 import { appendAuditEntries } from "./auditTrail.ts";
+import { resolveFlow, workflowVersion, type FlowStep } from "./approvalWorkflows.ts";
+import { decideFlowStep, isAllParallel, isWaitingOn, stepText, waitingApproverIds, type SteppedRequest } from "./expenseFlow.ts";
 
 // v3: recruiting seed made consistent (approval trails, structured offers, joiners linked to hires).
 // v4: manager → HR → recruiter hiring flow and per-candidate stage history.
@@ -265,14 +267,60 @@ export function canRaiseRequisition(actor: TalentActor): boolean {
   return RAISING_ROLES.includes(actor.role);
 }
 
-/** HR decides requisitions — never the requisition's own hiring manager. */
-export function requisitionApprovers(req: Requisition): DemoAccount[] {
+/* Requisition approval follows the "requisition" approval workflow (department head → HR → finance by default),
+   fixed when it's raised. Requisitions raised before workflows have a single HR step. */
+
+const NO_LINE_OVERRIDE = () => false;
+
+function hrIdsFor(req: Requisition): string[] {
   const hm = hiringManagerIdOf(req);
-  return DEMO_ACCOUNTS.filter((a) => isHrRole(a.role) && a.id !== hm);
+  return DEMO_ACCOUNTS.filter((a) => isHrRole(a.role) && a.id !== hm).map((a) => a.id);
+}
+
+/** The requisition's approval steps (older requisitions: a single HR step). */
+export function requisitionFlowSteps(req: Requisition): FlowStep[] {
+  return req.approvalSteps ?? [{ role: "hr", label: "HR approval", approverIds: hrIdsFor(req) }];
+}
+
+function reqFlow(req: Requisition): SteppedRequest {
+  const open = req.approvalStatus === "Pending approval" || req.approvalStatus === "On hold";
+  return {
+    employeeId: hiringManagerIdOf(req) ?? "",
+    status: open ? "pending" : "closed",
+    steps: requisitionFlowSteps(req),
+    currentStep: req.currentStep ?? 0,
+    stepDecisions: req.stepDecisions ?? [],
+  };
+}
+
+/** Every approval step is done (a hold after that is a pause HR lifts). */
+function approvalComplete(req: Requisition): boolean {
+  if (req.approvalSteps) return (req.currentStep ?? 0) >= req.approvalSteps.length;
+  return req.approvalStatus === "Approved" || (req.approvalStatus === "On hold" && (req.history ?? []).some((h) => h.action === "Approved"));
+}
+
+/** Who decides now: the open step's approvers still to act; HR once approval is complete. Never the hiring manager. */
+export function requisitionApprovers(req: Requisition): DemoAccount[] {
+  const ids = approvalComplete(req) ? hrIdsFor(req) : waitingApproverIds(reqFlow(req));
+  return DEMO_ACCOUNTS.filter((a) => ids.includes(a.id));
+}
+
+/** The open approval step, e.g. "HR approval · step 2 of 3" (empty once approval is complete). */
+export function requisitionWaitingFor(req: Requisition): string {
+  return approvalComplete(req) ? "" : stepText(reqFlow(req));
 }
 
 function isReqDecider(actor: TalentActor, req: Requisition): boolean {
-  return isHrRole(actor.role) && !isHiringManagerOf(actor, req);
+  if (isHiringManagerOf(actor, req)) return false;
+  if (approvalComplete(req)) return isHrRole(actor.role);
+  return isWaitingOn(reqFlow(req), actor.id, NO_LINE_OVERRIDE);
+}
+
+/** True when this actor's approval would complete approval (so a recruiter gets assigned). */
+export function requisitionApprovalCompletes(actor: TalentActor, req: Requisition): boolean {
+  if (approvalComplete(req)) return true;
+  const result = decideFlowStep(reqFlow(req), actor, "approved", undefined, NO_LINE_OVERRIDE, todayISO());
+  return typeof result !== "string" && result.outcome === "approved";
 }
 
 /** Recruiters HR can assign. */
@@ -394,7 +442,7 @@ const REQ_TRANSITIONS: Record<ApprovalStatus, ApprovalStatus[]> = {
   Rejected: [],
 };
 
-/** Raise: the hiring manager. Decide (approve / reject / hold): HR, never the hiring manager. */
+/** Raise: the hiring manager. Decide (approve / reject / hold): whoever the open workflow step waits on, never the hiring manager. */
 export function requisitionMoves(actor: TalentActor, req: Requisition): ApprovalStatus[] {
   return REQ_TRANSITIONS[req.approvalStatus].filter((next) =>
     next === "Pending approval" ? isHiringManagerOf(actor, req) : isReqDecider(actor, req),
@@ -409,15 +457,30 @@ const REQ_ACTION: Record<ApprovalStatus, string> = {
   "On hold": "Put on hold",
 };
 
-/** Raised-by-manager → HR approved → recruiter assigned, with who and when. */
-export function requisitionSteps(req: Requisition): { label: string; done: boolean; by?: string; on?: string }[] {
+type ReqStep = { label: string; done: boolean; by?: string; on?: string };
+
+/** Manager raised → each approval step (or group of a parallel step) → recruiter assigned, with who and when. */
+export function requisitionSteps(req: Requisition): ReqStep[] {
   const find = (...actions: string[]) => [...(req.history ?? [])].reverse().find((h) => actions.includes(h.action));
   const raised = find("Raised", "Submitted for approval");
-  const approved = find("Approved");
   const assigned = find("Recruiter assigned");
+  const approvals: ReqStep[] = [];
+  if (!req.approvalSteps) {
+    const approved = find("Approved");
+    approvals.push({ label: "HR approved", done: !!approved, by: approved?.by, on: approved?.on });
+  } else {
+    const decisions = req.stepDecisions ?? [];
+    req.approvalSteps.forEach((step, index) => {
+      const parts = isAllParallel(step) ? step.groups.map((g, gi) => ({ label: g.label, group: gi as number | undefined })) : [{ label: step.label, group: undefined }];
+      for (const part of parts) {
+        const d = decisions.find((x) => x.step === index && x.decision === "approved" && (part.group === undefined || x.group === part.group));
+        approvals.push({ label: part.label, done: !!d, by: d?.byName, on: d?.on });
+      }
+    });
+  }
   return [
     { label: "Manager raised", done: !!raised, by: raised?.by, on: raised?.on },
-    { label: "HR approved", done: !!approved, by: approved?.by, on: approved?.on },
+    ...approvals,
     {
       label: "Recruiter assigned",
       done: !!(req.recruiterId || req.recruiter),
@@ -427,8 +490,39 @@ export function requisitionSteps(req: Requisition): { label: string; done: boole
   ];
 }
 
+type ReqAlert = { to: string[]; title: string; body: string };
+
+function sendReqAlerts(alerts: ReqAlert[]) {
+  for (const a of alerts) {
+    for (const recipientId of new Set(a.to)) {
+      if (recipientId) pushPersonTaskAlert({ recipientId, title: a.title, body: a.body, href: "/recruiting" });
+    }
+  }
+}
+
+/** Fix the workflow steps on a requisition being raised. */
+function startReqApproval(row: Requisition) {
+  const hm = hiringManagerIdOf(row) ?? "";
+  row.approvalSteps = resolveFlow("requisition", hm, { excludeIds: [hm] });
+  row.currentStep = 0;
+  row.stepDecisions = [];
+  row.workflowVersion = workflowVersion("requisition");
+}
+
+function assignRecruiter(row: Requisition, recruiter: DemoAccount, stamp: { on: string; by: string; byId: string }) {
+  row.recruiter = recruiter.fullName;
+  row.recruiterId = recruiter.id;
+  row.recruiterAssignedOn = stamp.on;
+  row.history.push({ ...stamp, action: "Recruiter assigned", note: recruiter.fullName });
+}
+
+/**
+ * Raise (hiring manager), approve / reject / hold (the open workflow step's approvers). Approving the last step
+ * approves the requisition and assigns the recruiter. Once approved, HR can pause it and lift the pause.
+ */
 export function setRequisitionApproval(actor: TalentActor, id: string, approvalStatus: ApprovalStatus, note = "", recruiterId = DEFAULT_RECRUITER_ID): TalentResult {
-  return guarded((s) => {
+  let alerts: ReqAlert[] = [];
+  const result = guarded((s) => {
     const row = reqFor(s, id);
     if (!row) return "Requisition not found.";
     if (row.approvalStatus === approvalStatus) return null;
@@ -439,35 +533,107 @@ export function setRequisitionApproval(actor: TalentActor, id: string, approvalS
       return "The hiring manager cannot decide their own requisition.";
     }
     if (!requisitionMoves(actor, row).includes(approvalStatus)) {
-      return approvalStatus === "Pending approval" ? "Only the hiring manager can raise this requisition." : "Only HR can decide this requisition.";
+      if (approvalStatus === "Pending approval") return "Only the hiring manager can raise this requisition.";
+      const waiting = requisitionWaitingFor(row);
+      return waiting ? `This requisition is waiting for ${waiting.split(" · ")[0]!.toLowerCase()}.` : "Only HR can decide this requisition.";
     }
     const today = todayISO();
-    const recruiter = approvalStatus === "Approved" && !row.recruiterId ? recruiterOptions().find((a) => a.id === recruiterId) : undefined;
-    if (approvalStatus === "Approved" && !row.recruiterId && !recruiter) return "Choose a recruiter.";
-    const step = { on: today, by: actor.fullName, byId: actor.id };
-    row.approvalStatus = approvalStatus;
-    if (approvalStatus === "Pending approval") row.stageSummary = "Awaiting approval";
-    else {
+    const cleanNote = note.trim();
+    const stamp = { on: today, by: actor.fullName, byId: actor.id };
+    const log = (action: string) => {
+      row.history = [...(row.history ?? []), { ...stamp, action, ...(cleanNote ? { note: cleanNote } : {}) }];
+    };
+    const hm = hiringManagerIdOf(row) ?? "";
+    const pickRecruiter = () => (row.recruiterId ? undefined : recruiterOptions().find((a) => a.id === recruiterId));
+
+    if (approvalStatus === "Pending approval") {
+      startReqApproval(row);
+      row.approvalStatus = "Pending approval";
+      row.stageSummary = "Awaiting approval";
+      log(REQ_ACTION["Pending approval"]);
+      alerts = [{ to: waitingApproverIds(reqFlow(row)), title: "Requisition to approve", body: `${row.id} · ${row.title} · raised by ${row.hiringManager}` }];
+      return null;
+    }
+
+    if (approvalStatus === "On hold") {
+      row.approvalStatus = "On hold";
       row.approver = actor.fullName;
       row.decidedOn = today;
-      row.stageSummary = approvalStatus === "Approved" ? "Sourcing" : approvalStatus === "On hold" ? "On hold" : "Closed";
+      row.stageSummary = "On hold";
+      log(REQ_ACTION["On hold"]);
+      alerts = [{ to: [hm], title: `${row.id} put on hold`, body: `${row.title} · by ${actor.fullName}` }];
+      return null;
     }
-    row.history = [...(row.history ?? []), { ...step, action: REQ_ACTION[approvalStatus], ...(note.trim() ? { note: note.trim() } : {}) }];
-    if (recruiter) {
-      row.recruiter = recruiter.fullName;
-      row.recruiterId = recruiter.id;
-      row.recruiterAssignedOn = today;
-      row.history.push({ ...step, action: "Recruiter assigned", note: recruiter.fullName });
+
+    // Approval already complete: HR lifts a pause (Approved) or closes it (Rejected).
+    if (approvalComplete(row)) {
+      const recruiter = approvalStatus === "Approved" ? pickRecruiter() : undefined;
+      if (approvalStatus === "Approved" && !row.recruiterId && !recruiter) return "Choose a recruiter.";
+      row.approvalStatus = approvalStatus;
+      row.approver = actor.fullName;
+      row.decidedOn = today;
+      row.stageSummary = approvalStatus === "Approved" ? "Sourcing" : "Closed";
+      log(REQ_ACTION[approvalStatus]);
+      if (recruiter) assignRecruiter(row, recruiter, stamp);
+      return null;
     }
+
+    const flow = reqFlow(row);
+    const decision = decideFlowStep(flow, actor, approvalStatus === "Approved" ? "approved" : "rejected", cleanNote, NO_LINE_OVERRIDE, today);
+    if (typeof decision === "string") return decision;
+    const recruiter = decision.outcome === "approved" ? pickRecruiter() : undefined;
+    if (decision.outcome === "approved" && !row.recruiterId && !recruiter) return "Choose a recruiter.";
+    // Older requisitions get their single HR step saved with the decision.
+    row.approvalSteps = flow.steps as FlowStep[];
+    row.stepDecisions = [...(row.stepDecisions ?? []), ...decision.entries];
+    const labels = decision.entries.map((e) => e.label).join(", ");
+
+    if (decision.outcome === "rejected") {
+      row.approvalStatus = "Rejected";
+      row.approver = actor.fullName;
+      row.decidedOn = today;
+      row.stageSummary = "Closed";
+      log(`Rejected · ${labels}`);
+      alerts = [{ to: [hm], title: `${row.id} rejected`, body: `${row.title} · ${labels} · by ${actor.fullName}${cleanNote ? ` · “${cleanNote}”` : ""}` }];
+      return null;
+    }
+    if (decision.outcome === "waiting" || decision.outcome === "advanced") {
+      row.currentStep = decision.currentStep;
+      row.approvalStatus = "Pending approval";
+      row.stageSummary = "Awaiting approval";
+      log(`Approved · ${labels}`);
+      if (decision.outcome === "advanced") {
+        alerts = [
+          { to: waitingApproverIds(reqFlow(row)), title: "Requisition to approve", body: `${row.id} · ${row.title} · ${decision.next?.label ?? ""}` },
+          { to: [hm], title: `${row.id} moved on`, body: `${decision.step.label} done by ${actor.fullName}. Now with ${(decision.next?.label ?? "").toLowerCase()}.` },
+        ];
+      }
+      return null;
+    }
+    // Last step approved.
+    row.currentStep = row.approvalSteps.length;
+    row.approvalStatus = "Approved";
+    row.approver = actor.fullName;
+    row.decidedOn = today;
+    row.stageSummary = "Sourcing";
+    log(REQ_ACTION.Approved);
+    if (recruiter) assignRecruiter(row, recruiter, stamp);
+    alerts = [
+      { to: [hm], title: `${row.id} approved`, body: `${row.title} · recruiter ${row.recruiter}` },
+      ...(recruiter ? [{ to: [recruiter.id], title: "Requisition assigned to you", body: `${row.id} · ${row.title}` }] : []),
+    ];
     return null;
   });
+  if (!result) sendReqAlerts(alerts);
+  return result;
 }
 
 export type RequisitionInput = { title: string; department: string; country: string; location: string; openings: number };
 
-/** The hiring manager raises a requisition; it goes straight to HR for approval. */
+/** The hiring manager raises a requisition; it goes to the first approval step (no approvers: approved at once). */
 export function raiseRequisition(actor: TalentActor, input: RequisitionInput): TalentResult {
-  return guarded((s) => {
+  let alerts: ReqAlert[] = [];
+  const result = guarded((s) => {
     if (!canRaiseRequisition(actor)) return "Only the manager who needs the role can raise a requisition.";
     const title = input.title.trim();
     if (!title) return "Enter a job title.";
@@ -477,7 +643,7 @@ export function raiseRequisition(actor: TalentActor, input: RequisitionInput): T
     if (!Number.isInteger(input.openings) || input.openings < 1 || input.openings > 50) return "Openings must be 1–50.";
     const next = Math.max(200, ...s.requisitions.map((r) => Number(r.id.replace(/\D/g, "")) || 0)) + 1;
     const today = todayISO();
-    s.requisitions.unshift({
+    const row: Requisition = {
       id: `JOB-${next}`,
       title,
       department: input.department.trim(),
@@ -491,9 +657,23 @@ export function raiseRequisition(actor: TalentActor, input: RequisitionInput): T
       stageSummary: "Awaiting approval",
       created: today,
       history: [{ on: today, by: actor.fullName, byId: actor.id, action: "Raised" }],
-    });
+    };
+    startReqApproval(row);
+    if (!row.approvalSteps?.length) {
+      const recruiter = recruiterOptions().find((a) => a.id === DEFAULT_RECRUITER_ID) ?? recruiterOptions()[0];
+      row.approvalStatus = "Approved";
+      row.stageSummary = "Sourcing";
+      row.decidedOn = today;
+      row.history.push({ on: today, by: actor.fullName, byId: actor.id, action: "Approved", note: "No approver for this requisition" });
+      if (recruiter) assignRecruiter(row, recruiter, { on: today, by: actor.fullName, byId: actor.id });
+    } else {
+      alerts = [{ to: waitingApproverIds(reqFlow(row)), title: "Requisition to approve", body: `${row.id} · ${title} · raised by ${actor.fullName}` }];
+    }
+    s.requisitions.unshift(row);
     return null;
   });
+  if (!result) sendReqAlerts(alerts);
+  return result;
 }
 
 export type CandidateInput = { requisitionId: string; name: string; email: string; source: string; appliedOn: string };
@@ -898,7 +1078,7 @@ function saveDirectoryRecord(s: TalentState, joiner: OnboardingJoiner, status: "
     id: personId,
     employeeCode: `NJ${joiner.id.replace(/\D/g, "").slice(-4).padStart(4, "0")}`,
     fullName: joiner.name,
-    email: `${first}.${rest.join("") || "joiner"}@infotech.com`,
+    email: `${first}.${rest.join("") || "joiner"}@timez.com`,
     personalEmail: candidate?.email ?? "",
     mobile: candidate?.phone ?? "",
     photo: "/profile.svg",
@@ -913,7 +1093,7 @@ function saveDirectoryRecord(s: TalentState, joiner: OnboardingJoiner, status: "
     grade: offer?.grade ?? "",
     department,
     division: `${department} Delivery`,
-    businessUnit: `Infotech ${country.name}`,
+    businessUnit: `TimeZ ${country.name}`,
     costCenter: `CC-${country.code}-1`,
     location,
     countryCode: country.code,

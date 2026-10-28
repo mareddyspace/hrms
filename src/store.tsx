@@ -71,7 +71,7 @@ import {
   type DemoAccount, RETIRED_ACCOUNT_IDS, RETIRED_SIGN_IN_IDS, mentionsRetiredAccount, setDirectoryChainSource, setNavOverrideSource } from "./demoAccounts.ts";
 import { canApproveTeam, holidaysForPerson, setEarnedLeaveSource, setHolidayContext } from "./model.ts";
 import { getOptionalHolidayState, subscribeOptionalHolidays } from "./features/workforce/optionalHolidaysStore.ts";
-import { getPerson, isAccountActive, managerChainIds } from "./data/peopleLocal.ts";
+import { editedPerson, getPerson, isAccountActive, listPeople, managerChainIds, subscribePeople } from "./data/peopleLocal.ts";
 import { delegatedAuthority, noteLeaves, type DelegationScope } from "./data/delegations.ts";
 import { cachedPayslips, generatePayslips } from "./data/payslipGenerator.ts";
 import { getTaxRegime } from "./data/taxRegime.ts";
@@ -80,8 +80,9 @@ import { getNavOverrides } from "./data/platformLocal.ts";
 import { createSeed, DEMO_PASSWORD, EMPLOYEE, findAccountByCode, findAccountById } from "./seed.ts";
 import { taskPersonById } from "./data/taskTeam.ts";
 import { pushManagerTaskAlert, pushPersonTaskAlert } from "./data/collabLocal.ts";
-import { resolveWorkflow } from "./data/approvalWorkflows.ts";
-import { canPayExpenses, currentStepOf, isWaitingOn } from "./data/expenseFlow.ts";
+import { resolveFlow } from "./data/approvalWorkflows.ts";
+import { approvedNameFor, getCorrections, subscribeCorrections } from "./data/profileCorrections.ts";
+import { canPayExpenses, currentStepOf, decideFlowStep, isWaitingOn, waitingApproverIds } from "./data/expenseFlow.ts";
 import { taskProgress } from "./data/taskHelpers.ts";
 import { isTaskAutoMode } from "./data/taskAutoMode.ts";
 
@@ -489,6 +490,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const shiftState = useSyncExternalStore(subscribeShifts, getShiftState);
   const optionalHolidayState = useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState);
   const exitState = useSyncExternalStore(subscribeExits, getExitState);
+  // Approved name corrections change the signed-in person's own name everywhere.
+  const corrections = useSyncExternalStore(subscribeCorrections, getCorrections);
+  const people = useSyncExternalStore(subscribePeople, listPeople);
   const [state, setState] = useState<PortalState>(() => {
     ensureDemoLastLogin();
     return loadState();
@@ -587,7 +591,15 @@ export function PortalProvider({ children }: { children: ReactNode }) {
 
   const api = useMemo<PortalApi>(() => {
     const activeDemo = findDemoById(userId) ?? findDemoByCode((findAccountById(userId) ?? EMPLOYEE).employeeCode) ?? TIMEZ_DEMOS[0]!;
-    const active = activeDemo;
+    const approvedName = approvedNameFor(activeDemo.id, corrections);
+    // Approved job changes, transfers and promotions update the directory record; the signed-in person sees them too.
+    void people;
+    const edited = editedPerson(activeDemo.id) ?? editedPerson(activeDemo.employeeCode);
+    const active = {
+      ...activeDemo,
+      ...(approvedName ? { fullName: approvedName } : {}),
+      ...(edited ? { designation: edited.designation || activeDemo.designation, department: edited.department || activeDemo.department, location: edited.location || activeDemo.location } : {}),
+    };
     ensureDemoPasswordChangedAt(active.employeeCode);
     const mine = <T extends { employeeId: string }>(items: T[]) => items.filter((item) => item.employeeId === active.id);
     const activeOffs = scheduleForEmployee({
@@ -627,11 +639,31 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     function saveOwnProfile(input: { fullName: string; mobile: string; email: string; address: string; photo?: string }): string | null {
       // Legal name and work email are HR-owned: the employee's own edits never change them.
       const current = { ...active, ...withoutPhoto(state.profiles?.[active.id]) };
-      const fullName = current.fullName;
+      const fullName = approvedName ?? current.fullName;
       const email = current.email;
       const mobile = input.mobile.trim();
       if (!/^\+?[\d\s]{8,18}$/.test(mobile) || mobile.replace(/\D/g, "").length < 8 || mobile.replace(/\D/g, "").length > 15) {
         return "Enter a valid mobile number (8–15 digits).";
+      }
+      const address = input.address.trim();
+      const changes = [
+        ...(mobile !== current.mobile ? [{ field: "Mobile", before: current.mobile || "—", after: mobile }] : []),
+        ...(address !== (current.address ?? "") ? [{ field: "Address", before: current.address || "—", after: address || "—" }] : []),
+        ...(input.photo ? [{ field: "Photo", before: "—", after: "Updated" }] : []),
+      ];
+      if (changes.length) {
+        appendAuditEntries([
+          {
+            at: new Date().toISOString(),
+            actorId: active.id,
+            actorName: active.fullName,
+            entity: "Employee profile",
+            entityId: active.id,
+            subjectId: active.id,
+            action: "Updated",
+            changes,
+          },
+        ]);
       }
       setState((prev) => ({
         ...prev,
@@ -753,6 +785,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       employee: {
         ...active,
         ...withoutPhoto(state.profiles?.[active.id]),
+        ...(approvedName ? { fullName: approvedName } : {}),
         photo: state.profiles?.[active.id]?.photo || active.photo,
       },
       demoProfile: active,
@@ -1357,11 +1390,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         );
         if (duplicate) return "You've already claimed this expense (same date, category and amount).";
         const currency = payRulesFor(active.countryCode).currency;
-        const steps = resolveWorkflow("expense", active.id, input.amount).map(({ role, label, approverIds }) => ({
-          role,
-          label,
-          approverIds,
-        }));
+        // Parallel steps keep their approver groups (mode + groups).
+        const steps = resolveFlow("expense", active.id, { amount: input.amount });
         const base: Expense = {
           id: uid("ex"),
           employeeId: active.id,
@@ -1425,30 +1455,27 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (!isWaitingOn(expense, active.id, (id) => canDecideFor(id, "expenses"))) {
           return `This claim is waiting for ${step.label.toLowerCase()}.`;
         }
-        const stepIndex = expense.currentStep ?? 0;
         const today = todayISO();
-        const entry = {
-          step: stepIndex,
-          label: step.label,
-          decision: status,
-          byId: active.id,
-          byName: active.fullName,
-          on: today,
-          note: note?.trim() || undefined,
-        } as const;
-        const next = status === "approved" ? expense.steps[stepIndex + 1] : undefined;
-        const patch: Partial<Expense> = {
-          stepDecisions: [...(expense.stepDecisions ?? []), entry],
-          ...(next ? { currentStep: stepIndex + 1 } : { status, ...decision(status, note) }),
-        };
+        const cleanNote = note?.trim() || undefined;
+        const result = decideFlowStep(expense, active, status, cleanNote, (id) => canDecideFor(id, "expenses"), today);
+        if (typeof result === "string") return result;
+        const { outcome, next } = result;
+        const stepDecisions = [...(expense.stepDecisions ?? []), ...result.entries];
+        const patch: Partial<Expense> =
+          outcome === "waiting" || outcome === "advanced"
+            ? { stepDecisions, currentStep: result.currentStep }
+            : { stepDecisions, status, ...decision(status, note) };
         setState((prev) => ({ ...prev, expenses: patchById(prev.expenses, expenseId, patch) }));
+        // Other groups of this parallel step still have to approve; they were told when the step opened.
+        if (outcome === "waiting") return null;
         const amountText = money(expense.amount, expense.currency);
+        const who = findAccountById(expense.employeeId)?.fullName;
         if (next) {
-          for (const recipientId of next.approverIds) {
+          for (const recipientId of waitingApproverIds({ ...expense, ...patch })) {
             pushPersonTaskAlert({
               recipientId,
               title: "Expense claim to review",
-              body: `${expense.category} · ${amountText} · ${next.label}`,
+              body: `${who ? `${who} · ` : ""}${expense.category} · ${amountText} · ${next.label}`,
               href: "/expenses",
             });
           }
@@ -1462,7 +1489,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           pushPersonTaskAlert({
             recipientId: expense.employeeId,
             title: status === "approved" ? "Expense claim approved" : "Expense claim declined",
-            body: `${expense.category} · ${amountText} · by ${active.fullName}${note?.trim() ? ` · “${note.trim()}”` : ""}`,
+            body: `${expense.category} · ${amountText} · by ${active.fullName}${cleanNote ? ` · “${cleanNote}”` : ""}`,
             href: "/expenses",
           });
         }
@@ -2377,7 +2404,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
     };
-  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState, exitState]);
+  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState, exitState, corrections, people]);
 
   return <PortalContext.Provider value={api}>{children}</PortalContext.Provider>;
 }

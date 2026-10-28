@@ -6,18 +6,18 @@ import { cycleCompletion, getTalentState } from "./talentLocal.ts";
 const BASE_PEOPLE = getBasePeople().filter((p) => p.employmentStatus !== "Terminated");
 const MAIN_DEPARTMENTS = ["Engineering", "Product", "Sales", "People", "Finance", "Operations", "Customer Success", "Legal"];
 const REGION_BY_COUNTRY: Record<string, string> = {
-  IN: "Infotech India",
-  US: "Infotech Americas",
-  CA: "Infotech Americas",
-  GB: "Infotech EMEA",
-  DE: "Infotech EMEA",
-  AE: "Infotech EMEA",
-  SA: "Infotech EMEA",
-  AU: "Infotech APAC (ex-IN)",
+  IN: "TimeZ India",
+  US: "TimeZ Americas",
+  CA: "TimeZ Americas",
+  GB: "TimeZ EMEA",
+  DE: "TimeZ EMEA",
+  AE: "TimeZ EMEA",
+  SA: "TimeZ EMEA",
+  AU: "TimeZ APAC (ex-IN)",
 };
 const count = (test: (p: (typeof BASE_PEOPLE)[number]) => boolean) => BASE_PEOPLE.filter(test).length;
 
-/** Canonical Infotech workforce numbers, counted from the directory so every dashboard agrees. */
+/** Canonical TimeZ workforce numbers, counted from the directory so every dashboard agrees. */
 export const TZ_HEADCOUNT = {
   global: BASE_PEOPLE.length,
   byCountry: TIMEZ_COUNTRIES.map((c) => ({
@@ -30,7 +30,7 @@ export const TZ_HEADCOUNT = {
     ...MAIN_DEPARTMENTS.map((name) => ({ name, headcount: count((p) => p.department === name) })),
     { name: "Other", headcount: count((p) => !MAIN_DEPARTMENTS.includes(p.department)) },
   ],
-  byBusinessUnit: ["Infotech India", "Infotech Americas", "Infotech EMEA", "Infotech APAC (ex-IN)"].map((name) => ({
+  byBusinessUnit: ["TimeZ India", "TimeZ Americas", "TimeZ EMEA", "TimeZ APAC (ex-IN)"].map((name) => ({
     name,
     headcount: count((p) => REGION_BY_COUNTRY[String(p.countryCode)] === name),
   })),
@@ -186,9 +186,9 @@ export const TZ_ADMIN = {
     { name: "Document store", status: "Healthy" },
   ],
   auditEvents: [
-    { at: "14 Oct 09:12", actor: "alex.morgan@infotech.com", action: "Updated role binding", target: "Manager" },
-    { at: "13 Oct 18:40", actor: "alex.morgan@infotech.com", action: "Rotated API key", target: "Payroll connector" },
-    { at: "13 Oct 11:05", actor: "farhan.ali@infotech.com", action: "Published policy", target: "Leave Policy" },
+    { at: "14 Oct 09:12", actor: "alex.morgan@timez.com", action: "Updated role binding", target: "Manager" },
+    { at: "13 Oct 18:40", actor: "alex.morgan@timez.com", action: "Rotated API key", target: "Payroll connector" },
+    { at: "13 Oct 11:05", actor: "farhan.ali@timez.com", action: "Published policy", target: "Leave Policy" },
   ],
 } as const;
 

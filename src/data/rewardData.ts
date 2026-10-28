@@ -1,4 +1,4 @@
-/** Compensation, benefits, and documents & letters — fictional Infotech demo data only. */
+/** Compensation, benefits, and documents & letters — fictional TimeZ demo data only. */
 
 export const LEGAL_DISCLAIMER =
   "Official employment, tax and legal documents are issued by HR.";
@@ -195,12 +195,15 @@ export type LetterType =
   | "Confirmation"
   | "NOC"
   | "Visa/Travel"
-  | "Address proof";
+  | "Address proof"
+  | "Internship"
+  | "Warning"
+  | "Termination";
 
 export type LetterStatus = "Draft" | "Pending approval" | "Approved" | "Rejected" | "Issued";
 
 /** Letters that must stay hidden from their subject until issued. */
-export const SENSITIVE_LETTER_TYPES: LetterType[] = ["Salary revision", "Promotion"];
+export const SENSITIVE_LETTER_TYPES: LetterType[] = ["Salary revision", "Promotion", "Warning", "Termination"];
 
 /** One generated, approved version of a letter. The markup is frozen at generation time. */
 export interface IssuedLetter {
@@ -491,7 +494,7 @@ export const LETTER_REQUESTS: LetterRequest[] = [
     decidedOn: "2026-09-03",
     note: "Bank KYC support",
     previewBody:
-      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nEmployment particulars summary for Babu Menon (EMP1184).\nRole: Software Engineer · Entity: Infotech India Pvt Ltd.\nPreview only — the issued letter is provided by HR.",
+      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nEmployment particulars summary for Babu Menon (EMP1184).\nRole: Software Engineer · Entity: TimeZ India Pvt Ltd.\nPreview only — the issued letter is provided by HR.",
   },
   {
     id: "ltr-2",

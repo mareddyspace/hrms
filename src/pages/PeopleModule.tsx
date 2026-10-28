@@ -2,7 +2,8 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { Card, EmptyState, FilterBar, Page, StatusBadge } from "../components/ui.tsx";
 import { FILTER_OPTIONS, type EmploymentStatus, type PersonRecord } from "../data/peopleData.ts";
-import { allReportIds, listPeople, subscribePeople } from "../data/peopleLocal.ts";
+import { dataScopeFor, dataScopeLabel, personFilterFor, useAccessVersion } from "../data/accessControl.ts";
+import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { canManagePeople, canViewPeopleDirectory, getPeopleListScope } from "../data/peoplePermissions.ts";
 import { directoryFieldLevel } from "../data/rbac.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
@@ -52,12 +53,14 @@ export function PeopleDirectoryPage() {
   const listScope = getPeopleListScope(demoProfile);
   // Business unit, position and grade filters are for HR (company-wide scope) only.
   const hrFilters = listScope === "global";
-  // Managers see the people below them in the reporting line (direct and indirect), plus themselves.
-  const teamIds = useMemo(
-    () => (listScope === "team" ? new Set([employee.id, ...allReportIds(employee.id)]) : null),
-    // `people` is listed so the team refreshes after edits.
+  // Data scope set in Roles & permissions (managers default to their whole reporting line, HR global, employees own).
+  const accessVersion = useAccessVersion();
+  const dataScope = dataScopeFor(demoProfile.id);
+  const canSee = useMemo(
+    () => personFilterFor(demoProfile.id),
+    // `people` and the access version are listed so the scope refreshes after edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [listScope, employee.id, people],
+    [demoProfile.id, people, accessVersion],
   );
 
   const scoped = useMemo(
@@ -65,12 +68,12 @@ export function PeopleDirectoryPage() {
       people.filter((p) => {
         if (!matchesRegion(String(p.countryCode), p.countryName)) return false;
         if (listScope === "self") return p.id === employee.id;
-        if (teamIds && !teamIds.has(p.id)) return false;
+        if (!canSee(p)) return false;
         // The basic directory lists current colleagues only.
         if (basic && p.employmentStatus === "Terminated") return false;
         return true;
       }),
-    [people, matchesRegion, listScope, employee.id, teamIds, basic],
+    [people, matchesRegion, listScope, employee.id, canSee, basic],
   );
 
   const managers = useMemo(() => [...new Set(scoped.map((p) => p.managerName).filter(Boolean))].sort(), [scoped]);
@@ -166,7 +169,7 @@ export function PeopleDirectoryPage() {
     <Page
       title="People"
       subtitle={`${filtered.length.toLocaleString()} ${filtered.length === 1 ? "person" : "people"}${
-        listScope === "team" ? " in your team" : listScope === "self" ? " (your profile)" : ""
+        listScope === "self" ? " (your profile)" : dataScope.scope === "global" && !dataScope.countries.length ? "" : ` · ${dataScopeLabel(dataScope)}`
       }`}
       action={
         canEdit ? (

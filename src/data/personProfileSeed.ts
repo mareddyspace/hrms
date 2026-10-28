@@ -3,7 +3,7 @@
  * name parts, date of birth, nationality, work arrangement, education, experience and dependents.
  * Named personas are hand-written; everyone else is generated deterministically from their id,
  * so the same person always gets the same details and the details agree with their record
- * (adult at joining, degree after age 20, previous jobs end before joining Infotech).
+ * (adult at joining, degree after age 20, previous jobs end before joining TimeZ).
  */
 
 export type WorkArrangement = "Office" | "Hybrid" | "Remote";
@@ -320,7 +320,7 @@ function generate(input: ProfileSeedInput): PersonProfileDetails {
     education.push({ degree: pick(degrees.pg, id, 11), institution: pick(schools, id, 12), year: pgYear });
   }
 
-  // Experience: previous employers from graduation until the month before joining Infotech.
+  // Experience: previous employers from graduation until the month before joining TimeZ.
   const careerStart = monthIndex(iso(education[education.length - 1].year, 7, 1));
   const joinMonth = monthIndex(input.dateOfJoining);
   const span = joinMonth - 1 - careerStart;

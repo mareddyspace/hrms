@@ -404,6 +404,10 @@ export interface ExpenseApprovalStep {
   role: "manager" | "skip_manager" | "hr" | "finance" | "admin";
   label: string;
   approverIds: string[];
+  /** Parallel steps only: "all" — every group approves; "any" — one approval closes the step. */
+  mode?: "all" | "any";
+  /** Parallel steps only: one approver group per role. Older claims have none. */
+  groups?: { role: ExpenseApprovalStep["role"] | "executive"; label: string; approverIds: string[] }[];
 }
 
 export interface ExpenseStepDecision {
@@ -414,6 +418,9 @@ export interface ExpenseStepDecision {
   byName: string;
   on: string;
   note?: string;
+  /** Index into the step's groups, for parallel steps. */
+  group?: number;
+  role?: ExpenseApprovalStep["role"] | "executive";
 }
 
 export interface ExpenseReceipt {

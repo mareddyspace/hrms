@@ -10,6 +10,7 @@ import {
 import { usePortal } from "../store.tsx";
 import { useAskCopilot } from "../features/copilot/askCopilot.ts";
 import { CopilotSources } from "../features/copilot/CopilotSources.tsx";
+import { CopilotExtras } from "../features/copilot/CopilotExtras.tsx";
 
 type Turn = { id: string; role: "user" | "assistant"; text: string; answer?: CopilotAnswer };
 
@@ -133,6 +134,7 @@ export function CopilotPopup() {
                     </table>
                   </div>
                 )}
+                {turn.answer && <CopilotExtras answer={turn.answer} />}
                 <CopilotSources sources={turn.answer?.sources} onNavigate={() => setOpen(false)} />
                 {turn.answer?.links && turn.answer.links.length > 0 && (
                   <p className="chip-row copilot-fab-links">

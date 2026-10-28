@@ -34,7 +34,7 @@ import {
   type DelegationScope,
 } from "../data/delegations.ts";
 import { DelegationSettings } from "./DelegationSettings.tsx";
-import { currentStepOf, isWaitingOn, stepText } from "../data/expenseFlow.ts";
+import { currentStepOf, isWaitingOn, stepText, waitingApproverIds } from "../data/expenseFlow.ts";
 import { decideTravel, getTravelRequests, subscribeTravel, withdrawTravel } from "../data/travelStore.ts";
 
 /** Which delegation scope (§25) a request kind falls under. */
@@ -175,9 +175,10 @@ export function ApprovalsCenterPage() {
   const leaveName = (code: string) => leaveTable.find((row) => row.code === code)?.name ?? code;
   const actorRef = { id: employee.id, fullName: employee.fullName };
   /** "Finance approval (Alex Morgan)" for the open step of a multi-step request. */
-  const withTextFor = (item: Parameters<typeof currentStepOf>[0]) => {
+  const withTextFor = (item: Parameters<typeof waitingApproverIds>[0]) => {
     const step = currentStepOf(item);
-    return step ? `${step.label} (${step.approverIds.map(nameOf).join(", ")})` : undefined;
+    // Parallel steps: only the groups still waiting.
+    return step ? `${step.label} (${waitingApproverIds(item).map(nameOf).join(", ")})` : undefined;
   };
 
   const items = useMemo<RequestItem[]>(() => {

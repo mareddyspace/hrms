@@ -4,7 +4,64 @@
  */
 import { COUNTRY_PAY, legalEntityFor } from "../countryPay.ts";
 import type { CountryCode } from "../model.ts";
-import { letterTemplate, type LetterType } from "./rewardData.ts";
+import { LETTER_TEMPLATES, type LetterTemplateInfo, type LetterType } from "./rewardData.ts";
+
+/* ───────────── Letter types ───────────── */
+
+/** Letter types added here on top of the stored request types. */
+export const EXTRA_LETTER_TYPES = ["Internship", "Warning", "Termination"] as const;
+export type FullLetterType = LetterType | (typeof EXTRA_LETTER_TYPES)[number];
+
+export interface LetterInfo extends Omit<LetterTemplateInfo, "type"> {
+  type: FullLetterType;
+  /** Raised by HR only and decided by a second approver (never the person who raised it). */
+  secondApproval?: boolean;
+}
+
+const EXTRA_TEMPLATES: LetterInfo[] = [
+  {
+    type: "Internship",
+    label: "Internship certificate",
+    description: "Internship period, role and team.",
+    employeeCanRequest: true,
+    payLetter: false,
+    effectiveInput: true,
+  },
+  {
+    type: "Warning",
+    label: "Warning letter",
+    description: "Formal warning about conduct or performance. Needs a second approver.",
+    employeeCanRequest: false,
+    payLetter: false,
+    detailsLabel: "Issue and expected improvement",
+    secondApproval: true,
+  },
+  {
+    type: "Termination",
+    label: "Termination letter",
+    description: "Ends employment from a stated date, with the reason. Needs a second approver.",
+    employeeCanRequest: false,
+    payLetter: false,
+    detailsLabel: "Reason for termination",
+    effectiveInput: true,
+    secondApproval: true,
+  },
+];
+
+/** Every letter type that can be requested, in display order. */
+export const ALL_LETTER_TEMPLATES: LetterInfo[] = [
+  ...LETTER_TEMPLATES.filter((t) => !EXTRA_TEMPLATES.some((x) => x.type === t.type)),
+  ...EXTRA_TEMPLATES,
+];
+
+export function letterInfo(type: FullLetterType | string): LetterInfo {
+  return ALL_LETTER_TEMPLATES.find((t) => t.type === type) ?? ALL_LETTER_TEMPLATES[0];
+}
+
+/** Warning and termination letters: HR raises them and someone else approves. */
+export function needsSecondApproval(type: FullLetterType | string): boolean {
+  return Boolean(ALL_LETTER_TEMPLATES.find((t) => t.type === type)?.secondApproval);
+}
 
 /** Everything a template can use. Empty string = not known. */
 export interface LetterFields {
@@ -25,6 +82,10 @@ export interface LetterFields {
   previousSalary: string;
   effectiveDate: string;
   details: string;
+  /** Nationality on the employee record (visa letters). */
+  nationality: string;
+  /** End of an internship or contract. */
+  endDate: string;
 }
 
 export const FIELD_LABELS: Record<keyof LetterFields, string> = {
@@ -44,11 +105,16 @@ export const FIELD_LABELS: Record<keyof LetterFields, string> = {
   previousSalary: "Previous salary",
   effectiveDate: "Effective date",
   details: "Details",
+  nationality: "Nationality",
+  endDate: "End date",
 };
 
 const BASE_REQUIRED: (keyof LetterFields)[] = ["employeeName", "employeeCode", "title", "department", "countryName", "legalEntity", "joiningDate"];
 
-const EXTRA_REQUIRED: Record<LetterType, (keyof LetterFields)[]> = {
+const EXTRA_REQUIRED: Record<FullLetterType, (keyof LetterFields)[]> = {
+  Internship: ["endDate"],
+  Warning: ["details", "manager"],
+  Termination: ["details", "effectiveDate"],
   Employment: [],
   Experience: ["lastWorkingDay"],
   Relieving: ["lastWorkingDay"],
@@ -64,11 +130,19 @@ const EXTRA_REQUIRED: Record<LetterType, (keyof LetterFields)[]> = {
 };
 
 /** Labels of required fields that are missing. Generation is blocked while this is non-empty. */
-export function missingFields(type: LetterType, fields: LetterFields): string[] {
-  const keys = [...BASE_REQUIRED, ...EXTRA_REQUIRED[type]];
+export function missingFields(type: FullLetterType, fields: LetterFields): string[] {
+  const keys = [...BASE_REQUIRED, ...(EXTRA_REQUIRED[type] ?? [])];
   return keys
-    .filter((k) => !fields[k].trim())
-    .map((k) => (k === "details" ? letterTemplate(type).detailsLabel ?? FIELD_LABELS.details : FIELD_LABELS[k]));
+    .filter((k) => !(fields[k] ?? "").trim())
+    .map((k) =>
+      k === "details"
+        ? letterInfo(type).detailsLabel ?? FIELD_LABELS.details
+        : k === "effectiveDate" && type === "Termination"
+          ? "Termination date"
+          : k === "endDate" && type === "Internship"
+            ? "Internship end date (effective date)"
+            : FIELD_LABELS[k],
+    );
 }
 
 /* ───────────── Letterhead ───────────── */
@@ -84,7 +158,10 @@ const ENTITY_ADDRESS: Record<string, string> = {
   DE: "Friedrichstraße 68, 10117 Berlin, Germany",
 };
 
-const TYPE_CODE: Record<LetterType, string> = {
+const TYPE_CODE: Record<FullLetterType, string> = {
+  Internship: "INT",
+  Warning: "WRN",
+  Termination: "TRM",
   Employment: "EMP",
   Experience: "EXP",
   Relieving: "REL",
@@ -103,7 +180,7 @@ export function entityFor(countryCode: string): string {
   return legalEntityFor((countryCode || "IN") as CountryCode);
 }
 
-export function referenceNumber(type: LetterType, countryCode: string, serial: number, isoDate: string): string {
+export function referenceNumber(type: FullLetterType, countryCode: string, serial: number, isoDate: string): string {
   return `INF-${countryCode || "IN"}/HR/${TYPE_CODE[type]}/${isoDate.slice(0, 4)}/${String(serial).padStart(4, "0")}`;
 }
 
@@ -131,7 +208,7 @@ function esc(value: string): string {
 type Body = { title: string; toWhom: boolean; paragraphs: string[] };
 
 /** Builds the title and paragraphs. Values are escaped here; the strings are trusted markup afterwards. */
-function body(type: LetterType, f: LetterFields): Body {
+function body(type: FullLetterType, f: LetterFields): Body {
   const c = f.countryCode;
   const d = (iso: string) => esc(letterDate(iso, c));
   const name = `<strong>${esc(f.employeeName)}</strong> (${esc(f.employeeCode)})`;
@@ -264,7 +341,7 @@ function body(type: LetterType, f: LetterFields): Body {
         title: c === "DE" || c === "GB" ? "Visa Support Letter" : "Visa / Travel Letter",
         toWhom: true,
         paragraphs: [
-          `${name} is employed with ${entity} as ${role} since ${d(f.joiningDate)}.`,
+          `${name}${f.nationality ? `, ${esc(f.nationality)} national,` : ""} is employed with ${entity} as ${role} since ${d(f.joiningDate)}.`,
           `The employee intends to travel as follows: <strong>${esc(f.details)}</strong>. The employee will resume duties on return.`,
           noLiability,
         ],
@@ -279,11 +356,57 @@ function body(type: LetterType, f: LetterFields): Body {
           noLiability,
         ],
       };
+    case "Internship":
+      return {
+        title: "Internship Certificate",
+        toWhom: true,
+        paragraphs: [
+          `This is to certify that ${name} completed an internship with ${entity} from ${d(f.joiningDate)} to ${d(f.endDate)}, working as ${role}.`,
+          f.manager ? `The internship was supervised by ${esc(f.manager)}. During this period their conduct and work were satisfactory.` : "During this period their conduct and work were satisfactory.",
+          "We wish them every success.",
+        ],
+      };
+    case "Warning":
+      return {
+        title: c === "DE" ? "Warning Letter (Abmahnung)" : "Warning Letter",
+        toWhom: false,
+        paragraphs: [
+          `This letter is a formal warning about the following: <strong>${esc(f.details)}</strong>.`,
+          `This was discussed with you by your line manager, ${esc(f.manager)}. You are expected to show immediate and lasting improvement. Further issues of this kind may lead to further disciplinary action, up to and including termination of employment.`,
+          c === "GB"
+            ? "You have the right to appeal this warning in writing to Human Resources within 5 working days."
+            : c === "DE"
+              ? "A copy of this warning is placed on your personnel file. You may submit a written response, which will be filed with it."
+              : "A copy of this letter is placed on your personnel file. You may reply in writing to Human Resources within 7 days.",
+          "Please sign a copy of this letter to confirm you have received it.",
+        ],
+      };
+    case "Termination":
+      return {
+        title: "Termination of Employment",
+        toWhom: false,
+        paragraphs: [
+          `This letter confirms that your employment with ${entity} as ${role} ends with effect from <strong>${d(f.effectiveDate)}</strong>.`,
+          `Reason: ${esc(f.details)}.`,
+          c === "US"
+            ? "Employment with the company is at-will. Information on final pay, benefits continuation and any severance is sent separately."
+            : c === "GB"
+              ? "You will receive pay for your statutory or contractual notice, whichever is longer, and any accrued holiday. You have the right to appeal this decision in writing within 5 working days."
+              : c === "DE"
+                ? "The statutory or contractual notice period applies. Your final settlement and employment reference (Arbeitszeugnis) will follow."
+                : c === "AE" || c === "SA"
+                  ? "Your end-of-service gratuity, notice pay and accrued leave will be settled as per labour law and your contract."
+                  : "Your full and final settlement, including notice pay and accrued leave, will be processed as per your appointment terms and company policy.",
+          "Please return all company property and complete the exit handover by your last working day.",
+        ],
+      };
+    default:
+      return { title: letterInfo(type).label, toWhom: true, paragraphs: [`${name} is employed with ${entity} as ${role}.`, noLiability] };
   }
 }
 
 export interface LetterRenderMeta {
-  type: LetterType;
+  type: FullLetterType;
   /** ISO date printed on the letter. */
   date: string;
   referenceNo: string;
@@ -361,7 +484,7 @@ ${bodyHtml}
 </html>`;
 }
 
-export function letterFileName(type: LetterType, employeeCode: string, version?: number): string {
-  const label = letterTemplate(type).label.replace(/[^A-Za-z0-9]+/g, "-");
+export function letterFileName(type: FullLetterType, employeeCode: string, version?: number): string {
+  const label = letterInfo(type).label.replace(/[^A-Za-z0-9]+/g, "-");
   return `${label}-${employeeCode || "employee"}${version ? `-v${version}` : "-DRAFT"}`;
 }

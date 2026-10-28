@@ -362,3 +362,25 @@ export function finaliseProbation(
   }
   return null;
 }
+
+/**
+ * Mark probation confirmed from an applied "Probation completion" lifecycle action, so the Probation page agrees
+ * with the directory. Any review still waiting for HR is closed with it.
+ */
+export function confirmProbationFromAction(employeeId: string, on: string, by: { id: string; fullName: string }): LifecycleResult {
+  const record = findRecord(employeeId);
+  if (record?.status === "Confirmed") return null;
+  return upsertRecord(employeeId, (r) => {
+    r.status = "Confirmed";
+    r.finalisedOn = on;
+    for (const review of r.reviews) {
+      if (review.outcome) continue;
+      review.outcome = "Approved";
+      review.decidedBy = by.fullName;
+      review.decidedById = by.id;
+      review.decidedOn = todayISO();
+      review.decisionNote = "Closed by probation completion";
+    }
+    return null;
+  });
+}

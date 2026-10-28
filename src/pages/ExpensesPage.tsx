@@ -181,8 +181,8 @@ export function ExpensesPage() {
                   </span>
                   {expense.description && <span className="muted" style={{ whiteSpace: "pre-line" }}>{expense.description}</span>}
                   {trip && <span className="muted">Trip: {tripLabel(trip)}</span>}
-                  {(expense.stepDecisions ?? []).map((d) => (
-                    <span key={d.step} className="muted">
+                  {(expense.stepDecisions ?? []).map((d, i) => (
+                    <span key={i} className="muted">
                       {d.label}: {d.byName} · {formatShortDate(d.on)}
                       {d.note ? ` · “${d.note}”` : ""}
                     </span>

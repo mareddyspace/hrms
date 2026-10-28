@@ -1,0 +1,135 @@
+/* Draft helpers: summary, CV reader, candidate match, job description writer. */
+
+.ai-draft-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--text-xs, 12px);
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent-deep, var(--accent));
+  border: 1px dashed var(--accent);
+  white-space: nowrap;
+}
+
+.ai-box {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md, 8px);
+  padding: 10px 12px;
+  margin: 8px 0 12px;
+  background: var(--card);
+}
+
+.ai-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-bottom: 6px;
+}
+.ai-head h3,
+.ai-head strong {
+  margin: 0;
+  font-size: 14px;
+}
+
+.ai-bullets {
+  margin: 6px 0 4px;
+  padding-left: 18px;
+}
+.ai-bullets li {
+  margin: 3px 0;
+}
+.ai-bullets li strong {
+  margin-right: 4px;
+}
+
+.ai-note {
+  font-size: var(--text-xs, 12px);
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.ai-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.ai-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: var(--text-xs, 12px);
+  background: transparent;
+  color: var(--ink);
+}
+.ai-chip.is-ok {
+  border-color: var(--ok, var(--accent));
+  background: var(--accent-soft);
+}
+.ai-chip.is-miss {
+  border-color: var(--warn, var(--danger));
+  border-style: dashed;
+}
+button.ai-chip {
+  cursor: pointer;
+}
+
+.ai-score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+.ai-score-num {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.ai-score-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+  min-width: 80px;
+}
+.ai-score-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.ai-cv {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+.ai-cv textarea {
+  width: 100%;
+  min-height: 140px;
+  font-family: inherit;
+}
+
+.ai-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.ai-jd textarea {
+  width: 100%;
+  min-height: 320px;
+  font-family: inherit;
+  line-height: 1.45;
+}
+
+.ai-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}

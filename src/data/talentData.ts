@@ -1,4 +1,5 @@
-/** Shared Infotech talent modules mock data — recruiting through skills. */
+/** Shared TimeZ talent modules mock data — recruiting through skills. */
+import type { FlowDecision, FlowStep } from "./approvalWorkflows.ts";
 
 /** Blueprint order. Rejected / Withdrawn are exits, reachable from any open stage. */
 export const PIPELINE_STAGES = [
@@ -56,6 +57,16 @@ export interface Requisition {
   approver?: string;
   decidedOn?: string;
   history: ApprovalStep[];
+  /**
+   * Approval steps fixed when it was raised (the "requisition" approval workflow). Older requisitions have none:
+   * HR alone decides them.
+   */
+  approvalSteps?: FlowStep[];
+  /** Index into approvalSteps of the open step; equals its length once every step approved. */
+  currentStep?: number;
+  stepDecisions?: FlowDecision[];
+  /** Workflow version the steps came from. */
+  workflowVersion?: number;
 }
 
 /** One stage move. enteredOn is local date + time, e.g. "2026-09-12T10:30". */
