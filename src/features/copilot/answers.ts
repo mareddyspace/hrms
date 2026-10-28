@@ -3,6 +3,7 @@
  * builds (the viewer's own data, their reporting line, or company-wide figures only when allowed).
  * When the data isn't there, it says so in one line and links the right page — it never guesses.
  */
+import { enabledPolicyIds } from "../../data/aiSettings.ts";
 import { COMPANY_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from "../../brand.ts";
 import type { CopilotAnswer, CopilotContext } from "../../data/platformData.ts";
 import type { NavAccessId } from "../../demoAccounts.ts";
@@ -135,18 +136,20 @@ function balanceAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer {
     const pending = row.pending ? ` ${days(row.pending)} more ${row.pending === 1 ? "is" : "are"} pending approval.` : "";
     return {
       kind: "text",
-      summary: `You have ${days(row.available)} of ${row.name} available.${used}${pending}`,
+      // Same "Left" figure as the Leave page; pending requests are mentioned separately.
+      summary: `You have ${days(row.available + row.pending)} of ${row.name} left.${used}${pending}`,
       links: [{ label: "Leave", to: "/leave" }],
     };
   }
   // Types not offered (no quota, nothing used) and an empty comp-off bank are left out.
   const paid = rows.filter((r) => r.code !== "unpaid" && !(!r.quota && !r.utilized && r.available <= 0) && !(r.code === "comp_off" && r.available <= 0));
   const leaveOnly = paid.filter((r) => r.code !== "wfh" && r.code !== "emergency_wfh");
-  const total = leaveOnly.reduce((n, r) => n + Math.max(0, r.available), 0);
+  const total = leaveOnly.reduce((n, r) => n + Math.max(0, r.available + r.pending), 0);
+  const pendingTotal = leaveOnly.reduce((n, r) => n + (r.pending ?? 0), 0);
   return {
     kind: "metrics",
-    summary: `You have ${days(total)} of paid leave available this year: ${leaveOnly.map((r) => `${r.name} ${r.available}`).join(", ")}.`,
-    metrics: paid.map((r) => ({ label: r.name, value: `${days(r.available)}${r.pending ? ` (${r.pending} pending)` : ""}` })),
+    summary: `You have ${days(total)} of paid leave left this year: ${leaveOnly.map((r) => `${r.name} ${r.available + r.pending}`).join(", ")}.${pendingTotal ? ` ${days(pendingTotal)} pending approval.` : ""}`,
+    metrics: paid.map((r) => ({ label: r.name, value: `${days(r.available + r.pending)}${r.pending ? ` (${r.pending} pending)` : ""}` })),
     links: [{ label: "Leave", to: "/leave" }],
   };
 }
@@ -598,6 +601,8 @@ function expensesAnswer(ctx: CopilotContext): RawCopilotAnswer {
 }
 
 function policyTextAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer | null {
+  // Once an admin limits Copilot's policy sources, only the approved library answers; this older text is skipped.
+  if (enabledPolicyIds() !== null) return null;
   const list = ctx.policies ?? [];
   const words = q.split(" ").filter((w) => w.length > 3 && !["policy", "policies", "what", "about", "tell", "with"].includes(w));
   const hit = list.find((p) => words.some((w) => p.title.toLowerCase().includes(w)));

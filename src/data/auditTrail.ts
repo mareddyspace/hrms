@@ -40,7 +40,8 @@ export function listAudit(): AuditEntry[] {
 
 export function appendAuditEntries(entries: Omit<AuditEntry, "id">[]): void {
   if (entries.length === 0) return;
-  const stamped = entries.map((entry, i) => ({ ...entry, id: `au-${Date.now().toString(36)}-${i}` }));
+  const batch = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const stamped = entries.map((entry, i) => ({ ...entry, id: `au-${batch}-${i}` }));
   const next = [...stamped.reverse(), ...read()].slice(0, MAX_ENTRIES);
   cache = next;
   try {

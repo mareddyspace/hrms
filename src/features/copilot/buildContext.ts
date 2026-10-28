@@ -11,6 +11,7 @@ import { COURSES, PIPELINE_STAGES } from "../../data/talentData.ts";
 import { currentCycle, weightedProgress } from "../../data/homeInsights.ts";
 import { personName, workforceInsights, workforceStats, type TeamMember } from "../../data/workforceStats.ts";
 import { policiesForPerson, policyCatalog } from "../../data/policyLibrary.ts";
+import { policyEnabled } from "../../data/aiSettings.ts";
 import {
   addDaysISO,
   holidaySet,
@@ -95,12 +96,12 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
   const away = state.leaveRequests
     .filter(
       (r) =>
-        r.status === "approved" &&
+        (r.status === "approved" || r.status === "pending") &&
         r.from <= horizon &&
         r.to >= today &&
         (awayScope === "org" || r.employeeId === me || teamIds.has(r.employeeId)),
     )
-    .map((r) => ({ name: name(r.employeeId), self: r.employeeId === me, type: policyName(r.code), wfh: r.code === "wfh" || r.code === "emergency_wfh", from: r.from, to: r.to }))
+    .map((r) => ({ name: name(r.employeeId), self: r.employeeId === me, type: r.status === "pending" ? `${policyName(r.code)} (not approved yet)` : policyName(r.code), wfh: r.code === "wfh" || r.code === "emergency_wfh", from: r.from, to: r.to }))
     .sort((a, b) => a.from.localeCompare(b.from));
 
   // Items waiting on the viewer: same lists as countWaitingOnMe, including attendance corrections and shift swaps.
@@ -225,11 +226,12 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
     leavePolicies: localPolicies.filter((p) => p.quota > 0).map((p) => ({ code: p.code, name: p.name, quota: p.quota, accrual: p.accrual, carryForwardMax: p.carryForwardMax })),
     policies: state.policies.map((p) => ({ title: p.title, body: p.body })),
     // Same catalog and audience filter as the Policies page.
+    // Policies switched off in AI settings are never quoted.
     policyLibrary: policiesForPerson(
       { countryCode: (employee.countryCode ?? "IN") as CountryCode, legalEntity: employee.legalEntity, role: employee.role, employmentType: employee.employmentType },
       { holidays: myHolidays, shiftName: employee.shiftName, shiftHours: employee.shiftHours },
-    ),
-    policyCatalog: policyCatalog((code) => holidaysForCountry(state.holidays, code)),
+    ).filter((p) => policyEnabled(p.id)),
+    policyCatalog: policyCatalog((code) => holidaysForCountry(state.holidays, code)).filter((p) => policyEnabled(p.id)),
     myLeave: state.leaveRequests
       .filter((r) => r.employeeId === me)
       .map((r) => ({

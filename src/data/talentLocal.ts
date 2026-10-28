@@ -235,7 +235,7 @@ function accountId(name: string): string | undefined {
   return DEMO_ACCOUNTS.find((a) => sameName(a.fullName, name))?.id;
 }
 
-function hiringManagerIdOf(req: Requisition): string | undefined {
+export function hiringManagerIdOf(req: Requisition): string | undefined {
   return req.hiringManagerId || accountId(req.hiringManager);
 }
 
@@ -495,7 +495,7 @@ type ReqAlert = { to: string[]; title: string; body: string };
 function sendReqAlerts(alerts: ReqAlert[]) {
   for (const a of alerts) {
     for (const recipientId of new Set(a.to)) {
-      if (recipientId) pushPersonTaskAlert({ recipientId, title: a.title, body: a.body, href: "/recruiting" });
+      if (recipientId) pushPersonTaskAlert({ recipientId, title: a.title, body: a.body, href: a.title === "Requisition to approve" ? "/approvals" : "/recruiting" });
     }
   }
 }

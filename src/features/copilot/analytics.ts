@@ -226,6 +226,12 @@ function departmentFilter(q: string, people: readonly PersonRecord[]): string | 
 /* ───────────── the answer ───────────── */
 
 /** Returns null when the question is not an analytics question. */
+/** True for a numbers question ("headcount by country", "overtime by location this month"). */
+export function isAnalyticsQuestion(question: string): boolean {
+  const q = plainText(question);
+  return metricIn(q, dimIn(q, "org")) != null;
+}
+
 export function analyticsAnswer(question: string, src: AnalyticsSources): CopilotAnswer | null {
   const q = plainText(question);
   const dimAsked = dimIn(q, src.scope === "team" ? "team" : "org");

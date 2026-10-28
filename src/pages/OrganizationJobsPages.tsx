@@ -535,6 +535,7 @@ function ProfileForm({
             profiles={profiles}
             actor={demoProfile}
             canSave={false}
+            autoStart
             onUseText={(text) => {
               setDescription(text);
               setWriterOpen(false);

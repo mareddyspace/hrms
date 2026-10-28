@@ -364,14 +364,17 @@ export function Employee360View({
 
       // Attendance and leave, last 30 days.
       if (attendance.length) {
-        const leaveLeft = leaveBalances.reduce((s, r) => s + Number(r.available || 0), 0);
+        // Paid leave only — work from home and unpaid leave are not days off to count.
+        const leaveLeft = leaveBalances
+          .filter((r) => r.code !== "unpaid" && r.code !== "wfh" && r.code !== "emergency_wfh")
+          .reduce((s, r) => s + Math.max(0, Number(r.available || 0)), 0);
         const pending = leaveRequests.filter((l) => l.status === "pending").length;
         bullets.push({
           label: "Attendance & leave",
           text: `Last 30 days: ${attendanceStats.present} days worked, ${attendanceStats.leave} on leave, ${attendanceStats.absent} absent, ${plural(
             attendanceStats.late,
             "late arrival",
-          )}, ${attendanceStats.avgHours.toFixed(1)} h/day on average. ${leaveLeft} leave days left this year${pending ? `, ${pending} pending` : ""}.`,
+          )}, ${attendanceStats.avgHours.toFixed(1)} h/day on average. ${leaveLeft} paid leave days left this year${pending ? `, ${pending} pending` : ""}.`,
         });
         if (attendanceStats.late >= 3) dev.push(`look at start times (${attendanceStats.late} late arrivals in 30 days)`);
         if (attendanceStats.absent >= 2) dev.push(`check in on ${attendanceStats.absent} unplanned absences`);

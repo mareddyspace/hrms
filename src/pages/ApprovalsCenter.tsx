@@ -1,6 +1,6 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { decideCorrection, getAttendanceState, subscribeAttendance } from "../data/attendanceLocal.ts";
-import { managementChain } from "../demoAccounts.ts";
+import { DEMO_ACCOUNTS, managementChain } from "../demoAccounts.ts";
 import {
   compOffCandidates,
   decideSwap,
@@ -36,6 +36,7 @@ import {
 import { DelegationSettings } from "./DelegationSettings.tsx";
 import { currentStepOf, isWaitingOn, stepText, waitingApproverIds } from "../data/expenseFlow.ts";
 import { decideTravel, getTravelRequests, subscribeTravel, withdrawTravel } from "../data/travelStore.ts";
+import { getTalentState, hiringManagerIdOf, requisitionMoves, requisitionWaitingFor, setRequisitionApproval, subscribeTalent } from "../data/talentLocal.ts";
 
 /** Which delegation scope (§25) a request kind falls under. */
 function scopeOf(kind: string): DelegationScope {
@@ -147,7 +148,10 @@ export function countWaitingOnMe(
       (w.status === "awaiting_teammate" && w.teammateId === myId) ||
       (w.status === "awaiting_manager" && mine(w.requesterId) && mine(w.teammateId)),
   ).length;
-  return requests + stepped + timesheets + proofs + corrections + swaps;
+  const reqs = getTalentState().requisitions.filter(
+    (r) => r.approvalStatus === "Pending approval" && hiringManagerIdOf(r) !== myId && requisitionMoves({ id: myId, fullName: "", role: DEMO_ACCOUNTS.find((a) => a.id === myId)?.role ?? "employee" }, r).includes("Approved"),
+  ).length;
+  return requests + stepped + timesheets + proofs + corrections + swaps + reqs;
 }
 
 /** Approvals inbox built from real requests: decide what's waiting on you, track what you've asked for. */
@@ -159,6 +163,7 @@ export function ApprovalsCenterPage() {
   const shifts = useSyncExternalStore(subscribeShifts, getShiftState, getShiftState);
   const delegations = useSyncExternalStore(subscribeDelegations, getDelegationState, getDelegationState);
   const travel = useSyncExternalStore(subscribeTravel, getTravelRequests, getTravelRequests);
+  const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
   noteLeaves(state.leaveRequests);
   const actor = { id: employee.id, fullName: employee.fullName, role: portal.demoProfile.role };
   const rosterCtx = { leaves: state.leaveRequests, holidays: state.holidays };
@@ -267,6 +272,23 @@ export function ApprovalsCenterPage() {
         withdraw: () => withdrawTravel(actorRef, t.id),
         canAct: isWaitingOn(t, employee.id, (id) => canDecideFor(id, "expenses")),
         withText: withTextFor(t),
+      });
+    }
+    // Requisitions: each approval step's approvers decide here too (finance has no Recruiting page).
+    for (const r of talent.requisitions) {
+      if (r.approvalStatus !== "Pending approval") continue;
+      list.push({
+        key: `req-${r.id}`,
+        kind: "Requisition",
+        employeeId: hiringManagerIdOf(r) ?? "",
+        title: `${r.id} · ${r.title} · ${r.openings} opening${r.openings === 1 ? "" : "s"}`,
+        detail: [r.department, r.location ? `${r.location}, ${r.country}` : r.country, requisitionWaitingFor(r)].filter(Boolean).join(" · "),
+        raisedOn: r.created.slice(0, 10),
+        status: "pending",
+        open: true,
+        decide: (d, note) => setRequisitionApproval(actor, r.id, d === "approved" ? "Approved" : "Rejected", note ?? ""),
+        canAct: requisitionMoves(actor, r).includes("Approved"),
+        withText: requisitionWaitingFor(r) || undefined,
       });
     }
     for (const x of state.reimbursements) {
@@ -431,7 +453,7 @@ export function ApprovalsCenterPage() {
     }
     return list;
     // portal functions are recreated with state, so state is the real dependency
-  }, [state, portal, leaveTable, attendance, shifts, delegations, travel]);
+  }, [state, portal, leaveTable, attendance, shifts, delegations, travel, talent]);
 
   const waiting = items.filter((item) => {
     if (!item.open || !item.decide || item.employeeId === employee.id) return false;

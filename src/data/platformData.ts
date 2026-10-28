@@ -394,7 +394,7 @@ export const AI_AGENTS: AiAgentCard[] = [
     audience: "All staff",
     purpose: "Retrieves answers from the policy knowledge base.",
     availability: "Copilot · Policies screens",
-    demoStatus: "Planned demo",
+    demoStatus: "Demo ready",
   },
   {
     id: "analytics",
