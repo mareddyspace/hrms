@@ -382,7 +382,45 @@ export interface Expense extends DecisionInfo {
   currency?: string;
   description: string;
   projectId: string;
-  status: "submitted" | "approved" | "rejected" | "withdrawn";
+  status: "submitted" | "approved" | "rejected" | "withdrawn" | "paid";
+  /** Day the claim was filed. */
+  submittedOn?: string;
+  /** Approval steps fixed when the claim was filed (older claims have none: the reporting line decides). */
+  steps?: ExpenseApprovalStep[];
+  /** Index into `steps` of the step waiting for a decision. */
+  currentStep?: number;
+  stepDecisions?: ExpenseStepDecision[];
+  /** Stored receipt file (content kept in the receipt store under `id`). */
+  receipt?: ExpenseReceipt;
+  /** Approved travel request this claim belongs to. */
+  tripId?: string;
+  paidOn?: string;
+  paymentRef?: string;
+  paidById?: string;
+  paidByName?: string;
+}
+
+export interface ExpenseApprovalStep {
+  role: "manager" | "skip_manager" | "hr" | "finance" | "admin";
+  label: string;
+  approverIds: string[];
+}
+
+export interface ExpenseStepDecision {
+  step: number;
+  label: string;
+  decision: "approved" | "rejected";
+  byId: string;
+  byName: string;
+  on: string;
+  note?: string;
+}
+
+export interface ExpenseReceipt {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
 }
 
 export interface TaskSubtask {

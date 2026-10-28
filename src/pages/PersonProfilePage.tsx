@@ -31,7 +31,17 @@ import { canOpenFullRecord, profileAccessFor } from "../data/profileAccess.ts";
 import { skillsFor } from "../data/careerProfile.ts";
 import { getExitDetails, getPerson, isTerminated, listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { canManagePeople } from "../data/peoplePermissions.ts";
-import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
+import {
+  addEmployeeSkill,
+  getTalentState,
+  removeEmployeeSkill,
+  skillProfileFor,
+  SKILL_LEVELS,
+  subscribeTalent,
+  updateEmployeeSkill,
+  type TalentActor,
+} from "../data/talentLocal.ts";
+import { SKILL_LIBRARY, type EmployeeSkill } from "../data/talentData.ts";
 import { getLinksState, setLinkedIn, subscribeLinks } from "../data/socialLinks.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
 import { todayISO } from "../model.ts";
@@ -149,6 +159,77 @@ function useNow(intervalMs = 30_000) {
   return now;
 }
 
+/** Your own skills: add one (name + level), change a level, or remove it. Same data as the Skills & career page. */
+function OwnSkillsEditor({ actor, skills }: { actor: TalentActor; skills: EmployeeSkill[] }) {
+  const [name, setName] = useState("");
+  const [level, setLevel] = useState(SKILL_LEVELS[1] ?? SKILL_LEVELS[0]);
+  const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const show = (error: string | null, okText?: string) => setBanner(error ? { tone: "err", text: error } : okText ? { tone: "ok", text: okText } : null);
+  const suggestions = SKILL_LIBRARY.filter((d) => !skills.some((k) => k.skillId === d.id));
+
+  function add(event: FormEvent) {
+    event.preventDefault();
+    const clean = name.trim();
+    const error = addEmployeeSkill(actor, actor.id, clean, level);
+    show(error, `${clean} added.`);
+    if (!error) setName("");
+  }
+
+  return (
+    <div className="stack">
+      <Banner message={banner} />
+      {skills.length === 0 ? (
+        <p className="muted">No skills yet.</p>
+      ) : (
+        <ul className="todo">
+          {skills.map((sk) => (
+            <li key={sk.skillId} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Sparkles size={14} aria-hidden />
+              <span style={{ flex: 1, minWidth: 120 }}>{sk.skillName}</span>
+              <select
+                aria-label={`${sk.skillName} level`}
+                value={sk.level}
+                onChange={(e) => show(updateEmployeeSkill(actor, actor.id, sk.skillId, { level: e.target.value }))}
+              >
+                {SKILL_LEVELS.map((lv) => (
+                  <option key={lv} value={lv}>{lv}</option>
+                ))}
+              </select>
+              <button type="button" className="quiet-link" onClick={() => show(removeEmployeeSkill(actor, actor.id, sk.skillId), `${sk.skillName} removed.`)}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form onSubmit={add} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <input
+          aria-label="Skill name"
+          list="own-skill-suggestions"
+          value={name}
+          maxLength={40}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Add a skill"
+          style={{ flex: 1, minWidth: 140 }}
+        />
+        <datalist id="own-skill-suggestions">
+          {suggestions.map((d) => (
+            <option key={d.id} value={d.name} />
+          ))}
+        </datalist>
+        <select aria-label="Level" value={level} onChange={(e) => setLevel(e.target.value)}>
+          {SKILL_LEVELS.map((lv) => (
+            <option key={lv} value={lv}>{lv}</option>
+          ))}
+        </select>
+        <button type="submit" className="btn btn-tiny" disabled={name.trim().length < 2}>
+          Add
+        </button>
+      </form>
+    </div>
+  );
+}
+
 /**
  * The one profile page. `/info` (My profile) and `/directory/:id` render it via `personId`;
  * `/people/:id` renders it from the route. HR can edit the employee record from here.
@@ -220,7 +301,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
 
   const skills = person.record
     ? skillsFor(talent.skillProfiles, person.record)
-    : talent.skillProfiles.find((sp) => sp.employeeId === person.id)?.skills ?? [];
+    : skillProfileFor(talent, person.id);
   const career = person.record ? timelineFor({ ...person.record, ...getExitDetails(person.record) }, history) : [];
   const canHrEdit = canManagePeople(demoProfile.role) && !isMe && Boolean(person.record);
   const certs = talent.certifications.filter((c) => c.employeeId === person.id);
@@ -374,17 +455,23 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
             )}
           </Card>
 
-          {skills.length > 0 && (
-            <Card title="Skills">
-              <ul className="profile-skill-list">
-                {skills.map((sk) => (
-                  <li key={sk.skillId}>
-                    <Sparkles size={14} aria-hidden /> {sk.skillName}
-                    <span className="muted">{sk.level}</span>
-                  </li>
-                ))}
-              </ul>
+          {isMe && demoProfile.id === person.id ? (
+            <Card title="Skills" action={<Link to="/skills" className="quiet-link">Skills &amp; career</Link>}>
+              <OwnSkillsEditor actor={demoProfile} skills={skills} />
             </Card>
+          ) : (
+            skills.length > 0 && (
+              <Card title="Skills">
+                <ul className="profile-skill-list">
+                  {skills.map((sk) => (
+                    <li key={sk.skillId}>
+                      <Sparkles size={14} aria-hidden /> {sk.skillName}
+                      <span className="muted">{sk.level}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            )
           )}
 
           {access.work && career.length > 0 && (

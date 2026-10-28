@@ -1,4 +1,5 @@
 import type { NavAccessId } from "../demoAccounts.ts";
+import { pushPersonTaskAlert } from "./collabLocal.ts";
 import {
   AUDIT_LOG_SEED,
   ROLE_PERMISSION_CATALOG,
@@ -210,4 +211,258 @@ export function effectiveCatalogIds(account: { id: string; navAccess: readonly s
     if (o?.grant.includes(id as NavAccessId)) return true;
     return holds(account.navAccess, id);
   });
+}
+
+/* —— Sync runs and quarantine —— */
+
+const QUAR_KEY = "timez.platform.quarantine.v1";
+
+export type QuarantineField = "bankAccount" | "taxId" | "costCentre" | "workEmail";
+
+export interface QuarantineRecord {
+  id: string;
+  connectorId: string;
+  /** e.g. "EMP-1042 · Priya Nair". */
+  record: string;
+  field: QuarantineField;
+  value: string;
+  reason: string;
+  at: string;
+  attempts: number;
+}
+
+type QuarantineState = { runs: Record<string, number>; items: Record<string, QuarantineRecord[]> };
+
+export const QUARANTINE_FIELD_LABEL: Record<QuarantineField, string> = {
+  bankAccount: "Bank account",
+  taxId: "Tax ID",
+  costCentre: "Cost centre",
+  workEmail: "Work email",
+};
+
+export const COST_CENTRES = ["CC-100", "CC-200", "CC-300", "CC-400", "CC-500"];
+
+/** Fields each connector checks before a record is accepted. */
+const CONNECTOR_FIELDS: Record<string, QuarantineField[]> = {
+  payroll: ["bankAccount", "taxId", "costCentre"],
+  benefits: ["taxId", "costCentre"],
+  attendance: ["costCentre"],
+  learning: ["workEmail", "costCentre"],
+  sso: ["workEmail"],
+  email: ["workEmail"],
+  teams: ["workEmail"],
+  slack: ["workEmail"],
+};
+
+/** Connectors whose failures HR also hears about (payroll and HR records). */
+const HR_CONNECTORS = new Set(["payroll", "benefits", "attendance"]);
+
+const BATCH_SIZE: Record<string, number> = { payroll: 24, benefits: 16, attendance: 40, learning: 20 };
+
+const FIRST = ["Priya", "Arjun", "Meera", "Kabir", "Ananya", "Rohan", "Sara", "Vikram", "Diya", "Farah", "Oliver", "Emma", "Liam", "Noah", "Aisha", "Omar", "Lena", "Jonas", "Chloe", "Ethan"];
+const LAST = ["Nair", "Sharma", "Iyer", "Mehta", "Rao", "Khan", "Patel", "Singh", "Das", "Ali", "Smith", "Brown", "Wilson", "Taylor", "Hassan", "Fischer", "Martin", "Clark", "Lee", "Walker"];
+
+function hash(...parts: (string | number)[]): number {
+  let h = 7;
+  for (const ch of parts.join("|")) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  // Mix the bits so neighbouring rows don't fail together.
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/** Null when the value is accepted, else the reason it's rejected. */
+export function validateQuarantineValue(field: QuarantineField, value: string): string | null {
+  const v = value.trim();
+  if (field === "bankAccount") return /^\d{9,18}$/.test(v) ? null : v ? "Invalid bank account number" : "Missing bank account";
+  if (field === "taxId") return /^[A-Z]{5}\d{4}[A-Z]$/.test(v.toUpperCase()) ? null : "Invalid tax ID";
+  if (field === "costCentre") return COST_CENTRES.includes(v.toUpperCase()) ? null : `Unknown cost centre ${v || "(blank)"}`;
+  return /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(v) ? null : "Missing work email";
+}
+
+/** The bad value a failing record arrives with. */
+function badValue(field: QuarantineField, seed: number): string {
+  if (field === "taxId") return ["ABCD1234", "PAN-PENDING", "AB12C3456D"][seed % 3];
+  if (field === "costCentre") return ["CC-999", "CC-710", "SALES-EU"][seed % 3];
+  return "";
+}
+
+function readQuarantine(): QuarantineState {
+  const raw = readJson<Partial<QuarantineState>>(QUAR_KEY, {});
+  return { runs: { ...raw.runs }, items: { ...raw.items } };
+}
+
+export function listQuarantine(connectorId: string): QuarantineRecord[] {
+  return readQuarantine().items[connectorId] ?? [];
+}
+
+const nowStamp = () => new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+const syncStamp = () => new Date().toISOString().slice(0, 16).replace("T", " ");
+
+type Actor = { id: string; name: string };
+const GONE = "That record is no longer in quarantine.";
+
+/** Saves quarantine and connector together. The connector's error count is its open quarantine. */
+function save(state: QuarantineState, connectorId: string, patch: (item: IntegrationCard) => void, log: IntegrationCard["logs"][number]) {
+  const list = listIntegrations().map((i) => (i.id === connectorId ? { ...i, logs: [...i.logs] } : i));
+  const item = list.find((i) => i.id === connectorId);
+  if (item) {
+    patch(item);
+    const open = state.items[connectorId]?.length ?? 0;
+    item.errorCount = open;
+    if (open === 0 && item.status === "Degraded") item.status = "Connected";
+    if (open > 0 && item.status === "Connected") item.status = "Degraded";
+    item.logs = [log, ...item.logs].slice(0, 8);
+  }
+  try {
+    localStorage.setItem(QUAR_KEY, JSON.stringify(state));
+  } catch {
+    /* keep going */
+  }
+  writeJson(INT_KEY, list);
+  return item;
+}
+
+export type SyncRunResult = { item: IntegrationCard; processed: number; passed: number; failed: QuarantineRecord[] };
+
+/** Runs one batch of records for a connector. A few fail validation and go to quarantine. */
+export function runIntegrationSync(connectorId: string, actor: Actor): SyncRunResult | null {
+  const current = listIntegrations().find((i) => i.id === connectorId);
+  if (!current || current.status === "Not configured") return null;
+  const state = readQuarantine();
+  const run = (state.runs[connectorId] ?? 0) + 1;
+  state.runs[connectorId] = run;
+  const fields = CONNECTOR_FIELDS[connectorId] ?? ["costCentre"];
+  const size = BATCH_SIZE[connectorId] ?? 12;
+  const at = nowStamp();
+  const failed: QuarantineRecord[] = [];
+  for (let i = 0; i < size; i++) {
+    const roll = hash(connectorId, run, i);
+    // About one record in ten fails, so most runs quarantine a few rows (the first run always has one).
+    if (roll % 100 >= 10 && !(run === 1 && i === 3)) continue;
+    const field = fields[(roll >>> 8) % fields.length];
+    const code = 1000 + ((run * 37 + i * 13) % 900);
+    const name = `${FIRST[(run + i) % FIRST.length]} ${LAST[(run * 3 + i * 7) % LAST.length]}`;
+    const value = badValue(field, roll >>> 12);
+    failed.push({
+      id: `q-${connectorId}-${run}-${i}`,
+      connectorId,
+      record: `EMP-${code} · ${name}`,
+      field,
+      value,
+      reason: validateQuarantineValue(field, value) ?? "Rejected by provider",
+      at,
+      attempts: 0,
+    });
+  }
+  state.items[connectorId] = [...failed, ...(state.items[connectorId] ?? [])];
+  const passed = size - failed.length;
+  const item = save(
+    state,
+    connectorId,
+    (it) => {
+      it.recordsProcessed += passed;
+      it.lastSync = syncStamp();
+    },
+    failed.length
+      ? { at, level: "warn", message: `Sync by ${actor.name}: ${passed} of ${size} records passed, ${failed.length} quarantined` }
+      : { at, level: "info", message: `Sync by ${actor.name}: ${size} records passed` },
+  )!;
+  appendAudit({
+    actor: actor.name,
+    action: `Run integration sync · ${passed}/${size} passed${failed.length ? ` · ${failed.length} quarantined` : ""}`,
+    target: item.name,
+    outcome: failed.length ? "Failed" : "Success",
+  });
+  if (failed.length) {
+    const reasons = [...new Set(failed.map((f) => f.reason))].join(", ");
+    const body = `${failed.length} of ${size} records failed and are in quarantine: ${reasons}.`;
+    const href = `/integrations?connector=${connectorId}`;
+    const recipients = ["demo-admin", ...(HR_CONNECTORS.has(connectorId) ? ["demo-hr-admin"] : [])];
+    for (const recipientId of recipients) pushPersonTaskAlert({ recipientId, title: `${item.name}: sync failures`, body, href });
+  }
+  return { item, processed: size, passed, failed };
+}
+
+export type RecordOutcome = { ok: boolean; error?: string; record?: QuarantineRecord };
+
+function settle(connectorId: string, recordId: string, ok: boolean, actor: Actor, action: string): RecordOutcome {
+  const state = readQuarantine();
+  const list = state.items[connectorId] ?? [];
+  const rec = list.find((r) => r.id === recordId);
+  if (!rec) return { ok: false, error: GONE };
+  const at = nowStamp();
+  state.items[connectorId] = ok ? list.filter((r) => r.id !== recordId) : list.map((r) => (r.id === recordId ? { ...r, attempts: r.attempts + 1, at } : r));
+  const item = save(
+    state,
+    connectorId,
+    (it) => {
+      if (ok) it.recordsProcessed += 1;
+    },
+    { at, level: ok ? "info" : "warn", message: `${action} by ${actor.name}: ${rec.record} ${ok ? "passed" : "failed again"}` },
+  );
+  appendAudit({ actor: actor.name, action: `${action} · ${rec.record}`, target: item?.name ?? connectorId, outcome: ok ? "Success" : "Failed" });
+  return { ok, record: rec };
+}
+
+/** Same rule for single and bulk retries: the source may have been corrected since, so a retry can pass. */
+const retryPasses = (r: QuarantineRecord) => hash(r.id, r.attempts + 1) % 100 < 40;
+
+/** Re-sends a quarantined record as it is. */
+export function retryQuarantined(connectorId: string, recordId: string, actor: Actor): RecordOutcome {
+  const rec = listQuarantine(connectorId).find((r) => r.id === recordId);
+  if (!rec) return { ok: false, error: GONE };
+  return settle(connectorId, recordId, retryPasses(rec), actor, "Retry quarantined record");
+}
+
+/** Corrects the failing field and re-sends. Passes when the new value is valid. */
+export function fixAndRetryQuarantined(connectorId: string, recordId: string, value: string, actor: Actor): RecordOutcome {
+  const rec = listQuarantine(connectorId).find((r) => r.id === recordId);
+  if (!rec) return { ok: false, error: GONE };
+  const error = validateQuarantineValue(rec.field, value);
+  if (error) return { ok: false, error };
+  return settle(connectorId, recordId, true, actor, `Fix and retry record (${QUARANTINE_FIELD_LABEL[rec.field].toLowerCase()})`);
+}
+
+/** Removes a record from quarantine without sending it. */
+export function dismissQuarantined(connectorId: string, recordId: string, reason: string, actor: Actor): RecordOutcome {
+  const why = reason.trim();
+  if (!why) return { ok: false, error: "Add a reason to dismiss." };
+  const state = readQuarantine();
+  const list = state.items[connectorId] ?? [];
+  const rec = list.find((r) => r.id === recordId);
+  if (!rec) return { ok: false, error: GONE };
+  state.items[connectorId] = list.filter((r) => r.id !== recordId);
+  const item = save(state, connectorId, () => {}, { at: nowStamp(), level: "info", message: `${rec.record} dismissed by ${actor.name}: ${why}` });
+  appendAudit({ actor: actor.name, action: `Dismissed quarantined record · ${rec.record} · ${why}`, target: item?.name ?? connectorId, outcome: "Recorded" });
+  return { ok: true, record: rec };
+}
+
+/** Retries every quarantined record for a connector. */
+export function retryAllQuarantined(connectorId: string, actor: Actor): { passed: number; failed: number } {
+  const state = readQuarantine();
+  const list = state.items[connectorId] ?? [];
+  if (!list.length) return { passed: 0, failed: 0 };
+  const at = nowStamp();
+  const passedIds = new Set(list.filter(retryPasses).map((r) => r.id));
+  state.items[connectorId] = list.filter((r) => !passedIds.has(r.id)).map((r) => ({ ...r, attempts: r.attempts + 1, at }));
+  const failed = list.length - passedIds.size;
+  const item = save(
+    state,
+    connectorId,
+    (it) => {
+      it.recordsProcessed += passedIds.size;
+    },
+    { at, level: failed ? "warn" : "info", message: `Retry all by ${actor.name}: ${passedIds.size} passed, ${failed} still quarantined` },
+  );
+  appendAudit({
+    actor: actor.name,
+    action: `Retry all quarantined · ${passedIds.size} passed · ${failed} failed`,
+    target: item?.name ?? connectorId,
+    outcome: failed ? "Failed" : "Success",
+  });
+  return { passed: passedIds.size, failed };
 }

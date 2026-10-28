@@ -21,6 +21,7 @@ import {
   audienceLabel,
   createSurvey,
   deleteDraftSurvey,
+  engagementTrend,
   getSurveysState,
   hasResponded,
   isInAudience,
@@ -30,6 +31,7 @@ import {
   subscribeSurveys,
   summarize,
   surveyPhase,
+  type EngagementPoint,
   type QuestionKind,
   type QuestionResult,
   type Survey,
@@ -38,6 +40,7 @@ import {
   type SurveyResponse,
 } from "./surveysStore.ts";
 import "./talentplus.css";
+import "./engagementTrend.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -214,11 +217,12 @@ function Results({ surveys }: { surveys: Survey[] }) {
   const [surveyId, setSurveyId] = useState(visible[0]?.id ?? "");
   const survey = visible.find((s) => s.id === surveyId) ?? visible[0];
 
-  if (!survey) return <EmptyState title="No results yet" description="Results show after a survey closes." />;
+  if (!survey) return hr ? <EngagementTrend /> : <EmptyState title="No results yet" description="Results show after a survey closes." />;
   const access = resultsFor(actor, survey.id);
 
   return (
     <div className="stack">
+      {hr && <EngagementTrend />}
       <Card>
         <Field label="Survey">
           <select value={survey.id} onChange={(e) => setSurveyId(e.target.value)}>
@@ -312,6 +316,111 @@ function ResultsView({ survey, responses, scope }: { survey: Survey; responses: 
           {scope === "all" && <Breakdown survey={survey} responses={responses} />}
         </>
       )}
+    </>
+  );
+}
+
+/* ───────────── Engagement trend (HR) ───────────── */
+
+const signed = (n: number | null) => (n === null ? "—" : n > 0 ? `+${n}` : String(n));
+const shortTitle = (title: string) => title.replace(/^Quarterly pulse — /, "");
+
+function TrendChart({ points }: { points: EngagementPoint[] }) {
+  const W = 560;
+  const H = 200;
+  const pad = { l: 36, r: 16, t: 14, b: 30 };
+  const step = points.length > 1 ? (W - pad.l - pad.r) / (points.length - 1) : 0;
+  const x = (i: number) => pad.l + (points.length > 1 ? i * step : (W - pad.l - pad.r) / 2);
+  // Engagement is 0–100; eNPS is −100–100. Both share a −100…100 axis so the lines are comparable.
+  const y = (v: number) => pad.t + ((100 - v) / 200) * (H - pad.t - pad.b);
+  const line = (pick: (p: EngagementPoint) => number | null) =>
+    points
+      .map((p, i) => [i, pick(p)] as const)
+      .filter((d): d is readonly [number, number] => d[1] !== null)
+      .map(([i, v], k) => `${k ? "L" : "M"}${x(i)},${y(v)}`)
+      .join(" ");
+  const series = [
+    { key: "engagement", label: "Engagement (0–100)", color: "var(--accent)", pick: (p: EngagementPoint) => p.engagement },
+    { key: "enps", label: "eNPS (−100 to +100)", color: "var(--warn)", pick: (p: EngagementPoint) => p.enps },
+  ];
+  return (
+    <figure className="tp-trend">
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Engagement and eNPS by survey">
+        {[100, 50, 0, -50, -100].map((v) => (
+          <g key={v}>
+            <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke="var(--line)" strokeDasharray={v === 0 ? undefined : "3 4"} />
+            <text x={pad.l - 6} y={y(v) + 4} textAnchor="end" fontSize="11" fill="var(--muted)">{v}</text>
+          </g>
+        ))}
+        {points.map((p, i) => (
+          <text key={p.surveyId} x={x(i)} y={H - 10} textAnchor="middle" fontSize="11" fill="var(--muted)">
+            {shortTitle(p.title).slice(0, 18)}
+          </text>
+        ))}
+        {series.map((s) => (
+          <g key={s.key}>
+            <path d={line(s.pick)} fill="none" stroke={s.color} strokeWidth="2" />
+            {points.map((p, i) => {
+              const v = s.pick(p);
+              return v === null ? null : (
+                <circle key={p.surveyId} cx={x(i)} cy={y(v)} r="3.5" fill={s.color}>
+                  <title>{`${p.title}: ${s.key === "enps" ? signed(v) : v}`}</title>
+                </circle>
+              );
+            })}
+          </g>
+        ))}
+      </svg>
+      <figcaption className="tp-trend-legend">
+        {series.map((s) => (
+          <span key={s.key}>
+            <i style={{ background: s.color }} /> {s.label}
+          </span>
+        ))}
+      </figcaption>
+    </figure>
+  );
+}
+
+function EngagementTrend() {
+  const actor = useActor();
+  const state = useSyncExternalStore(subscribeSurveys, getSurveysState);
+  const points = useMemo(() => engagementTrend(actor, state), [actor, state]);
+  if (!points.length) return null;
+  const departments = [...new Set(points.flatMap((p) => p.departments.map((d) => d.department)))].sort();
+  const last = points[points.length - 1];
+  const prev = points[points.length - 2];
+  const delta = (a: number | null, b: number | null | undefined) => (a === null || b === null || b === undefined ? undefined : `${signed(a - b)} since last run`);
+
+  return (
+    <>
+      <MetricGrid>
+        <MetricCard label="Engagement (latest)" value={last.engagement === null ? "—" : last.engagement} hint={delta(last.engagement, prev?.engagement)} />
+        <MetricCard label="eNPS (latest)" value={signed(last.enps)} hint={delta(last.enps, prev?.enps)} />
+        <MetricCard label="Survey runs" value={points.length} />
+      </MetricGrid>
+      <Card title="Engagement over time">
+        <TrendChart points={points} />
+        <DataTable
+          headers={["Survey", "Closed", "Responses", "Engagement", "eNPS"]}
+          rows={points.map((p) => [p.title, formatShortDate(p.closedOn), String(p.responses), p.engagement === null ? "—" : String(p.engagement), signed(p.enps)])}
+        />
+      </Card>
+      <Card title="Engagement by department">
+        <DataTable
+          headers={["Department", ...points.map((p) => shortTitle(p.title))]}
+          rows={departments.map((dept) => [
+            dept,
+            ...points.map((p) => {
+              const g = p.departments.find((d) => d.department === dept);
+              if (!g) return "—";
+              if (g.engagement === null && g.enps === null) return <span key={p.surveyId} className="muted">Fewer than {MIN_RESPONSES}</span>;
+              return `${g.engagement ?? "—"} · eNPS ${signed(g.enps)}`;
+            }),
+          ])}
+        />
+        <p className="muted">Engagement is the average rating answer on a 0–100 scale. Groups under {MIN_RESPONSES} responses stay hidden.</p>
+      </Card>
     </>
   );
 }

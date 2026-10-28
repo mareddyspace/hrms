@@ -225,7 +225,7 @@ export function Employee360View({
     .sort((a, b) => b.effective.localeCompare(a.effective));
   const bonuses = reward.bonuses.filter((b) => b.employeeId === person.id);
   const enrolments = reward.enrollments.filter((e) => e.employeeId === person.id);
-  const coverage = DEPENDENTS.filter((d) => d.employeeId === person.id);
+  const coverage = (reward.dependents ?? DEPENDENTS).filter((d) => d.employeeId === person.id);
   const rules = payRulesFor(String(person.countryCode) as CountryCode);
   const monthly = rules.earnings.reduce((sum, line) => sum + line.amount, 0);
   const showPay = revealPay;

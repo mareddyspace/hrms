@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Banner, Card, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { formatShortDate, plural } from "../../model.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
@@ -6,12 +6,18 @@ import {
   CASE_CATEGORIES,
   ICC_MEMBERS,
   POSH_SLA_DAYS,
+  ARCHIVED_STATUS,
   addCaseNote,
   addCommentByCode,
+  assignCase,
+  assigneeName,
   canManageCase,
+  caseAssignees,
   caseMoves,
+  enforceCaseRetention,
   findCaseByCode,
   getGrievanceState,
+  isCaseArchived,
   isCaseOpen,
   isIccMember,
   isPosh,
@@ -41,6 +47,10 @@ export function GrievancePage() {
   const state = useSyncExternalStore(subscribeGrievance, getGrievanceState, getGrievanceState);
   useSyncExternalStore(subscribePeople, listPeople, listPeople);
   const staff = isHr(actor.role) || isIccMember(actor.id);
+  // Apply the retention rule as it stands now (it can change in the Privacy centre).
+  useEffect(() => {
+    enforceCaseRetention();
+  }, []);
   const managed = state.cases.filter((c) => canManageCase(actor, c));
   const mine = state.cases.filter((c) => isReporter(actor, c));
   const [tab, setTab] = useState(staff ? "manage" : "raise");
@@ -240,6 +250,7 @@ function CaseSummary({ c, onOpen, showCode = false, staffView = false }: { c: Ca
         <span>Raised {formatShortDate(c.createdOn)}</span>
         {staffView && <span>Reporter: {c.anonymous ? "Anonymous" : personName(c.reporterId)}</span>}
         {staffView && c.againstName && <span>About: {c.againstName}</span>}
+        {staffView && <span>Assigned to: {assigneeName(c) ?? "Unassigned"}</span>}
         {!staffView && c.anonymous && <span>Anonymous</span>}
       </div>
       <div className="cmp-actions">
@@ -255,9 +266,12 @@ function ManageList({ actor, cases, onOpen }: { actor: ComplianceActor; cases: C
   const [status, setStatus] = useState<"open" | "all" | CaseStatus>("open");
   const [category, setCategory] = useState<"all" | CaseCategory>("all");
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [mineOnly, setMineOnly] = useState(false);
+  const hr = isHr(actor.role);
 
   const shown = cases
-    .filter((c) => (status === "open" ? isCaseOpen(c) : status === "all" ? true : c.status === status))
+    .filter((c) => (status === "open" ? isCaseOpen(c) : status === "all" ? !isCaseArchived(c) : c.status === status))
+    .filter((c) => !mineOnly || c.assigneeId === actor.id)
     .filter((c) => category === "all" || c.category === category)
     .filter((c) => !overdueOnly || isSlaOverdue(c))
     .sort((a, b) => Number(isSlaOverdue(b)) - Number(isSlaOverdue(a)) || b.createdOn.localeCompare(a.createdOn));
@@ -281,6 +295,7 @@ function ManageList({ actor, cases, onOpen }: { actor: ComplianceActor; cases: C
                   {(["Open", "Investigating", "Resolved", "Closed"] as CaseStatus[]).map((s) => (
                     <option key={s}>{s}</option>
                   ))}
+                  {hr && <option value={ARCHIVED_STATUS}>Archived</option>}
                 </select>
               </Field>
               <Field label="Category">
@@ -294,6 +309,10 @@ function ManageList({ actor, cases, onOpen }: { actor: ComplianceActor; cases: C
               <label className="cmp-check">
                 <input type="checkbox" checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)} />
                 SLA overdue only
+              </label>
+              <label className="cmp-check">
+                <input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} />
+                Assigned to me
               </label>
             </div>
             {shown.length === 0 ? (
@@ -348,6 +367,9 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
   const [note, setNote] = useState("");
   const [confidential, setConfidential] = useState(true);
   const [msg, setMsg] = useState<Msg>(null);
+  const [assignee, setAssignee] = useState(c.assigneeId ?? "");
+  const archived = isCaseArchived(c);
+  const canAssign = isHr(actor.role) && !archived;
   const moves = caseMoves(c);
   const due = slaDueOn(c);
 
@@ -370,6 +392,8 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
             <span>Raised {formatShortDate(c.createdOn)}</span>
             <span>Reporter: {c.anonymous ? "Anonymous" : personName(c.reporterId)}</span>
             {c.againstName && <span>About: {c.againstName}</span>}
+            <span>Assigned to: {assigneeName(c) ?? "Unassigned"}</span>
+            {c.closedOn && <span>Closed {formatShortDate(c.closedOn)}</span>}
             {due && <span>POSH SLA due {formatShortDate(due)}</span>}
           </span>
           <span className="row-gap">
@@ -379,6 +403,34 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
         </div>
         <p className="cmp-desc">{c.description}</p>
         {c.resolution && <p className="note ok">Resolution: {c.resolution}</p>}
+
+        {canAssign && (
+          <div className="cmp-form">
+            <Field label="Assign to">
+              <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+                <option value="">Unassigned</option>
+                {caseAssignees(c).map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                    {a.id === actor.id ? " (you)" : ""}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <div>
+              <button
+                className="btn-ghost"
+                type="button"
+                onClick={() => {
+                  const err = assignCase(actor, c.id, assignee);
+                  setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: assignee ? "Case assigned." : "Assignment cleared." });
+                }}
+              >
+                Assign
+              </button>
+            </div>
+          </div>
+        )}
 
         {moves.length > 0 && (
           <div className="cmp-form">
@@ -413,28 +465,30 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
           </div>
         )}
 
-        <div className="cmp-form">
-          <Field label="Add note" wide>
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} />
-          </Field>
-          <label className="cmp-check">
-            <input type="checkbox" checked={confidential} onChange={(e) => setConfidential(e.target.checked)} />
-            Confidential (hidden from reporter)
-          </label>
-          <div>
-            <button
-              className="btn-ghost"
-              type="button"
-              onClick={() => {
-                const err = addCaseNote(actor, c.id, note, confidential);
-                setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: "Note added." });
-                if (!err) setNote("");
-              }}
-            >
-              Add note
-            </button>
+        {!archived && (
+          <div className="cmp-form">
+            <Field label="Add note" wide>
+              <textarea value={note} onChange={(e) => setNote(e.target.value)} />
+            </Field>
+            <label className="cmp-check">
+              <input type="checkbox" checked={confidential} onChange={(e) => setConfidential(e.target.checked)} />
+              Confidential (hidden from reporter)
+            </label>
+            <div>
+              <button
+                className="btn-ghost"
+                type="button"
+                onClick={() => {
+                  const err = addCaseNote(actor, c.id, note, confidential);
+                  setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: "Note added." });
+                  if (!err) setNote("");
+                }}
+              >
+                Add note
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         <h3 style={{ margin: 0, fontSize: 15 }}>Timeline</h3>
         <Timeline entries={c.timeline} />
@@ -473,7 +527,7 @@ function ReporterCaseDialog({ c, actor, code, onClose }: { c: CaseRecord; actor:
         {c.resolution && <p className="note ok">Resolution: {c.resolution}</p>}
         <h3 style={{ margin: 0, fontSize: 15 }}>Timeline</h3>
         <Timeline entries={reporterTimeline(c)} />
-        {c.status !== "Closed" && (
+        {c.status !== "Closed" && !isCaseArchived(c) && (
           <div className="stack">
             <Field label="Add a comment">
               <textarea value={comment} onChange={(e) => setComment(e.target.value)} />

@@ -11,6 +11,8 @@ import {
 import { formatShortDate, parseISODate, toISO, todayISO } from "../model.ts";
 import { managementChain } from "../demoAccounts.ts";
 import { delegatedAuthority } from "./delegations.ts";
+import { pushPersonTaskAlert } from "./collabLocal.ts";
+import { appendAuditEntries } from "./auditTrail.ts";
 
 const KEY = "timez.attendance.state.v1";
 const CORRECTION_WINDOW_DAYS = 30;
@@ -220,9 +222,31 @@ export function listCorrectionsForManager(managerId: string): AttendanceCorrecti
   return getAttendanceState().corrections.filter((c) => c.managerId === managerId);
 }
 
-/** Corrections the viewer may decide — `canApprove` is the portal's reporting-line / HR check. */
-export function listCorrectionsForApprover(canApprove: (employeeId: string) => boolean): AttendanceCorrection[] {
-  return getAttendanceState().corrections.filter((c) => canApprove(c.employeeId));
+/** HR can review any correction, not only their own reporting line. */
+export function isHrReviewer(role: string): boolean {
+  return role === "hr" || role === "hr_admin";
+}
+
+/** Corrections the viewer may decide — `canApprove` is the portal's reporting-line check; HR sees every request but their own. */
+export function listCorrectionsForApprover(
+  canApprove: (employeeId: string) => boolean,
+  viewer?: { id: string; role: string },
+): AttendanceCorrection[] {
+  const hr = viewer ? isHrReviewer(viewer.role) : false;
+  return getAttendanceState().corrections.filter(
+    (c) => canApprove(c.employeeId) || (hr && c.employeeId !== viewer?.id),
+  );
+}
+
+/** HH:MM of a session punch, or "—". */
+function punchHm(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function sessionFor(state: AttendanceState, employeeId: string, date: string): TodaySession | undefined {
+  return state.sessions.find((x) => x.employeeId === employeeId && x.date === date);
 }
 
 /** Nearest manager in the reporting line — the default reviewer for a correction. */
@@ -267,9 +291,11 @@ export function submitCorrection(input: {
   if (sameDay.some((c) => c.status === "Pending")) return "A pending correction already exists for this date.";
   if (sameDay.some((c) => c.status === "Approved")) return "A correction for this date was already approved.";
 
+  const id = `ac-local-${Date.now()}`;
+  const current = sessionFor(getAttendanceState(), input.employeeId, input.date);
   update((s) => {
     s.corrections.unshift({
-      id: `ac-local-${Date.now()}`,
+      id,
       employeeId: input.employeeId,
       employeeName: input.employeeName,
       managerId: input.managerId,
@@ -282,10 +308,33 @@ export function submitCorrection(input: {
       createdAt: new Date().toISOString(),
     });
   });
+  appendAuditEntries([
+    {
+      at: new Date().toISOString(),
+      actorId: input.employeeId,
+      actorName: input.employeeName,
+      entity: "Attendance correction",
+      entityId: id,
+      subjectId: input.employeeId,
+      action: "Created",
+      changes: [
+        { field: "Date", before: "", after: input.date },
+        { field: "Check-in", before: punchHm(current?.checkIn), after: checkIn ?? punchHm(current?.checkIn) },
+        { field: "Check-out", before: punchHm(current?.checkOut), after: checkOut ?? punchHm(current?.checkOut) },
+        { field: "Status", before: "", after: "Pending" },
+      ],
+    },
+  ]);
+  pushPersonTaskAlert({
+    recipientId: input.managerId,
+    title: "Attendance correction",
+    body: `${input.employeeName} asked to correct ${formatShortDate(input.date)}.`,
+    href: "/attendance",
+  });
   return null;
 }
 
-/** Decide a correction. Only someone above the employee in their reporting line may decide — never self. */
+/** Decide a correction. Someone above the employee in their reporting line, or HR, may decide — never self. */
 export function decideCorrection(
   id: string,
   approver: { id: string; role: string; fullName?: string },
@@ -299,9 +348,13 @@ export function decideCorrection(
   // An active approval delegation covering attendance corrections counts too (§25).
   const inLine =
     managementChain(row.employeeId).some((m) => m.id === approver.id) ||
-    delegatedAuthority(approver.id, row.employeeId, "attendance") !== null;
-  if (!inLine) return "Only someone above this person in their reporting line can review this correction.";
+    delegatedAuthority(approver.id, row.employeeId, "attendance") !== null ||
+    isHrReviewer(approver.role);
+  if (!inLine) return "Only someone above this person in their reporting line, or HR, can review this correction.";
   if (row.status !== "Pending") return "This request was already decided.";
+  const before = sessionFor(getAttendanceState(), row.employeeId, row.date);
+  const beforeIn = punchHm(before?.checkIn);
+  const beforeOut = punchHm(before?.checkOut);
   update((s) => {
     const target = s.corrections.find((c) => c.id === id);
     if (!target) return;
@@ -329,6 +382,29 @@ export function decideCorrection(
         breaks: [],
       });
     }
+  });
+  const after = sessionFor(getAttendanceState(), row.employeeId, row.date);
+  appendAuditEntries([
+    {
+      at: new Date().toISOString(),
+      actorId: approver.id,
+      actorName: approver.fullName ?? approver.id,
+      entity: "Attendance correction",
+      entityId: row.id,
+      subjectId: row.employeeId,
+      action: "Updated",
+      changes: [
+        { field: "Status", before: "Pending", after: status },
+        { field: "Check-in", before: beforeIn, after: punchHm(after?.checkIn) },
+        { field: "Check-out", before: beforeOut, after: punchHm(after?.checkOut) },
+      ],
+    },
+  ]);
+  pushPersonTaskAlert({
+    recipientId: row.employeeId,
+    title: `Correction ${status.toLowerCase()}`,
+    body: `${approver.fullName ?? "Your reviewer"} ${status.toLowerCase()} your correction for ${formatShortDate(row.date)}.${note?.trim() ? ` Note: ${note.trim()}` : ""}`,
+    href: "/attendance",
   });
   return null;
 }

@@ -259,8 +259,10 @@ a { color: var(--accent); }
   gap: 2px;
   flex: 1;
   min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   padding: 0 8px;
+  overflow-x: hidden;
 }
 .side-empty {
   margin: 8px 6px;
@@ -1212,7 +1214,9 @@ table.data tr:last-child td { border-bottom: 0; }
 .kv dd { margin: 0; font-weight: 650; font-weight: 600; text-align: right; }
 
 .empty { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
-.quiet-link { font-size: 13.5px; font-weight: 650; font-weight: 600; text-decoration: none; }
+.quiet-link { font-size: 13.5px; font-weight: 600; text-decoration: none; }
+/* Buttons styled as links (open a record in place). */
+button.quiet-link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; font-weight: 600; text-align: left; }
 .quiet-link:hover { text-decoration: underline; }
 
 .page-head { align-items: flex-end; margin: 0 0 14px; }

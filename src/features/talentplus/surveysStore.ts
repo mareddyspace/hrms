@@ -358,3 +358,105 @@ export function resultsFor(actor: PlusActor, surveyId: string): ResultsAccess {
   if (team.length < MIN_RESPONSES) return { scope: "too-few", count: team.length };
   return { scope: "team", responses: team };
 }
+
+/* ───────────── Engagement trend ───────────── */
+
+export interface EngagementGroup {
+  department: string;
+  responses: number;
+  /** null when the group is below the anonymity threshold or the survey had no such question. */
+  engagement: number | null;
+  enps: number | null;
+}
+
+export interface EngagementPoint {
+  surveyId: string;
+  title: string;
+  closedOn: string;
+  responses: number;
+  /** Average of all 1–5 rating answers, as 0–100. */
+  engagement: number | null;
+  enps: number | null;
+  departments: EngagementGroup[];
+}
+
+/** Pulse runs from before this portal (aggregates only — no individual answers were imported). */
+const PAST_RUNS: EngagementPoint[] = [
+  {
+    surveyId: "srv-pulse-q1",
+    title: "Quarterly pulse — Q1 2026",
+    closedOn: "2026-03-20",
+    responses: 10,
+    engagement: 63,
+    enps: 10,
+    departments: [
+      { department: "Engineering", responses: 6, engagement: 60, enps: 0 },
+      { department: "People", responses: 1, engagement: null, enps: null },
+      { department: "Product", responses: 1, engagement: null, enps: null },
+      { department: "IT", responses: 1, engagement: null, enps: null },
+      { department: "Talent Acquisition", responses: 1, engagement: null, enps: null },
+    ],
+  },
+  {
+    surveyId: "srv-pulse-q2",
+    title: "Quarterly pulse — Q2 2026",
+    closedOn: "2026-06-19",
+    responses: 11,
+    engagement: 66,
+    enps: 18,
+    departments: [
+      { department: "Engineering", responses: 6, engagement: 64, enps: 17 },
+      { department: "People", responses: 1, engagement: null, enps: null },
+      { department: "Product", responses: 1, engagement: null, enps: null },
+      { department: "IT", responses: 1, engagement: null, enps: null },
+      { department: "Talent Acquisition", responses: 1, engagement: null, enps: null },
+      { department: "Total Rewards", responses: 1, engagement: null, enps: null },
+    ],
+  },
+];
+
+/** Mean of every 1–5 rating answer, scaled so 1 → 0 and 5 → 100. */
+export function engagementScore(survey: Survey, responses: SurveyResponse[]): number | null {
+  const ratingIds = survey.questions.filter((q) => q.kind === "rating").map((q) => q.id);
+  const values = responses.flatMap((r) => ratingIds.map((id) => r.answers[id]).filter((v): v is number => typeof v === "number"));
+  if (!values.length) return null;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  return Math.round(((mean - 1) / 4) * 100);
+}
+
+function enpsOf(survey: Survey, responses: SurveyResponse[]): number | null {
+  const q = survey.questions.find((x) => x.kind === "enps");
+  if (!q) return null;
+  const scores = responses.map((r) => r.answers[q.id]).filter((v): v is number => typeof v === "number");
+  return scores.length ? enpsScore(scores).score : null;
+}
+
+function pointFor(survey: Survey, responses: SurveyResponse[]): EngagementPoint {
+  const enough = responses.length >= MIN_RESPONSES;
+  const groups = new Map<string, SurveyResponse[]>();
+  for (const r of responses) groups.set(r.department, [...(groups.get(r.department) ?? []), r]);
+  return {
+    surveyId: survey.id,
+    title: survey.title,
+    closedOn: survey.closeDate,
+    responses: responses.length,
+    engagement: enough ? engagementScore(survey, responses) : null,
+    enps: enough ? enpsOf(survey, responses) : null,
+    departments: [...groups.entries()].map(([department, list]) => ({
+      department,
+      responses: list.length,
+      engagement: list.length >= MIN_RESPONSES ? engagementScore(survey, list) : null,
+      enps: list.length >= MIN_RESPONSES ? enpsOf(survey, list) : null,
+    })),
+  };
+}
+
+/** HR only: engagement and eNPS for every closed company-wide survey, oldest first. */
+export function engagementTrend(actor: PlusActor, state: SurveyState = getSurveysState()): EngagementPoint[] {
+  if (!isHr(actor.role)) return [];
+  const today = todayISO();
+  const live = state.surveys
+    .filter((s) => s.published && surveyPhase(s, today) === "Closed" && s.audience.type === "all")
+    .map((s) => pointFor(s, state.responses.filter((r) => r.surveyId === s.id)));
+  return [...PAST_RUNS, ...live].sort((a, b) => a.closedOn.localeCompare(b.closedOn));
+}

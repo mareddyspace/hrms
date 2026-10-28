@@ -16,6 +16,10 @@ import {
 import {
   CHAT_PEOPLE,
   FAQ_ITEMS,
+  HR_DESK_OWNERS,
+  HR_REQUEST_CATEGORIES,
+  HR_REQUEST_PRIORITIES,
+  HR_REQUEST_SLA,
   chatPersonById,
   canManageAnnouncement,
   isHrRole,
@@ -23,13 +27,19 @@ import {
   type ApprovalKind,
   type ChatAvailability,
   type ChatPerson,
+  hrDeskOwnerName,
+  hrRequestOverdue,
+  type HrRequest,
   type HrRequestCategory,
+  type HrRequestPriority,
   type InboxTab,
 } from "../data/collabData.ts";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 import {
   addHrComment,
   allowedHrStatuses,
+  assignHrRequest,
+  canReassignHrRequest,
   conversationUnreadCount,
   countPendingInbox,
   countUnreadMessages,
@@ -40,15 +50,18 @@ import {
   delegateInboxTask,
   getCollabState,
   hrRequestVisibleTo,
+  isHrDeskMember,
   isMessageUnreadFor,
   listConversationsForUser,
   markAnnouncementRead,
   markConversationRead,
   sendChatMessage,
   setAnnouncementState,
+  setHrRequestPriority,
   setHrRequestStatus,
   startDirectChat,
   subscribeCollab,
+  worksHrRequest,
 } from "../data/collabLocal.ts";
 import { usePortal } from "../store.tsx";
 
@@ -876,18 +889,59 @@ export { NotificationCenterPage } from "./NotificationCenter.tsx";
 
 /* ───────────────────────────── 5. HELP & HR REQUESTS ── */
 
+type HrQueueFilter = "open" | "mine" | "unassigned" | "overdue" | "all";
+
+function formatDueAt(iso: string | undefined) {
+  if (!iso) return "—";
+  return formatWhen(iso);
+}
+
+/** Hours between two timestamps, rounded to one decimal. */
+function hoursBetween(fromIso: string, toIso: string): number | null {
+  const a = Date.parse(fromIso);
+  const b = Date.parse(toIso);
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return null;
+  return (b - a) / 3_600_000;
+}
+
+function formatHours(h: number | null): string {
+  if (h === null) return "—";
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))} min`;
+  if (h < 48) return `${h.toFixed(1)} h`;
+  return `${(h / 24).toFixed(1)} days`;
+}
+
+function HrDueCell({ request }: { request: HrRequest }) {
+  const overdue = hrRequestOverdue(request);
+  return (
+    <span className="row-gap">
+      <span>{formatDueAt(request.dueAt)}</span>
+      {overdue && <StatusBadge status="Overdue" tone="danger" literal />}
+    </span>
+  );
+}
+
 export function HelpHrRequestsPage() {
   const { employee, demoProfile } = usePortal();
   const collab = useCollab();
+  const [params, setParams] = useSearchParams();
   const hrView = isHrRole(demoProfile.role);
-  const actor = { id: employee.id, role: demoProfile.role };
-  const requests = useMemo(
+  const deskView = isHrDeskMember(employee.id, demoProfile.role);
+  const actor = { id: employee.id, role: demoProfile.role, name: employee.fullName };
+  const visible = useMemo(
     () => collab.hrRequests.filter((r) => hrRequestVisibleTo(r, employee.id, demoProfile.role)),
     [collab.hrRequests, employee.id, demoProfile.role],
   );
+  const mine = useMemo(() => visible.filter((r) => r.requesterId === employee.id), [visible, employee.id]);
+  const queue = useMemo(
+    () => visible.filter((r) => r.requesterId !== employee.id && (hrView || r.assigneeId === employee.id)),
+    [visible, employee.id, hrView],
+  );
   // HR handles requests; they don't raise HR requests to themselves.
-  const [tab, setTab] = useState(hrView ? "history" : "request");
+  const [tab, setTab] = useState(hrView ? "queue" : "request");
+  const [queueFilter, setQueueFilter] = useState<HrQueueFilter>("open");
   const [category, setCategory] = useState<HrRequestCategory>("Documents");
+  const [priority, setPriority] = useState<HrRequestPriority>("Normal");
   const [subject, setSubject] = useState("");
   const {
     value: description,
@@ -904,8 +958,66 @@ export function HelpHrRequestsPage() {
   const [ticketError, setTicketError] = useState("");
   const [faqQ, setFaqQ] = useState("");
 
-  const selected = requests.find((r) => r.id === selectedId) ?? requests[0] ?? null;
+  // Deep link from a notification: /help?request=<id>
+  const linkedId = params.get("request");
+  useEffect(() => {
+    if (!linkedId) return;
+    const target = visible.find((r) => r.id === linkedId);
+    if (target) {
+      setSelectedId(target.id);
+      setTab(target.requesterId === employee.id ? "history" : "queue");
+      if (target.requesterId !== employee.id) setQueueFilter("all");
+    }
+    const next = new URLSearchParams(params);
+    next.delete("request");
+    setParams(next, { replace: true });
+  }, [linkedId, visible, employee.id, params, setParams]);
+
+  const queueRows = useMemo(() => {
+    const now = Date.now();
+    const rows = queue.filter((r) => {
+      switch (queueFilter) {
+        case "open":
+          return r.status !== "Resolved" && r.status !== "Closed";
+        case "mine":
+          return r.assigneeId === employee.id && r.status !== "Resolved" && r.status !== "Closed";
+        case "unassigned":
+          return !r.assigneeId && r.status !== "Resolved" && r.status !== "Closed";
+        case "overdue":
+          return hrRequestOverdue(r, now);
+        default:
+          return true;
+      }
+    });
+    // Overdue first, then the soonest due.
+    return rows.sort((a, b) => {
+      const oa = hrRequestOverdue(a, now) ? 0 : 1;
+      const ob = hrRequestOverdue(b, now) ? 0 : 1;
+      if (oa !== ob) return oa - ob;
+      return (Date.parse(a.dueAt ?? "") || Infinity) - (Date.parse(b.dueAt ?? "") || Infinity);
+    });
+  }, [queue, queueFilter, employee.id]);
+
+  const sla = useMemo(() => {
+    const now = Date.now();
+    const open = queue.filter((r) => r.status !== "Resolved" && r.status !== "Closed");
+    const responses = queue
+      .map((r) => (r.firstResponseAt && r.submittedAt ? hoursBetween(r.submittedAt, r.firstResponseAt) : null))
+      .filter((h): h is number => h !== null);
+    return {
+      open: open.length,
+      overdue: open.filter((r) => hrRequestOverdue(r, now)).length,
+      unassigned: open.filter((r) => !r.assigneeId).length,
+      avgFirstResponse: responses.length ? responses.reduce((s, h) => s + h, 0) / responses.length : null,
+      responded: responses.length,
+    };
+  }, [queue]);
+
+  const listForTab = tab === "queue" ? queue : mine;
+  const selected = listForTab.find((r) => r.id === selectedId) ?? (tab === "queue" ? queueRows[0] : mine[0]) ?? null;
   const statusOptions = selected ? allowedHrStatuses(selected, employee.id, demoProfile.role) : [];
+  const canReassign = selected ? canReassignHrRequest(selected, employee.id, demoProfile.role) : false;
+  const canSetPriority = selected ? worksHrRequest(selected, employee.id, demoProfile.role) : false;
 
   const faqs = FAQ_ITEMS.filter((f) => {
     if (!faqQ) return true;
@@ -924,30 +1036,166 @@ export function HelpHrRequestsPage() {
       setFormOk("");
       return;
     }
-    createHrRequest({
+    const id = createHrRequest({
       category,
       subject,
       description,
       author: employee.fullName,
       requesterId: employee.id,
+      priority,
     });
     setSubject("");
+    setPriority("Normal");
     resetDescription();
     setFormError("");
     setFormOk("Request submitted.");
+    setSelectedId(id);
     setTab("history");
   }
+
+  function openRequest(id: string) {
+    setSelectedId(id);
+    setTicketError("");
+  }
+
+  const route = HR_REQUEST_SLA[category] ?? HR_REQUEST_SLA.Other;
+
+  const detail = (
+    <Card title="Status & comments">
+      {!selected ? (
+        <EmptyState title="Select a request" description="View comments and update status." />
+      ) : (
+        <div className="stack">
+          <h3 style={{ margin: 0 }}>{selected.subject}</h3>
+          <p className="muted">
+            {selected.category} · Created {selected.createdAt}
+            {selected.requesterId !== employee.id && ` · Raised by ${selected.requesterName ?? "Unknown"}`}
+          </p>
+          <dl className="kv">
+            <dt>Due</dt>
+            <dd><HrDueCell request={selected} /></dd>
+            <dt>Owner</dt>
+            <dd>{hrDeskOwnerName(selected.assigneeId)}</dd>
+            <dt>Priority</dt>
+            <dd>{selected.priority ?? "Normal"}</dd>
+            <dt>First response</dt>
+            <dd>
+              {selected.firstResponseAt
+                ? `${formatWhen(selected.firstResponseAt)} (${formatHours(
+                    selected.submittedAt ? hoursBetween(selected.submittedAt, selected.firstResponseAt) : null,
+                  )})`
+                : "Not yet"}
+            </dd>
+          </dl>
+          {selected.status === "Waiting on you" && (
+            <p className="muted">The due time is paused while HR waits for a reply.</p>
+          )}
+          {(canReassign || canSetPriority) && (
+            <div className="row-gap">
+              {canReassign && (
+                <Field label="Owner">
+                  <select
+                    value={selected.assigneeId ?? ""}
+                    onChange={(e) => setTicketError(assignHrRequest(selected.id, e.target.value, actor) ?? "")}
+                  >
+                    <option value="">Unassigned</option>
+                    {HR_DESK_OWNERS.filter((o) => o.id !== selected.requesterId).map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.id === employee.id ? `${o.name} (me)` : o.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+              {canSetPriority && (
+                <Field label="Priority">
+                  <select
+                    value={selected.priority ?? "Normal"}
+                    onChange={(e) =>
+                      setTicketError(setHrRequestPriority(selected.id, e.target.value as HrRequestPriority, actor) ?? "")
+                    }
+                  >
+                    {HR_REQUEST_PRIORITIES.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+            </div>
+          )}
+          {statusOptions.length > 0 ? (
+            <Field label="Status">
+              <select
+                value={selected.status}
+                onChange={(e) =>
+                  setTicketError(setHrRequestStatus(selected.id, e.target.value as typeof selected.status, actor) ?? "")
+                }
+              >
+                {[selected.status, ...statusOptions].map((s) => (
+                  <option key={s} value={s}>
+                    {selected.requesterId === employee.id && s === "In progress" && selected.status !== "In progress"
+                      ? "Reopen"
+                      : s}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            <div className="row-gap">
+              <StatusBadge status={selected.status} />
+              <span className="muted">
+                {selected.requesterId === employee.id && hrView
+                  ? "You raised this request — another HR team member resolves it."
+                  : "HR updates the status of this request."}
+              </span>
+            </div>
+          )}
+          <p>{selected.description}</p>
+          <h4 className="collab-section-title">Comments</h4>
+          <ul className="collab-timeline">
+            {selected.comments.map((c, i) => (
+              <li key={`${c.at}-${i}`}>
+                <strong>{c.author}</strong>
+                <div className="muted">{formatWhen(c.at)}</div>
+                <div>{c.text}</div>
+              </li>
+            ))}
+          </ul>
+          {ticketError && <Banner message={{ tone: "err", text: ticketError }} />}
+          <Field label="Add comment" wide>
+            <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
+          </Field>
+          <button
+            type="button"
+            className="btn"
+            disabled={!comment.trim()}
+            onClick={() => {
+              const failure = addHrComment(selected.id, employee.fullName, comment, actor);
+              setTicketError(failure ?? "");
+              if (!failure) setComment("");
+            }}
+          >
+            Post comment
+          </button>
+        </div>
+      )}
+    </Card>
+  );
 
   return (
     <Page title={hrView ? "HR requests" : "Helpdesk"}>
       <Tabs
         tabs={[
-          ...(hrView ? [] : [{ id: "request", label: "New request" }]),
-          { id: "history", label: hrView ? "Request queue" : "Request history" },
+          ...(hrView ? [] : [{ id: "request", label: "New request" }, { id: "history", label: "Request history" }]),
+          ...(deskView ? [{ id: "queue", label: "Request queue" }] : []),
           { id: "faq", label: "FAQ & policies" },
         ]}
         value={tab}
-        onChange={setTab}
+        onChange={(id) => {
+          setTab(id);
+          setSelectedId("");
+          setTicketError("");
+        }}
       />
 
       {tab === "request" && !hrView && (
@@ -961,20 +1209,22 @@ export function HelpHrRequestsPage() {
                   fillDescription("hrRequest", e.target.value);
                 }}
               >
-                {(
-                  [
-                    "Payroll provider",
-                    "Benefits",
-                    "Documents",
-                    "Leave",
-                    "Profile correction",
-                    "Other",
-                  ] as const
-                ).map((c) => (
+                {HR_REQUEST_CATEGORIES.map((c) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
             </Field>
+            <Field label="Priority">
+              <select value={priority} onChange={(e) => setPriority(e.target.value as HrRequestPriority)}>
+                {HR_REQUEST_PRIORITIES.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </Field>
+            <p className="muted">
+              {category} requests go to {hrDeskOwnerName(route.ownerId)} and are due within {route.workingDays} working{" "}
+              {route.workingDays === 1 ? "day" : "days"}.
+            </p>
             <Field label="Subject">
               <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Short summary" />
             </Field>
@@ -997,99 +1247,78 @@ export function HelpHrRequestsPage() {
         </Card>
       )}
 
-      {tab === "history" && (
+      {tab === "history" && !hrView && (
         <div className="collab-split">
-          <Card title={hrView ? "Requests from employees" : "My requests"}>
-            {requests.length === 0 ? (
-              <EmptyState title="No requests yet" description={hrView ? undefined : "Use the New request tab."} />
+          <Card title="My requests">
+            {mine.length === 0 ? (
+              <EmptyState title="No requests yet" description="Use the New request tab." />
             ) : (
               <DataTable
-                headers={hrView ? ["Subject", "Requester", "Category", "Status", "Updated", ""] : ["Subject", "Category", "Status", "Updated", ""]}
-                rows={requests.map((r) => [
+                headers={["Subject", "Category", "Status", "Due", "Updated", ""]}
+                rows={mine.map((r) => [
                   r.subject,
-                  ...(hrView ? [r.requesterName ?? "Unknown (legacy)"] : []),
                   r.category,
                   <StatusBadge key={r.id} status={r.status} />,
+                  r.status === "Resolved" || r.status === "Closed" ? "—" : <HrDueCell key={`${r.id}-d`} request={r} />,
                   r.updatedAt,
-                  <button key={`${r.id}-o`} type="button" className="quiet-link" onClick={() => {
-                      setSelectedId(r.id);
-                      setTicketError("");
-                    }}>
+                  <button key={`${r.id}-o`} type="button" className="quiet-link" onClick={() => openRequest(r.id)}>
                     Open
                   </button>,
                 ])}
               />
             )}
           </Card>
-          <Card title="Status & comments">
-            {!selected ? (
-              <EmptyState title="Select a request" description="View comments and update status." />
-            ) : (
-              <div className="stack">
-                <h3 style={{ margin: 0 }}>{selected.subject}</h3>
-                <p className="muted">
-                  {selected.category} · Created {selected.createdAt}
-                  {hrView && ` · Raised by ${selected.requesterName ?? "Unknown"}`}
-                </p>
-                {statusOptions.length > 0 ? (
-                  <Field label="Status">
-                    <select
-                      value={selected.status}
-                      onChange={(e) =>
-                        setTicketError(
-                          setHrRequestStatus(selected.id, e.target.value as typeof selected.status, actor) ?? "",
-                        )
-                      }
-                    >
-                      {[selected.status, ...statusOptions].map((s) => (
-                        <option key={s} value={s}>
-                          {(!hrView || selected.requesterId === employee.id) && s === "In progress" && selected.status !== "In progress"
-                            ? "Reopen"
-                            : s}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                ) : (
-                  <div className="row-gap">
-                    <StatusBadge status={selected.status} />
-                    <span className="muted">
-                      {selected.requesterId === employee.id && hrView
-                        ? "You raised this request — another HR team member resolves it."
-                        : "HR updates the status of this request."}
-                    </span>
-                  </div>
-                )}
-                <p>{selected.description}</p>
-                <h4 className="collab-section-title">Comments</h4>
-                <ul className="collab-timeline">
-                  {selected.comments.map((c, i) => (
-                    <li key={`${c.at}-${i}`}>
-                      <strong>{c.author}</strong>
-                      <div className="muted">{formatWhen(c.at)}</div>
-                      <div>{c.text}</div>
-                    </li>
-                  ))}
-                </ul>
-                {ticketError && <Banner message={{ tone: "err", text: ticketError }} />}
-                <Field label="Add comment" wide>
-                  <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
-                </Field>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={!comment.trim()}
-                  onClick={() => {
-                    const failure = addHrComment(selected.id, employee.fullName, comment, actor);
-                    setTicketError(failure ?? "");
-                    if (!failure) setComment("");
-                  }}
-                >
-                  Post comment
-                </button>
-              </div>
-            )}
-          </Card>
+          {detail}
+        </div>
+      )}
+
+      {tab === "queue" && deskView && (
+        <div className="stack">
+          <MetricGrid>
+            <MetricCard label="Open" value={sla.open} hint={`${sla.unassigned} unassigned`} />
+            <MetricCard label="Overdue" value={sla.overdue} hint="Past the category due time" />
+            <MetricCard
+              label="Avg first response"
+              value={formatHours(sla.avgFirstResponse)}
+              hint={sla.responded ? `Across ${sla.responded} requests` : "No replies yet"}
+            />
+          </MetricGrid>
+          <FilterBar>
+            <label className="filter-label">
+              Show
+              <select value={queueFilter} onChange={(e) => setQueueFilter(e.target.value as HrQueueFilter)}>
+                <option value="open">All open</option>
+                <option value="mine">Assigned to me</option>
+                <option value="unassigned">Unassigned</option>
+                <option value="overdue">Overdue</option>
+                <option value="all">All requests</option>
+              </select>
+            </label>
+          </FilterBar>
+          <div className="collab-split">
+            <Card title="Requests from employees">
+              {queueRows.length === 0 ? (
+                <EmptyState title="Nothing in this view" description="Try another filter." />
+              ) : (
+                <DataTable
+                  headers={["Subject", "Requester", "Category", "Priority", "Owner", "Due", "Status", ""]}
+                  rows={queueRows.map((r) => [
+                    r.subject,
+                    r.requesterName ?? "Unknown",
+                    r.category,
+                    r.priority ?? "Normal",
+                    hrDeskOwnerName(r.assigneeId),
+                    r.status === "Resolved" || r.status === "Closed" ? "—" : <HrDueCell key={`${r.id}-d`} request={r} />,
+                    <StatusBadge key={r.id} status={r.status} />,
+                    <button key={`${r.id}-o`} type="button" className="quiet-link" onClick={() => openRequest(r.id)}>
+                      Open
+                    </button>,
+                  ])}
+                />
+              )}
+            </Card>
+            {detail}
+          </div>
         </div>
       )}
 

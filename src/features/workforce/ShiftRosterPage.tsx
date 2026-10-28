@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
 import { Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
 import { addDaysISO, todayISO } from "../../model.ts";
@@ -30,6 +30,20 @@ import {
   subscribeShifts,
   weekConflicts,
   weekDates,
+  canSetCoverage,
+  checkCoverageAlerts,
+  COMPANY_SCOPE,
+  coverageGaps,
+  coverageMinimum,
+  describeGaps,
+  hasOwnCoverageRule,
+  MAX_COVERAGE,
+  resetCoverage,
+  setCoverageMinimum,
+  swapCoverageImpact,
+  weekCoverage,
+  WEEKDAY_NAMES,
+  type CoverageSlot,
   type RosterContext,
   type ShiftDef,
   type ShiftSwap,
@@ -37,6 +51,7 @@ import {
 } from "./shiftsStore.ts";
 import { canDecideFor, fmt, isHrRole, isWeekend, personName, shortDay, weekStartOf, type WorkforceActor } from "./workforceShared.ts";
 import "./workforce.css";
+import "./coverage.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -58,15 +73,22 @@ export function ShiftRosterPage() {
   const actor: WorkforceActor = demoProfile;
   const team = taskTeamFor(actor.id);
   const hr = isHrRole(actor.role);
+  const ctx = useRosterContext();
   const tabs = [
     { id: "mine", label: "My shifts" },
     { id: "swaps", label: "Swaps" },
     { id: "compoff", label: "Comp-off" },
     ...(team.length ? [{ id: "roster", label: "Team roster" }] : []),
+    ...(team.length || hr ? [{ id: "coverage", label: "Coverage" }] : []),
     ...(hr ? [{ id: "types", label: "Shift types" }] : []),
   ];
   const [tab, setTab] = useState("mine");
   const active = tabs.some((t) => t.id === tab) ? tab : "mine";
+
+  // Leave approved since the roster was published can leave a shift short — tell the roster owner once.
+  useEffect(() => {
+    checkCoverageAlerts(ctx);
+  }, [ctx]);
 
   return (
     <Page title="Shifts & roster">
@@ -75,6 +97,7 @@ export function ShiftRosterPage() {
       {active === "swaps" && <Swaps actor={actor} />}
       {active === "compoff" && <CompOff actor={actor} />}
       {active === "roster" && <TeamRoster actor={actor} />}
+      {active === "coverage" && <CoverageSettings actor={actor} />}
       {active === "types" && <ShiftTypes actor={actor} />}
     </Page>
   );
@@ -212,26 +235,34 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
       {toApprove.length > 0 && (
         <Card title="For your approval">
           <ul className="approval-list">
-            {toApprove.map((s) => (
+            {toApprove.map((s) => {
+              const impact = swapCoverageImpact(ctx, s.id, data);
+              return (
               <li key={s.id} className="approval-item">
                 <strong>{shortDay(s.date)}</strong>
                 <span>{swapLine(s, data)}</span>
                 <p className="muted">{s.reason}</p>
+                {impact.length > 0 && <p className="note wf-danger">Leaves {describeGaps(impact, data)} under-covered.</p>}
                 <div className="approval-actions">
                   <input aria-label="Decision note"
                     placeholder="Note (needed to reject)"
                     value={notes[s.id] ?? ""}
                     onChange={(e) => setNotes({ ...notes, [s.id]: e.target.value })}
                   />
-                  <button className="btn btn-tiny" type="button" onClick={() => setMsg(result(decideSwap(actor, ctx, s.id, true, notes[s.id]), "Swap approved — roster updated."))}>
-                    Approve
+                  <button
+                    className="btn btn-tiny"
+                    type="button"
+                    onClick={() => setMsg(result(decideSwap(actor, ctx, s.id, true, notes[s.id], impact.length > 0), "Swap approved — roster updated."))}
+                  >
+                    {impact.length ? "Approve anyway" : "Approve"}
                   </button>
                   <button className="btn-ghost btn-tiny" type="button" onClick={() => setMsg(result(decideSwap(actor, ctx, s.id, false, notes[s.id]), "Swap rejected."))}>
                     Reject
                   </button>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </Card>
       )}
@@ -384,12 +415,35 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
   const published = week?.status === "published";
   const activeShifts = data.shifts.filter((s) => s.active);
   const conflicts = useMemo(() => weekConflicts(data, ctx, actor.id, weekStart), [data, ctx, actor.id, weekStart]);
+  const coverage = useMemo(() => weekCoverage(data, ctx, actor.id, weekStart), [data, ctx, actor.id, weekStart]);
+  const gaps = useMemo(() => coverageGaps(data, ctx, actor.id, weekStart), [data, ctx, actor.id, weekStart]);
+  const [confirmGaps, setConfirmGaps] = useState(false);
   const weekOver = dates[6] < today;
 
   function change(personId: string, date: string, shiftId: string) {
     const error = assignShift(actor, ctx, personId, date, shiftId || null);
     setMsg(error ? { tone: "err", text: error } : null);
+    setConfirmGaps(false);
   }
+
+  function publish(allowGaps: boolean) {
+    if (gaps.length && !allowGaps) {
+      setConfirmGaps(true);
+      setMsg({ tone: "warn", text: `Under-covered: ${describeGaps(gaps, data)}. Fill these shifts or publish anyway.` });
+      return;
+    }
+    setConfirmGaps(false);
+    setMsg(result(publishWeek(actor, ctx, weekStart, allowGaps), "Roster published — your team can see their shifts."));
+  }
+
+  const coverageShifts = data.shifts.filter((s) => coverage.some((c) => c.shiftId === s.id));
+  const coverageRows = coverageShifts.map((shift) => [
+    <strong key="n">{shift.name}</strong>,
+    ...dates.map((date) => {
+      const slot = coverage.find((c) => c.shiftId === shift.id && c.date === date);
+      return slot ? <CoverageCell key={date} slot={slot} /> : <span key={date} className="muted">—</span>;
+    }),
+  ]);
 
   const rows = team.map((person) => [
     <strong key="n">{person.shortName}</strong>,
@@ -438,10 +492,10 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
         title={`Week of ${fmt(weekStart)}`}
         action={
           <div className="row-gap">
-            <button className="btn-ghost btn-tiny" type="button" onClick={() => { setWeekStart(addDaysISO(weekStart, -7)); setMsg(null); }}>
+            <button className="btn-ghost btn-tiny" type="button" onClick={() => { setWeekStart(addDaysISO(weekStart, -7)); setMsg(null); setConfirmGaps(false); }}>
               Previous
             </button>
-            <button className="btn-ghost btn-tiny" type="button" onClick={() => { setWeekStart(addDaysISO(weekStart, 7)); setMsg(null); }}>
+            <button className="btn-ghost btn-tiny" type="button" onClick={() => { setWeekStart(addDaysISO(weekStart, 7)); setMsg(null); setConfirmGaps(false); }}>
               Next
             </button>
           </div>
@@ -454,9 +508,16 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
               {published && week?.publishedOn && <span className="muted">Published {fmt(week.publishedOn)} by {week.publishedByName}</span>}
             </div>
             {!published && !weekOver && (
-              <button className="btn" type="button" onClick={() => setMsg(result(publishWeek(actor, ctx, weekStart), "Roster published — your team can see their shifts."))}>
-                Publish roster
-              </button>
+              <div className="row-gap">
+                <button className="btn" type="button" onClick={() => publish(false)}>
+                  Publish roster
+                </button>
+                {confirmGaps && gaps.length > 0 && (
+                  <button className="btn-ghost" type="button" onClick={() => publish(true)}>
+                    Publish anyway
+                  </button>
+                )}
+              </div>
             )}
           </div>
           <Banner message={msg} />
@@ -475,6 +536,26 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
           </p>
         </div>
       </Card>
+      <Card title="Coverage">
+        <div className="stack">
+          {gaps.length > 0 ? (
+            <p className="note wf-danger">
+              {gaps.length} under-covered {gaps.length === 1 ? "shift" : "shifts"}: {describeGaps(gaps, data)}.
+            </p>
+          ) : (
+            coverage.some((c) => c.required > 0) && <p className="muted">Every shift meets its minimum this week.</p>
+          )}
+          <div className="wf-grid">
+            <DataTable headers={headers.map((h, i) => (i === 0 ? "Shift" : h))} rows={coverageRows} empty={<EmptyState title="No shifts this week" />} />
+          </div>
+          <div className="wf-cov-legend muted">
+            <span><span className="wf-cov under">0/1</span> Under minimum</span>
+            <span><span className="wf-cov ok">1/1</span> Covered</span>
+            <span><span className="wf-cov over">2/1</span> Over minimum</span>
+            <span>People on approved leave don't count.</span>
+          </div>
+        </div>
+      </Card>
       <Card title="Shift hours">
         <div className="row-gap">
           {activeShifts.map((s) => (
@@ -483,6 +564,119 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
               {s.weekendOnly ? " · weekends" : ""}
             </span>
           ))}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+// ---------- Coverage ----------
+
+function CoverageCell({ slot }: { slot: CoverageSlot }) {
+  const title =
+    slot.status === "under"
+      ? `Needs ${slot.required - slot.assigned} more`
+      : slot.status === "over"
+        ? `${slot.assigned - slot.required} over minimum`
+        : slot.status === "none"
+          ? "Not needed"
+          : "Covered";
+  const leaveNote = slot.onLeave.length ? ` · ${slot.onLeave.map(personName).join(", ")} on leave` : "";
+  return (
+    <div className="wf-cell">
+      <span className={`wf-cov ${slot.status}`} title={title + leaveNote}>
+        {slot.assigned}/{slot.required}
+      </span>
+      {slot.onLeave.length > 0 && <span className="wf-tag warn">{slot.onLeave.length} on leave</span>}
+    </div>
+  );
+}
+
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+function CoverageSettings({ actor }: { actor: WorkforceActor }) {
+  const data = useShifts();
+  const hr = isHrRole(actor.role);
+  const hasTeam = taskTeamFor(actor.id).length > 0;
+  const scopes = [
+    ...(hr ? [{ id: COMPANY_SCOPE, label: "Company default" }] : []),
+    ...(hasTeam ? [{ id: actor.id, label: "My team" }] : []),
+  ];
+  const [scope, setScope] = useState(scopes[0]?.id ?? actor.id);
+  const [msg, setMsg] = useState<Msg>(null);
+  const editable = canSetCoverage(actor, scope);
+  const shifts = data.shifts.filter((s) => s.active);
+  const ownCount = data.coverage.filter((r) => r.scope === scope).length;
+
+  function change(shiftId: string, weekday: number, value: string) {
+    if (value === "") return;
+    const error = setCoverageMinimum(actor, scope, shiftId, weekday, Number(value));
+    setMsg(error ? { tone: "err", text: error } : null);
+  }
+
+  const rows = shifts.map((shift) => [
+    <span key="n">
+      <strong>{shift.name}</strong>
+      <span className="muted wf-block">{shift.start}–{shift.end}</span>
+    </span>,
+    ...WEEK_ORDER.map((weekday) => {
+      const weekend = weekday === 0 || weekday === 6;
+      if (shift.weekendOnly && !weekend) return <span key={weekday} className="muted">—</span>;
+      const value = coverageMinimum(scope, shift.id, weekday, data);
+      const own = hasOwnCoverageRule(scope, shift.id, weekday, data);
+      return editable ? (
+        <input
+          key={weekday}
+          className={`wf-cov-input${own ? " own" : ""}`}
+          type="number"
+          min={0}
+          max={MAX_COVERAGE}
+          aria-label={`${shift.name} minimum on ${WEEKDAY_NAMES[weekday]}`}
+          value={value}
+          onChange={(e) => change(shift.id, weekday, e.target.value)}
+        />
+      ) : (
+        <span key={weekday}>{value}</span>
+      );
+    }),
+  ]);
+
+  return (
+    <>
+      <Banner message={msg} />
+      <Card
+        title="Minimum staffing"
+        action={
+          scopes.length > 1 ? (
+            <select aria-label="Whose minimums" value={scope} onChange={(e) => { setScope(e.target.value); setMsg(null); }}>
+              {scopes.map((s) => (
+                <option key={s.id} value={s.id}>{s.label}</option>
+              ))}
+            </select>
+          ) : undefined
+        }
+      >
+        <div className="stack">
+          <p className="muted">
+            {scope === COMPANY_SCOPE
+              ? "People needed on each shift, per day. Applies to every team unless a manager sets their own."
+              : "People needed on each shift in your team, per day. Highlighted values are your own; the rest follow the company default."}{" "}
+            Holidays need no one.
+          </p>
+          <div className="wf-grid">
+            <DataTable headers={["Shift", ...WEEK_ORDER.map((d) => WEEKDAY_NAMES[d])]} rows={rows} empty={<EmptyState title="No active shifts" />} />
+          </div>
+          {editable && ownCount > 0 && (
+            <div className="row-gap">
+              <button
+                className="btn-ghost btn-tiny"
+                type="button"
+                onClick={() => setMsg(result(resetCoverage(actor, scope), scope === COMPANY_SCOPE ? "Company minimums reset to the defaults." : "Your team now follows the company minimums."))}
+              >
+                {scope === COMPANY_SCOPE ? "Reset to defaults" : "Use company minimums"}
+              </button>
+            </div>
+          )}
         </div>
       </Card>
     </>

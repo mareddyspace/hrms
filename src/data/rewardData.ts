@@ -32,6 +32,12 @@ export interface CompCycle {
   status: "Planning" | "Open" | "Manager review" | "Calibration" | "Closed";
   window: string;
   countries: string[];
+  /** Cycles HR creates: when new pay takes effect, the budget and the proposal window. */
+  effectiveDate?: string;
+  budgetPct?: number;
+  opensOn?: string;
+  closesOn?: string;
+  createdBy?: string;
 }
 
 export interface CompReviewItem {
@@ -85,6 +91,18 @@ export interface BenefitPlan {
   mandatory?: boolean;
   /** Everyone in the country is enrolled automatically (no request needed). */
   autoEnrolled?: boolean;
+  /** The employee can add verified dependents to this plan. */
+  coversDependents?: boolean;
+  /** Who may join. Country is always the plan's own country. */
+  eligibility?: PlanEligibility;
+}
+
+export interface PlanEligibility {
+  /** Employment types that may not join, e.g. "Contract". */
+  excludeEmploymentTypes?: string[];
+  minServiceMonths?: number;
+  /** When set, only these grades may join. */
+  grades?: string[];
 }
 
 export interface BenefitEnrollment {
@@ -96,6 +114,8 @@ export interface BenefitEnrollment {
   country: string;
   status: "Eligible" | "Enrolled" | "Waived" | "Pending";
   effective: string;
+  /** Requested with a life event rather than in open enrollment. */
+  lifeEventId?: string;
 }
 
 /** An employee asks HR to change an enrolled plan; the enrollment itself stays as it is. */
@@ -118,7 +138,42 @@ export interface Dependent {
   name: string;
   relationship: string;
   coveredPlans: string[];
+  dateOfBirth?: string;
+  gender?: string;
+  /** HR checks new and edited dependents before they can be covered. */
+  verification?: "Pending" | "Verified" | "Rejected";
+  verifiedBy?: string;
+  verifiedOn?: string;
 }
+
+export const DEPENDENT_RELATIONSHIPS = ["Spouse", "Partner", "Child", "Parent", "Parent-in-law"];
+
+export const LIFE_EVENT_TYPES = ["Marriage", "Birth or adoption", "Divorce", "Death of a dependent", "Spouse lost coverage"];
+
+/** A life event opens a 30-day window to change benefits outside open enrollment. */
+export interface LifeEvent {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  type: string;
+  eventDate: string;
+  raisedOn: string;
+  windowEnds: string;
+  status: "Open" | "Closed";
+  closedBy?: string;
+}
+
+/** The annual open enrollment window. HR can open or close it early. */
+export interface EnrollmentWindow {
+  year: number;
+  start: string;
+  end: string;
+  /** HR override: forced open or closed regardless of the dates. */
+  override?: "open" | "closed";
+  updatedBy?: string;
+}
+
+export const OPEN_ENROLLMENT_SEED: EnrollmentWindow = { year: 2027, start: "2026-10-15", end: "2026-11-15" };
 
 export interface BenefitHistoryRow {
   id: string;
@@ -220,6 +275,10 @@ export const COMP_CYCLES: CompCycle[] = [
     status: "Manager review",
     window: "01 Oct – 30 Nov 2026",
     countries: ["India", "United States", "United Kingdom", "Canada"],
+    effectiveDate: "2027-04-01",
+    budgetPct: 8,
+    opensOn: "2026-10-01",
+    closesOn: "2026-11-30",
   },
   {
     id: "cc-mid",
@@ -227,6 +286,10 @@ export const COMP_CYCLES: CompCycle[] = [
     status: "Closed",
     window: "01 Mar – 31 Mar 2026",
     countries: ["India", "United States"],
+    effectiveDate: "2026-04-01",
+    budgetPct: 3,
+    opensOn: "2026-03-01",
+    closesOn: "2026-03-31",
   },
 ];
 
@@ -288,6 +351,8 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     summary: "Employee + family floater cover",
     employeeCost: "Employer paid",
     documents: ["India Medical SPD"],
+    coversDependents: true,
+    eligibility: { excludeEmploymentTypes: ["Contract"] },
   },
   {
     id: "bp-in-pf",
@@ -310,6 +375,8 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     summary: "PPO network · open enrollment Nov",
     employeeCost: "$120 / paycheck",
     documents: ["US Medical SBC"],
+    coversDependents: true,
+    eligibility: { excludeEmploymentTypes: ["Contract"], minServiceMonths: 1 },
   },
   {
     id: "bp-us-401",
@@ -320,6 +387,7 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     summary: "4% employer match",
     employeeCost: "Elective deferral",
     documents: ["401k Summary"],
+    eligibility: { excludeEmploymentTypes: ["Contract"], minServiceMonths: 3 },
   },
   {
     id: "bp-uk-med",
@@ -330,6 +398,8 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     summary: "Employee + optional dependents",
     employeeCost: "£45 / month",
     documents: ["UK PMI guide"],
+    coversDependents: true,
+    eligibility: { excludeEmploymentTypes: ["Contract"], minServiceMonths: 6, grades: ["L5", "L6", "M1", "M2", "M3", "E1"] },
   },
   {
     id: "bp-uk-pen",
@@ -340,6 +410,7 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     summary: "Auto-enrolment pension · 3% employer contribution. You can opt out.",
     employeeCost: "5% of qualifying earnings",
     documents: ["UK Pension guide"],
+    eligibility: { excludeEmploymentTypes: ["Contract"], minServiceMonths: 3 },
     autoEnrolled: true,
   },
   {
@@ -351,6 +422,7 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     summary: "Mandatory medical insurance (DHA)",
     employeeCost: "Employer paid",
     documents: ["UAE Medical"],
+    coversDependents: true,
     mandatory: true,
   },
 ];
@@ -363,8 +435,8 @@ export const BENEFIT_ENROLLMENTS: BenefitEnrollment[] = [
 ];
 
 export const DEPENDENTS: Dependent[] = [
-  { id: "dep-1", employeeId: "emp-mahesh", name: "Ananya Menon", relationship: "Spouse", coveredPlans: ["Group Medical (India)"] },
-  { id: "dep-2", employeeId: "emp-mahesh", name: "Arjun Menon", relationship: "Child", coveredPlans: ["Group Medical (India)"] },
+  { id: "dep-1", employeeId: "emp-mahesh", name: "Ananya Menon", relationship: "Spouse", coveredPlans: ["Group Medical (India)"], dateOfBirth: "1993-08-21", gender: "Female", verification: "Verified" },
+  { id: "dep-2", employeeId: "emp-mahesh", name: "Arjun Menon", relationship: "Child", coveredPlans: ["Group Medical (India)"], dateOfBirth: "2025-05-30", gender: "Male", verification: "Verified" },
 ];
 
 export const BENEFIT_HISTORY: BenefitHistoryRow[] = [

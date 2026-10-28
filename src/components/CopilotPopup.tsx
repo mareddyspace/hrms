@@ -3,20 +3,20 @@ import { Link } from "react-router-dom";
 import { Bot, Maximize2, X } from "lucide-react";
 import { PRODUCT_NAME } from "../brand.ts";
 import {
-  answerCopilot,
   copilotPersonaFromRole,
   COPILOT_SUGGESTIONS,
   type CopilotAnswer,
 } from "../data/platformData.ts";
 import { usePortal } from "../store.tsx";
-import { useCopilotContext } from "../features/copilot/copilotContext.ts";
+import { useAskCopilot } from "../features/copilot/askCopilot.ts";
+import { CopilotSources } from "../features/copilot/CopilotSources.tsx";
 
 type Turn = { id: string; role: "user" | "assistant"; text: string; answer?: CopilotAnswer };
 
 /** Floating AI button + popup chat — shown for every signed-in role. */
 export function CopilotPopup() {
   const { employee, demoProfile } = usePortal();
-  const buildContext = useCopilotContext();
+  const askCopilot = useAskCopilot();
   const persona = copilotPersonaFromRole(demoProfile.role);
   const suggestions = COPILOT_SUGGESTIONS[persona].slice(0, 3);
   const [open, setOpen] = useState(false);
@@ -39,7 +39,7 @@ export function CopilotPopup() {
   function ask(question: string) {
     const q = question.trim();
     if (!q) return;
-    const answer = answerCopilot(q, buildContext());
+    const answer = askCopilot(q);
     const stamp = Date.now();
     setHistory((prev) => [
       ...prev,
@@ -133,6 +133,7 @@ export function CopilotPopup() {
                     </table>
                   </div>
                 )}
+                <CopilotSources sources={turn.answer?.sources} onNavigate={() => setOpen(false)} />
                 {turn.answer?.links && turn.answer.links.length > 0 && (
                   <p className="chip-row copilot-fab-links">
                     {turn.answer.links.map((l) => (

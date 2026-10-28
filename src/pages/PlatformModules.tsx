@@ -1,6 +1,6 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { PRODUCT_NAME } from "../brand.ts";
 import {
   Banner,
@@ -46,7 +46,8 @@ import {
   type DayStatus,
 } from "../data/workforceStats.ts";
 import { countWaitingOnMe } from "./ApprovalsCenter.tsx";
-import { useCopilotContext } from "../features/copilot/copilotContext.ts";
+import { useAskCopilot } from "../features/copilot/askCopilot.ts";
+import { CopilotSources } from "../features/copilot/CopilotSources.tsx";
 import { getCompensationAccess, hasModuleAccess } from "../data/peoplePermissions.ts";
 import { canViewReport } from "../data/rbac.ts";
 import {
@@ -58,22 +59,31 @@ import {
   PAYROLL_PROVIDERS,
   PAYROLL_STATUS,
   ROLE_PERMISSION_CATALOG,
-  answerCopilot,
   copilotPersonaFromRole,
   type AnalyticsRange,
   type CopilotAnswer,
 } from "../data/platformData.ts";
 import {
+  COST_CENTRES,
+  QUARANTINE_FIELD_LABEL,
   canEditRolePermissions,
+  dismissQuarantined,
   effectiveCatalogIds,
+  fixAndRetryQuarantined,
   getPlatformVersion,
   listAuditLog,
   listIntegrations,
   listNotificationPrefs,
+  listQuarantine,
+  retryAllQuarantined,
   retryIntegration,
+  retryQuarantined,
+  runIntegrationSync,
   saveRoleEdit,
   subscribePlatform,
   updateNotificationPref,
+  type QuarantineField,
+  type QuarantineRecord,
 } from "../data/platformLocal.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
@@ -526,7 +536,7 @@ type ChatTurn = { id: string; role: "user" | "assistant"; text: string; answer?:
 
 export function AiCopilotPage() {
   const { employee, demoProfile } = usePortal();
-  const buildContext = useCopilotContext();
+  const askCopilot = useAskCopilot();
   const persona = copilotPersonaFromRole(demoProfile.role);
   const suggestions = COPILOT_SUGGESTIONS[persona];
   const [prompt, setPrompt] = useState("");
@@ -536,7 +546,7 @@ export function AiCopilotPage() {
   function ask(question: string) {
     const q = question.trim();
     if (!q) return;
-    const answer = answerCopilot(q, buildContext());
+    const answer = askCopilot(q);
     const stamp = Date.now();
     const userTurn: ChatTurn = { id: `u-${stamp}`, role: "user", text: q };
     const botTurn: ChatTurn = { id: `a-${stamp}`, role: "assistant", text: answer.summary, answer };
@@ -647,6 +657,7 @@ function CopilotAnswerCard({ answer, highlight }: { answer: CopilotAnswer; highl
           rows={answer.table.rows.map((r) => r.map((c) => c))}
         />
       )}
+      <CopilotSources sources={answer.sources} />
       {answer.links && (
         <p className="chip-row">
           {answer.links.map((l) => (
@@ -707,13 +718,16 @@ export function AiAgentsPage() {
 export function IntegrationsPage() {
   usePlatformTick();
   const { demoProfile, employee } = usePortal();
+  const [searchParams] = useSearchParams();
   const integrations = listIntegrations();
-  const [selected, setSelected] = useState(integrations[0]?.id ?? "sso");
+  const linked = searchParams.get("connector");
+  const [selected, setSelected] = useState(integrations.find((i) => i.id === linked)?.id ?? integrations[0]?.id ?? "sso");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pendingRetry, setPendingRetry] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [toast, setToast] = useState<{ tone: "ok" | "err" | "warn"; text: string } | null>(null);
 
   const active = integrations.find((i) => i.id === selected) ?? integrations[0];
+  const actor = { id: employee.id, name: employee.fullName };
 
   if (!hasModuleAccess(demoProfile, "integrations") && !hasModuleAccess(demoProfile, "*")) {
     return (
@@ -738,71 +752,81 @@ export function IntegrationsPage() {
     else setToast({ tone: "err", text: `${result.item.name} retry failed. Check the logs.` });
   }
 
+  function runSync(id: string) {
+    const result = runIntegrationSync(id, actor);
+    if (!result) setToast({ tone: "err", text: "This connector isn't set up." });
+    else if (result.failed.length)
+      setToast({ tone: "warn", text: `${result.item.name}: ${result.passed} of ${result.processed} records synced, ${result.failed.length} moved to quarantine.` });
+    else setToast({ tone: "ok", text: `${result.item.name}: all ${result.processed} records synced.` });
+  }
+
   return (
     <Page title="Integrations">
       {toast && <Banner message={toast} />}
       <div className="grid-2">
-        {integrations.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`card integration-card ${item.id === selected ? "selected" : ""}`}
-            onClick={() => setSelected(item.id)}
-          >
-            <div className="row-between">
-              <h2 className="card-title">{item.name}</h2>
-              <StatusBadge
-                status={item.status}
-                tone={
-                  item.status === "Connected"
-                    ? "ok"
-                    : item.status === "Degraded"
-                      ? "warn"
-                      : item.status === "Disconnected"
-                        ? "danger"
-                        : "neutral"
-                }
-              />
-            </div>
-            <p className="note">{item.category}</p>
-            <p>{item.description}</p>
-            <dl className="info-grid">
-              <div className="info-fact">
-                <dt>Last sync</dt>
-                <dd>{item.lastSync}</dd>
+        {integrations.map((item) => {
+          const held = listQuarantine(item.id).length;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`card integration-card ${item.id === selected ? "selected" : ""}`}
+              onClick={() => setSelected(item.id)}
+            >
+              <div className="row-between">
+                <h2 className="card-title">{item.name}</h2>
+                <span className="chip-row">
+                  {held > 0 && <StatusBadge status={`${held} quarantined`} tone="warn" literal />}
+                  <StatusBadge status={item.status} tone={integrationTone(item.status)} />
+                </span>
               </div>
-              <div className="info-fact">
-                <dt>Records</dt>
-                <dd>{item.recordsProcessed.toLocaleString()}</dd>
-              </div>
-              <div className="info-fact">
-                <dt>Errors</dt>
-                <dd>{item.errorCount}</dd>
-              </div>
-            </dl>
-          </button>
-        ))}
+              <p className="note">{item.category}</p>
+              <p>{item.description}</p>
+              <dl className="info-grid">
+                <div className="info-fact">
+                  <dt>Last sync</dt>
+                  <dd>{item.lastSync}</dd>
+                </div>
+                <div className="info-fact">
+                  <dt>Records</dt>
+                  <dd>{item.recordsProcessed.toLocaleString()}</dd>
+                </div>
+                <div className="info-fact">
+                  <dt>Errors</dt>
+                  <dd>{item.errorCount}</dd>
+                </div>
+              </dl>
+            </button>
+          );
+        })}
       </div>
 
       {active && (
         <Card
           title={`${active.name} · logs`}
           action={
-            <button className="btn" type="button" onClick={() => requestRetry(active.id)} disabled={active.status === "Not configured"}>
-              Retry sync
-            </button>
+            <span className="chip-row">
+              <button className="btn" type="button" onClick={() => runSync(active.id)} disabled={active.status === "Not configured"}>
+                Run sync
+              </button>
+              <button className="btn-ghost" type="button" onClick={() => requestRetry(active.id)} disabled={active.status === "Not configured"}>
+                Retry sync
+              </button>
+            </span>
           }
         >
           <DataTable
             headers={["When", "Level", "Message"]}
-            rows={active.logs.map((l) => [
+            rows={active.logs.map((l, i) => [
               l.at,
-              <StatusBadge key={l.at + l.message} status={l.level} tone={l.level === "error" ? "danger" : l.level === "warn" ? "warn" : "info"} />,
+              <StatusBadge key={`${i}-${l.at}`} status={l.level} tone={l.level === "error" ? "danger" : l.level === "warn" ? "warn" : "info"} />,
               l.message,
             ])}
           />
         </Card>
       )}
+
+      {active && active.status !== "Not configured" && <QuarantineCard connectorId={active.id} actor={actor} onResult={setToast} />}
 
       <Dialog
         open={reviewOpen}
@@ -825,6 +849,128 @@ export function IntegrationsPage() {
       </Dialog>
     </Page>
   );
+}
+
+/** Records that failed a sync, with retry, fix & retry and dismiss. */
+function QuarantineCard({
+  connectorId,
+  actor,
+  onResult,
+}: {
+  connectorId: string;
+  actor: { id: string; name: string };
+  onResult: (msg: { tone: "ok" | "err" | "warn"; text: string }) => void;
+}) {
+  const records = listQuarantine(connectorId);
+  const [editing, setEditing] = useState<{ id: string; mode: "fix" | "dismiss"; value: string; error?: string } | null>(null);
+
+  function retry(r: QuarantineRecord) {
+    const out = retryQuarantined(connectorId, r.id, actor);
+    if (out.error) onResult({ tone: "err", text: out.error });
+    else onResult(out.ok ? { tone: "ok", text: `${r.record} synced.` } : { tone: "warn", text: `${r.record} failed again: ${r.reason}.` });
+  }
+
+  function submitEdit(r: QuarantineRecord) {
+    if (!editing) return;
+    const out =
+      editing.mode === "fix"
+        ? fixAndRetryQuarantined(connectorId, r.id, editing.value, actor)
+        : dismissQuarantined(connectorId, r.id, editing.value, actor);
+    if (!out.ok) {
+      setEditing({ ...editing, error: out.error });
+      return;
+    }
+    setEditing(null);
+    onResult({ tone: "ok", text: editing.mode === "fix" ? `${r.record} fixed and synced.` : `${r.record} dismissed.` });
+  }
+
+  function retryAll() {
+    const out = retryAllQuarantined(connectorId, actor);
+    onResult(
+      out.failed
+        ? { tone: "warn", text: `${out.passed} synced, ${out.failed} still in quarantine.` }
+        : { tone: "ok", text: `All ${out.passed} records synced.` },
+    );
+  }
+
+  return (
+    <Card
+      title={`Quarantine (${records.length})`}
+      action={
+        records.length > 0 && (
+          <button className="btn-ghost" type="button" onClick={retryAll}>
+            Retry all
+          </button>
+        )
+      }
+    >
+      <DataTable
+        headers={["Record", "Reason", "Time", "Actions"]}
+        empty={<p className="note">No failed records. Records that fail a sync are held here.</p>}
+        rows={records.map((r) => {
+          const open = editing?.id === r.id ? editing : null;
+          return [
+            r.record,
+            <span key="reason">
+              {r.reason}
+              <br />
+              <small className="note">
+                {QUARANTINE_FIELD_LABEL[r.field]}: {r.value || "blank"}
+                {r.attempts ? ` · ${r.attempts} ${r.attempts === 1 ? "retry" : "retries"}` : ""}
+              </small>
+            </span>,
+            r.at,
+            open ? (
+              <form
+                key="edit"
+                className="stack-tight"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  submitEdit(r);
+                }}
+              >
+                <input
+                  aria-label={open.mode === "fix" ? QUARANTINE_FIELD_LABEL[r.field] : "Reason to dismiss"}
+                  value={open.value}
+                  autoFocus
+                  placeholder={open.mode === "fix" ? fixHint(r.field) : "Reason"}
+                  onChange={(e) => setEditing({ ...open, value: e.target.value, error: undefined })}
+                />
+                {open.error && <small className="note err">{open.error}</small>}
+                <span className="chip-row">
+                  <button className="btn btn-tiny" type="submit">
+                    {open.mode === "fix" ? "Save & retry" : "Dismiss"}
+                  </button>
+                  <button className="btn-ghost btn-tiny" type="button" onClick={() => setEditing(null)}>
+                    Cancel
+                  </button>
+                </span>
+              </form>
+            ) : (
+              <span key="actions" className="chip-row">
+                <button className="btn-ghost btn-tiny" type="button" onClick={() => retry(r)}>
+                  Retry
+                </button>
+                <button className="btn-ghost btn-tiny" type="button" onClick={() => setEditing({ id: r.id, mode: "fix", value: r.value })}>
+                  Fix & retry
+                </button>
+                <button className="btn-ghost btn-tiny" type="button" onClick={() => setEditing({ id: r.id, mode: "dismiss", value: "" })}>
+                  Dismiss
+                </button>
+              </span>
+            ),
+          ];
+        })}
+      />
+    </Card>
+  );
+}
+
+function fixHint(field: QuarantineField): string {
+  if (field === "bankAccount") return "9–18 digits";
+  if (field === "taxId") return "e.g. ABCDE1234F";
+  if (field === "costCentre") return COST_CENTRES.join(", ");
+  return "name@company.com";
 }
 
 /* ───────────────── Payroll ───────────────── */

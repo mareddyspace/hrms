@@ -18,8 +18,6 @@ import {
   COURSES,
   LEARNING_PATHS,
   LEVEL_RANK,
-  PERF_CYCLES,
-  CLOSED_STAGES,
   PIPELINE_STAGES,
   RATINGS,
   SKILL_LIBRARY,
@@ -34,10 +32,13 @@ import {
   type Requisition,
   type PerfGoal,
   type PerfReview,
-  type PipelineStage,
 } from "../data/talentData.ts";
 import {
   advanceCycle,
+  allCycles,
+  createReviewCycle,
+  pending360For,
+  type CycleInput,
   approveOffer,
   averageTimeToHire,
   bandFor,
@@ -45,7 +46,6 @@ import {
   myPipelineRequisitions,
   raiseRequisition,
   recruiterOptions,
-  stageMovesFor,
   DEFAULT_RECRUITER_ID,
   canApproveOffer,
   isHiringManagerOf,
@@ -54,6 +54,7 @@ import {
   offerApprovalNeeded,
   requisitionApprovers,
   canAcknowledgePolicies,
+  isJoinerSelf,
   canEditGoal,
   canViewReview,
   canWriteManagerReview,
@@ -74,7 +75,6 @@ import {
   saveManagerAssessment,
   saveSelfAssessment,
   set360Status,
-  setDevelopmentPlan,
   setRating,
   verifyCertification,
   visibleRating,
@@ -92,12 +92,12 @@ import {
   requestCertificationRenewal,
   requisitionMoves,
   SELF_PROGRESS_CAP,
-  setCandidateStage,
   setJoinerPolicyAck,
   setOnboardingTaskStatus,
   setOfferStatus,
   setRequisitionApproval,
   skillProfileFor,
+  SKILL_LEVELS,
   submitInterviewFeedback,
   subscribeTalent,
   updateEmployeeSkill,
@@ -121,8 +121,9 @@ import {
   type CertificateDoc,
 } from "../components/CertificateViewer.tsx";
 import { canManagePeople } from "../data/peoplePermissions.ts";
-import { FeedbackPanel, OneOnOnePanel } from "./PerformanceCheckIns.tsx";
-import { CandidatePipelineView, MyPipeline, PipelineByMonth, RequisitionTracker } from "./recruiting/CandidatePipeline.tsx";
+import { DevPlanEditor, FeedbackPanel, OneOnOnePanel, Pending360Requests, Reviewers360 } from "./PerformanceCheckIns.tsx";
+import { CandidateCards, CandidatePipelineView, MyPipeline, PipelineByMonth, RequisitionTracker } from "./recruiting/CandidatePipeline.tsx";
+import { canSeeTeamInterests, CareerInterestsPanel, RoleMatchesPanel, TeamInterestsPanel } from "./CareerPanels.tsx";
 
 function useTalent() {
   return useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
@@ -236,6 +237,16 @@ export function RecruitingPage() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [talent.candidates, q, stageFilter, matchesRegion, canSeeCandidates, hmReqIds, candAccess]);
+
+  // Your own pipeline covers every requisition you work, whichever region the top bar shows.
+  const pipelineCandidates = canSeeCandidates
+    ? talent.candidates.filter(
+        (c) =>
+          accessFor(c) !== "hidden" &&
+          (!stageFilter || c.stage === stageFilter) &&
+          (!q || `${c.name} ${c.role} ${c.email}`.toLowerCase().includes(q.toLowerCase())),
+      )
+    : [];
 
   if (!canOpen) return <NotAuthorized module="Recruiting" />;
 
@@ -505,58 +516,24 @@ export function RecruitingPage() {
       )}
 
       {tab === "pipeline" && (
-        <div className="mgr-home-grid">
+        <div className="stack">
           <Card title="Recruitment pipeline">
             <MiniBars items={stageCounts} />
           </Card>
-          <Card title="Move candidate stage">
-            {candidates.length === 0 ? (
-              <EmptyState title="No candidates" description="Try other filters." />
+          <Card title="Candidates">
+            {canSeeCandidates ? (
+              <CandidateCards actor={actor} talent={talent} candidates={pipelineCandidates} onOpen={setOpenCand} onResult={(error, okText) => setNotice(noticeFor(error, okText))} />
             ) : (
-              <DataTable
-                headers={["Candidate", "Role", "Stage", "Advance"]}
-                rows={candidates.map((c) => {
-                  const req = reqById(c.requisitionId);
-                  const moves = stageMovesFor(actor, c, talent.offers, req);
-                  return [
-                    <button key={`${c.id}-n`} type="button" className="quiet-link" onClick={() => setOpenCand(c.id)}>
-                      {c.name}
-                    </button>,
-                    c.role,
-                    <StatusBadge key={c.id} status={c.stage} literal tone={c.stage === "Rejected" || c.stage === "Withdrawn" ? "warn" : "info"} />,
-                    req && req.approvalStatus !== "Approved" && !CLOSED_STAGES.includes(c.stage) ? (
-                      <span key={`${c.id}-stage`} className="muted">{req.id} {req.approvalStatus.toLowerCase()}</span>
-                    ) : (
-                      <select aria-label={`Stage for ${c.name}`}
-                        key={`${c.id}-stage`}
-                        value={c.stage}
-                        disabled={moves.length === 0}
-                        onChange={(e) =>
-                          setNotice(
-                            noticeFor(
-                              setCandidateStage(actor, c.id, e.target.value as PipelineStage),
-                              e.target.value === "Hired" ? `${c.name} hired. Onboarding started.` : `${c.name} → ${e.target.value}.`,
-                            ),
-                          )
-                        }
-                      >
-                        {[c.stage, ...moves].map((s) => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    ),
-                  ];
-                })}
-              />
+              <EmptyState title="Candidates restricted" description="Your role can't view candidates." />
             )}
-            {canEdit && <p className="muted">Recruiter moves one stage at a time. Hiring manager decides at Final Review. Hired needs an accepted offer.</p>}
+            {canEdit && <p className="muted">One stage at a time. The hiring manager decides at Final Review; Hired needs an accepted offer.</p>}
           </Card>
         </div>
       )}
 
       {tab === "mine" && showMine && (
         <Card title={isHrRole(actor.role) ? "All pipelines" : "My pipeline"}>
-          <MyPipeline actor={actor} talent={talent} candidates={candidates} onOpen={setOpenCand} />
+          <MyPipeline actor={actor} talent={talent} candidates={pipelineCandidates} onOpen={setOpenCand} onResult={(error, okText) => setNotice(noticeFor(error, okText))} />
         </Card>
       )}
 
@@ -906,6 +883,7 @@ export function OnboardingPage() {
     (t) => t.joinerId === joiner?.id && (!ownerFilter || t.owner === ownerFilter),
   );
   const canAck = joiner ? canAcknowledgePolicies(actor, joiner) : false;
+  const ackForJoiner = joiner ? canAck && !isJoinerSelf(actor, joiner) : false;
 
   return (
     <Page title="Onboarding">
@@ -940,8 +918,27 @@ export function OnboardingPage() {
               <div className="info-fact"><dt>Manager</dt><dd>{joiner.manager}</dd></div>
               <div className="info-fact"><dt>Requisition</dt><dd>{joiner.requisitionId ?? "—"}</dd></div>
               <div className="info-fact"><dt>Documents</dt><dd>{joiner.docsStatus}</dd></div>
-              <div className="info-fact"><dt>Policy acknowledgement</dt><dd>{joiner.policyAck}</dd></div>
-              <div className="info-fact"><dt>Directory</dt><dd>{joiner.personId ? "Added" : "Added when onboarding completes"}</dd></div>
+              <div className="info-fact">
+                <dt>Policy acknowledgement</dt>
+                <dd>
+                  {joiner.policyAck}
+                  {joiner.policyAck === "Complete" && joiner.policyAckOn
+                    ? ` · ${joiner.policyAckOn}${joiner.policyAckByHr ? `, recorded by HR (${joiner.policyAckBy})` : ""}`
+                    : ""}
+                </dd>
+              </div>
+              <div className="info-fact">
+                <dt>Directory</dt>
+                <dd>
+                  {!joiner.personId ? "Not added yet" : joiner.overallStatus === "Completed" ? "Active" : "Onboarding"}
+                  {joiner.personId && (
+                    <>
+                      {" · "}
+                      <Link to={`/people/${joiner.personId}`} className="quiet-link">Profile</Link>
+                    </>
+                  )}
+                </dd>
+              </div>
             </dl>
             <Progress value={joiner.preboardingPct} label="Checklist complete" />
             <div className="row-gap" style={{ marginTop: 8 }}>
@@ -950,9 +947,16 @@ export function OnboardingPage() {
                   type="button"
                   className="btn"
                   disabled={joiner.policyAck === "Complete"}
-                  onClick={() => setNotice(noticeFor(setJoinerPolicyAck(actor, joiner.id, "Complete"), "Policies acknowledged."))}
+                  onClick={() =>
+                    setNotice(
+                      noticeFor(
+                        setJoinerPolicyAck(actor, joiner.id, "Complete"),
+                        ackForJoiner ? `Recorded for ${joiner.name}.` : "Policies acknowledged.",
+                      ),
+                    )
+                  }
                 >
-                  Acknowledge policies
+                  {ackForJoiner ? "Record acknowledgment" : "Acknowledge policies"}
                 </button>
               )}
               <Link to="/policies" className="btn-ghost">
@@ -1032,19 +1036,46 @@ function AssessmentEditor({
   );
 }
 
-function DevPlanInput({ value, editable, onSave }: { value?: string; editable: boolean; onSave: (plan: string) => void }) {
-  const [draft, setDraft] = useState(value ?? "");
-  if (!editable) return <span>{value || "—"}</span>;
+function CycleDialog({ actor, onClose }: { actor: TalentActor; onClose: (message?: string) => void }) {
+  const [form, setForm] = useState<CycleInput>({ name: "", start: "", end: "", selfReviewDue: "", managerReviewDue: "" });
+  const [error, setError] = useState("");
+  const set = (patch: Partial<CycleInput>) => setForm((f) => ({ ...f, ...patch }));
+
+  function save() {
+    const err = createReviewCycle(actor, form);
+    if (err) setError(err);
+    else onClose(`${form.name.trim()} created. Move it to Active to open reviews.`);
+  }
+
   return (
-    <input
-      aria-label="Development plan"
-      value={draft}
-      maxLength={300}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => draft !== (value ?? "") && onSave(draft)}
-      placeholder="Development plan…"
-      style={{ minWidth: 160 }}
-    />
+    <Dialog open title="New review cycle" onClose={() => onClose()}>
+      <div className="form-grid-2">
+        <Field label="Name" wide>
+          <input value={form.name} maxLength={60} onChange={(e) => set({ name: e.target.value })} placeholder="e.g. H1 2027 review" />
+        </Field>
+        <Field label="Start">
+          <input type="date" value={form.start} onChange={(e) => set({ start: e.target.value })} />
+        </Field>
+        <Field label="End">
+          <input type="date" value={form.end} min={form.start || undefined} onChange={(e) => set({ end: e.target.value })} />
+        </Field>
+        <Field label="Self-review due">
+          <input type="date" value={form.selfReviewDue} onChange={(e) => set({ selfReviewDue: e.target.value })} />
+        </Field>
+        <Field label="Manager review due">
+          <input type="date" value={form.managerReviewDue} onChange={(e) => set({ managerReviewDue: e.target.value })} />
+        </Field>
+      </div>
+      {error && <Banner message={{ tone: "err", text: error }} />}
+      <div className="dialog-actions">
+        <button type="button" className="btn-ghost" onClick={() => onClose()}>
+          Cancel
+        </button>
+        <button type="button" className="btn" onClick={save}>
+          Create
+        </button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -1118,10 +1149,12 @@ export function PerformancePage() {
   const actor = demoProfile;
   const talent = useTalent();
   const [tab, setTab] = useState("goals");
-  const [cycleId, setCycleId] = useState(PERF_CYCLES[0]?.id ?? "");
+  const cycles = allCycles(talent);
+  const [cycleId, setCycleId] = useState(cycles[0]?.id ?? "");
   const [notice, setNotice] = useState<Notice>(null);
   const [goalForm, setGoalForm] = useState<GoalInput | null>(null);
-  const cycle = PERF_CYCLES.find((c) => c.id === cycleId) ?? PERF_CYCLES[0];
+  const [cycleOpen, setCycleOpen] = useState(false);
+  const cycle = cycles.find((c) => c.id === cycleId) ?? cycles[0];
   const status = cycleStatusOf(talent, cycleId);
   const next = nextCycleStatus(status);
   const closed = status === "Closed";
@@ -1131,6 +1164,7 @@ export function PerformancePage() {
   const goals = talent.goals.filter((g) => g.cycleId === cycleId && canViewReview(actor, g.ownerId));
   const reviews = talent.reviews.filter((r) => r.cycleId === cycleId && canViewReview(actor, r.employeeId));
   const run = (error: string | null, okText?: string) => setNotice(noticeFor(error, okText));
+  const asked360 = pending360For(talent, actor.id);
 
   const owners = [...new Map(goals.map((g) => [g.ownerId, g.ownerName])).entries()];
   const offWeight = owners
@@ -1153,9 +1187,9 @@ export function PerformancePage() {
         <label className="filter-label">
           Performance cycle
           <select value={cycleId} onChange={(e) => setCycleId(e.target.value)}>
-            {PERF_CYCLES.map((c) => (
+            {cycles.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.name} · {cycleStatusOf(talent, c.id)}
+                {c.name} · {c.status}
               </option>
             ))}
           </select>
@@ -1165,12 +1199,21 @@ export function PerformancePage() {
             Move to {next}
           </button>
         )}
+        {hr && (
+          <button type="button" className="btn-ghost" onClick={() => setCycleOpen(true)}>
+            New cycle
+          </button>
+        )}
       </FilterBar>
 
       {cycle && (
         <MetricGrid>
           <MetricCard label="Cycle" value={cycle.name} hint={`${cycle.start} → ${cycle.end}`} />
-          <MetricCard label="Status" value={status} />
+          <MetricCard
+            label="Status"
+            value={status}
+            hint={cycle.selfReviewDue ? `Self due ${cycle.selfReviewDue} · manager due ${cycle.managerReviewDue ?? "—"}` : undefined}
+          />
           <MetricCard label="Completion" value={`${cycleCompletion(talent, cycleId)}%`} hint="Assessments submitted" />
           <MetricCard label="Reviews in view" value={reviews.length} />
         </MetricGrid>
@@ -1183,7 +1226,7 @@ export function PerformancePage() {
           { id: "checkins", label: "1:1 check-ins" },
           { id: "self", label: "Self-assessment" },
           { id: "manager", label: "Manager assessment" },
-          { id: "360", label: "360 feedback" },
+          { id: "360", label: asked360.length ? `360 feedback (${asked360.length})` : "360 feedback" },
           { id: "reviews", label: "Ratings & plans" },
         ]}
         value={tab}
@@ -1263,6 +1306,20 @@ export function PerformancePage() {
             empty={<EmptyState title="No goals" description="No goals in this cycle yet." />}
           />
         </Card>
+      )}
+
+      {cycleOpen && (
+        <CycleDialog
+          actor={actor}
+          onClose={(message) => {
+            setCycleOpen(false);
+            if (message) {
+              setNotice({ tone: "ok", text: message });
+              const created = allCycles(getTalentState()).at(-1);
+              if (created) setCycleId(created.id);
+            }
+          }}
+        />
       )}
 
       {goalForm && (
@@ -1346,32 +1403,42 @@ export function PerformancePage() {
       )}
 
       {tab === "360" && (
-        <Card title="360-degree feedback">
-          <DataTable
-            headers={["Employee", "360 status", "Update"]}
-            rows={reviews.map((r) => [
-              r.employeeName,
-              <StatusBadge key={r.id} status={r.feedback360Status} literal />,
-              <select aria-label="360 feedback status"
-                key={`${r.id}-360`}
-                value={r.feedback360Status}
-                disabled={!canWriteManagerReview(actor, r.employeeId) || status !== "Active"}
-                onChange={(e) => run(set360Status(actor, r.id, e.target.value as PerfReview["feedback360Status"]))}
-              >
-                {(["Not started", "In progress", "Complete"] as const).map((s) => (
-                  <option key={s} value={s}>{s}</option>
+        <div className="stack">
+          <Pending360Requests me={actor} requests={asked360} onResult={run} />
+          <Card title="360-degree feedback">
+            <p className="muted">The employee or their manager nominates up to 3 reviewers. Managers and HR see the answers.</p>
+            {reviews.length === 0 ? (
+              <EmptyState title="No reviews" description="No reviews in view for this cycle." />
+            ) : (
+              <ul className="feedback-list">
+                {reviews.map((r) => (
+                  <li key={r.id} className="feedback-item">
+                    <div className="row-between">
+                      <strong>{r.employeeName}</strong>
+                      <select
+                        aria-label="360 feedback status"
+                        value={r.feedback360Status}
+                        disabled={!canWriteManagerReview(actor, r.employeeId) || status !== "Active"}
+                        onChange={(e) => run(set360Status(actor, r.id, e.target.value as PerfReview["feedback360Status"]))}
+                      >
+                        {(["Not started", "In progress", "Complete"] as const).map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <Reviewers360 me={actor} review={r} open={status === "Planning" || status === "Active"} onResult={run} />
+                  </li>
                 ))}
-              </select>,
-            ])}
-            empty={<EmptyState title="No reviews" description="No reviews in view for this cycle." />}
-          />
-        </Card>
+              </ul>
+            )}
+          </Card>
+        </div>
       )}
 
       {tab === "reviews" && (
         <Card title="Ratings and development plans">
           <DataTable
-            headers={["Employee", "Self", "Manager", "360", "Rating", "Released", "Dev plan"]}
+            headers={["Employee", "Self", "Manager", "360", "Rating", "Released"]}
             rows={reviews.map((r) => {
               const writer = canWriteManagerReview(actor, r.employeeId);
               const canRate = writer && !r.released && (status === "Active" || status === "Calibration");
@@ -1408,16 +1475,23 @@ export function PerformancePage() {
                 ) : (
                   "No"
                 ),
-                <DevPlanInput
-                  key={`${r.id}-dp`}
-                  value={r.developmentPlan}
-                  editable={writer && !closed}
-                  onSave={(plan) => run(setDevelopmentPlan(actor, r.id, plan), "Plan saved.")}
-                />,
               ];
             })}
             empty={<EmptyState title="No reviews" description="No reviews in view for this cycle." />}
           />
+        </Card>
+      )}
+
+      {tab === "reviews" && reviews.length > 0 && (
+        <Card title="Development plans">
+          <ul className="feedback-list">
+            {reviews.map((r) => (
+              <li key={r.id} className="feedback-item">
+                <strong>{r.employeeName}</strong>
+                <DevPlanEditor me={actor} review={r} open={!closed} onResult={run} />
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
     </Page>
@@ -1895,20 +1969,29 @@ export function SkillsCareerPage() {
     ).slice(0, 4);
   }, [gaps, demoProfile, myEnrollments]);
 
+  const seesTeamInterests = canSeeTeamInterests(demoProfile);
+
   return (
     <Page title="Skills & career">
       <Tabs
         tabs={[
           { id: "library", label: "Skills library" },
           { id: "profile", label: "My skills profile" },
+          { id: "interests", label: "Career interests" },
+          { id: "matches", label: "Role matches" },
           { id: "gap", label: "Target role & gaps" },
           { id: "recs", label: "Recommended courses" },
+          ...(seesTeamInterests ? [{ id: "team", label: "Team interests" }] : []),
         ]}
         value={tab}
         onChange={setTab}
       />
 
       <Banner message={notice} />
+
+      {tab === "interests" && <CareerInterestsPanel me={demoProfile} />}
+      {tab === "matches" && <RoleMatchesPanel me={demoProfile} />}
+      {tab === "team" && seesTeamInterests && <TeamInterestsPanel me={demoProfile} />}
 
       {tab === "library" && (
         <Card title="Skills library">
@@ -1924,7 +2007,7 @@ export function SkillsCareerPage() {
           <DataTable
             headers={["Skill", "Current level", "Personal target"]}
             rows={skills.map((s) => {
-              const levels = SKILL_LIBRARY.find((x) => x.id === s.skillId)?.levels ?? [];
+              const levels = SKILL_LIBRARY.find((x) => x.id === s.skillId)?.levels ?? SKILL_LEVELS;
               return [
                 s.skillName,
                 <select aria-label="Current level" key={`${s.skillId}-c`} value={s.level} onChange={(e) => setSkill(s.skillId, { level: e.target.value })}>

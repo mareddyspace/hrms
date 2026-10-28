@@ -36,7 +36,7 @@ export {
   type WorkArrangement,
 } from "./personProfileSeed.ts";
 
-export type EmploymentStatus = "Active" | "On Leave" | "Contractor" | "Terminated";
+export type EmploymentStatus = "Active" | "Onboarding" | "On Leave" | "Contractor" | "Terminated";
 
 export interface PersonRecord {
   id: string;
@@ -149,6 +149,10 @@ export interface OrgNode {
   managerName?: string;
   /** Employee nodes link to the person's profile. */
   personId?: string;
+  /** Org unit closed to new moves (set by the local org overlay). */
+  inactive?: boolean;
+  /** Key of the editable org unit behind this node (set by the local org overlay). */
+  unitKey?: string;
 }
 
 export interface JobFamily {
@@ -164,6 +168,8 @@ export interface JobProfile {
   title: string;
   gradeBand: string;
   description: string;
+  /** Closed to new use (set by the local job overlay). */
+  inactive?: boolean;
 }
 
 export interface PositionRecord {
@@ -183,6 +189,13 @@ export interface PositionRecord {
   incumbentName?: string;
   requirements: string[];
   openings: number;
+  /** Budgeted seats; filled + vacant. Set by the local position overlay. */
+  headcount?: number;
+  filled?: number;
+  /** Closed position (set by the local position overlay). */
+  inactive?: boolean;
+  /** Added in this portal rather than seeded. */
+  added?: boolean;
 }
 
 export const LEGAL_BY_COUNTRY: Record<string, string> = {
@@ -462,6 +475,13 @@ type OpenPositionSeed = {
   status: "Open" | "Frozen";
   requirements: string[];
   openings: number;
+  /** Budgeted seats; filled + vacant. Set by the local position overlay. */
+  headcount?: number;
+  filled?: number;
+  /** Closed position (set by the local position overlay). */
+  inactive?: boolean;
+  /** Added in this portal rather than seeded. */
+  added?: boolean;
 };
 
 const OPEN_POSITION_SEEDS: OpenPositionSeed[] = [

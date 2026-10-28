@@ -141,11 +141,15 @@ export interface OnboardingJoiner {
   managerId: string;
   candidateId?: string;
   requisitionId?: string;
-  /** Set once onboarding is complete and the person is added to the directory. */
+  /** Directory record, created (status Onboarding) when the candidate is hired; made active when onboarding completes. */
   personId?: string;
   preboardingPct: number;
   docsStatus: "Not started" | "In progress" | "Submitted" | "Verified";
   policyAck: "Pending" | "Complete";
+  /** When and by whom the policy acknowledgment was recorded (HR may record it for the joiner). */
+  policyAckOn?: string;
+  policyAckBy?: string;
+  policyAckByHr?: boolean;
   overallStatus: "Pre-boarding" | "Day 1 ready" | "In progress" | "Completed";
 }
 
@@ -183,6 +187,29 @@ export interface PerfCycle {
   status: "Planning" | "Active" | "Calibration" | "Closed";
   start: string;
   end: string;
+  selfReviewDue?: string;
+  managerReviewDue?: string;
+  createdBy?: string;
+}
+
+/** A 360 reviewer nominated by the employee or their manager, and their answer. */
+export interface Reviewer360 {
+  reviewerId: string;
+  reviewerName: string;
+  nominatedBy: string;
+  nominatedOn: string;
+  rating?: number;
+  comment?: string;
+  respondedOn?: string;
+}
+
+export type DevActionStatus = "Not started" | "In progress" | "Done";
+
+export interface DevAction {
+  id: string;
+  title: string;
+  due: string;
+  status: DevActionStatus;
 }
 
 export interface PerfReview {
@@ -202,7 +229,10 @@ export interface PerfReview {
   released?: boolean;
   releasedBy?: string;
   releasedOn?: string;
+  /** Older single-text plan; shown as the first action when devActions is missing. */
   developmentPlan?: string;
+  devActions?: DevAction[];
+  reviewers360?: Reviewer360[];
   finalDecisionNote: string;
 }
 

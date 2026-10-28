@@ -1,9 +1,12 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  Banner,
   Card,
   DataTable,
+  Dialog,
   EmptyState,
+  Field,
   FilterBar,
   MetricCard,
   MetricGrid,
@@ -12,22 +15,55 @@ import {
   Tabs,
 } from "../components/ui.tsx";
 import {
-  JOB_FAMILIES,
-  JOB_PROFILES,
   buildOrgTree,
   buildPositions,
+  familyForDepartment,
+  type JobProfile,
   type OrgNode,
   type PositionRecord,
 } from "../data/peopleData.ts";
 import { getLifecycleHistory, isScheduled, subscribeLifecycleHistory } from "../data/lifecycleHistory.ts";
+import {
+  GRADE_OPTIONS,
+  ORG_UNIT_TYPES,
+  addOrgUnit,
+  applyOrgOverlay,
+  applyPositionOverlay,
+  canEditOrganisation,
+  getOrgOverlay,
+  listJobFamilies,
+  listJobProfiles,
+  listOrgUnits,
+  locationOptions,
+  parentTypeOf,
+  positionDefFor,
+  saveJobProfile,
+  savePosition,
+  setJobProfileActive,
+  setPositionActive,
+  subscribeOrgOverlay,
+  unitOptions,
+  unitTypeLabel,
+  updateOrgUnit,
+  type OrgUnit,
+  type OrgUnitType,
+} from "../data/orgStructureLocal.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { hasModuleAccess } from "../data/peoplePermissions.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
+import { TIMEZ_COUNTRIES } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import "../features/lifecycle/lifecycle.css";
+
+type Message = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
 function usePeople() {
   return useSyncExternalStore(subscribePeople, listPeople, listPeople);
+}
+
+function useOrgOverlay() {
+  return useSyncExternalStore(subscribeOrgOverlay, getOrgOverlay, getOrgOverlay);
 }
 
 const TYPE_LABEL: Record<OrgNode["type"], string> = {
@@ -48,20 +84,26 @@ const TYPE_LABEL: Record<OrgNode["type"], string> = {
 };
 
 function countNodes(node: OrgNode, type: OrgNode["type"], names = new Set<string>()): Set<string> {
-  if (node.type === type) names.add(node.name);
+  if (node.type === type && !node.inactive) names.add(node.name);
   node.children?.forEach((child) => countNodes(child, type, names));
   return names;
+}
+
+function countryName(code: string): string {
+  return TIMEZ_COUNTRIES.find((c) => c.code === code)?.name ?? code;
 }
 
 function OrgTreeNode({
   node,
   expanded,
   toggle,
+  onEdit,
   depth = 0,
 }: {
   node: OrgNode;
   expanded: Set<string>;
   toggle: (id: string) => void;
+  onEdit?: (unitKey: string) => void;
   depth?: number;
 }) {
   const hasChildren = !!node.children?.length;
@@ -82,7 +124,7 @@ function OrgTreeNode({
               <strong>{node.name}</strong>
             </Link>
           ) : (
-            <strong>{node.name}</strong>
+            <strong className={node.inactive ? "muted" : undefined}>{node.name}</strong>
           )}
           <span className="muted">
             {" "}
@@ -91,12 +133,26 @@ function OrgTreeNode({
             {typeof node.headcount === "number" && node.type !== "employee" ? ` · ${node.headcount}` : ""}
             {node.managerName && node.type !== "supervisoryOrg" ? ` · Head: ${node.managerName}` : ""}
           </span>
+          {node.inactive && (
+            <>
+              {" "}
+              <StatusBadge status="Inactive" tone="neutral" literal />
+            </>
+          )}
+          {onEdit && node.unitKey && (
+            <>
+              {" "}
+              <button type="button" className="btn-ghost btn-tiny" onClick={() => onEdit(node.unitKey!)}>
+                Edit
+              </button>
+            </>
+          )}
         </div>
       </div>
       {hasChildren && isOpen && (
         <ul className="org-tree-list">
           {node.children!.map((child) => (
-            <OrgTreeNode key={child.id} node={child} expanded={expanded} toggle={toggle} depth={depth + 1} />
+            <OrgTreeNode key={child.id} node={child} expanded={expanded} toggle={toggle} onEdit={onEdit} depth={depth + 1} />
           ))}
         </ul>
       )}
@@ -104,19 +160,137 @@ function OrgTreeNode({
   );
 }
 
+/* ───────────── Org unit dialog ───────────── */
+
+function UnitForm({
+  units,
+  unit,
+  onDone,
+}: {
+  units: OrgUnit[];
+  unit: OrgUnit | null;
+  onDone: (m: Message) => void;
+}) {
+  const { demoProfile } = usePortal();
+  const people = usePeople();
+  const [type, setType] = useState<OrgUnitType>(unit?.type ?? "department");
+  const [countryCode, setCountryCode] = useState(unit?.countryCode ?? "IN");
+  const [parentKey, setParentKey] = useState(unit?.parentKey ?? "");
+  const [name, setName] = useState(unit?.name ?? "");
+  const [code, setCode] = useState(unit?.code ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const parentType = parentTypeOf(type);
+  const parents = units.filter((u) => u.type === parentType && u.countryCode === countryCode && u.active);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const result = unit
+      ? updateOrgUnit(demoProfile, people, unit.key, { name, code })
+      : addOrgUnit(demoProfile, people, { type, countryCode, name, code, parentKey });
+    if (result) setError(result);
+    else onDone({ tone: "ok", text: unit ? `${name.trim()} saved.` : `${unitTypeLabel(type)} ${name.trim()} added.` });
+  }
+
+  function toggleActive() {
+    if (!unit) return;
+    const result = updateOrgUnit(demoProfile, people, unit.key, { active: !unit.active });
+    if (result) setError(result);
+    else onDone({ tone: "ok", text: `${unit.name} ${unit.active ? "deactivated" : "reactivated"}.` });
+  }
+
+  return (
+    <form className="stack" onSubmit={submit}>
+      <Banner message={error ? { tone: "err", text: error } : null} />
+      {unit && unit.headcount > 0 && unit.active && (
+        <p className="muted">
+          {unit.headcount} {unit.headcount === 1 ? "person is" : "people are"} here. Deactivating stops new moves in; current people stay.
+        </p>
+      )}
+      <div className="lc-grid">
+        <Field label="Type">
+          <select value={type} disabled={Boolean(unit)} onChange={(e) => { setType(e.target.value as OrgUnitType); setParentKey(""); }}>
+            {ORG_UNIT_TYPES.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Country">
+          <select value={countryCode} disabled={Boolean(unit)} onChange={(e) => { setCountryCode(e.target.value); setParentKey(""); }}>
+            {TIMEZ_COUNTRIES.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {!unit && parentType !== "country" && (
+          <Field label={`Parent ${unitTypeLabel(parentType).toLowerCase()}`} wide>
+            <select value={parentKey} onChange={(e) => setParentKey(e.target.value)} required>
+              <option value="">Choose…</option>
+              {parents.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+        <Field label="Name">
+          <input value={name} maxLength={80} onChange={(e) => setName(e.target.value)} required />
+        </Field>
+        <Field label="Code">
+          <input value={code} maxLength={30} onChange={(e) => setCode(e.target.value)} placeholder="Optional" />
+        </Field>
+      </div>
+      <div className="row-gap">
+        <button className="btn" type="submit">
+          {unit ? "Save" : "Add unit"}
+        </button>
+        {unit && (
+          <button className="btn-ghost" type="button" onClick={toggleActive}>
+            {unit.active ? "Deactivate" : "Reactivate"}
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
 export function OrganizationPage() {
   const { demoProfile } = usePortal();
   const { t, matchesRegion } = useLocale();
   const people = usePeople();
+  const overlay = useOrgOverlay();
   const history = useSyncExternalStore(subscribeLifecycleHistory, getLifecycleHistory, getLifecycleHistory);
   const scopedPeople = useMemo(
     () => people.filter((p) => matchesRegion(String(p.countryCode), p.countryName)),
     [people, matchesRegion],
   );
-  const tree = useMemo(() => buildOrgTree(scopedPeople.length ? scopedPeople : people), [scopedPeople, people]);
+  const treePeople = scopedPeople.length ? scopedPeople : people;
+  const tree = useMemo(() => applyOrgOverlay(buildOrgTree(treePeople), people, overlay), [treePeople, people, overlay]);
+  const units = useMemo(() => listOrgUnits(people, overlay), [people, overlay]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["company-timez"]));
   const [tab, setTab] = useState("structure");
-  const countries = (tree.children ?? []).filter((c) => (c.headcount ?? 0) > 0);
+  const [message, setMessage] = useState<Message>(null);
+  const [dialog, setDialog] = useState<{ key: string | null } | null>(null);
+  const [unitType, setUnitType] = useState("");
+  const [unitQ, setUnitQ] = useState("");
+  const countries = (tree.children ?? []).filter((c) => (c.headcount ?? 0) > 0 || c.children?.some((x) => x.id.startsWith("added-")));
+  const canEdit = canEditOrganisation(demoProfile.role);
+  const editing = dialog?.key ? units.find((u) => u.key === dialog.key) ?? null : null;
+  const unitName = (key: string) => units.find((u) => u.key === key)?.name ?? "";
+
+  const shownUnits = useMemo(() => {
+    const q = unitQ.trim().toLowerCase();
+    return units.filter(
+      (u) =>
+        (!unitType || u.type === unitType) &&
+        matchesRegion(u.countryCode, countryName(u.countryCode)) &&
+        (!q || `${u.name} ${u.code}`.toLowerCase().includes(q)),
+    );
+  }, [units, unitType, unitQ, matchesRegion]);
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -136,7 +310,17 @@ export function OrganizationPage() {
   }
 
   return (
-    <Page title="Organization">
+    <Page
+      title="Organization"
+      action={
+        canEdit ? (
+          <button type="button" className="btn" onClick={() => setDialog({ key: null })}>
+            Add unit
+          </button>
+        ) : undefined
+      }
+    >
+      <Banner message={message} />
       <FilterBar>
         <RegionalFilter label={t("locale.region")} />
       </FilterBar>
@@ -150,6 +334,7 @@ export function OrganizationPage() {
       <Tabs
         tabs={[
           { id: "structure", label: "Structure" },
+          { id: "units", label: "Units" },
           { id: "history", label: "Change history" },
         ]}
         value={tab}
@@ -175,7 +360,7 @@ export function OrganizationPage() {
           }
         >
           <ul className="org-tree-list">
-            <OrgTreeNode node={tree} expanded={expanded} toggle={toggle} />
+            <OrgTreeNode node={tree} expanded={expanded} toggle={toggle} onEdit={canEdit ? (key) => setDialog({ key }) : undefined} />
           </ul>
           <Link to="/directory" className="quiet-link">
             See everyone in People
@@ -183,64 +368,363 @@ export function OrganizationPage() {
         </Card>
       )}
 
-      {tab === "history" && (
-        <Card title="Change history">
+      {tab === "units" && (
+        <Card title="Org units">
+          <FilterBar>
+            <label className="filter-label">
+              Search
+              <input value={unitQ} onChange={(e) => setUnitQ(e.target.value)} placeholder="Name or code" />
+            </label>
+            <label className="filter-label">
+              Type
+              <select value={unitType} onChange={(e) => setUnitType(e.target.value)}>
+                <option value="">All</option>
+                {ORG_UNIT_TYPES.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </FilterBar>
           <DataTable
-            headers={["Effective", "Status", "Person", "Change", "From", "To", "Recorded", "By"]}
-            rows={history.map((e) => [
-              e.effectiveDate,
-              isScheduled(e) ? (
-                <StatusBadge key={`s-${e.id}`} status="Scheduled" tone="info" literal />
+            headers={["Name", "Type", "Country", "Parent", "Code", "People", "Status", ""]}
+            rows={shownUnits.slice(0, 300).map((u) => [
+              u.name,
+              unitTypeLabel(u.type),
+              countryName(u.countryCode),
+              u.parentKey ? unitName(u.parentKey) : countryName(u.countryCode),
+              u.code || "—",
+              u.headcount,
+              <StatusBadge key={`st-${u.key}`} status={u.active ? "Active" : "Inactive"} tone={u.active ? "ok" : "neutral"} literal />,
+              canEdit ? (
+                <button key={`e-${u.key}`} type="button" className="btn-ghost btn-tiny" onClick={() => setDialog({ key: u.key })}>
+                  Edit
+                </button>
               ) : (
-                <StatusBadge key={`s-${e.id}`} status="In effect" tone="ok" literal />
+                ""
               ),
-              <Link key={e.id} to={`/people/${e.personId}`}>{e.personName}</Link>,
-              e.type,
-              e.before,
-              e.after,
-              e.recordedOn,
-              e.by,
             ])}
-            empty={<EmptyState title="No changes yet" />}
+            empty={<EmptyState title="No units" description="Try other filters." />}
           />
+          {shownUnits.length > 300 && <p className="muted">Showing 300 of {shownUnits.length}.</p>}
         </Card>
       )}
+
+      {tab === "history" && (
+        <>
+          <Card title="Structure and job changes">
+            <DataTable
+              headers={["Date", "Record", "Name", "Change", "From", "To", "By"]}
+              rows={overlay.changes.map((c) => [c.date, c.entity, c.name, c.action, c.before, c.after, c.by])}
+              empty={<EmptyState title="No structure changes yet" />}
+            />
+          </Card>
+          <Card title="People changes">
+            <DataTable
+              headers={["Effective", "Status", "Person", "Change", "From", "To", "Recorded", "By"]}
+              rows={history.map((e) => [
+                e.effectiveDate,
+                isScheduled(e) ? (
+                  <StatusBadge key={`s-${e.id}`} status="Scheduled" tone="info" literal />
+                ) : (
+                  <StatusBadge key={`s-${e.id}`} status="In effect" tone="ok" literal />
+                ),
+                <Link key={e.id} to={`/people/${e.personId}`}>{e.personName}</Link>,
+                e.type,
+                e.before,
+                e.after,
+                e.recordedOn,
+                e.by,
+              ])}
+              empty={<EmptyState title="No changes yet" />}
+            />
+          </Card>
+        </>
+      )}
+
+      <Dialog
+        open={Boolean(dialog) && canEdit}
+        title={editing ? `Edit ${unitTypeLabel(editing.type).toLowerCase()}` : "Add org unit"}
+        onClose={() => setDialog(null)}
+      >
+        {dialog && (
+          <UnitForm
+            key={dialog.key ?? "new"}
+            units={units}
+            unit={editing}
+            onDone={(m) => {
+              setMessage(m);
+              setDialog(null);
+            }}
+          />
+        )}
+      </Dialog>
     </Page>
   );
+}
+
+/* ───────────── Job profile and position dialogs ───────────── */
+
+function ProfileForm({ profile, families, onDone }: { profile: JobProfile | null; families: string[]; onDone: (m: Message) => void }) {
+  const { demoProfile } = usePortal();
+  const [title, setTitle] = useState(profile?.title ?? "");
+  const [familyName, setFamilyName] = useState(profile?.familyName ?? families[0] ?? "");
+  const [gradeBand, setGradeBand] = useState(profile?.gradeBand ?? "L4");
+  const [description, setDescription] = useState(profile?.description ?? "");
+  const [error, setError] = useState<string | null>(null);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const result = saveJobProfile(demoProfile, profile?.id ?? null, { title, familyName, gradeBand, description });
+    if (result) setError(result);
+    else onDone({ tone: "ok", text: `${title.trim()} saved.` });
+  }
+
+  function toggleActive() {
+    if (!profile) return;
+    const result = setJobProfileActive(demoProfile, profile.id, Boolean(profile.inactive));
+    if (result) setError(result);
+    else onDone({ tone: "ok", text: `${profile.title} ${profile.inactive ? "reactivated" : "deactivated"}.` });
+  }
+
+  return (
+    <form className="stack" onSubmit={submit}>
+      <Banner message={error ? { tone: "err", text: error } : null} />
+      <div className="lc-grid">
+        <Field label="Title">
+          <input value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} required />
+        </Field>
+        <Field label="Job family">
+          <select value={familyName} onChange={(e) => setFamilyName(e.target.value)}>
+            {families.map((f) => (
+              <option key={f}>{f}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Grade band">
+          <select value={gradeBand} onChange={(e) => setGradeBand(e.target.value)}>
+            {[...new Set([gradeBand, ...GRADE_OPTIONS])].map((g) => (
+              <option key={g}>{g}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Description" wide>
+          <textarea value={description} maxLength={500} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+      </div>
+      <div className="row-gap">
+        <button className="btn" type="submit">
+          {profile ? "Save" : "Add profile"}
+        </button>
+        {profile && (
+          <button className="btn-ghost" type="button" onClick={toggleActive}>
+            {profile.inactive ? "Reactivate" : "Deactivate"}
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function PositionForm({
+  position,
+  profiles,
+  families,
+  onDone,
+}: {
+  position: PositionRecord | null;
+  profiles: JobProfile[];
+  families: string[];
+  onDone: (m: Message) => void;
+}) {
+  const { demoProfile } = usePortal();
+  const people = usePeople();
+  const def = position ? positionDefFor(position) : null;
+  const [title, setTitle] = useState(def?.title ?? "");
+  const [department, setDepartment] = useState(def?.department ?? "Engineering");
+  const [jobFamily, setJobFamily] = useState(def?.jobFamily ?? familyForDepartment("Engineering"));
+  const [jobProfileId, setJobProfileId] = useState(def?.jobProfileId ?? "");
+  const [grade, setGrade] = useState(def?.grade ?? "L4");
+  const [location, setLocation] = useState(def ? `${def.countryCode}|${def.location}` : "");
+  const [headcount, setHeadcount] = useState(String(def?.headcount ?? 1));
+  const [status, setStatus] = useState<"Open" | "Frozen">(def?.status ?? "Open");
+  const [requirements, setRequirements] = useState((def?.requirements ?? []).join("\n"));
+  const [error, setError] = useState<string | null>(null);
+  const departments = useMemo(() => unitOptions(people, "department"), [people]);
+  const locations = useMemo(() => locationOptions(people), [people]);
+  const familyProfiles = profiles.filter((p) => p.familyName === jobFamily && (!p.inactive || p.id === jobProfileId));
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const [countryCode, ...rest] = location.split("|");
+    const result = savePosition(demoProfile, position, {
+      title,
+      department,
+      jobFamily,
+      jobProfileId,
+      grade,
+      countryCode,
+      location: rest.join("|"),
+      headcount: Number(headcount),
+      status,
+      requirements: requirements.split("\n"),
+    });
+    if (result) setError(result);
+    else onDone({ tone: "ok", text: `${title.trim()} saved.` });
+  }
+
+  function toggleActive() {
+    if (!position) return;
+    const result = setPositionActive(demoProfile, position, Boolean(position.inactive));
+    if (result) setError(result);
+    else onDone({ tone: "ok", text: `${position.title} ${position.inactive ? "reactivated" : "deactivated"}.` });
+  }
+
+  return (
+    <form className="stack" onSubmit={submit}>
+      <Banner message={error ? { tone: "err", text: error } : null} />
+      <div className="lc-grid">
+        <Field label="Title" wide>
+          <input value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} required />
+        </Field>
+        <Field label="Department">
+          <select
+            value={department}
+            onChange={(e) => {
+              setDepartment(e.target.value);
+              setJobFamily(familyForDepartment(e.target.value));
+              setJobProfileId("");
+            }}
+          >
+            {!departments.some((d) => d.value === department) && <option value={department}>{department}</option>}
+            {departments.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Location">
+          <select value={location} onChange={(e) => setLocation(e.target.value)} required>
+            <option value="">Choose…</option>
+            {location && !locations.some((l) => `${l.countryCode}|${l.location}` === location) && (
+              <option value={location}>{location.split("|").slice(1).join("|")}</option>
+            )}
+            {locations.map((l) => (
+              <option key={`${l.countryCode}|${l.location}`} value={`${l.countryCode}|${l.location}`}>
+                {l.label} · {l.countryName}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Job family">
+          <select value={jobFamily} onChange={(e) => { setJobFamily(e.target.value); setJobProfileId(""); }}>
+            {families.map((f) => (
+              <option key={f}>{f}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Job profile">
+          <select value={jobProfileId} onChange={(e) => setJobProfileId(e.target.value)}>
+            <option value="">None</option>
+            {familyProfiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.title} · {p.gradeBand}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Grade">
+          <select value={grade} onChange={(e) => setGrade(e.target.value)}>
+            {[...new Set([grade, ...GRADE_OPTIONS])].map((g) => (
+              <option key={g}>{g}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Headcount">
+          <input type="number" min={1} max={500} value={headcount} onChange={(e) => setHeadcount(e.target.value)} required />
+        </Field>
+        <Field label="Status">
+          <select value={status} onChange={(e) => setStatus(e.target.value as "Open" | "Frozen")}>
+            <option>Open</option>
+            <option>Frozen</option>
+          </select>
+        </Field>
+        <Field label="Requirements (one per line)" wide>
+          <textarea value={requirements} onChange={(e) => setRequirements(e.target.value)} />
+        </Field>
+      </div>
+      <div className="row-gap">
+        <button className="btn" type="submit">
+          {position ? "Save" : "Add position"}
+        </button>
+        {position && (
+          <button className="btn-ghost" type="button" onClick={toggleActive}>
+            {position.inactive ? "Reactivate" : "Deactivate"}
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function positionTone(p: PositionRecord): "ok" | "warn" | "info" | "neutral" {
+  if (p.inactive) return "neutral";
+  return p.status === "Open" ? "ok" : p.status === "Frozen" ? "warn" : "info";
 }
 
 export function JobsPage() {
   const { demoProfile } = usePortal();
   const people = usePeople();
-  const allPositions = useMemo(() => buildPositions(people), [people]);
+  const overlay = useOrgOverlay();
+  const allPositions = useMemo(() => applyPositionOverlay(buildPositions(people), people, overlay), [people, overlay]);
+  const allProfiles = useMemo(() => listJobProfiles(overlay), [overlay]);
+  const families = useMemo(() => listJobFamilies(allProfiles), [allProfiles]);
+  const familyNames = families.map((f) => f.name);
   const [tab, setTab] = useState("families");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [family, setFamily] = useState("");
   const [selectedId, setSelectedId] = useState("pos-221");
+  const [message, setMessage] = useState<Message>(null);
+  const [profileDialog, setProfileDialog] = useState<{ id: string | null } | null>(null);
+  const [positionDialog, setPositionDialog] = useState<{ id: string | null } | null>(null);
   const { id } = useParams();
+  const canEdit = canEditOrganisation(demoProfile.role);
 
   const profiles = useMemo(() => {
-    return JOB_PROFILES.filter((p) => {
+    return allProfiles.filter((p) => {
       if (family && p.familyName !== family) return false;
       if (q && !`${p.title} ${p.id}`.toLowerCase().includes(q.toLowerCase())) return false;
       return true;
     });
-  }, [q, family]);
+  }, [allProfiles, q, family]);
 
   const positions = useMemo(() => {
     return allPositions.filter((p) => {
-      if (status && p.status !== status) return false;
+      if (status === "Inactive") {
+        if (!p.inactive) return false;
+      } else {
+        if (p.inactive) return false;
+        if (status && p.status !== status) return false;
+      }
       if (family && p.jobFamily !== family) return false;
       if (q && !`${p.title} ${p.code} ${p.location}`.toLowerCase().includes(q.toLowerCase())) return false;
       return true;
     });
   }, [allPositions, q, status, family]);
 
+  const activePositions = allPositions.filter((p) => !p.inactive);
+  const seats = activePositions.reduce((sum, p) => sum + (p.headcount ?? 0), 0);
+  const filled = activePositions.reduce((sum, p) => sum + (p.filled ?? 0), 0);
+
   const selected: PositionRecord | undefined =
     allPositions.find((p) => p.id === (id || selectedId) || p.code === id) ??
     allPositions.find((p) => p.id === selectedId) ??
     positions[0];
+  const editingProfile = profileDialog?.id ? allProfiles.find((p) => p.id === profileDialog.id) ?? null : null;
+  const editingPosition = positionDialog?.id ? allPositions.find((p) => p.id === positionDialog.id) ?? null : null;
 
   if (!hasModuleAccess(demoProfile, "jobs") && !hasModuleAccess(demoProfile, "*")) {
     return (
@@ -250,8 +734,35 @@ export function JobsPage() {
     );
   }
 
+  const done = (m: Message) => {
+    setMessage(m);
+    setProfileDialog(null);
+    setPositionDialog(null);
+  };
+
   return (
-    <Page title="Jobs & positions">
+    <Page
+      title="Jobs & positions"
+      action={
+        canEdit ? (
+          <div className="row-gap">
+            <button type="button" className="btn-ghost" onClick={() => setProfileDialog({ id: null })}>
+              Add job profile
+            </button>
+            <button type="button" className="btn" onClick={() => setPositionDialog({ id: null })}>
+              Add position
+            </button>
+          </div>
+        ) : undefined
+      }
+    >
+      <Banner message={message} />
+      <MetricGrid>
+        <MetricCard label="Positions" value={activePositions.length} />
+        <MetricCard label="Headcount" value={seats} />
+        <MetricCard label="Filled" value={filled} />
+        <MetricCard label="Vacant" value={seats - filled} />
+      </MetricGrid>
       <FilterBar>
         <label className="filter-label">
           Search
@@ -261,8 +772,8 @@ export function JobsPage() {
           Job family
           <select value={family} onChange={(e) => setFamily(e.target.value)}>
             <option value="">All</option>
-            {JOB_FAMILIES.map((f) => (
-              <option key={f.id} value={f.name}>
+            {families.map((f) => (
+              <option key={f.name} value={f.name}>
                 {f.name}
               </option>
             ))}
@@ -271,10 +782,11 @@ export function JobsPage() {
         <label className="filter-label">
           Position status
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">All</option>
+            <option value="">All active</option>
             <option value="Open">Open</option>
             <option value="Filled">Filled</option>
             <option value="Frozen">Frozen</option>
+            <option value="Inactive">Inactive</option>
           </select>
         </label>
       </FilterBar>
@@ -294,7 +806,7 @@ export function JobsPage() {
         <Card title="Job families">
           <DataTable
             headers={["Family", "Profiles", "People"]}
-            rows={JOB_FAMILIES.map((f) => [
+            rows={families.map((f) => [
               f.name,
               String(f.profiles),
               String(people.filter((p) => p.jobFamily === f.name && p.employmentStatus === "Active").length),
@@ -309,8 +821,22 @@ export function JobsPage() {
             <EmptyState title="No profiles" description="Try other filters." />
           ) : (
             <DataTable
-              headers={["ID", "Title", "Family", "Grade band", "Description"]}
-              rows={profiles.map((p) => [p.id, p.title, p.familyName, p.gradeBand, p.description])}
+              headers={["ID", "Title", "Family", "Grade band", "Description", "Status", ""]}
+              rows={profiles.map((p) => [
+                p.id,
+                p.title,
+                p.familyName,
+                p.gradeBand,
+                p.description,
+                <StatusBadge key={`ps-${p.id}`} status={p.inactive ? "Inactive" : "Active"} tone={p.inactive ? "neutral" : "ok"} literal />,
+                canEdit ? (
+                  <button key={`pe-${p.id}`} type="button" className="btn-ghost btn-tiny" onClick={() => setProfileDialog({ id: p.id })}>
+                    Edit
+                  </button>
+                ) : (
+                  ""
+                ),
+              ])}
             />
           )}
         </Card>
@@ -322,7 +848,7 @@ export function JobsPage() {
             <EmptyState title="No positions" description="Try other filters." />
           ) : (
             <DataTable
-              headers={["Code", "Title", "Grade", "Country", "Location", "Manager", "Status", ""]}
+              headers={["Code", "Title", "Grade", "Country", "Location", "Manager", "Headcount", "Vacant", "Status", ""]}
               rows={positions.slice(0, 200).map((p) => [
                 p.code,
                 p.title,
@@ -330,22 +856,26 @@ export function JobsPage() {
                 p.country,
                 p.location,
                 p.managerName,
-                <StatusBadge
-                  key={p.id}
-                  status={p.status}
-                  tone={p.status === "Open" ? "ok" : p.status === "Frozen" ? "warn" : "info"}
-                />,
-                <button
-                  key={`${p.id}-open`}
-                  type="button"
-                  className="quiet-link"
-                  onClick={() => {
-                    setSelectedId(p.id);
-                    setTab("detail");
-                  }}
-                >
-                  View
-                </button>,
+                p.headcount ?? 0,
+                (p.headcount ?? 0) - (p.filled ?? 0),
+                <StatusBadge key={p.id} status={p.inactive ? "Inactive" : p.status} tone={positionTone(p)} literal={p.inactive} />,
+                <div key={`${p.id}-open`} className="row-gap">
+                  <button
+                    type="button"
+                    className="quiet-link"
+                    onClick={() => {
+                      setSelectedId(p.id);
+                      setTab("detail");
+                    }}
+                  >
+                    View
+                  </button>
+                  {canEdit && !p.incumbentId && (
+                    <button type="button" className="quiet-link" onClick={() => setPositionDialog({ id: p.id })}>
+                      Edit
+                    </button>
+                  )}
+                </div>,
               ])}
             />
           )}
@@ -355,7 +885,16 @@ export function JobsPage() {
 
       {tab === "detail" && selected && (
         <div className="mgr-home-grid">
-          <Card title={`${selected.title} · ${selected.code}`}>
+          <Card
+            title={`${selected.title} · ${selected.code}`}
+            action={
+              canEdit && !selected.incumbentId ? (
+                <button type="button" className="btn-ghost btn-tiny" onClick={() => setPositionDialog({ id: selected.id })}>
+                  Edit
+                </button>
+              ) : undefined
+            }
+          >
             <dl className="info-grid">
               <div className="info-fact">
                 <dt>Job family</dt>
@@ -363,7 +902,7 @@ export function JobsPage() {
               </div>
               <div className="info-fact">
                 <dt>Job profile</dt>
-                <dd>{selected.jobProfileId}</dd>
+                <dd>{selected.jobProfileId || "—"}</dd>
               </div>
               <div className="info-fact">
                 <dt>Grade</dt>
@@ -387,17 +926,19 @@ export function JobsPage() {
               </div>
               <div className="info-fact">
                 <dt>Reporting manager</dt>
-                <dd>{selected.managerName}</dd>
+                <dd>{selected.managerName || "—"}</dd>
               </div>
               <div className="info-fact">
                 <dt>Status</dt>
                 <dd>
-                  <StatusBadge status={selected.status} />
+                  <StatusBadge status={selected.inactive ? "Inactive" : selected.status} tone={positionTone(selected)} literal={selected.inactive} />
                 </dd>
               </div>
               <div className="info-fact">
-                <dt>Openings</dt>
-                <dd>{selected.openings}</dd>
+                <dt>Headcount</dt>
+                <dd>
+                  {selected.headcount ?? 0} · {selected.filled ?? 0} filled · {(selected.headcount ?? 0) - (selected.filled ?? 0)} vacant
+                </dd>
               </div>
               {selected.incumbentName && (
                 <div className="info-fact">
@@ -425,7 +966,7 @@ export function JobsPage() {
           </Card>
           <Card title="Open positions">
             <ul className="todo">
-              {allPositions.filter((p) => p.id !== selected.id && p.status !== "Filled").map((p) => (
+              {activePositions.filter((p) => p.id !== selected.id && p.status !== "Filled").map((p) => (
                 <li key={p.id}>
                   <button
                     type="button"
@@ -444,6 +985,15 @@ export function JobsPage() {
           </Card>
         </div>
       )}
+
+      <Dialog open={Boolean(profileDialog) && canEdit} title={editingProfile ? "Edit job profile" : "Add job profile"} onClose={() => setProfileDialog(null)}>
+        {profileDialog && <ProfileForm key={profileDialog.id ?? "new"} profile={editingProfile} families={familyNames} onDone={done} />}
+      </Dialog>
+      <Dialog open={Boolean(positionDialog) && canEdit} title={editingPosition ? "Edit position" : "Add position"} onClose={() => setPositionDialog(null)}>
+        {positionDialog && (
+          <PositionForm key={positionDialog.id ?? "new"} position={editingPosition} profiles={allProfiles} families={familyNames} onDone={done} />
+        )}
+      </Dialog>
     </Page>
   );
 }
