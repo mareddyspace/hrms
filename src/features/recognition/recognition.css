@@ -1,0 +1,28 @@
+/* Recognition wall and rewards */
+.rc-feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.rc-post { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); min-width: 0; }
+.rc-post-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.rc-tags { flex-wrap: wrap; font-size: 12.5px; }
+.rc-message { margin: 0; overflow-wrap: anywhere; }
+.rc-points { margin: 0; font-weight: 700; color: var(--accent); font-size: 13px; }
+.rc-block { display: block; margin-top: 2px; }
+.rc-like {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rc-like.on { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
+.rc-rewards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.rc-reward { display: grid; gap: 6px; align-content: start; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.rc-reward h3 { margin: 0; font-size: 14px; }
+.rc-reward p { margin: 0; }
+.rc-reward input { width: 100%; padding: 5px 8px; border: 1px solid var(--chip-border); border-radius: 6px; background: var(--input-bg); color: inherit; font: inherit; font-size: 13px; }

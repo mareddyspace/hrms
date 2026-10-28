@@ -29,6 +29,7 @@ import {
 import { cycleCompletion, cycleStatusOf, getTalentState, skillProfileFor } from "./talentLocal.ts";
 import { buildAttendanceHistory, type AttendanceCorrection, type TodaySession } from "./attendanceData.ts";
 import { COMP_CYCLES, type CompReviewItem } from "./rewardData.ts";
+import { getRewardState } from "./rewardLocal.ts";
 
 type TalentState = ReturnType<typeof getTalentState>;
 
@@ -341,7 +342,9 @@ export function compReviewStatus(
   reviews: readonly CompReviewItem[],
   ids?: ReadonlySet<string>,
 ): { cycle: string; status: string; total: number; submittedPct: number; pendingManagers: number; approved: number; awaiting: number; avgIncreasePct: number } | null {
-  const cycle = COMP_CYCLES.find((c) => c.status !== "Closed") ?? COMP_CYCLES[0];
+  // HR-created cycles live in the reward store; the seed list is the fallback.
+  const cycles = getRewardState().cycles ?? COMP_CYCLES;
+  const cycle = cycles.find((c) => c.status !== "Closed") ?? cycles[0];
   if (!cycle) return null;
   const rows = reviews.filter((r) => r.cycleId === cycle.id && (!ids || ids.has(r.employeeId)));
   const submitted = rows.filter((r) => r.status !== "Draft");

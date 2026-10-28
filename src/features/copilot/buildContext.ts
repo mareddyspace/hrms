@@ -10,13 +10,16 @@ import { getExitDetails } from "../../data/peopleLocal.ts";
 import { COURSES, PIPELINE_STAGES } from "../../data/talentData.ts";
 import { currentCycle, weightedProgress } from "../../data/homeInsights.ts";
 import { personName, workforceInsights, workforceStats, type TeamMember } from "../../data/workforceStats.ts";
+import { policiesForPerson, policyCatalog } from "../../data/policyLibrary.ts";
 import {
   addDaysISO,
   holidaySet,
+  holidaysForCountry,
   holidaysForPerson,
   localPolicy,
   parseISODate,
   workingDays,
+  type CountryCode,
   type Employee,
   type LeaveRow,
   type PayslipView,
@@ -220,6 +223,12 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
     leaveRows: src.leaveTable.map((r) => ({ name: r.name, code: r.code, available: r.available, pending: r.pending, quota: r.quota, utilized: r.utilized })),
     leavePolicies: localPolicies.filter((p) => p.quota > 0).map((p) => ({ code: p.code, name: p.name, quota: p.quota, accrual: p.accrual, carryForwardMax: p.carryForwardMax })),
     policies: state.policies.map((p) => ({ title: p.title, body: p.body })),
+    // Same catalog and audience filter as the Policies page.
+    policyLibrary: policiesForPerson(
+      { countryCode: (employee.countryCode ?? "IN") as CountryCode, legalEntity: employee.legalEntity, role: employee.role, employmentType: employee.employmentType },
+      { holidays: myHolidays, shiftName: employee.shiftName, shiftHours: employee.shiftHours },
+    ),
+    policyCatalog: policyCatalog((code) => holidaysForCountry(state.holidays, code)),
     myLeave: state.leaveRequests
       .filter((r) => r.employeeId === me)
       .map((r) => ({

@@ -70,7 +70,18 @@ export type NavAccessId =
   | "auditlog"
   | "mail"
   | "paypreview"
-  | "policies";
+  | "policies"
+  | "projects"
+  | "encashment"
+  | "cashadvance"
+  | "assets"
+  | "software"
+  | "hrcases"
+  | "travel"
+  | "workflowsconfig"
+  | "emailoutbox"
+  | "lifecycleactions"
+  | "recognition";
 
 export interface DemoAccount extends Employee {
   /** Prototype-only plain-text password (frontend mock). */
@@ -128,6 +139,13 @@ const ACCESS_EMPLOYEE: NavAccessId[] = [
   "shifts",
   "optionalholidays",
   "policies",
+  "projects",
+  "encashment",
+  "cashadvance",
+  "assets",
+  "software",
+  "travel",
+  "recognition",
 ];
 
 const ACCESS_MANAGER: NavAccessId[] = [
@@ -142,6 +160,7 @@ const ACCESS_MANAGER: NavAccessId[] = [
   "analytics",
   "recruiting", // managers see and act on their own requisitions only
   "probationreviews",
+  "lifecycleactions",
   "teamexits",
   "succession",
   "contractors",
@@ -163,6 +182,9 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "reportbuilder",
   "auditlog",
   "approvalsmenu",
+  "workflowsconfig",
+  "emailoutbox",
+  "lifecycleactions",
 ];
 
 function account(
@@ -235,7 +257,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     department: "Engineering",
     currency: "INR",
     reportsToId: "demo-ceo",
-    navAccess: ACCESS_MANAGER,
+    navAccess: [...ACCESS_MANAGER, "onboarding"], // follows new joiners in the team
   }),
   account({
     id: "demo-hr-admin",
@@ -272,6 +294,8 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "auditlog",
       "payroll", // HR owns compensation & benefits: payroll status and pay preview
       "paypreview",
+      "hrcases",
+      "integrations", // sync health for payroll and HR data
     ],
   }),
   account({

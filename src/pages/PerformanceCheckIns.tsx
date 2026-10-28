@@ -4,18 +4,34 @@ import type { DemoAccount } from "../demoAccounts.ts";
 import {
   PRAISE_BADGES,
   type CheckInItem,
+  type DevActionStatus,
   type FeedbackItem,
   type OneOnOne,
+  type PerfReview,
   type PraiseBadge,
+  type Reviewer360,
 } from "../data/talentData.ts";
 import {
   addCheckInItem,
+  addDevAction,
   addFeedback,
   answerFeedbackRequest,
+  canEditDevPlan,
+  canNominate360,
+  canSee360Responses,
+  DEV_ACTION_STATUSES,
+  devActionsOf,
   isMeetingInFuture,
+  MAX_360_REVIEWERS,
+  nominate360Reviewer,
+  remove360Reviewer,
+  removeDevAction,
+  reviewer360Options,
   scheduleOneOnOne,
   setOneOnOneStatus,
+  submit360Response,
   toggleCheckInItem,
+  updateDevAction,
   updateOneOnOne,
   type TalentActor,
 } from "../data/talentLocal.ts";
@@ -460,5 +476,188 @@ function ChecklistSection({
         </button>
       </form>
     </section>
+  );
+}
+
+/* ───────────────────────────── 360 FEEDBACK ── */
+
+type Result = (error: string | null, okText?: string) => void;
+
+/** Requests addressed to me: a 1–5 rating and a comment each. */
+export function Pending360Requests({ me, requests, onResult }: { me: TalentActor; requests: { review: PerfReview; reviewer: Reviewer360 }[]; onResult: Result }) {
+  if (requests.length === 0) return null;
+  return (
+    <Card title="360 feedback asked of you">
+      <ul className="feedback-list">
+        {requests.map(({ review }) => (
+          <li key={review.id} className="feedback-item">
+            <Answer360Form me={me} review={review} onResult={onResult} />
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function Answer360Form({ me, review, onResult }: { me: TalentActor; review: PerfReview; onResult: Result }) {
+  const [rating, setRating] = useState("4");
+  const [comment, setComment] = useState("");
+  return (
+    <form
+      className="stack"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const error = submit360Response(me, review.id, Number(rating), comment);
+        onResult(error, `360 feedback sent for ${review.employeeName}.`);
+        if (!error) setComment("");
+      }}
+    >
+      <strong>{review.employeeName}</strong>
+      <div className="form-grid-2">
+        <Field label="Rating (1–5)">
+          <select value={rating} onChange={(e) => setRating(e.target.value)}>
+            {[5, 4, 3, 2, 1].map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Comment" wide>
+          <textarea rows={2} maxLength={600} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="What they do well, and one thing to work on" />
+        </Field>
+      </div>
+      <div>
+        <button className="btn btn-tiny" type="submit" disabled={comment.trim().length < 5}>
+          Send
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** Nominees for one review: the employee or manager adds up to 3; managers and HR read the answers. */
+export function Reviewers360({ me, review, open, onResult }: { me: TalentActor; review: PerfReview; open: boolean; onResult: Result }) {
+  const list = review.reviewers360 ?? [];
+  const canEdit = open && canNominate360(me, review);
+  const showAnswers = canSee360Responses(me, review);
+  const options = reviewer360Options(review);
+  const [pick, setPick] = useState("");
+  return (
+    <div className="stack">
+      {list.length === 0 ? (
+        <p className="muted">No reviewers yet.</p>
+      ) : (
+        <ul className="todo">
+          {list.map((r) => (
+            <li key={r.reviewerId}>
+              <strong>{r.reviewerName}</strong> · {r.respondedOn ? `answered ${r.respondedOn}` : "waiting"}
+              {showAnswers && r.respondedOn ? ` · ${r.rating}/5 · ${r.comment}` : ""}
+              {canEdit && !r.respondedOn && (
+                <>
+                  {" "}
+                  <button type="button" className="quiet-link" onClick={() => onResult(remove360Reviewer(me, review.id, r.reviewerId), "Reviewer removed.")}>
+                    Remove
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {canEdit && list.length < MAX_360_REVIEWERS && (
+        <div className="row-gap">
+          <select aria-label="Nominate reviewer" value={pick} onChange={(e) => setPick(e.target.value)}>
+            <option value="">Choose reviewer…</option>
+            {options.map((a) => (
+              <option key={a.id} value={a.id}>{a.fullName}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn btn-tiny"
+            disabled={!pick}
+            onClick={() => {
+              const name = options.find((a) => a.id === pick)?.fullName ?? "Reviewer";
+              const error = nominate360Reviewer(me, review.id, pick);
+              onResult(error, `${name} asked for 360 feedback.`);
+              if (!error) setPick("");
+            }}
+          >
+            Nominate
+          </button>
+          <span className="muted">{list.length}/{MAX_360_REVIEWERS}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ───────────────────────────── DEVELOPMENT PLAN ── */
+
+export function DevPlanEditor({ me, review, open, onResult }: { me: TalentActor; review: PerfReview; open: boolean; onResult: Result }) {
+  const actions = devActionsOf(review);
+  const editable = open && canEditDevPlan(me, review);
+  const [title, setTitle] = useState("");
+  const [due, setDue] = useState("");
+  return (
+    <div className="stack">
+      {actions.length === 0 ? (
+        <p className="muted">No actions yet.</p>
+      ) : (
+        <ul className="todo">
+          {actions.map((a) => (
+            <li key={a.id} className="row-gap">
+              <span style={{ flex: 1 }}>{a.title}</span>
+              {editable ? (
+                <>
+                  <input
+                    type="date"
+                    aria-label="Due date"
+                    value={a.due}
+                    onChange={(e) => onResult(updateDevAction(me, review.id, a.id, { due: e.target.value }))}
+                  />
+                  <select
+                    aria-label="Action status"
+                    value={a.status}
+                    onChange={(e) => onResult(updateDevAction(me, review.id, a.id, { status: e.target.value as DevActionStatus }))}
+                  >
+                    {DEV_ACTION_STATUSES.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  <button type="button" className="quiet-link" onClick={() => onResult(removeDevAction(me, review.id, a.id), "Action removed.")}>
+                    Remove
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="muted">{a.due ? `Due ${a.due}` : "No due date"}</span>
+                  <StatusBadge status={a.status} literal tone={a.status === "Done" ? "ok" : a.status === "In progress" ? "info" : "neutral"} />
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {editable && (
+        <form
+          className="row-gap"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const error = addDevAction(me, review.id, { title, due });
+            onResult(error, "Action added.");
+            if (!error) {
+              setTitle("");
+              setDue("");
+            }
+          }}
+        >
+          <input aria-label="New action" value={title} maxLength={160} onChange={(e) => setTitle(e.target.value)} placeholder="New action" style={{ minWidth: 200 }} />
+          <input type="date" aria-label="Due date" value={due} onChange={(e) => setDue(e.target.value)} />
+          <button type="submit" className="btn btn-tiny" disabled={title.trim().length < 3}>
+            Add
+          </button>
+        </form>
+      )}
+    </div>
   );
 }

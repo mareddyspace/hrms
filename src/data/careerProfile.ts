@@ -12,7 +12,7 @@ import {
 
 const LEVELS = ["Awareness", "Working", "Intermediate", "Advanced", "Expert"];
 
-/** Named people (personas and Ram's teammates) have hand-written starter skills in talentData. */
+/** Named people (personas and Ram's teammates) have a hand-written career track in talentData. */
 function isNamed(personId: string): boolean {
   return !personId.startsWith("wf-") && !personId.startsWith("local-");
 }
@@ -61,19 +61,23 @@ export function trackFor(person: Pick<PersonRecord, "id" | "department">): Skill
   return TRACK_BY_DEPARTMENT[person.department] ?? null;
 }
 
-/** Saved skills, else the named starter profile, else skills that fit the person's department and grade. */
+/** Starting skills before the person edits them: from their department and grade. /skills and the profile both use this. */
+export function starterSkills(person: Pick<PersonRecord, "department" | "grade">): EmployeeSkill[] {
+  const base = GRADE_LEVEL[person.grade] ?? 1;
+  const ids = SKILLS_BY_DEPARTMENT[person.department] ?? ["sk-11"];
+  const out = ids.map((id, i) => skill(id, base - (i >= 2 ? 1 : 0)));
+  if (LEADER_GRADES.has(person.grade) && !ids.includes("sk-3")) out.push(skill("sk-3", base - 1));
+  return out;
+}
+
+/** Saved skills, else the department-based starting list. */
 export function skillsFor(
   skillProfiles: SkillProfile[],
   person: Pick<PersonRecord, "id" | "department" | "grade">,
 ): EmployeeSkill[] {
   const saved = skillProfiles.find((p) => p.employeeId === person.id);
   if (saved) return saved.skills;
-  if (isNamed(person.id)) return starterSkillsFor(person.id).skills;
-  const base = GRADE_LEVEL[person.grade] ?? 1;
-  const ids = SKILLS_BY_DEPARTMENT[person.department] ?? ["sk-11"];
-  const out = ids.map((id, i) => skill(id, base - (i >= 2 ? 1 : 0)));
-  if (LEADER_GRADES.has(person.grade)) out.push(skill("sk-3", base - 1));
-  return out;
+  return starterSkills(person);
 }
 
 export interface SkillGap {

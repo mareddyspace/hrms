@@ -2,12 +2,16 @@ import {
   ANNOUNCEMENTS_SEED,
   CONVERSATIONS_SEED,
   DEFAULT_NOTIF_PREFS,
+  HR_DESK_OWNERS,
   HR_REQUESTS_SEED,
+  HR_REQUEST_SLA,
   INBOX_SEED,
   NOTIFICATIONS_SEED,
   canAccessRestrictedChat,
   canManageAnnouncement,
   defaultNotifActionLabel,
+  hrDeskOwnerName,
+  hrRequestDueAt,
   inferNotifCategory,
   isHrRole,
   normalizeNotifCategory,
@@ -21,12 +25,14 @@ import {
   type Conversation,
   type HrRequest,
   type HrRequestCategory,
+  type HrRequestPriority,
   type InboxTab,
   type InboxTask,
   type NotifCategory,
   type NotifPrefs,
   type NotifRef,
 } from "./collabData.ts";
+import { queueEmailForNotification } from "./emailOutbox.ts";
 import { DEMO_ACCOUNTS, RETIRED_ACCOUNT_IDS, RETIRED_ACCOUNT_NAMES, findDemoById, managementChain, mentionsRetiredAccount } from "../demoAccounts.ts";
 
 const KEY = "timez.collab.state.v6";
@@ -178,6 +184,30 @@ function dropRetiredAccounts(state: CollabState): boolean {
 }
 
 function read(): CollabState {
+  const state = readStored();
+  state.hrRequests = state.hrRequests.map(withHrDesk);
+  return state;
+}
+
+/**
+ * Fills service-desk fields on tickets saved before routing existed: owner from the category,
+ * normal priority, due time from the SLA and the first HR reply from the comments.
+ */
+function withHrDesk(r: HrRequest): HrRequest {
+  if (r.submittedAt && r.dueAt && r.priority && typeof r.assigneeId === "string") return r;
+  const submittedAt = r.submittedAt ?? r.comments[0]?.at ?? `${r.createdAt}T09:00:00`;
+  const firstReply = r.comments.find((c, i) => i > 0 && c.author !== r.requesterName);
+  return {
+    ...r,
+    submittedAt,
+    priority: r.priority ?? "Normal",
+    assigneeId: typeof r.assigneeId === "string" ? r.assigneeId : (HR_REQUEST_SLA[r.category] ?? HR_REQUEST_SLA.Other).ownerId,
+    dueAt: r.dueAt ?? hrRequestDueAt(r.category, submittedAt),
+    firstResponseAt: r.firstResponseAt ?? firstReply?.at,
+  };
+}
+
+function readStored(): CollabState {
   const base = defaults();
   try {
     let raw = localStorage.getItem(KEY);
@@ -653,19 +683,40 @@ export function notificationFeedFor(
 
 /* ── HR requests ── */
 
+const hrRequestLink = (id: string) => `/help?request=${encodeURIComponent(id)}`;
+
+/** Whether this person works the HR service desk (HR roles, or a named desk owner). */
+export function isHrDeskMember(userId: string, role: string): boolean {
+  return isHrRole(role) || HR_DESK_OWNERS.some((o) => o.id === userId);
+}
+
+function formatDue(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+/** Routes the request to the category owner, sets its SLA due time and tells the owner. Returns the new id. */
 export function createHrRequest(input: {
   category: HrRequestCategory;
   subject: string;
   description: string;
   author: string;
   requesterId: string;
-}) {
+  priority?: HrRequestPriority;
+}): string {
+  const id = `hr-local-${Date.now()}`;
   updateCollab((s) => {
     const now = new Date().toISOString();
+    const route = HR_REQUEST_SLA[input.category] ?? HR_REQUEST_SLA.Other;
+    // Nobody works their own ticket: if the routed owner raised it, leave it for HR to pick up.
+    const assigneeId = route.ownerId === input.requesterId ? "" : route.ownerId;
+    const subject = input.subject.trim();
+    const dueAt = hrRequestDueAt(input.category, now);
     s.hrRequests.unshift({
-      id: `hr-local-${Date.now()}`,
+      id,
       category: input.category,
-      subject: input.subject.trim(),
+      subject,
       description: input.description.trim(),
       status: "Open",
       requesterId: input.requesterId,
@@ -673,21 +724,44 @@ export function createHrRequest(input: {
       createdAt: now.slice(0, 10),
       updatedAt: now.slice(0, 10),
       comments: [{ at: now, author: input.author, text: input.description.trim() }],
+      submittedAt: now,
+      assigneeId,
+      priority: input.priority ?? "Normal",
+      dueAt,
     });
+    if (assigneeId) {
+      deliverInto(s, {
+        category: "Tickets",
+        title: `HR request assigned · ${subject}`,
+        body: `${input.author} raised a ${input.category} request. Due ${formatDue(dueAt)}.`,
+        audience: "employee",
+        recipientId: assigneeId,
+        href: hrRequestLink(id),
+        actionLabel: "Open request",
+      });
+    }
   });
+  return id;
 }
 
-/** Own tickets for everyone; HR sees all (including legacy tickets with no requester). */
+/** Own tickets for everyone; HR sees all (including legacy tickets with no requester); owners see theirs. */
 export function hrRequestVisibleTo(r: HrRequest, userId: string, role: string): boolean {
   if (isHrRole(role)) return true;
+  if (!!r.assigneeId && r.assigneeId === userId) return true;
   return !!r.requesterId && r.requesterId === userId;
+}
+
+/** HR, or the owner the ticket is assigned to — never on a ticket they raised themselves. */
+export function worksHrRequest(r: HrRequest, userId: string, role: string): boolean {
+  if (r.requesterId === userId) return false;
+  return isHrRole(role) || (!!r.assigneeId && r.assigneeId === userId);
 }
 
 /** Statuses the viewer may move this ticket to (excluding its current one). */
 export function allowedHrStatuses(r: HrRequest, userId: string, role: string): HrRequest["status"][] {
   // HR works other people's tickets. On a ticket they raised themselves they are the requester and another
   // HR member has to resolve it.
-  if (isHrRole(role) && r.requesterId !== userId) {
+  if (worksHrRequest(r, userId, role)) {
     return (["In progress", "Waiting on you", "Resolved", "Closed"] as const).filter((s) => s !== r.status);
   }
   if (r.requesterId !== userId) return [];
@@ -695,6 +769,29 @@ export function allowedHrStatuses(r: HrRequest, userId: string, role: string): H
   if (r.status === "Resolved") return ["Closed", "In progress"];
   if (r.status === "Closed") return ["In progress"];
   return [];
+}
+
+/** HR may reassign any ticket they didn't raise. */
+export function canReassignHrRequest(r: HrRequest, userId: string, role: string): boolean {
+  return isHrRole(role) && r.requesterId !== userId;
+}
+
+/** Tells the requester (or, when the requester acted, the owner) that the status changed. */
+function notifyHrStatusChange(s: CollabState, row: HrRequest, actorId: string, actorName: string) {
+  const toRequester = !!row.requesterId && row.requesterId !== actorId;
+  const recipientId = toRequester ? row.requesterId : row.assigneeId;
+  if (!recipientId || recipientId === actorId) return;
+  deliverInto(s, {
+    category: "Tickets",
+    title: `HR request ${row.status.toLowerCase()} · ${row.subject}`,
+    body: toRequester
+      ? `${actorName} set your request to ${row.status}.${row.status === "Waiting on you" ? " HR needs a reply from you." : ""}`
+      : `${actorName} changed the request to ${row.status}.`,
+    audience: "employee",
+    recipientId,
+    href: hrRequestLink(row.id),
+    actionLabel: "Open request",
+  });
 }
 
 /** Returns an error message, or null when the comment was added. */
@@ -708,15 +805,19 @@ export function addHrComment(
   if (!body) return "Comment cannot be empty.";
   const current = getCollabState().hrRequests.find((r) => r.id === id);
   if (!current || !hrRequestVisibleTo(current, actor.id, actor.role)) return "Request not found.";
-  const byHr = isHrRole(actor.role) && current.requesterId !== actor.id;
+  const byHr = worksHrRequest(current, actor.id, actor.role);
   updateCollab((s) => {
     const row = s.hrRequests.find((r) => r.id === id);
     if (!row) return;
-    row.comments.push({ at: new Date().toISOString(), author, text: body });
-    row.updatedAt = new Date().toISOString().slice(0, 10);
+    const now = new Date().toISOString();
+    const before = row.status;
+    row.comments.push({ at: now, author, text: body });
+    row.updatedAt = now.slice(0, 10);
+    if (byHr && !row.firstResponseAt) row.firstResponseAt = now;
     if (row.status === "Open" && byHr) row.status = "In progress";
     // The employee answered HR's question — back into HR's queue.
     if (row.status === "Waiting on you" && !byHr) row.status = "In progress";
+    if (row.status !== before) notifyHrStatusChange(s, row, actor.id, author);
   });
   return null;
 }
@@ -725,7 +826,7 @@ export function addHrComment(
 export function setHrRequestStatus(
   id: string,
   status: HrRequest["status"],
-  actor: { id: string; role: string },
+  actor: { id: string; role: string; name?: string },
 ): string | null {
   const current = getCollabState().hrRequests.find((r) => r.id === id);
   if (!current || !hrRequestVisibleTo(current, actor.id, actor.role)) return "Request not found.";
@@ -737,12 +838,72 @@ export function setHrRequestStatus(
       ? "That status change is not allowed."
       : "Only HR can update this status. You can close a resolved request or reopen it.";
   }
+  const byHr = worksHrRequest(current, actor.id, actor.role);
+  const actorName = actor.name ?? findDemoById(actor.id)?.fullName ?? "HR";
   updateCollab((s) => {
     const row = s.hrRequests.find((r) => r.id === id);
-    if (row) {
-      row.status = status;
-      row.updatedAt = new Date().toISOString().slice(0, 10);
+    if (!row) return;
+    const now = new Date().toISOString();
+    row.status = status;
+    row.updatedAt = now.slice(0, 10);
+    if (byHr && !row.firstResponseAt) row.firstResponseAt = now;
+    notifyHrStatusChange(s, row, actor.id, actorName);
+  });
+  return null;
+}
+
+/** Returns an error message, or null when the owner changed. Pass "" to unassign. */
+export function assignHrRequest(
+  id: string,
+  assigneeId: string,
+  actor: { id: string; role: string; name: string },
+): string | null {
+  const current = getCollabState().hrRequests.find((r) => r.id === id);
+  if (!current) return "Request not found.";
+  if (!canReassignHrRequest(current, actor.id, actor.role)) return "Only HR can reassign this request.";
+  if (assigneeId && assigneeId === current.requesterId) return "The requester can't own their own request.";
+  if ((current.assigneeId ?? "") === assigneeId) return null;
+  updateCollab((s) => {
+    const row = s.hrRequests.find((r) => r.id === id);
+    if (!row) return;
+    const now = new Date().toISOString();
+    row.assigneeId = assigneeId;
+    row.updatedAt = now.slice(0, 10);
+    row.comments.push({
+      at: now,
+      author: actor.name,
+      text: assigneeId ? `Assigned to ${hrDeskOwnerName(assigneeId)}.` : "Unassigned.",
+    });
+    if (assigneeId && assigneeId !== actor.id) {
+      deliverInto(s, {
+        category: "Tickets",
+        title: `HR request assigned · ${row.subject}`,
+        body: `${actor.name} assigned you a ${row.category} request from ${row.requesterName ?? "an employee"}.${
+          row.dueAt ? ` Due ${formatDue(row.dueAt)}.` : ""
+        }`,
+        audience: "employee",
+        recipientId: assigneeId,
+        href: hrRequestLink(row.id),
+        actionLabel: "Open request",
+      });
     }
+  });
+  return null;
+}
+
+/** Returns an error message, or null when the priority changed. */
+export function setHrRequestPriority(
+  id: string,
+  priority: HrRequestPriority,
+  actor: { id: string; role: string },
+): string | null {
+  const current = getCollabState().hrRequests.find((r) => r.id === id);
+  if (!current) return "Request not found.";
+  if (!worksHrRequest(current, actor.id, actor.role)) return "Only HR can change the priority.";
+  if (current.priority === priority) return null;
+  updateCollab((s) => {
+    const row = s.hrRequests.find((r) => r.id === id);
+    if (row) row.priority = priority;
   });
   return null;
 }
@@ -818,6 +979,11 @@ function deliverInto(s: CollabState, draft: NotificationDraft): boolean {
     ref: draft.ref ?? notifRefFromHref(href, draft.title),
   });
   if (s.notifications.length > MAX_STORED) s.notifications.length = MAX_STORED;
+  // Person-targeted notifications also go out by email (when admins allow email for that channel).
+  if (draft.recipientId) {
+    const head = s.notifications[0];
+    queueEmailForNotification({ recipientId: draft.recipientId, category, title: head.title, body: head.body, href });
+  }
   return true;
 }
 

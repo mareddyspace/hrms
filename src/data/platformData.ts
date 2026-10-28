@@ -1,5 +1,6 @@
 import type { DemoAccount, NavAccessId } from "../demoAccounts.ts";
 import type { CountryCode, UserRole } from "../model.ts";
+import type { Policy } from "./policyLibrary.ts";
 import { TIMEZ_COUNTRIES } from "../model.ts";
 
 export type AnalyticsRange = "7d" | "30d" | "90d" | "ytd";
@@ -86,6 +87,18 @@ export interface CopilotAnswer {
   metrics?: { label: string; value: string }[];
   table?: { headers: string[]; rows: string[][] };
   links?: { label: string; to: string }[];
+  /** Policies the answer was taken from. */
+  sources?: CopilotSource[];
+  /** True when the question asked for something the viewer may not see. */
+  denied?: boolean;
+}
+
+export interface CopilotSource {
+  title: string;
+  version: string;
+  effective: string;
+  section: string;
+  to: string;
 }
 
 /** Who is asking — answers and links are trimmed to what this persona may open. */
@@ -138,6 +151,10 @@ export interface CopilotContext {
   allHolidays?: { date: string; name: string }[];
   leavePolicies?: { code: string; name: string; quota: number; accrual?: string; carryForwardMax?: number }[];
   policies?: { title: string; body?: string }[];
+  /** Policy library entries that apply to the viewer (policyAppliesTo), with their own holidays and shift. */
+  policyLibrary?: Policy[];
+  /** The whole library, only to recognise questions about policies that don't apply to the viewer. */
+  policyCatalog?: Policy[];
   /** The viewer's own leave requests, newest first. */
   myLeave?: { type: string; code: string; from: string; to: string; days: number; status: string; appliedOn: string; decidedBy?: string; note?: string }[];
   backdated?: { type: string; from: string; to: string; status: string }[];
@@ -275,6 +292,7 @@ export function answerCopilot(question: string, input: CopilotContext | CopilotV
   if (requires && !viewerHas(viewer, requires)) {
     return {
       kind: "text",
+      denied: true,
       summary: "That isn't available with your current access. Ask your manager or HR if you need it.",
       links: [{ label: "Help", to: "/help" }].filter(allowedLink),
     };

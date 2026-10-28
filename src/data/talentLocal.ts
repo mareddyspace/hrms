@@ -16,14 +16,17 @@ import {
   PERF_CYCLES,
   PERF_GOALS,
   PERF_REVIEWS,
+  LEVEL_RANK,
   PIPELINE_STAGES,
   RATINGS,
   REQUISITIONS,
+  SKILL_LIBRARY,
   starterSkillsFor,
   type ApprovalStatus,
   type Candidate,
   type Certification,
   type Course,
+  type DevAction,
   type EmployeeSkill,
   type Enrollment,
   type FeedbackItem,
@@ -39,6 +42,7 @@ import {
   type PerfReview,
   type PipelineStage,
   type Requisition,
+  type Reviewer360,
   type SkillProfile,
   type StageStep,
 } from "./talentData.ts";
@@ -47,7 +51,11 @@ import { TIMEZ_COUNTRIES, todayISO, type UserRole } from "../model.ts";
 import { legalEntityFor } from "../countryPay.ts";
 import { TASK_TEAM } from "./taskTeam.ts";
 import { GRADE_BANDS, type GradeBand } from "./rewardData.ts";
-import { upsertPerson, type LocalPersonRecord } from "./peopleLocal.ts";
+import { getPerson, upsertPerson, type LocalPersonRecord } from "./peopleLocal.ts";
+import type { EmploymentStatus } from "./peopleData.ts";
+import { starterSkills } from "./careerProfile.ts";
+import { pushPersonTaskAlert } from "./collabLocal.ts";
+import { appendAuditEntries } from "./auditTrail.ts";
 
 // v3: recruiting seed made consistent (approval trails, structured offers, joiners linked to hires).
 // v4: manager → HR → recruiter hiring flow and per-candidate stage history.
@@ -76,6 +84,8 @@ type TalentState = {
   skillProfiles: SkillProfile[];
   /** Cycle status changes made by HR (cycle id → status). */
   cycleStatus: Record<string, PerfCycle["status"]>;
+  /** Review cycles HR created (added to PERF_CYCLES). */
+  cycles: PerfCycle[];
 };
 
 /** Who is performing a talent action — the signed-in persona. */
@@ -99,6 +109,7 @@ function defaults(): TalentState {
     oneOnOnes: structuredClone(ONE_ON_ONES),
     skillProfiles: [],
     cycleStatus: {},
+    cycles: [],
   };
 }
 
@@ -368,7 +379,7 @@ export function setCandidateStage(actor: TalentActor, id: string, stage: Pipelin
         : "Only the assigned recruiter or HR runs the pipeline.";
     }
     pushStep(row, actor, stage, note);
-    if (stage === "Hired") createJoiner(s, row, req);
+    if (stage === "Hired") createJoiner(s, row, req, actor);
     return null;
   });
 }
@@ -481,6 +492,62 @@ export function raiseRequisition(actor: TalentActor, input: RequisitionInput): T
       created: today,
       history: [{ on: today, by: actor.fullName, byId: actor.id, action: "Raised" }],
     });
+    return null;
+  });
+}
+
+export type CandidateInput = { requisitionId: string; name: string; email: string; source: string; appliedOn: string };
+
+/** Requisitions this actor can add candidates to: approved, staffed, and run by them (recruiter or HR). */
+export function candidateIntakeRequisitions(actor: TalentActor, reqs: Requisition[]): Requisition[] {
+  return reqs.filter((r) => isRequisitionOpen(r) && canRunPipeline(actor, r) && r.stageSummary !== "Filled");
+}
+
+/** The recruiter or HR adds a candidate to an approved requisition; they start at the first pipeline stage. */
+export function addCandidate(actor: TalentActor, input: CandidateInput): TalentResult {
+  return guarded((s) => {
+    const req = reqFor(s, input.requisitionId);
+    if (!req) return "Choose a requisition.";
+    if (!canRunPipeline(actor, req)) return "Only the assigned recruiter or HR can add candidates.";
+    if (!isRequisitionOpen(req)) return `${req.id} is not approved yet.`;
+    const name = input.name.trim();
+    if (name.length < 2) return "Enter the candidate's name.";
+    const email = input.email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Enter a valid email.";
+    if (s.candidates.some((c) => c.requisitionId === req.id && c.email.toLowerCase() === email)) return `${email} is already on ${req.id}.`;
+    if (!input.source.trim()) return "Enter the source.";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.appliedOn) || input.appliedOn > todayISO()) return "Choose an applied date that is not in the future.";
+    const stage = PIPELINE_STAGES[0];
+    const id = newId("cand");
+    s.candidates.push({
+      id,
+      name,
+      email,
+      phone: "",
+      role: req.title,
+      requisitionId: req.id,
+      stage,
+      country: req.country,
+      source: input.source.trim(),
+      experienceYears: 0,
+      skills: [],
+      resumeNote: "",
+      history: [{ stage, enteredOn: `${input.appliedOn}T09:00`, by: name, note: `Added by ${actor.fullName} · ${input.source.trim()}` }],
+    });
+    appendAuditEntries([
+      {
+        at: new Date().toISOString(),
+        actorId: actor.id,
+        actorName: actor.fullName,
+        entity: "Candidate",
+        entityId: id,
+        action: "Created",
+        changes: [
+          { field: "Name", before: "", after: name },
+          { field: "Requisition", before: "", after: req.id },
+        ],
+      },
+    ]);
     return null;
   });
 }
@@ -720,9 +787,14 @@ export function canEditOnboardingTask(actor: TalentActor, task: OnboardingTask, 
   return isTaskOwner(actor, task, joiner) || isHrRole(actor.role);
 }
 
-/** Only the joiner acknowledges policies. */
-export function canAcknowledgePolicies(actor: TalentActor, joiner: OnboardingJoiner): boolean {
+/** True when the actor is the joiner themselves. */
+export function isJoinerSelf(actor: TalentActor, joiner: OnboardingJoiner): boolean {
   return joiner.personId === actor.id || sameName(joiner.name, actor.fullName);
+}
+
+/** The joiner acknowledges policies, or HR records the acknowledgment on their behalf. */
+export function canAcknowledgePolicies(actor: TalentActor, joiner: OnboardingJoiner): boolean {
+  return isJoinerSelf(actor, joiner) || isHrRole(actor.role);
 }
 
 /** Progress and overall status come from the checklist, not from stored numbers. */
@@ -745,13 +817,13 @@ function addDaysTo(iso: string, days: number): string {
   return localISO(new Date(y, m - 1, d + days));
 }
 
-/** A hire becomes a joiner with the standard checklist. */
-function createJoiner(s: TalentState, candidate: Candidate, req: Requisition) {
+/** A hire becomes a joiner with the standard checklist and a directory record (status Onboarding). HR and the hiring manager are told. */
+function createJoiner(s: TalentState, candidate: Candidate, req: Requisition, actor: TalentActor) {
   if (s.joiners.some((j) => j.candidateId === candidate.id)) return;
   const offer = s.offers.find((o) => o.candidateId === candidate.id && o.status === "Accepted");
   const id = newId("ob");
   const startDate = offer?.startDate ?? addDaysTo(todayISO(), 14);
-  s.joiners.push({
+  const joiner: OnboardingJoiner = {
     id,
     name: candidate.name,
     role: req.title,
@@ -765,17 +837,56 @@ function createJoiner(s: TalentState, candidate: Candidate, req: Requisition) {
     docsStatus: "Not started",
     policyAck: "Pending",
     overallStatus: "Pre-boarding",
-  });
+  };
+  s.joiners.push(joiner);
   ONBOARDING_TEMPLATE.forEach((t, i) =>
     s.tasks.push({ id: `${id}-t${i + 1}`, joinerId: id, title: t.title, owner: t.owner, category: t.category, status: "Pending", due: addDaysTo(startDate, t.dueOffset) }),
   );
   const hired = s.candidates.filter((c) => c.requisitionId === req.id && c.stage === "Hired").length;
   if (hired >= req.openings) req.stageSummary = "Filled";
+  saveDirectoryRecord(s, joiner, "Onboarding");
+  appendAuditEntries([
+    {
+      at: new Date().toISOString(),
+      actorId: actor.id,
+      actorName: actor.fullName,
+      entity: "Joiner",
+      entityId: id,
+      subjectId: joiner.personId,
+      action: "Created",
+      changes: [
+        { field: "Name", before: "", after: joiner.name },
+        { field: "Role", before: "", after: joiner.role },
+        { field: "Start date", before: "", after: startDate },
+      ],
+    },
+  ]);
+  const recipients = new Set([...DEMO_ACCOUNTS.filter((a) => isHrRole(a.role)).map((a) => a.id), joiner.managerId]);
+  recipients.delete(actor.id);
+  recipients.delete("");
+  for (const recipientId of recipients) {
+    pushPersonTaskAlert({
+      recipientId,
+      title: `${joiner.name} hired`,
+      body: `${joiner.name} joins as ${joiner.role} on ${startDate}. Onboarding has started.`,
+      href: "/onboarding",
+    });
+  }
 }
 
-/** When onboarding completes, the joiner becomes an employee in the directory (probation runs from the joining date). */
-function addToDirectory(s: TalentState, joiner: OnboardingJoiner) {
-  if (joiner.personId || joiner.overallStatus !== "Completed") return;
+/**
+ * The joiner's directory record. Created with status Onboarding when the candidate is hired,
+ * and set to Active once onboarding completes (probation runs from the joining date).
+ */
+function saveDirectoryRecord(s: TalentState, joiner: OnboardingJoiner, status: "Onboarding" | "Active") {
+  const personId = joiner.personId ?? joiner.id;
+  const existing = getPerson(personId);
+  const employmentStatus: EmploymentStatus = status;
+  if (existing) {
+    if (existing.employmentStatus !== employmentStatus && existing.employmentStatus !== "Terminated") upsertPerson({ ...existing, employmentStatus });
+    joiner.personId = existing.id;
+    return;
+  }
   const candidate = s.candidates.find((c) => c.id === joiner.candidateId);
   const req = s.requisitions.find((r) => r.id === joiner.requisitionId);
   const offer = s.offers.find((o) => o.candidateId === joiner.candidateId && o.status === "Accepted");
@@ -784,7 +895,7 @@ function addToDirectory(s: TalentState, joiner: OnboardingJoiner) {
   const location = req?.location ?? country.name;
   const [first, ...rest] = joiner.name.toLowerCase().split(/\s+/);
   const person: LocalPersonRecord = {
-    id: joiner.id,
+    id: personId,
     employeeCode: `NJ${joiner.id.replace(/\D/g, "").slice(-4).padStart(4, "0")}`,
     fullName: joiner.name,
     email: `${first}.${rest.join("") || "joiner"}@infotech.com`,
@@ -794,7 +905,7 @@ function addToDirectory(s: TalentState, joiner: OnboardingJoiner) {
     gender: "",
     dateOfJoining: joiner.startDate,
     employmentType: "Full Time",
-    employmentStatus: "Active",
+    employmentStatus,
     designation: joiner.role,
     jobFamily: department,
     jobProfileId: "",
@@ -819,6 +930,29 @@ function addToDirectory(s: TalentState, joiner: OnboardingJoiner) {
   joiner.personId = person.id;
 }
 
+/** After a checklist change: make sure the record exists, and activate it the first time onboarding completes. */
+function syncJoinerRecord(s: TalentState, joiner: OnboardingJoiner, before: OnboardingJoiner["overallStatus"], actor: TalentActor) {
+  deriveJoiners(s);
+  const completed = joiner.overallStatus === "Completed";
+  saveDirectoryRecord(s, joiner, completed ? "Active" : "Onboarding");
+  if (!completed || before === "Completed") return;
+  appendAuditEntries([
+    {
+      at: new Date().toISOString(),
+      actorId: actor.id,
+      actorName: actor.fullName,
+      entity: "Joiner",
+      entityId: joiner.id,
+      subjectId: joiner.personId,
+      action: "Updated",
+      changes: [
+        { field: "Onboarding", before, after: "Completed" },
+        { field: "Employment status", before: "Onboarding", after: "Active" },
+      ],
+    },
+  ]);
+}
+
 export function setOnboardingTaskStatus(actor: TalentActor, id: string, status: OnboardingTask["status"], reason = ""): TalentResult {
   return guarded((s) => {
     const row = s.tasks.find((t) => t.id === id);
@@ -829,26 +963,34 @@ export function setOnboardingTaskStatus(actor: TalentActor, id: string, status: 
       if (reason.trim().length < 5) return "Give a reason for updating someone else's task.";
       row.overrideNote = `${actor.fullName}, ${todayISO()}: ${reason.trim()}`;
     }
+    const before = joiner?.overallStatus ?? "Pre-boarding";
     row.status = status;
-    deriveJoiners(s);
-    if (joiner) addToDirectory(s, joiner);
+    if (joiner) syncJoinerRecord(s, joiner, before, actor);
     return null;
   });
 }
 
+/** The joiner acknowledges policies themselves, or HR records it for them (kept with the date and "recorded by HR"). */
 export function setJoinerPolicyAck(actor: TalentActor, id: string, policyAck: OnboardingJoiner["policyAck"]): TalentResult {
   return guarded((s) => {
     const row = s.joiners.find((j) => j.id === id);
     if (!row) return "Joiner not found.";
-    if (!canAcknowledgePolicies(actor, row)) return "Only the new joiner can acknowledge policies.";
+    if (!canAcknowledgePolicies(actor, row)) return "Only the new joiner or HR can record the policy acknowledgment.";
+    const before = row.overallStatus;
     row.policyAck = policyAck;
     if (policyAck === "Complete") {
+      row.policyAckOn = todayISO();
+      row.policyAckBy = actor.fullName;
+      row.policyAckByHr = !isJoinerSelf(actor, row);
       s.tasks.forEach((t) => {
         if (t.joinerId === id && t.category === "Policy") t.status = "Done";
       });
+    } else {
+      delete row.policyAckOn;
+      delete row.policyAckBy;
+      delete row.policyAckByHr;
     }
-    deriveJoiners(s);
-    addToDirectory(s, row);
+    syncJoinerRecord(s, row, before, actor);
     return null;
   });
 }
@@ -860,8 +1002,61 @@ export function inReviewCycle(employeeId: string): boolean {
   return managementChain(employeeId, DEMO_ACCOUNTS).length > 0;
 }
 
-export function cycleStatusOf(state: Pick<TalentState, "cycleStatus">, cycleId: string): PerfCycle["status"] {
-  return state.cycleStatus[cycleId] ?? PERF_CYCLES.find((c) => c.id === cycleId)?.status ?? "Planning";
+export function cycleStatusOf(state: Pick<TalentState, "cycleStatus"> & Partial<Pick<TalentState, "cycles">>, cycleId: string): PerfCycle["status"] {
+  return (
+    state.cycleStatus[cycleId] ??
+    PERF_CYCLES.find((c) => c.id === cycleId)?.status ??
+    state.cycles?.find((c) => c.id === cycleId)?.status ??
+    "Planning"
+  );
+}
+
+/** Built-in cycles plus the ones HR created, each with its current status. */
+export function allCycles(state: Pick<TalentState, "cycleStatus" | "cycles">): PerfCycle[] {
+  return [...PERF_CYCLES, ...(state.cycles ?? [])].map((c) => ({ ...c, status: cycleStatusOf(state, c.id) }));
+}
+
+export type CycleInput = { name: string; start: string; end: string; selfReviewDue: string; managerReviewDue: string };
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** HR creates a review cycle (it starts in Planning). Everyone with a manager gets a review in it. */
+export function createReviewCycle(actor: TalentActor, input: CycleInput): TalentResult {
+  return guarded((s) => {
+    if (!isHrRole(actor.role)) return "Only HR can create review cycles.";
+    const name = input.name.trim();
+    if (name.length < 3) return "Enter a cycle name.";
+    if ([...PERF_CYCLES, ...s.cycles].some((c) => sameName(c.name, name))) return "A cycle with this name already exists.";
+    const dates = [input.start, input.end, input.selfReviewDue, input.managerReviewDue];
+    if (!dates.every((d) => ISO_DATE.test(d))) return "Fill in all four dates.";
+    if (input.end <= input.start) return "The end date must be after the start date.";
+    if (input.selfReviewDue < input.start || input.selfReviewDue > input.end) return "Self-review due must fall within the cycle.";
+    if (input.managerReviewDue < input.selfReviewDue || input.managerReviewDue > input.end) return "Manager review is due after self-review and before the cycle ends.";
+    const id = newId("cyc");
+    s.cycles.push({
+      id,
+      name,
+      status: "Planning",
+      start: input.start,
+      end: input.end,
+      selfReviewDue: input.selfReviewDue,
+      managerReviewDue: input.managerReviewDue,
+      createdBy: actor.fullName,
+    });
+    DEMO_ACCOUNTS.filter((a) => inReviewCycle(a.id) && !mentionsRetiredAccount(a)).forEach((a, i) =>
+      s.reviews.push({
+        id: `${id}-r${i + 1}`,
+        employeeId: a.id,
+        employeeName: a.fullName,
+        cycleId: id,
+        selfStatus: "Not started",
+        managerStatus: "Not started",
+        feedback360Status: "Not started",
+        finalDecisionNote: "",
+      }),
+    );
+    return null;
+  });
 }
 
 const CYCLE_NEXT: Record<PerfCycle["status"], PerfCycle["status"] | null> = {
@@ -974,13 +1169,166 @@ export function setRating(actor: TalentActor, id: string, rating: string | undef
   });
 }
 
-export function setDevelopmentPlan(actor: TalentActor, id: string, plan: string): TalentResult {
+/* ───────────── 360 feedback ───────────── */
+
+export const MAX_360_REVIEWERS = 3;
+
+/** The employee or someone above them picks the 360 reviewers. */
+export function canNominate360(actor: TalentActor, review: Pick<PerfReview, "employeeId">): boolean {
+  return review.employeeId === actor.id || canWriteManagerReview(actor, review.employeeId);
+}
+
+/** 360 answers are read by the employee's managers and HR (never the employee). */
+export function canSee360Responses(actor: TalentActor, review: Pick<PerfReview, "employeeId">): boolean {
+  if (review.employeeId === actor.id) return false;
+  return isHrRole(actor.role) || canWriteManagerReview(actor, review.employeeId);
+}
+
+/** People who can be nominated: anyone who signs in, except the employee and anyone already nominated. */
+export function reviewer360Options(review: PerfReview): DemoAccount[] {
+  const taken = new Set((review.reviewers360 ?? []).map((r) => r.reviewerId));
+  return DEMO_ACCOUNTS.filter((a) => a.id !== review.employeeId && !taken.has(a.id) && !mentionsRetiredAccount(a));
+}
+
+/** Open 360 requests addressed to this person. */
+export function pending360For(state: Pick<TalentState, "reviews" | "cycleStatus" | "cycles">, reviewerId: string): { review: PerfReview; reviewer: Reviewer360 }[] {
+  const out: { review: PerfReview; reviewer: Reviewer360 }[] = [];
+  for (const review of state.reviews) {
+    if (cycleStatusOf(state, review.cycleId) === "Closed") continue;
+    const reviewer = review.reviewers360?.find((r) => r.reviewerId === reviewerId && !r.respondedOn);
+    if (reviewer) out.push({ review, reviewer });
+  }
+  return out;
+}
+
+export function nominate360Reviewer(actor: TalentActor, reviewId: string, reviewerId: string): TalentResult {
   return guarded((s) => {
-    const row = reviewFor(s, id);
+    const row = reviewFor(s, reviewId);
     if (typeof row === "string") return row;
-    if (!canWriteManagerReview(actor, row.employeeId)) return "Only someone above the employee in their reporting line can edit the plan.";
+    if (!canNominate360(actor, row)) return "Only the employee or their manager can nominate reviewers.";
+    const status = cycleStatusOf(s, row.cycleId);
+    if (status === "Closed" || status === "Calibration") return "360 nominations are closed for this cycle.";
+    const list = row.reviewers360 ?? [];
+    if (list.length >= MAX_360_REVIEWERS) return `Up to ${MAX_360_REVIEWERS} reviewers.`;
+    const person = reviewer360Options(row).find((a) => a.id === reviewerId);
+    if (!person) return "Choose a reviewer.";
+    row.reviewers360 = [...list, { reviewerId: person.id, reviewerName: person.fullName, nominatedBy: actor.fullName, nominatedOn: todayISO() }];
+    if (row.feedback360Status === "Not started") row.feedback360Status = "In progress";
+    pushPersonTaskAlert({
+      recipientId: person.id,
+      title: "360 feedback requested",
+      body: `Please give 360 feedback for ${row.employeeName}.`,
+      href: "/evaluations",
+    });
+    return null;
+  });
+}
+
+/** Removes a nominee who has not answered yet. */
+export function remove360Reviewer(actor: TalentActor, reviewId: string, reviewerId: string): TalentResult {
+  return guarded((s) => {
+    const row = reviewFor(s, reviewId);
+    if (typeof row === "string") return row;
+    if (!canNominate360(actor, row)) return "Only the employee or their manager can change reviewers.";
+    const entry = row.reviewers360?.find((r) => r.reviewerId === reviewerId);
+    if (!entry) return "Reviewer not found.";
+    if (entry.respondedOn) return "This reviewer has already answered.";
+    row.reviewers360 = (row.reviewers360 ?? []).filter((r) => r.reviewerId !== reviewerId);
+    return null;
+  });
+}
+
+/** A nominee answers: a 1–5 rating and a comment. The 360 is complete once every nominee has answered. */
+export function submit360Response(actor: TalentActor, reviewId: string, rating: number, comment: string): TalentResult {
+  return guarded((s) => {
+    const row = reviewFor(s, reviewId);
+    if (typeof row === "string") return row;
+    const entry = row.reviewers360?.find((r) => r.reviewerId === actor.id);
+    if (!entry) return "You were not asked for 360 feedback on this review.";
+    if (entry.respondedOn) return "You already answered.";
     if (cycleStatusOf(s, row.cycleId) === "Closed") return "This cycle is closed.";
-    row.developmentPlan = plan.slice(0, 300);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) return "Rating must be 1 to 5.";
+    const text = comment.trim();
+    if (text.length < 5) return "Add a short comment.";
+    entry.rating = rating;
+    entry.comment = text.slice(0, 600);
+    entry.respondedOn = todayISO();
+    if ((row.reviewers360 ?? []).every((r) => r.respondedOn)) row.feedback360Status = "Complete";
+    return null;
+  });
+}
+
+/* ───────────── Development plan ───────────── */
+
+export const DEV_ACTION_STATUSES: readonly DevAction["status"][] = ["Not started", "In progress", "Done"];
+
+/** The plan's actions. Older reviews with a single text plan show it as the first action. */
+export function devActionsOf(review: Pick<PerfReview, "id" | "devActions" | "developmentPlan">): DevAction[] {
+  if (review.devActions) return review.devActions;
+  const text = review.developmentPlan?.trim();
+  return text ? [{ id: `${review.id}-a1`, title: text, due: "", status: "Not started" }] : [];
+}
+
+/** The employee and anyone above them keep the plan up to date. */
+export function canEditDevPlan(actor: TalentActor, review: Pick<PerfReview, "employeeId">): boolean {
+  return review.employeeId === actor.id || canWriteManagerReview(actor, review.employeeId);
+}
+
+function devPlanFor(s: TalentState, actor: TalentActor, reviewId: string): PerfReview | string {
+  const row = reviewFor(s, reviewId);
+  if (typeof row === "string") return row;
+  if (!canEditDevPlan(actor, row)) return "Only the employee or their manager can edit the plan.";
+  if (cycleStatusOf(s, row.cycleId) === "Closed") return "This cycle is closed.";
+  row.devActions = structuredClone(devActionsOf(row));
+  return row;
+}
+
+export function addDevAction(actor: TalentActor, reviewId: string, input: { title: string; due: string }): TalentResult {
+  return guarded((s) => {
+    const row = devPlanFor(s, actor, reviewId);
+    if (typeof row === "string") return row;
+    const title = input.title.trim();
+    if (title.length < 3) return "Enter the action.";
+    if (input.due && !ISO_DATE.test(input.due)) return "Choose a valid due date.";
+    if ((row.devActions ?? []).length >= 12) return "Up to 12 actions.";
+    row.devActions = [...(row.devActions ?? []), { id: newId("da"), title: title.slice(0, 160), due: input.due, status: "Not started" }];
+    return null;
+  });
+}
+
+export function updateDevAction(
+  actor: TalentActor,
+  reviewId: string,
+  actionId: string,
+  patch: Partial<Pick<DevAction, "title" | "due" | "status">>,
+): TalentResult {
+  return guarded((s) => {
+    const row = devPlanFor(s, actor, reviewId);
+    if (typeof row === "string") return row;
+    const action = row.devActions?.find((a) => a.id === actionId);
+    if (!action) return "Action not found.";
+    if (patch.title !== undefined) {
+      if (patch.title.trim().length < 3) return "Enter the action.";
+      action.title = patch.title.trim().slice(0, 160);
+    }
+    if (patch.due !== undefined) {
+      if (patch.due && !ISO_DATE.test(patch.due)) return "Choose a valid due date.";
+      action.due = patch.due;
+    }
+    if (patch.status !== undefined) {
+      if (!DEV_ACTION_STATUSES.includes(patch.status)) return "Choose a status.";
+      action.status = patch.status;
+    }
+    return null;
+  });
+}
+
+export function removeDevAction(actor: TalentActor, reviewId: string, actionId: string): TalentResult {
+  return guarded((s) => {
+    const row = devPlanFor(s, actor, reviewId);
+    if (typeof row === "string") return row;
+    if (!row.devActions?.some((a) => a.id === actionId)) return "Action not found.";
+    row.devActions = row.devActions.filter((a) => a.id !== actionId);
     return null;
   });
 }
@@ -1356,9 +1704,27 @@ export function toggleCheckInItem(actor: TalentActor, meetingId: string, list: "
 
 /* ───────────── Skills ───────────── */
 
-/** The employee's saved skills profile, or their starter profile until they change it. */
+/** Proficiency levels, lowest first. */
+export const SKILL_LEVELS: readonly string[] = Object.keys(LEVEL_RANK);
+
+/** The starting list before the person edits it: department-based, the same one the profile page shows. */
+function startingSkills(employeeId: string): EmployeeSkill[] {
+  const person = getPerson(employeeId);
+  return structuredClone(person ? starterSkills(person) : starterSkillsFor(employeeId).skills);
+}
+
+/** The employee's saved skills profile, or their starting list until they change it. */
 export function skillProfileFor(state: Pick<TalentState, "skillProfiles">, employeeId: string): EmployeeSkill[] {
-  return state.skillProfiles.find((p) => p.employeeId === employeeId)?.skills ?? starterSkillsFor(employeeId).skills;
+  return state.skillProfiles.find((p) => p.employeeId === employeeId)?.skills ?? startingSkills(employeeId);
+}
+
+function ownProfile(s: TalentState, employeeId: string): SkillProfile {
+  let profile = s.skillProfiles.find((p) => p.employeeId === employeeId);
+  if (!profile) {
+    profile = { employeeId, skills: startingSkills(employeeId) };
+    s.skillProfiles.push(profile);
+  }
+  return profile;
 }
 
 export function updateEmployeeSkill(
@@ -1369,14 +1735,43 @@ export function updateEmployeeSkill(
 ): TalentResult {
   return guarded((s) => {
     if (actor.id !== employeeId) return "You can only edit your own skills profile.";
-    let profile = s.skillProfiles.find((p) => p.employeeId === employeeId);
-    if (!profile) {
-      profile = { employeeId, skills: structuredClone(starterSkillsFor(employeeId).skills) };
-      s.skillProfiles.push(profile);
-    }
-    const skill = profile.skills.find((k) => k.skillId === skillId);
+    if (patch.level !== undefined && !SKILL_LEVELS.includes(patch.level)) return "Choose a level.";
+    if (patch.targetLevel !== undefined && !SKILL_LEVELS.includes(patch.targetLevel)) return "Choose a target level.";
+    const skill = ownProfile(s, employeeId).skills.find((k) => k.skillId === skillId);
     if (!skill) return "Skill not found.";
     Object.assign(skill, patch);
+    return null;
+  });
+}
+
+/** Adds a skill to your own profile: a library skill by name, or a new one. */
+export function addEmployeeSkill(actor: TalentActor, employeeId: string, name: string, level: string): TalentResult {
+  return guarded((s) => {
+    if (actor.id !== employeeId) return "You can only edit your own skills profile.";
+    const clean = name.trim().replace(/\s+/g, " ");
+    if (clean.length < 2) return "Enter a skill name.";
+    if (!SKILL_LEVELS.includes(level)) return "Choose a level.";
+    const profile = ownProfile(s, employeeId);
+    if (profile.skills.some((k) => sameName(k.skillName, clean))) return `${clean} is already on your profile.`;
+    if (profile.skills.length >= 20) return "Up to 20 skills.";
+    const def = SKILL_LIBRARY.find((d) => sameName(d.name, clean));
+    const rank = SKILL_LEVELS.indexOf(level);
+    profile.skills.push({
+      skillId: def?.id ?? `sk-own-${clean.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      skillName: def?.name ?? clean.slice(0, 40),
+      level,
+      targetLevel: SKILL_LEVELS[Math.min(SKILL_LEVELS.length - 1, rank + 1)],
+    });
+    return null;
+  });
+}
+
+export function removeEmployeeSkill(actor: TalentActor, employeeId: string, skillId: string): TalentResult {
+  return guarded((s) => {
+    if (actor.id !== employeeId) return "You can only edit your own skills profile.";
+    const profile = ownProfile(s, employeeId);
+    if (!profile.skills.some((k) => k.skillId === skillId)) return "Skill not found.";
+    profile.skills = profile.skills.filter((k) => k.skillId !== skillId);
     return null;
   });
 }
@@ -1386,4 +1781,128 @@ export function resetTalentState() {
   localStorage.removeItem(LEGACY_KEY);
   cache = null;
   listeners.forEach((fn) => fn());
+}
+
+/* ───────────── Career interests ───────────── */
+
+export const CAREER_TIMEFRAMES = ["Next 6 months", "6–12 months", "1–2 years", "2+ years"] as const;
+export type CareerTimeframe = (typeof CAREER_TIMEFRAMES)[number];
+
+/** Functions someone can say they would like to work in (matches role tracks and requisition departments). */
+export const CAREER_FUNCTIONS = ["Engineering", "People", "Talent Acquisition", "Total Rewards", "Product", "IT", "Leadership"] as const;
+
+export interface CareerInterests {
+  employeeId: string;
+  /** TARGET_ROLES ids. */
+  targetRoleIds: string[];
+  functions: string[];
+  openToRelocation: boolean;
+  timeframe: CareerTimeframe;
+  note: string;
+  updatedOn: string;
+}
+
+const INTERESTS_KEY = "timez.career.interests.v1";
+let interestsCache: CareerInterests[] | null = null;
+
+function readInterests(): CareerInterests[] {
+  try {
+    const raw = localStorage.getItem(INTERESTS_KEY);
+    const saved = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(saved) ? (saved as CareerInterests[]).filter((i) => i && typeof i.employeeId === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Stable snapshot for useSyncExternalStore (subscribe with subscribeTalent). */
+export function getCareerInterestsList(): CareerInterests[] {
+  if (!interestsCache) interestsCache = readInterests();
+  return interestsCache;
+}
+
+export function careerInterestsFor(employeeId: string, list: CareerInterests[] = getCareerInterestsList()): CareerInterests | undefined {
+  return list.find((i) => i.employeeId === employeeId);
+}
+
+/** The employee, anyone above them, and HR can see career interests. */
+export function canViewCareerInterests(actor: TalentActor, employeeId: string): boolean {
+  return canViewEmployeeTalent(actor, employeeId);
+}
+
+/** Career interests the actor may see for other people: their reporting line, or everyone for HR. */
+export function visibleCareerInterests(actor: TalentActor, list: CareerInterests[] = getCareerInterestsList()): CareerInterests[] {
+  return list.filter((i) => i.employeeId !== actor.id && canViewCareerInterests(actor, i.employeeId));
+}
+
+export type CareerInterestsInput = Pick<CareerInterests, "targetRoleIds" | "functions" | "openToRelocation" | "timeframe" | "note">;
+
+export function saveCareerInterests(actor: TalentActor, input: CareerInterestsInput, validRoleIds: readonly string[]): TalentResult {
+  const roles = [...new Set(input.targetRoleIds)];
+  const functions = [...new Set(input.functions)];
+  const note = input.note.trim();
+  if (!roles.length && !functions.length) return "Pick at least one target role or function.";
+  if (roles.length > 3) return "Pick up to 3 target roles.";
+  if (roles.some((id) => !validRoleIds.includes(id))) return "One of the roles is no longer available.";
+  if (functions.some((f) => !(CAREER_FUNCTIONS as readonly string[]).includes(f))) return "Choose functions from the list.";
+  if (!CAREER_TIMEFRAMES.includes(input.timeframe)) return "Choose a timeframe.";
+  if (note.length > 500) return "Keep the note under 500 characters.";
+  const list = getCareerInterestsList();
+  const before = careerInterestsFor(actor.id, list);
+  const next: CareerInterests = {
+    employeeId: actor.id,
+    targetRoleIds: roles,
+    functions,
+    openToRelocation: !!input.openToRelocation,
+    timeframe: input.timeframe,
+    note,
+    updatedOn: todayISO(),
+  };
+  const updated = [...list.filter((i) => i.employeeId !== actor.id), next];
+  try {
+    localStorage.setItem(INTERESTS_KEY, JSON.stringify(updated));
+  } catch {
+    return "Could not save. Please try again.";
+  }
+  interestsCache = updated;
+  listeners.forEach((fn) => fn());
+  const managerId = managementChain(actor.id, DEMO_ACCOUNTS)[0]?.id;
+  if (managerId) {
+    try {
+      pushPersonTaskAlert({
+        recipientId: managerId,
+        title: "Career interests updated",
+        body: `${actor.fullName} updated their career interests (${next.timeframe}).`,
+        href: "/skills",
+      });
+    } catch {
+      // Notifications are best-effort.
+    }
+  }
+  appendAuditEntries([
+    {
+      at: new Date().toISOString(),
+      actorId: actor.id,
+      actorName: actor.fullName,
+      entity: "Career interests",
+      entityId: actor.id,
+      subjectId: actor.id,
+      action: before ? "Updated" : "Created",
+      changes: [
+        { field: "Target roles", before: before?.targetRoleIds.join(", ") ?? "", after: roles.join(", ") },
+        { field: "Functions", before: before?.functions.join(", ") ?? "", after: functions.join(", ") },
+        { field: "Open to relocation", before: before ? (before.openToRelocation ? "Yes" : "No") : "", after: next.openToRelocation ? "Yes" : "No" },
+        { field: "Timeframe", before: before?.timeframe ?? "", after: next.timeframe },
+      ].filter((c) => c.before !== c.after),
+    },
+  ]);
+  return null;
+}
+
+/** The review whose development plan the person can add to now: the latest one in a cycle that isn't closed. */
+export function openDevPlanReview(state: Pick<TalentState, "reviews" | "cycleStatus" | "cycles">, employeeId: string): PerfReview | undefined {
+  const startOf = (cycleId: string) => allCycles(state).find((c) => c.id === cycleId)?.start ?? "";
+  return state.reviews
+    .filter((r) => r.employeeId === employeeId && cycleStatusOf(state, r.cycleId) !== "Closed")
+    .sort((a, b) => startOf(b.cycleId).localeCompare(startOf(a.cycleId)))[0];
 }

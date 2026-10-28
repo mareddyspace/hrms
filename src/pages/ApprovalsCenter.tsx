@@ -34,6 +34,8 @@ import {
   type DelegationScope,
 } from "../data/delegations.ts";
 import { DelegationSettings } from "./DelegationSettings.tsx";
+import { currentStepOf, isWaitingOn, stepText } from "../data/expenseFlow.ts";
+import { decideTravel, getTravelRequests, subscribeTravel, withdrawTravel } from "../data/travelStore.ts";
 
 /** Which delegation scope (§25) a request kind falls under. */
 function scopeOf(kind: string): DelegationScope {
@@ -45,6 +47,7 @@ function scopeOf(kind: string): DelegationScope {
     case "Expense claim":
     case "Reimbursement":
     case "Cash advance":
+    case "Travel request":
       return "expenses";
     case "Timesheet":
       return "timesheets";
@@ -75,12 +78,17 @@ type RequestItem = {
   declineLabel?: string;
   decide?: (decision: "approved" | "rejected", note?: string) => string | null | Promise<string | null>;
   withdraw?: () => string | null | Promise<string | null>;
+  /** Multi-step requests: whether the signed-in user decides the open step (overrides the reporting-line rule). */
+  canAct?: boolean;
+  /** Multi-step requests: who it's with now, e.g. "Finance approval · step 2 of 2". */
+  withText?: string;
 };
 
 const STATUS_TONE: Record<string, "ok" | "warn" | "danger" | "neutral" | "info"> = {
   pending: "warn",
   submitted: "warn",
   approved: "ok",
+  paid: "info",
   verified: "ok",
   rejected: "danger",
   withdrawn: "neutral",
@@ -92,6 +100,7 @@ const STATUS_TEXT: Record<string, string> = {
   pending: "Waiting for approval",
   submitted: "Waiting for approval",
   approved: "Approved",
+  paid: "Paid",
   verified: "Verified",
   rejected: "Declined",
   withdrawn: "Withdrawn",
@@ -113,7 +122,6 @@ export function countWaitingOnMe(
     ["leave", state.backdatedPermissions],
     ["leave", state.leaveRequests],
     ["leave", state.encashments],
-    ["expenses", state.expenses],
     ["expenses", state.reimbursements],
     ["expenses", state.cashAdvances],
     ["others", state.assetRequests],
@@ -124,6 +132,10 @@ export function countWaitingOnMe(
     (sum, [scope, list]) => sum + list.filter((item) => open(item.status) && mine(item.employeeId, scope)).length,
     0,
   );
+  // Expense claims and travel requests follow their approval steps.
+  const stepped = [...state.expenses, ...getTravelRequests()].filter((item) =>
+    isWaitingOn(item, myId, (employeeId) => canApprove(employeeId, "expenses")),
+  ).length;
   const timesheets = state.orgTimesheets.filter((row) => row.status === "submitted" && mine(row.personId, "timesheets")).length;
   const proofs = canVerifyProofs
     ? state.investmentProofs.filter((p) => p.status === "submitted" && p.employeeId !== myId).length
@@ -135,7 +147,7 @@ export function countWaitingOnMe(
       (w.status === "awaiting_teammate" && w.teammateId === myId) ||
       (w.status === "awaiting_manager" && mine(w.requesterId) && mine(w.teammateId)),
   ).length;
-  return requests + timesheets + proofs + corrections + swaps;
+  return requests + stepped + timesheets + proofs + corrections + swaps;
 }
 
 /** Approvals inbox built from real requests: decide what's waiting on you, track what you've asked for. */
@@ -146,6 +158,7 @@ export function ApprovalsCenterPage() {
   const attendance = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
   const shifts = useSyncExternalStore(subscribeShifts, getShiftState, getShiftState);
   const delegations = useSyncExternalStore(subscribeDelegations, getDelegationState, getDelegationState);
+  const travel = useSyncExternalStore(subscribeTravel, getTravelRequests, getTravelRequests);
   noteLeaves(state.leaveRequests);
   const actor = { id: employee.id, fullName: employee.fullName, role: portal.demoProfile.role };
   const rosterCtx = { leaves: state.leaveRequests, holidays: state.holidays };
@@ -160,6 +173,12 @@ export function ApprovalsCenterPage() {
     taskPersonById(id)?.fullName ??
     id;
   const leaveName = (code: string) => leaveTable.find((row) => row.code === code)?.name ?? code;
+  const actorRef = { id: employee.id, fullName: employee.fullName };
+  /** "Finance approval (Alex Morgan)" for the open step of a multi-step request. */
+  const withTextFor = (item: Parameters<typeof currentStepOf>[0]) => {
+    const step = currentStepOf(item);
+    return step ? `${step.label} (${step.approverIds.map(nameOf).join(", ")})` : undefined;
+  };
 
   const items = useMemo<RequestItem[]>(() => {
     const isOpen = (status: string) => status === "pending" || status === "submitted";
@@ -220,12 +239,33 @@ export function ApprovalsCenterPage() {
         kind: "Expense claim",
         employeeId: x.employeeId,
         title: `${x.category} · ${money(x.amount, x.currency)} · ${formatShortDate(x.date)}`,
-        detail: x.description,
+        detail: [x.description, stepText(x)].filter(Boolean).join(" · "),
+        raisedOn: x.submittedOn,
         status: x.status,
         open: isOpen(x.status),
         decided: x,
         decide: (d, note) => portal.setExpenseStatus(x.id, d, note),
         withdraw: () => portal.setExpenseStatus(x.id, "withdrawn"),
+        ...(x.steps?.length ? { canAct: portal.canDecideExpense(x), withText: withTextFor(x) } : {}),
+      });
+    }
+    for (const t of travel) {
+      list.push({
+        key: `trv-${t.id}`,
+        kind: "Travel request",
+        employeeId: t.employeeId,
+        title: `${t.fromCity} → ${t.toCity} · ${formatShortDate(t.departOn)} – ${formatShortDate(t.returnOn)} · ${money(t.estimatedCost, t.currency)}`,
+        detail: [t.purpose, `${t.mode}${t.advanceNeeded && t.advanceAmount ? ` · advance ${money(t.advanceAmount, t.currency)}` : ""}`, stepText(t)]
+          .filter(Boolean)
+          .join(" · "),
+        raisedOn: t.submittedOn,
+        status: t.status,
+        open: t.status === "pending",
+        decided: t,
+        decide: (d, note) => decideTravel(actorRef, t.id, d, note, (id) => canDecideFor(id, "expenses")),
+        withdraw: () => withdrawTravel(actorRef, t.id),
+        canAct: isWaitingOn(t, employee.id, (id) => canDecideFor(id, "expenses")),
+        withText: withTextFor(t),
       });
     }
     for (const x of state.reimbursements) {
@@ -390,10 +430,11 @@ export function ApprovalsCenterPage() {
     }
     return list;
     // portal functions are recreated with state, so state is the real dependency
-  }, [state, portal, leaveTable, attendance, shifts, delegations]);
+  }, [state, portal, leaveTable, attendance, shifts, delegations, travel]);
 
   const waiting = items.filter((item) => {
     if (!item.open || !item.decide || item.employeeId === employee.id) return false;
+    if (item.canAct !== undefined) return item.canAct;
     if (item.kind === "Tax-saving proof") return canVerifyProofs;
     if (item.key.startsWith("swt-")) return true; // already limited to the teammate asked
     if (item.kind === "Leave encashment" && managementChain(item.employeeId, demoAccounts).length === 0) {
@@ -539,7 +580,8 @@ export function ApprovalsCenterPage() {
                     <StatusBadge status={STATUS_TEXT[item.status] ?? item.status} tone={STATUS_TONE[item.status]} literal />
                   </div>
                   <span>{item.title}</span>
-                  {item.open && (() => {
+                  {item.open && item.withText && <span className="muted">With {item.withText}</span>}
+                  {item.open && !item.withText && (() => {
                     const { first, available } = currentApprover(item.employeeId);
                     if (!first) return null;
                     // An active delegation (§25) from the first approver puts the request with the delegate.

@@ -1,5 +1,6 @@
 import { addDaysISO, parseISODate, todayISO, type Holiday, type LeaveRequest } from "../../model.ts";
 import { taskTeamFor } from "../../data/taskTeam.ts";
+import { appendAuditEntries } from "../../data/auditTrail.ts";
 import {
   canDecideFor,
   createStore,
@@ -79,12 +80,24 @@ export interface CompOffCredit {
   expiresOn: string;
 }
 
+/** Minimum people needed on a shift on one weekday. scope is a manager id (their team) or "*" (company default). */
+export interface CoverageRule {
+  scope: string;
+  shiftId: string;
+  /** 0 = Sunday … 6 = Saturday */
+  weekday: number;
+  min: number;
+}
+
 interface ShiftState {
   shifts: ShiftDef[];
   assignments: ShiftAssignment[];
   weeks: RosterWeek[];
   swaps: ShiftSwap[];
   credits: CompOffCredit[];
+  coverage: CoverageRule[];
+  /** Coverage alerts already sent (manager|date|shift|leave), so each goes out once. */
+  coverageAlerts: string[];
 }
 
 /** Calendar facts the rules need from the portal store. */
@@ -186,6 +199,8 @@ function defaults(): ShiftState {
         expiresOn: addDaysISO("2026-06-27", COMP_OFF_VALID_DAYS),
       },
     ],
+    coverage: [],
+    coverageAlerts: [],
   };
 }
 
@@ -423,7 +438,8 @@ export function weekConflicts(state: ShiftState, ctx: RosterContext, managerId: 
   return problems;
 }
 
-export function publishWeek(actor: WorkforceActor, ctx: RosterContext, weekStart: string): WorkforceResult {
+/** Publishes the week. Under-covered shifts block publishing unless `allowGaps` is set (the manager chose "Publish anyway"). */
+export function publishWeek(actor: WorkforceActor, ctx: RosterContext, weekStart: string, allowGaps = false): WorkforceResult {
   if (weekStartOf(weekStart) !== weekStart) return "Pick a week starting on Monday.";
   if (addDaysISO(weekStart, 6) < todayISO()) return "That week is over.";
   return store.mutate((s) => {
@@ -434,6 +450,8 @@ export function publishWeek(actor: WorkforceActor, ctx: RosterContext, weekStart
     if (week?.status === "published") return "This week is already published.";
     const conflicts = weekConflicts(s, ctx, actor.id, weekStart);
     if (conflicts.length) return conflicts[0];
+    const gaps = coverageGaps(s, ctx, actor.id, weekStart);
+    if (gaps.length && !allowGaps) return `Under-covered: ${describeGaps(gaps, s)}. Fill these shifts or publish anyway.`;
     const record: RosterWeek = {
       managerId: actor.id,
       weekStart,
@@ -444,6 +462,11 @@ export function publishWeek(actor: WorkforceActor, ctx: RosterContext, weekStart
     s.weeks = [...s.weeks.filter((w) => !(w.managerId === actor.id && w.weekStart === weekStart)), record];
     for (const personId of new Set(rows.map((r) => r.personId))) {
       notify(personId, "Roster published", `Your shifts for the week of ${fmt(weekStart)} are ready.`, ROUTE);
+    }
+    if (gaps.length) {
+      audit(actor, "Roster week", `${actor.id}:${weekStart}`, "Updated", [
+        { field: "Published with gaps", before: "", after: describeGaps(gaps, s) },
+      ]);
     }
     return null;
   });
@@ -557,12 +580,17 @@ export function canApproveSwap(actor: WorkforceActor, swap: ShiftSwap): boolean 
   return canDecideFor(actor, swap.requesterId) && canDecideFor(actor, swap.teammateId);
 }
 
+/**
+ * Approve or reject a swap. Approval re-checks every roster rule and coverage: if the swap would leave a
+ * shift below its minimum it is refused unless `allowGaps` is set, and then the roster owner is alerted.
+ */
 export function decideSwap(
   actor: WorkforceActor,
   ctx: RosterContext,
   id: string,
   approve: boolean,
   note = "",
+  allowGaps = false,
 ): WorkforceResult {
   return store.mutate((s) => {
     const swap = s.swaps.find((w) => w.id === id);
@@ -576,8 +604,15 @@ export function decideSwap(
       if (typeof rows === "string") return rows;
       const error = swapRuleError(s, ctx, rows[0], rows[1]);
       if (error) return error;
+      const ownerId = rows[0].managerId;
+      const before = coverageGaps(s, ctx, ownerId, weekStartOf(swap.date)).filter((g) => g.date === swap.date);
       rows[0].shiftId = swap.teammateShiftId;
       rows[1].shiftId = swap.requesterShiftId;
+      const fresh = newGaps(before, coverageGaps(s, ctx, ownerId, weekStartOf(swap.date)).filter((g) => g.date === swap.date));
+      if (fresh.length && !allowGaps) return `This swap leaves ${describeGaps(fresh, s)} under-covered.`;
+      if (fresh.length && ownerId !== actor.id) {
+        notify(ownerId, "Coverage alert", `A swap approved by ${actor.fullName} leaves ${describeGaps(fresh, s)} under-covered.`, ROUTE);
+      }
     }
     swap.status = approve ? "approved" : "rejected";
     swap.decidedByName = actor.fullName;
@@ -675,4 +710,200 @@ export function compOffCreditsFor(employeeId: string, year: number, takenDates: 
     if (credit) used.add(credit.id);
   }
   return credits.filter((c) => used.has(c.id) || c.expiresOn >= today).length;
+}
+
+// ---------- coverage (minimum staffing) ----------
+
+export const MAX_COVERAGE = 20;
+/** Company scope for coverage rules; a manager's own rules override it for their team. */
+export const COMPANY_SCOPE = "*";
+export const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Starting minimums before HR or a manager changes them: one person on each day shift on weekdays, one on weekend support. */
+const DEFAULT_MINIMUMS: Record<string, { weekday: number; weekend: number }> = {
+  "sh-morning": { weekday: 1, weekend: 0 },
+  "sh-general": { weekday: 1, weekend: 0 },
+  "sh-evening": { weekday: 1, weekend: 0 },
+  "sh-night": { weekday: 0, weekend: 0 },
+  "sh-weekend": { weekday: 0, weekend: 1 },
+};
+
+export type CoverageStatus = "under" | "ok" | "over" | "none";
+
+export interface CoverageSlot {
+  date: string;
+  shiftId: string;
+  required: number;
+  /** People rostered and not on approved leave. */
+  assigned: number;
+  /** Rostered people who are on approved leave that day. */
+  onLeave: string[];
+  status: CoverageStatus;
+}
+
+/** Minimum for a scope, falling back to the company rule and then the starting default. */
+export function coverageMinimum(scope: string, shiftId: string, weekday: number, state: ShiftState = getShiftState()): number {
+  const own = state.coverage.find((r) => r.scope === scope && r.shiftId === shiftId && r.weekday === weekday);
+  if (own) return own.min;
+  const company = state.coverage.find((r) => r.scope === COMPANY_SCOPE && r.shiftId === shiftId && r.weekday === weekday);
+  if (company) return company.min;
+  const shift = shiftById(shiftId, state);
+  if (!shift) return 0;
+  const seed = DEFAULT_MINIMUMS[shiftId] ?? { weekday: 0, weekend: 0 };
+  const weekend = weekday === 0 || weekday === 6;
+  if (shift.weekendOnly && !weekend) return 0;
+  return weekend ? seed.weekend : seed.weekday;
+}
+
+/** True when the scope has its own rule for this slot (not inherited). */
+export function hasOwnCoverageRule(scope: string, shiftId: string, weekday: number, state: ShiftState = getShiftState()): boolean {
+  return state.coverage.some((r) => r.scope === scope && r.shiftId === shiftId && r.weekday === weekday);
+}
+
+/** Required headcount on a manager's roster for a date; holidays need no one. */
+export function requiredOn(state: ShiftState, ctx: RosterContext, managerId: string, shiftId: string, date: string): number {
+  if (holidayOn(date, ctx.holidays)) return 0;
+  const shift = shiftById(shiftId, state);
+  if (!shift || !shift.active) return 0;
+  if (shift.weekendOnly && !isWeekend(date)) return 0;
+  return coverageMinimum(managerId, shiftId, parseISODate(date).getDay(), state);
+}
+
+/** Assigned vs required for every shift on every day of a manager's week. */
+export function weekCoverage(state: ShiftState, ctx: RosterContext, managerId: string, weekStart: string): CoverageSlot[] {
+  const slots: CoverageSlot[] = [];
+  for (const shift of state.shifts) {
+    for (const date of weekDates(weekStart)) {
+      const rows = state.assignments.filter((a) => a.managerId === managerId && a.date === date && a.shiftId === shift.id);
+      if ((!shift.active || (shift.weekendOnly && !isWeekend(date))) && !rows.length) continue;
+      const onLeave = rows.filter((a) => leaveOn(a.personId, date, ctx.leaves)).map((a) => a.personId);
+      const assigned = rows.length - onLeave.length;
+      const required = requiredOn(state, ctx, managerId, shift.id, date);
+      const status: CoverageStatus =
+        assigned < required ? "under" : required > 0 && assigned > required ? "over" : required === 0 && assigned === 0 ? "none" : "ok";
+      slots.push({ date, shiftId: shift.id, required, assigned, onLeave, status });
+    }
+  }
+  return slots;
+}
+
+/** Upcoming under-covered slots in a manager's week (past days and today are left out). */
+export function coverageGaps(state: ShiftState, ctx: RosterContext, managerId: string, weekStart: string): CoverageSlot[] {
+  const today = todayISO();
+  return weekCoverage(state, ctx, managerId, weekStart)
+    .filter((c) => c.status === "under" && c.date > today)
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function newGaps(before: CoverageSlot[], after: CoverageSlot[]): CoverageSlot[] {
+  return after.filter((a) => {
+    const prev = before.find((b) => b.date === a.date && b.shiftId === a.shiftId);
+    return !prev || a.assigned < prev.assigned;
+  });
+}
+
+export function describeGaps(gaps: CoverageSlot[], state: ShiftState = getShiftState()): string {
+  const parts = gaps.slice(0, 3).map((g) => `${shiftById(g.shiftId, state)?.name ?? "Shift"} on ${fmt(g.date)} (${g.assigned} of ${g.required})`);
+  return parts.join(", ") + (gaps.length > 3 ? ` and ${gaps.length - 3} more` : "");
+}
+
+/** Slots this swap would push below minimum — shown as a warning before approval. */
+export function swapCoverageImpact(ctx: RosterContext, swapId: string, state: ShiftState = getShiftState()): CoverageSlot[] {
+  const swap = state.swaps.find((w) => w.id === swapId);
+  if (!swap) return [];
+  const draft = structuredClone(state);
+  const rows = liveSwapRows(draft, swap);
+  if (typeof rows === "string") return [];
+  const ownerId = rows[0].managerId;
+  const week = weekStartOf(swap.date);
+  const before = coverageGaps(draft, ctx, ownerId, week).filter((g) => g.date === swap.date);
+  rows[0].shiftId = swap.teammateShiftId;
+  rows[1].shiftId = swap.requesterShiftId;
+  return newGaps(before, coverageGaps(draft, ctx, ownerId, week).filter((g) => g.date === swap.date));
+}
+
+/** HR sets any scope (including the company default); a manager sets their own team's. */
+export function canSetCoverage(actor: WorkforceActor, scope: string): boolean {
+  if (isHrRole(actor.role)) return true;
+  return scope === actor.id && teamIdsFor(actor.id).length > 0;
+}
+
+export function setCoverageMinimum(actor: WorkforceActor, scope: string, shiftId: string, weekday: number, min: number): WorkforceResult {
+  if (!canSetCoverage(actor, scope)) return scope === COMPANY_SCOPE ? "Only HR can set company minimums." : "You can set minimums for your own team only.";
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) return "Pick a day.";
+  if (!Number.isInteger(min) || min < 0 || min > MAX_COVERAGE) return `Minimum must be a whole number from 0 to ${MAX_COVERAGE}.`;
+  return store.mutate((s) => {
+    const shift = shiftById(shiftId, s);
+    if (!shift) return "That shift no longer exists.";
+    if (shift.weekendOnly && weekday !== 0 && weekday !== 6 && min > 0) return `${shift.name} runs only on weekends.`;
+    const before = coverageMinimum(scope, shiftId, weekday, s);
+    s.coverage = [
+      ...s.coverage.filter((r) => !(r.scope === scope && r.shiftId === shiftId && r.weekday === weekday)),
+      { scope, shiftId, weekday, min },
+    ];
+    if (before !== min) {
+      const where = scope === COMPANY_SCOPE ? "company" : `${personName(scope)}'s team`;
+      audit(actor, "Shift coverage", `${scope}:${shiftId}:${weekday}`, "Updated", [
+        { field: `${shift.name} minimum, ${WEEKDAY_NAMES[weekday]} (${where})`, before: String(before), after: String(min) },
+      ]);
+    }
+    return null;
+  });
+}
+
+/** Drops a scope's own minimums so it follows the company rule (or the defaults) again. */
+export function resetCoverage(actor: WorkforceActor, scope: string): WorkforceResult {
+  if (!canSetCoverage(actor, scope)) return "You can reset your own team's minimums only.";
+  return store.mutate((s) => {
+    const removed = s.coverage.filter((r) => r.scope === scope).length;
+    if (!removed) return "These minimums already use the defaults.";
+    s.coverage = s.coverage.filter((r) => r.scope !== scope);
+    audit(actor, "Shift coverage", scope, "Removed", [{ field: "Own minimums", before: `${removed} rules`, after: "Defaults" }]);
+    return null;
+  });
+}
+
+/**
+ * Alerts each roster owner once when approved leave drops a published, upcoming shift below its minimum.
+ * Safe to call often — after a leave decision or when the roster page opens.
+ */
+export function checkCoverageAlerts(ctx: RosterContext): void {
+  const state = getShiftState();
+  const today = todayISO();
+  const fresh: { key: string; managerId: string; text: string }[] = [];
+  for (const week of state.weeks) {
+    if (week.status !== "published" || addDaysISO(week.weekStart, 6) <= today) continue;
+    for (const slot of coverageGaps(state, ctx, week.managerId, week.weekStart)) {
+      for (const personId of slot.onLeave) {
+        const leave = leaveOn(personId, slot.date, ctx.leaves);
+        const key = `${week.managerId}|${slot.date}|${slot.shiftId}|${leave?.id ?? personId}`;
+        if (state.coverageAlerts.includes(key) || fresh.some((f) => f.key === key)) continue;
+        fresh.push({
+          key,
+          managerId: week.managerId,
+          text: `${personName(personId)} is on leave — ${shiftById(slot.shiftId, state)?.name ?? "a shift"} on ${fmt(slot.date)} has ${slot.assigned} of ${slot.required} needed.`,
+        });
+      }
+    }
+  }
+  if (!fresh.length) return;
+  store.mutate((s) => {
+    s.coverageAlerts = [...s.coverageAlerts, ...fresh.map((f) => f.key)].slice(-500);
+    for (const f of fresh) notify(f.managerId, "Coverage alert", f.text, ROUTE);
+    return null;
+  });
+}
+
+function audit(
+  actor: WorkforceActor,
+  entity: string,
+  entityId: string,
+  action: "Created" | "Updated" | "Removed",
+  changes: { field: string; before: string; after: string }[],
+) {
+  try {
+    appendAuditEntries([{ at: new Date().toISOString(), actorId: actor.id, actorName: actor.fullName, entity, entityId, action, changes }]);
+  } catch {
+    // The audit trail is best-effort.
+  }
 }

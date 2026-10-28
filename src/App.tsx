@@ -11,6 +11,11 @@ import { accountHasNavAccess, type NavAccessId } from "./demoAccounts.ts";
 import { usePortal } from "./store.tsx";
 
 // Pages load on first visit, so the first screen opens fast.
+const EmailOutboxPage = lazy(() => import("./pages/EmailOutboxPage.tsx").then((m) => ({ default: m.EmailOutboxPage })));
+const LifecycleActionsPage = lazy(() => import("./features/lifecycle/LifecycleActionsPage.tsx").then((m) => ({ default: m.LifecycleActionsPage })));
+const RecognitionPage = lazy(() => import("./pages/RecognitionPage.tsx").then((m) => ({ default: m.RecognitionPage })));
+const TravelPage = lazy(() => import("./pages/TravelPage.tsx").then((m) => ({ default: m.TravelPage })));
+const ApprovalWorkflowsPage = lazy(() => import("./pages/ApprovalWorkflowsPage.tsx").then((m) => ({ default: m.ApprovalWorkflowsPage })));
 const PersonalisationPage = lazy(() => import("./pages/PersonalisationPage.tsx").then((m) => ({ default: m.PersonalisationPage })));
 const AuditLogPage = lazy(() => import("./pages/AuditLogPage.tsx").then((m) => ({ default: m.AuditLogPage })));
 const ExpensesPage = lazy(() => import("./pages/ExpensesPage.tsx").then((m) => ({ default: m.ExpensesPage })));
@@ -149,7 +154,7 @@ export function App() {
         <Route path="/benefits/country" element={<Allowed id="administration"><CountryBenefitsConfigPage /></Allowed>} />
         <Route path="/documents/country" element={<Allowed id="administration"><CountryDocumentsConfigPage /></Allowed>} />
         <Route path="/integrations" element={<Allowed id="integrations"><IntegrationsPage /></Allowed>} />
-        <Route path="/encashment" element={<EncashmentPage />} />
+        <Route path="/encashment" element={<Allowed id="encashment"><EncashmentPage /></Allowed>} />
         <Route path="/documents" element={<Allowed id="documents"><DocumentsPage /></Allowed>} />
         <Route path="/timesheet" element={<Allowed id="timesheet"><TimesheetPage /></Allowed>} />
         <Route path="/policies" element={<Allowed id="policies"><MyPoliciesPage /></Allowed>} />
@@ -161,13 +166,18 @@ export function App() {
         <Route path="/directory" element={<Allowed id="people"><DirectoryPage /></Allowed>} />
         <Route path="/directory/new" element={<Allowed id="people"><PeopleNewPage /></Allowed>} />
         <Route path="/directory/:id" element={<Allowed id="people"><PeopleDetailPage /></Allowed>} />
-        <Route path="/cash" element={<CashPage />} />
+        <Route path="/cash" element={<Allowed id="cashadvance"><CashPage /></Allowed>} />
+        <Route path="/travel" element={<Allowed id="travel"><TravelPage /></Allowed>} />
+        <Route path="/admin/email-outbox" element={<Allowed id="emailoutbox"><EmailOutboxPage /></Allowed>} />
+        <Route path="/lifecycle/actions" element={<Allowed id="lifecycleactions"><LifecycleActionsPage /></Allowed>} />
+        <Route path="/recognition" element={<Allowed id="recognition"><RecognitionPage /></Allowed>} />
+        <Route path="/admin/workflows-config" element={<Allowed id="workflowsconfig"><ApprovalWorkflowsPage /></Allowed>} />
         <Route path="/approvals" element={<ApprovalsCenterPage />} />
         <Route path="/chat" element={<Allowed id="messages"><ChatPage /></Allowed>} />
         <Route path="/mail" element={<Allowed id="mail"><MailPage /></Allowed>} />
         <Route path="/announcements" element={<Allowed id="announcements"><AnnouncementsPage /></Allowed>} />
         <Route path="/notifications" element={<Allowed id="notifications"><NotificationCenterPage /></Allowed>} />
-        <Route path="/assets" element={<AssetsPage />} />
+        <Route path="/assets" element={<Allowed id="assets"><AssetsPage /></Allowed>} />
         <Route path="/expenses" element={<Allowed id="expenses"><ExpensesPage /></Allowed>} />
         <Route path="/reimbursement" element={<ReimbursementPage />} />
         <Route path="/investment" element={<Allowed id="taxdeclarations"><InvestmentProofPage /></Allowed>} />
@@ -179,6 +189,7 @@ export function App() {
         <Route path="/me/immigration" element={<Allowed id="immigration"><ImmigrationPage /></Allowed>} />
         <Route path="/me/privacy" element={<Allowed id="privacy"><PrivacyCentrePage /></Allowed>} />
         <Route path="/me/grievances" element={<Allowed id="grievances"><GrievancePage /></Allowed>} />
+        <Route path="/people/cases" element={<Allowed id="hrcases"><GrievancePage /></Allowed>} />
         <Route path="/talent/background-checks" element={<Allowed id="bgv"><BackgroundChecksPage /></Allowed>} />
         <Route path="/engagement-surveys" element={<Allowed id="engagement"><EngagementSurveysPage /></Allowed>} />
         <Route path="/succession" element={<Allowed id="succession"><SuccessionPage /></Allowed>} />
@@ -191,9 +202,9 @@ export function App() {
         <Route path="/payslips" element={<Allowed id="payslips"><PayslipsPage /></Allowed>} />
         <Route path="/payslips/:id" element={<Allowed id="payslips"><PayslipDetail /></Allowed>} />
         <Route path="/evaluations" element={<Allowed id="performance"><EvaluationsPage /></Allowed>} />
-        <Route path="/software" element={<SoftwarePage />} />
+        <Route path="/software" element={<Allowed id="software"><SoftwarePage /></Allowed>} />
         <Route path="/programs" element={<Allowed id="learning"><ProgramsPage /></Allowed>} />
-        <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/projects" element={<Allowed id="projects"><ProjectsPage /></Allowed>} />
         <Route path="/holidays" element={<Allowed id="holidays"><HolidaysPage /></Allowed>} />
         <Route path="/help" element={<Allowed id="help"><HelpPage /></Allowed>} />
         <Route path="/terms" element={<TermsPage />} />

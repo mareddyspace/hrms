@@ -1,11 +1,16 @@
 import { todayISO } from "../../model.ts";
 import { listPeople } from "../../data/peopleLocal.ts";
+import { DEMO_ACCOUNTS } from "../../demoAccounts.ts";
+import { pushPersonTaskAlert } from "../../data/collabLocal.ts";
+import { appendAuditEntries } from "../../data/auditTrail.ts";
+import { getPrivacyState } from "./privacyStore.ts";
 import {
   createLocalStore,
   daysBetween,
   isHr,
   newId,
   nowStamp,
+  personName,
   relDay,
   type ComplianceActor,
   type ComplianceResult,
@@ -13,7 +18,10 @@ import {
 
 export const CASE_CATEGORIES = ["Grievance", "Harassment/POSH", "Discrimination", "Ethics/whistleblowing", "Safety"] as const;
 export type CaseCategory = (typeof CASE_CATEGORIES)[number];
-export type CaseStatus = "Open" | "Investigating" | "Resolved" | "Closed";
+export type CaseStatus = "Open" | "Investigating" | "Resolved" | "Closed" | "Archived (retention)";
+export const ARCHIVED_STATUS = "Archived (retention)" as const;
+/** Retention rule (Privacy centre) that governs closed case files. */
+export const CASE_RETENTION_CATEGORY = "Grievance and POSH case files";
 
 export const POSH_SLA_DAYS = 90;
 
@@ -50,6 +58,10 @@ export type CaseRecord = {
   status: CaseStatus;
   resolution?: string;
   closedOn?: string;
+  /** HR person handling the case. */
+  assigneeId?: string;
+  /** Set when the case file was cut down to a stub under the retention rule. */
+  archivedOn?: string;
   timeline: CaseEntry[];
 };
 
@@ -92,6 +104,7 @@ function defaults(): GrievanceState {
       againstName: "Ram Krishnan",
       createdOn: relDay(-6),
       status: "Open",
+      assigneeId: "demo-hr-admin",
       timeline: [entry(`${relDay(-6)}T15:10:00.000Z`, "filed", "Case raised.", "emp-mahesh", "Reporter")],
     },
     {
@@ -109,6 +122,23 @@ function defaults(): GrievanceState {
       ],
     },
   ];
+  // Closed long ago: past the retention period, so it is archived on load.
+  cases.push({
+    id: "gc-6",
+    code: "CASE-8HDN-2RTF",
+    category: "Grievance",
+    description: "Overtime claims for the quarter were not paid out with the monthly salary.",
+    reporterId: "emp-ram",
+    anonymous: false,
+    createdOn: relDay(-6 * 365 - 30),
+    status: "Closed",
+    resolution: "Payroll corrected and arrears paid in the next cycle.",
+    closedOn: relDay(-6 * 365),
+    timeline: [
+      entry(`${relDay(-6 * 365 - 30)}T09:00:00.000Z`, "filed", "Case raised.", "emp-ram", "Reporter"),
+      entry(`${relDay(-6 * 365)}T12:00:00.000Z`, "status", "Payroll corrected and arrears paid in the next cycle.", "demo-hr-admin", "Farhan Ali", false, "Closed"),
+    ],
+  });
   if (w1 && w2) {
     cases.push({
       id: "gc-3",
@@ -183,6 +213,23 @@ export function isReporter(actor: ComplianceActor, c: CaseRecord): boolean {
 
 export function canSeeCase(actor: ComplianceActor, c: CaseRecord): boolean {
   return isReporter(actor, c) || canManageCase(actor, c);
+}
+
+export function isCaseArchived(c: Pick<CaseRecord, "status">): boolean {
+  return c.status === ARCHIVED_STATUS;
+}
+
+/** HR people a case can be assigned to (never the reporter or the person named). */
+export function caseAssignees(c?: CaseRecord): { id: string; name: string }[] {
+  return DEMO_ACCOUNTS.filter((a) => isHr(a.role) && a.id !== c?.reporterId && a.id !== c?.againstId).map((a) => ({
+    id: a.id,
+    name: a.fullName,
+  }));
+}
+
+export function assigneeName(c: Pick<CaseRecord, "assigneeId">): string | undefined {
+  if (!c.assigneeId) return undefined;
+  return DEMO_ACCOUNTS.find((a) => a.id === c.assigneeId)?.fullName ?? personName(c.assigneeId);
 }
 
 export function isCaseOpen(c: CaseRecord): boolean {
@@ -272,14 +319,23 @@ const TRANSITIONS: Record<CaseStatus, CaseStatus[]> = {
   Investigating: ["Resolved", "Closed"],
   Resolved: ["Closed"],
   Closed: [],
+  [ARCHIVED_STATUS]: [],
 };
+
+/** Audit rows for HR cases carry no notes or descriptions — case contents are confidential. */
+function auditCase(actor: ComplianceActor, id: string, changes: { field: string; before: string; after: string }[]) {
+  appendAuditEntries([
+    { at: nowStamp(), actorId: actor.id, actorName: actor.fullName, entity: "HR case", entityId: id, action: "Updated", changes },
+  ]);
+}
 
 export function caseMoves(c: CaseRecord): CaseStatus[] {
   return TRANSITIONS[c.status];
 }
 
 export function setCaseStatus(actor: ComplianceActor, id: string, next: CaseStatus, note: string): ComplianceResult {
-  return store.guarded((s) => {
+  const before = getGrievanceState().cases.find((c) => c.id === id)?.status;
+  const error = store.guarded((s) => {
     const row = s.cases.find((c) => c.id === id);
     if (!row) return "Case not found.";
     if (!canManageCase(actor, row)) return isPosh(row) ? "Only HR or the Internal Committee can update this case." : "Only HR can update this case.";
@@ -293,6 +349,97 @@ export function setCaseStatus(actor: ComplianceActor, id: string, next: CaseStat
     row.timeline.push(entry(nowStamp(), "status", text || `Moved to ${next}.`, actor.id, actor.fullName, false, next));
     return null;
   });
+  if (!error) auditCase(actor, id, [{ field: "Status", before: before ?? "", after: next }]);
+  return error;
+}
+
+/** HR assigns the case to an HR person, who is notified. An empty id clears the assignment. */
+export function assignCase(actor: ComplianceActor, id: string, assigneeId: string): ComplianceResult {
+  const current = getGrievanceState().cases.find((c) => c.id === id);
+  let code = "";
+  const error = store.guarded((s) => {
+    const row = s.cases.find((c) => c.id === id);
+    if (!row) return "Case not found.";
+    if (!isHr(actor.role) || !canManageCase(actor, row)) return "Only HR can assign this case.";
+    if (isCaseArchived(row)) return "This case is archived.";
+    if ((row.assigneeId ?? "") === assigneeId) return "Already assigned.";
+    if (assigneeId && !caseAssignees(row).some((a) => a.id === assigneeId)) return "Choose an HR person from the list.";
+    row.assigneeId = assigneeId || undefined;
+    code = row.code;
+    return null;
+  });
+  if (error) return error;
+  auditCase(actor, id, [
+    { field: "Assigned to", before: (current && assigneeName(current)) ?? "", after: assigneeName({ assigneeId: assigneeId || undefined }) ?? "" },
+  ]);
+  if (assigneeId && assigneeId !== actor.id) {
+    pushPersonTaskAlert({
+      recipientId: assigneeId,
+      title: "HR case assigned",
+      body: `${actor.fullName} assigned you case ${code}.`,
+      href: "/me/grievances",
+    });
+  }
+  return null;
+}
+
+/* ───────────── Retention ───────────── */
+
+/** Closed dates before this are past the retention period; undefined when there is no rule. */
+export function caseRetentionCutoff(today = todayISO()): string | undefined {
+  const rule = getPrivacyState().retention.find((r) => r.category === CASE_RETENTION_CATEGORY);
+  if (!rule || !(rule.period > 0)) return undefined;
+  const [y, m, d] = today.split("-").map(Number);
+  const months = rule.unit === "years" ? rule.period * 12 : rule.period;
+  return new Date(Date.UTC(y, m - 1 - months, d)).toISOString().slice(0, 10);
+}
+
+function isClosedStatus(status: CaseStatus): boolean {
+  return status === "Closed" || status === "Resolved";
+}
+
+/**
+ * Closed cases past the retention period are cut down to a stub: notes, description and names removed,
+ * status "Archived (retention)". Closed cases missing a closed date get one from their last status change.
+ */
+export function enforceCaseRetention(today = todayISO()): number {
+  const cutoff = caseRetentionCutoff(today);
+  const due = (c: CaseRecord) => !!cutoff && isClosedStatus(c.status) && !!c.closedOn && c.closedOn < cutoff;
+  const cases = getGrievanceState().cases;
+  if (!cases.some((c) => (isClosedStatus(c.status) && !c.closedOn) || due(c))) return 0;
+  const archived: { id: string; before: CaseStatus }[] = [];
+  store.guarded((s) => {
+    for (const row of s.cases) {
+      if (isClosedStatus(row.status) && !row.closedOn) {
+        const last = [...row.timeline].reverse().find((e) => e.kind === "status" && e.status === row.status);
+        row.closedOn = (last?.at ?? row.createdOn).slice(0, 10);
+      }
+      if (!due(row)) continue;
+      archived.push({ id: row.id, before: row.status });
+      row.status = ARCHIVED_STATUS;
+      row.archivedOn = today;
+      row.description = "Case file removed under the retention rule.";
+      row.resolution = undefined;
+      row.againstId = undefined;
+      row.againstName = undefined;
+      row.timeline = [entry(nowStamp(), "status", "Archived under the retention rule.", "", "System", false, ARCHIVED_STATUS)];
+    }
+    return null;
+  });
+  if (archived.length > 0) {
+    appendAuditEntries(
+      archived.map(({ id, before }) => ({
+        at: nowStamp(),
+        actorId: "system",
+        actorName: "Retention rule",
+        entity: "HR case",
+        entityId: id,
+        action: "Updated" as const,
+        changes: [{ field: "Status", before, after: ARCHIVED_STATUS }],
+      })),
+    );
+  }
+  return archived.length;
 }
 
 export function addCaseNote(actor: ComplianceActor, id: string, text: string, confidential: boolean): ComplianceResult {
@@ -302,6 +449,7 @@ export function addCaseNote(actor: ComplianceActor, id: string, text: string, co
     const body = text.trim();
     if (body.length < 2) return "Write a note first.";
     if (body.length > 2000) return "Keep notes under 2,000 characters.";
+    if (isCaseArchived(row)) return "This case is archived.";
     if (canManageCase(actor, row)) {
       row.timeline.push(entry(nowStamp(), "note", body, actor.id, actor.fullName, confidential));
       return null;
@@ -322,7 +470,7 @@ export function addCommentByCode(actor: ComplianceActor, code: string, text: str
   return store.guarded((s) => {
     const row = s.cases.find((c) => c.id === found.id);
     if (!row) return "Case not found.";
-    if (row.status === "Closed") return "This case is closed.";
+    if (row.status === "Closed" || isCaseArchived(row)) return "This case is closed.";
     const body = text.trim();
     if (body.length < 2) return "Write a comment first.";
     if (body.length > 2000) return "Keep comments under 2,000 characters.";
@@ -345,4 +493,11 @@ export function casesForExport(personId: string) {
       resolution: c.resolution,
       timeline: reporterTimeline(c).map(({ at, kind, text, status }) => ({ at, kind, text, status })),
     }));
+}
+
+// Retention runs once when the case store loads (the page runs it again on open).
+try {
+  enforceCaseRetention();
+} catch {
+  /* storage unavailable */
 }

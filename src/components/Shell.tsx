@@ -61,6 +61,8 @@ import { NotesButton } from "./NotesPanel.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Banner, Dropdown, Field } from "./ui.tsx";
 import { updatePreferences, useApplyPreferences } from "../data/preferences.ts";
+import { useApprovalReminders } from "../data/approvalReminders.ts";
+import { applyDueLifecycleActions } from "../features/lifecycle/lifecycleActionsStore.ts";
 import { useTaskAutoReminders } from "../data/taskAutoReminders.ts";
 
 
@@ -94,6 +96,11 @@ const linkIcons: Record<string, ReactNode> = {
   "/attendance": <CalendarDays size={18} strokeWidth={1.75} />,
   "/leave": <Clock3 size={18} strokeWidth={1.75} />,
   "/timesheet": <Clock3 size={18} strokeWidth={1.75} />,
+  "/projects": <Briefcase size={18} strokeWidth={1.75} />,
+  "/travel": <Briefcase size={18} strokeWidth={1.75} />,
+  "/cash": <Wallet size={18} strokeWidth={1.75} />,
+  "/encashment": <Wallet size={18} strokeWidth={1.75} />,
+  "/people/cases": <Inbox size={18} strokeWidth={1.75} />,
   "/recruiting": <Target size={18} strokeWidth={1.75} />,
   "/onboarding": <UserRound size={18} strokeWidth={1.75} />,
   "/evaluations": <Target size={18} strokeWidth={1.75} />,
@@ -296,8 +303,14 @@ export function Shell() {
   const prefs = useApplyPreferences(employee.id);
   // Task due/overdue reminders fire on any page, not only when Tasks is open.
   useTaskAutoReminders();
-  // Icons-only sidebar; the chosen section's pages run as a horizontal bar above the page.
-  const collapsed = true;
+  // Approvers are reminded of items waiting on them for more than two days.
+  useApprovalReminders();
+  // Approved transfers and promotions take effect on their date.
+  useEffect(() => {
+    applyDueLifecycleActions();
+  }, []);
+  // Full sidebar with each section's pages; the current section's pages also run as a horizontal bar above the page.
+  const collapsed = false;
   const theme = document.documentElement.dataset.theme === "night" ? "night" : "light";
   const [openGroups, setOpenGroups] = useState<string[]>(["Me", "Time & pay"]);
   const location = useLocation();
@@ -624,8 +637,7 @@ export function Shell() {
           </div>
         </header>
 
-        {collapsed &&
-          (() => {
+        {(() => {
             const group = roleNav.find((g) => g.key === tabGroup);
             if (!group) return null;
             return (

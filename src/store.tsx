@@ -80,6 +80,8 @@ import { getNavOverrides } from "./data/platformLocal.ts";
 import { createSeed, DEMO_PASSWORD, EMPLOYEE, findAccountByCode, findAccountById } from "./seed.ts";
 import { taskPersonById } from "./data/taskTeam.ts";
 import { pushManagerTaskAlert, pushPersonTaskAlert } from "./data/collabLocal.ts";
+import { resolveWorkflow } from "./data/approvalWorkflows.ts";
+import { canPayExpenses, currentStepOf, isWaitingOn } from "./data/expenseFlow.ts";
 import { taskProgress } from "./data/taskHelpers.ts";
 import { isTaskAutoMode } from "./data/taskAutoMode.ts";
 
@@ -351,6 +353,11 @@ interface PortalApi {
   canVerifyProofs: boolean;
   addExpense: (input: Omit<Expense, "id" | "employeeId" | "status">) => string | null;
   setExpenseStatus: (id: string, status: Expense["status"], note?: string) => string | null;
+  /** Whether the signed-in user decides the open approval step of this claim. */
+  canDecideExpense: (expense: Expense) => boolean;
+  /** Whether the signed-in user records payment on this approved claim (finance or admin). */
+  canPayExpense: (expense: Expense) => boolean;
+  markExpensePaid: (id: string, paidOn: string, reference: string) => string | null;
   acceptTask: (id: string) => string | null;
   moveTask: (id: string, status: TaskStatus) => void;
   /** Manager: set primary owner / reassign task. */
@@ -950,6 +957,20 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             ? patchById(prev.backdatedPermissions, permission.id, { status: "used" as const })
             : prev.backdatedPermissions,
         }));
+        if (activeHasApprover) {
+          // The direct manager in the reporting line decides; tell them once, after the request is saved.
+          const approverId = managementChain(active.id, TIMEZ_DEMOS)[0]?.id ?? managerChainIds(active.id)[0];
+          if (approverId) {
+            const leaveName = state.leavePolicies.find((p) => p.code === request.code)?.name ?? "Leave";
+            const dates = request.from === request.to ? formatLongDate(request.from) : `${formatLongDate(request.from)} – ${formatLongDate(request.to)}`;
+            pushPersonTaskAlert({
+              recipientId: approverId,
+              title: "Leave request",
+              body: `${active.fullName} applied for ${leaveName} · ${dates}.`,
+              href: "/leave",
+            });
+          }
+        }
         return null;
       },
       requestBackdatedPermission: (input) => {
@@ -1080,6 +1101,15 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           ...prev,
           leaveRequests: patchById(prev.leaveRequests, leaveId, { status, ...decision(status, note) }),
         }));
+        if ((status === "approved" || status === "rejected") && request.employeeId !== active.id) {
+          const dates = request.from === request.to ? formatLongDate(request.from) : `${formatLongDate(request.from)} – ${formatLongDate(request.to)}`;
+          pushPersonTaskAlert({
+            recipientId: request.employeeId,
+            title: status === "approved" ? "Leave approved" : "Leave rejected",
+            body: `${active.fullName} ${status} your leave · ${dates}.${note?.trim() ? ` Note: ${note.trim()}` : ""}`,
+            href: "/leave",
+          });
+        }
         return null;
       },
       applyEncashment: (code, days) => {
@@ -1312,7 +1342,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       addExpense: (input) => {
         const error = validateExpense(input, claimLimitsFor(active.countryCode).maxClaim, payRulesFor(active.countryCode).currency);
         if (error) return error;
-        if (input.amount > receiptThresholdFor(active.countryCode) && !/Receipt:/i.test(input.description)) {
+        if (input.amount > receiptThresholdFor(active.countryCode) && !input.receipt && !/Receipt:/i.test(input.description)) {
           return "Attach the receipt for this amount.";
         }
         if (!currentProjects.some((project) => project.id === input.projectId)) return "Choose one of your current projects.";
@@ -1326,23 +1356,146 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             item.amount === input.amount,
         );
         if (duplicate) return "You've already claimed this expense (same date, category and amount).";
-        const expense: Expense = {
+        const currency = payRulesFor(active.countryCode).currency;
+        const steps = resolveWorkflow("expense", active.id, input.amount).map(({ role, label, approverIds }) => ({
+          role,
+          label,
+          approverIds,
+        }));
+        const base: Expense = {
           id: uid("ex"),
           employeeId: active.id,
           ...input,
-          currency: payRulesFor(active.countryCode).currency,
+          currency,
           description: input.description.trim(),
           status: "submitted",
+          submittedOn: todayISO(),
+          steps,
+          currentStep: 0,
+          stepDecisions: [],
         };
-        setState((prev) => ({ ...prev, expenses: [withAutoApproval(expense, "approved"), ...prev.expenses] }));
+        // No step anyone can decide: the claim is approved as soon as it's filed.
+        const expense: Expense =
+          steps.length === 0
+            ? {
+                ...base,
+                status: "approved",
+                decidedById: active.id,
+                decidedByName: active.fullName,
+                decidedOn: todayISO(),
+                decisionNote: "Approved automatically — no approver for this claim",
+              }
+            : base;
+        setState((prev) => ({ ...prev, expenses: [expense, ...prev.expenses] }));
+        const amountText = money(input.amount, currency);
+        if (steps[0]) {
+          for (const recipientId of steps[0].approverIds) {
+            pushPersonTaskAlert({
+              recipientId,
+              title: "Expense claim to review",
+              body: `${active.fullName} · ${input.category} · ${amountText} · ${steps[0].label}`,
+              href: "/expenses",
+            });
+          }
+        }
         return null;
       },
       setExpenseStatus: (expenseId, status, note) => {
         const expense = state.expenses.find((item) => item.id === expenseId);
         if (!expense) return "Expense not found.";
-        const error = decisionError(expense.employeeId, expense.status, status);
-        if (error) return error;
-        setState((prev) => ({ ...prev, expenses: patchById(prev.expenses, expenseId, { status, ...decision(status, note) }) }));
+        const step = currentStepOf(expense);
+        // Older claims (no steps) and withdrawals keep the one-step rule.
+        if (status === "withdrawn" || !step || !expense.steps) {
+          const error = decisionError(expense.employeeId, expense.status, status);
+          if (error) return error;
+          setState((prev) => ({ ...prev, expenses: patchById(prev.expenses, expenseId, { status, ...decision(status, note) }) }));
+          if (status === "approved" || status === "rejected") {
+            pushPersonTaskAlert({
+              recipientId: expense.employeeId,
+              title: status === "approved" ? "Expense claim approved" : "Expense claim declined",
+              body: `${expense.category} · ${money(expense.amount, expense.currency)} · by ${active.fullName}`,
+              href: "/expenses",
+            });
+          }
+          return null;
+        }
+        if (status !== "approved" && status !== "rejected") return "That status change isn't allowed.";
+        if (expense.employeeId === active.id) return "You cannot decide your own request.";
+        if (expense.status !== "submitted") return "This request has already been decided.";
+        if (!isWaitingOn(expense, active.id, (id) => canDecideFor(id, "expenses"))) {
+          return `This claim is waiting for ${step.label.toLowerCase()}.`;
+        }
+        const stepIndex = expense.currentStep ?? 0;
+        const today = todayISO();
+        const entry = {
+          step: stepIndex,
+          label: step.label,
+          decision: status,
+          byId: active.id,
+          byName: active.fullName,
+          on: today,
+          note: note?.trim() || undefined,
+        } as const;
+        const next = status === "approved" ? expense.steps[stepIndex + 1] : undefined;
+        const patch: Partial<Expense> = {
+          stepDecisions: [...(expense.stepDecisions ?? []), entry],
+          ...(next ? { currentStep: stepIndex + 1 } : { status, ...decision(status, note) }),
+        };
+        setState((prev) => ({ ...prev, expenses: patchById(prev.expenses, expenseId, patch) }));
+        const amountText = money(expense.amount, expense.currency);
+        if (next) {
+          for (const recipientId of next.approverIds) {
+            pushPersonTaskAlert({
+              recipientId,
+              title: "Expense claim to review",
+              body: `${expense.category} · ${amountText} · ${next.label}`,
+              href: "/expenses",
+            });
+          }
+          pushPersonTaskAlert({
+            recipientId: expense.employeeId,
+            title: "Expense claim moved on",
+            body: `${step.label} done by ${active.fullName}. Now with ${next.label.toLowerCase()}.`,
+            href: "/expenses",
+          });
+        } else {
+          pushPersonTaskAlert({
+            recipientId: expense.employeeId,
+            title: status === "approved" ? "Expense claim approved" : "Expense claim declined",
+            body: `${expense.category} · ${amountText} · by ${active.fullName}${note?.trim() ? ` · “${note.trim()}”` : ""}`,
+            href: "/expenses",
+          });
+        }
+        return null;
+      },
+      canDecideExpense: (expense) => isWaitingOn(expense, active.id, (id) => canDecideFor(id, "expenses")),
+      canPayExpense: (expense) => expense.status === "approved" && canPayExpenses(active.role, active.id, expense.employeeId),
+      markExpensePaid: (expenseId, paidOn, reference) => {
+        const expense = state.expenses.find((item) => item.id === expenseId);
+        if (!expense) return "Expense not found.";
+        if (expense.status !== "approved") return "Only approved claims can be marked paid.";
+        if (!canPayExpenses(active.role, active.id, expense.employeeId)) return "Only finance or admin can record payments.";
+        if (!paidOn) return "Enter the payment date.";
+        if (paidOn > todayISO()) return "Payment date can't be in the future.";
+        if (expense.decidedOn && paidOn < expense.decidedOn) return "Payment date can't be before the approval.";
+        const ref = reference.trim();
+        if (!ref) return "Enter the payment reference.";
+        setState((prev) => ({
+          ...prev,
+          expenses: patchById(prev.expenses, expenseId, {
+            status: "paid",
+            paidOn,
+            paymentRef: ref,
+            paidById: active.id,
+            paidByName: active.fullName,
+          }),
+        }));
+        pushPersonTaskAlert({
+          recipientId: expense.employeeId,
+          title: "Expense claim paid",
+          body: `${expense.category} · ${money(expense.amount, expense.currency)} · ref ${ref}`,
+          href: "/expenses",
+        });
         return null;
       },
       acceptTask: (taskId) => {

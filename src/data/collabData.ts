@@ -291,9 +291,76 @@ export type HrRequestCategory =
   | "Payroll provider"
   | "Benefits"
   | "Documents"
+  | "IT access"
   | "Leave"
   | "Profile correction"
   | "Other";
+
+export const HR_REQUEST_CATEGORIES: HrRequestCategory[] = [
+  "Payroll provider",
+  "Benefits",
+  "Documents",
+  "IT access",
+  "Leave",
+  "Profile correction",
+  "Other",
+];
+
+export type HrRequestPriority = "Low" | "Normal" | "High" | "Urgent";
+export const HR_REQUEST_PRIORITIES: HrRequestPriority[] = ["Low", "Normal", "High", "Urgent"];
+
+/** People who work the HR service desk (assignable owners). */
+export const HR_DESK_OWNERS: { id: string; name: string }[] = [
+  { id: "demo-hr-admin", name: "Farhan Ali" },
+  { id: "demo-admin", name: "Alex Morgan" },
+];
+
+/**
+ * Service levels per category: who picks the request up first and how many working days
+ * (Mon–Fri) HR has to resolve it. Edit this table to change routing or targets.
+ */
+export const HR_REQUEST_SLA: Record<HrRequestCategory, { ownerId: string; workingDays: number }> = {
+  "Payroll provider": { ownerId: "demo-hr-admin", workingDays: 2 },
+  Benefits: { ownerId: "demo-hr-admin", workingDays: 3 },
+  Documents: { ownerId: "demo-hr-admin", workingDays: 3 },
+  "IT access": { ownerId: "demo-admin", workingDays: 1 },
+  Leave: { ownerId: "demo-hr-admin", workingDays: 2 },
+  "Profile correction": { ownerId: "demo-hr-admin", workingDays: 2 },
+  Other: { ownerId: "demo-hr-admin", workingDays: 3 },
+};
+
+export function hrDeskOwnerName(id: string | undefined): string {
+  if (!id) return "Unassigned";
+  return HR_DESK_OWNERS.find((o) => o.id === id)?.name ?? findDemoById(id)?.fullName ?? id;
+}
+
+/** Adds working days (skipping Saturday and Sunday) to a timestamp, keeping the time of day. */
+export function addWorkingDays(fromIso: string, days: number): string {
+  const d = new Date(fromIso);
+  if (Number.isNaN(d.getTime())) return fromIso;
+  let left = days;
+  while (left > 0) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) left -= 1;
+  }
+  return d.toISOString();
+}
+
+export function hrRequestDueAt(category: HrRequestCategory, submittedAt: string): string {
+  return addWorkingDays(submittedAt, (HR_REQUEST_SLA[category] ?? HR_REQUEST_SLA.Other).workingDays);
+}
+
+/** Statuses where the SLA clock runs. "Waiting on you" pauses it until the employee replies. */
+export function hrRequestClockRunning(r: Pick<HrRequest, "status">): boolean {
+  return r.status === "Open" || r.status === "In progress";
+}
+
+export function hrRequestOverdue(r: HrRequest, now = Date.now()): boolean {
+  if (!hrRequestClockRunning(r) || !r.dueAt) return false;
+  const due = Date.parse(r.dueAt);
+  return !Number.isNaN(due) && due < now;
+}
 
 export interface HrRequestComment {
   at: string;
@@ -313,6 +380,15 @@ export interface HrRequest {
   createdAt: string;
   updatedAt: string;
   comments: HrRequestComment[];
+  /** Full timestamp of submission (createdAt is the date only). */
+  submittedAt?: string;
+  /** HR owner working the request; "" when unassigned. */
+  assigneeId?: string;
+  priority?: HrRequestPriority;
+  /** Resolution target from the category SLA. */
+  dueAt?: string;
+  /** When HR first replied or changed the status. */
+  firstResponseAt?: string;
 }
 
 export interface FaqItem {

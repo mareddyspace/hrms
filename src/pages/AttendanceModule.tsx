@@ -30,6 +30,7 @@ import {
   decideCorrection,
   getAttendanceState,
   getCurrentSession,
+  isHrReviewer,
   listCorrectionsForApprover,
   listCorrectionsForEmployee,
   missingCheckOutSessions,
@@ -146,8 +147,8 @@ export function AttendancePage() {
     [attState.corrections, employee.id],
   );
   const teamCorrections = useMemo(
-    () => listCorrectionsForApprover(canDecideFor),
-    [attState.corrections, canDecideFor],
+    () => listCorrectionsForApprover(canDecideFor, { id: employee.id, role: demoProfile.role }),
+    [attState.corrections, canDecideFor, employee.id, demoProfile.role],
   );
 
   const range = useMemo(() => {
@@ -833,8 +834,8 @@ export function AttendancePage() {
                 )}
               </Card>
 
-              {(isManager || teamCorrections.length > 0) && (
-                <Card title="Team correction queue" className="att-corr-span">
+              {(isManager || isHrReviewer(demoProfile.role) || teamCorrections.length > 0) && (
+                <Card title={isHrReviewer(demoProfile.role) ? "Correction queue" : "Team correction queue"} className="att-corr-span">
                   {teamCorrections.length === 0 ? (
                     <EmptyState title="No team requests" />
                   ) : (

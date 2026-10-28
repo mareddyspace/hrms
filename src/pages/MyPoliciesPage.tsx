@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Card, Page } from "../components/ui.tsx";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import { getPerson, subscribePeople } from "../data/peopleLocal.ts";
@@ -113,7 +114,13 @@ function MyPoliciesView({
   acks: ReturnType<typeof getPolicyAcks>;
 }) {
   const [query, setQuery] = useState("");
-  const [openId, setOpenId] = useState("");
+  const [params] = useSearchParams();
+  // Copilot source links open a policy directly: /policies?policy=<id>
+  const [openId, setOpenId] = useState(params.get("policy") ?? "");
+  useEffect(() => {
+    const linked = params.get("policy");
+    if (linked) setOpenId(linked);
+  }, [params]);
   const q = query.trim().toLowerCase();
   const matches = (p: Policy) =>
     !q ||

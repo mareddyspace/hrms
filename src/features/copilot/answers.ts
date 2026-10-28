@@ -7,8 +7,11 @@ import { COMPANY_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from "../../brand.ts";
 import type { CopilotAnswer, CopilotContext } from "../../data/platformData.ts";
 import type { NavAccessId } from "../../demoAccounts.ts";
 import { hasWord, monthIn, normalizeQuestion } from "./normalize.ts";
+import { leaveSources, policyLibraryAnswer } from "./policyAnswers.ts";
 
 export type RawCopilotAnswer = CopilotAnswer & { requires?: NavAccessId };
+
+const POLICY_WORDS = ["policy", "policies", "handbook", "acknowledge", "acknowledgement", "procedure", "procedures", "code of conduct", "contractor terms", "notice period", "probation"];
 
 export const NO_DECISIONS = "I can't approve, reject or change anything — decisions are made in Approvals.";
 
@@ -97,6 +100,7 @@ function personSummaryAnswer(target: string, ctx: CopilotContext, quietIfMissing
   if (found.status === "denied") {
     return {
       kind: "text",
+      denied: true,
       summary: "I can only summarise you or people below you in the reporting line. HR can summarise anyone.",
       links: [{ label: "Directory", to: "/directory" }],
     };
@@ -162,13 +166,14 @@ function leavePolicyAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer {
         ? `${carry.map((p) => `${p.name}: up to ${days(p.carryForwardMax!)} carry into next year`).join("; ")}. Other leave types reset on 1 January.`
         : "No leave type carries forward; balances reset on 1 January.",
       links,
+      sources: leaveSources(ctx, hasWord(q, ["encash", "encashment"]) ? ["Your yearly entitlement", "Encashment"] : ["Your yearly entitlement"]),
     };
   }
   const describe = (p: (typeof policies)[number]) =>
     `${p.name}: ${days(p.quota)} a year${p.accrual === "monthly" ? ", earned monthly" : ""}${p.carryForwardMax ? `, up to ${p.carryForwardMax} carry forward` : ""}`;
   if (code) {
     const p = policies.find((x) => x.code === code);
-    if (!p) return { kind: "text", summary: "That leave type isn't in your leave policy.", links };
+    if (!p) return { kind: "text", summary: "That leave type isn't in your leave policy.", links, sources: leaveSources(ctx, ["Your yearly entitlement"]) };
     const extra =
       code === "sick"
         ? " It can't be booked in advance, and you can apply up to 7 days after being ill; older dates need your manager's permission first."
@@ -180,13 +185,19 @@ function leavePolicyAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer {
                 return body ? ` ${body}` : "";
               })()
             : "";
-    return { kind: "text", summary: `${describe(p)}.${extra}`, links };
+    return {
+      kind: "text",
+      summary: `${describe(p)}.${extra}`,
+      links,
+      sources: leaveSources(ctx, code === "sick" ? ["Your yearly entitlement", "Applying"] : code === "comp_off" || code === "wfh" || code === "emergency_wfh" ? ["Everyone also gets"] : ["Your yearly entitlement"]),
+    };
   }
   return {
     kind: "table",
     summary: `Leave policy for ${ctx.countryName}. Past dates need your manager's permission first (sick leave: within 7 days is fine).`,
     table: { headers: ["Type", "Rule"], rows: policies.map((p) => [p.name, describe(p).split(": ")[1]]) },
     links,
+    sources: leaveSources(ctx, ["Your yearly entitlement", "Applying"]),
   };
 }
 
@@ -624,8 +635,8 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
   if (otherPay && !/\b(my|your|our)s? (salary|pay)/.test(q)) {
     const comp = ctx.viewer.role === "hr" || ctx.viewer.role === "hr_admin" || ctx.viewer.role === "super_admin";
     return comp
-      ? { kind: "text", summary: "I don't show individual pay in chat. Open Compensation to see it.", links: [{ label: "Compensation", to: "/compensation" }] }
-      : { kind: "text", summary: "I can't share anyone else's pay — only the person and HR can see it.", links: [{ label: "My payslips", to: "/payslips" }] };
+      ? { kind: "text", denied: true, summary: "I don't show individual pay in chat. Open Compensation to see it.", links: [{ label: "Compensation", to: "/compensation" }] }
+      : { kind: "text", denied: true, summary: "I can't share anyone else's pay — only the person and HR can see it.", links: [{ label: "My payslips", to: "/payslips" }] };
   }
 
   // "<Name>'s leave / manager / goals …": Copilot only answers these about the asker.
@@ -661,6 +672,12 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
   }
   if (hasWord(q, ["product name", "app name", "portal name", "what is this app", "what is this portal"])) {
     return { kind: "text", summary: `${PRODUCT_NAME} is the ${COMPANY_NAME} employee portal.`, links: [{ label: "Home", to: "/" }] };
+  }
+
+  // A policy that doesn't apply to the asker (another country, role or contract type) is never quoted.
+  if (hasWord(q, POLICY_WORDS)) {
+    const denied = policyLibraryAnswer(q, ctx, true);
+    if (denied) return denied;
   }
 
   const isLeave = hasWord(q, LEAVE);
@@ -782,8 +799,8 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
 
   // Holiday policy text, then holidays.
   if (hasWord(q, ["holiday", "holidays", "festival", "festivals", "public holiday", "bank holiday", "closure", "long weekend"])) {
-    if (hasWord(q, ["policy"])) {
-      const p = policyTextAnswer("holiday", ctx);
+    if (hasWord(q, ["policy", "rule", "rules"])) {
+      const p = policyLibraryAnswer(`holiday ${q}`, ctx) ?? policyTextAnswer("holiday", ctx);
       if (p) return p;
     }
     return holidayAnswer(q, ctx);
@@ -897,10 +914,19 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
     return workforceAnswer(q, ctx);
   }
 
-  if (hasWord(q, ["expense", "expenses", "reimbursement", "reimbursements", "claim", "claims"])) return expensesAnswer(ctx);
+  if (hasWord(q, ["expense", "expenses", "reimbursement", "reimbursements", "claim", "claims"])) {
+    if (hasWord(q, ["policy", "policies", "rule", "rules", "limit", "limits", "receipt", "receipts", "advance"])) {
+      const p = policyLibraryAnswer(q, ctx);
+      if (p) return p;
+    }
+    return expensesAnswer(ctx);
+  }
 
-  if (hasWord(q, ["policy", "policies", "handbook", "acknowledge", "acknowledgement"])) {
-    return policyTextAnswer(q, ctx) ?? { kind: "text", summary: "Company policies and your acknowledgements are under Policies.", links: [{ label: "Policies", to: "/policies" }] };
+  if (hasWord(q, POLICY_WORDS)) {
+    return (
+      policyLibraryAnswer(q, ctx) ??
+      policyTextAnswer(q, ctx) ?? { kind: "text", summary: "Company policies and your acknowledgements are under Policies.", links: [{ label: "Policies", to: "/policies" }] }
+    );
   }
 
   if (hasWord(q, ["integration", "integrations", "sso", "audit", "connector", "connectors", "admin", "administration"])) {

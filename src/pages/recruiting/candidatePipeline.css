@@ -217,3 +217,93 @@
 .cp-actions select {
   min-width: 0;
 }
+
+/* Next step box in the candidate view. */
+.cp-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+}
+.cp-next-label {
+  font-size: var(--text-xs, 12px);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.cp-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.cp-skill {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: var(--text-xs, 12px);
+}
+
+/* One card per candidate, each with its own pipeline. */
+.cp-filter {
+  display: flex;
+  gap: 6px;
+}
+.cp-cards {
+  display: grid;
+  gap: 12px;
+}
+.cp-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 12px 14px;
+  min-width: 0;
+}
+.cp-card.is-overdue {
+  border-color: var(--danger);
+}
+.cp-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.cp-card-name {
+  font-weight: 700;
+  font-size: 1rem;
+}
+.cp-card-meta {
+  font-size: var(--text-xs, 12px);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.cp-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.cp-fact dd {
+  overflow-wrap: anywhere;
+}
+
+.cp-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.cp-card-actions select {
+  width: auto;
+}

@@ -23,34 +23,46 @@ import {
   hasModuleAccess,
 } from "../data/peoplePermissions.ts";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
-import {
-  BENEFIT_HISTORY,
-  BENEFIT_PLANS,
-  COMP_CYCLES,
-  DEPENDENTS,
-  GRADE_BANDS,
-  LEGAL_DISCLAIMER,
-} from "../data/rewardData.ts";
+import { BENEFIT_PLANS, LEGAL_DISCLAIMER, LIFE_EVENT_TYPES, type Dependent, type GradeBand } from "../data/rewardData.ts";
 import {
   UPLOAD_EXTENSIONS,
+  activeLifeEvent,
   addLibraryDoc,
   canAdminBenefits,
   canDecideBenefitFor,
   canDecideCompReview,
+  canProposeFor,
+  changeWindowFor,
+  closeLifeEvent,
+  cycleBudgetUse,
+  cycleTakesProposals,
   decideChangeRequest,
   decideCompReview,
   decideEnrollment,
+  eligibilityRules,
   getRewardState,
   isAboveInLine,
   isMandatoryPlan,
+  isPayHr,
+  openEnrollmentIsOpen,
+  openEnrollmentLabel,
   pendingChangeFor,
+  planEligibility,
+  raiseLifeEvent,
+  removeDependent,
   requestEnrollment,
   requestEnrollmentChange,
+  setBonusStatus,
+  setCompCycleStatus,
+  setOpenEnrollmentDates,
+  setOpenEnrollmentOverride,
   submitCompReview,
   subscribeReward,
   validateUpload,
+  verifyDependent,
 } from "../data/rewardLocal.ts";
-import type { DocumentGroup } from "../model.ts";
+import { BandDialog, BonusDialog, CoverDialog, DependentDialog, NewCycleDialog, ProposeDialog } from "./RewardDialogs.tsx";
+import { formatShortDate, todayISO, type DocumentGroup } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { LetterHistoryPanel, LetterRequestsPanel, LetterViewerDialog, MyLettersPanel, type OpenLetter } from "./LettersPanel.tsx";
 
@@ -90,13 +102,26 @@ export function CompensationPage() {
     { id: "bonuses", label: compTeam ? "Bonus & incentives" : "My bonuses" },
   ];
   const [tab, setTab] = useState(tabs[0].id);
-  const [cycleId, setCycleId] = useState(COMP_CYCLES[0]?.id ?? "");
+  const cycles = reward.cycles;
+  const [cycleId, setCycleId] = useState(cycles.find((c) => c.status !== "Closed")?.id ?? cycles[0]?.id ?? "");
   const [country, setCountry] = useState("");
   const [reviewMsg, setReviewMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [dialog, setDialog] = useState<"cycle" | "propose" | "bonus" | null>(null);
+  const [editBand, setEditBand] = useState<GradeBand | null>(null);
+  const payHr = isPayHr(me);
 
   const moduleOk = hasModuleAccess(me, "compensation") || access.module;
-  const bands = GRADE_BANDS.filter((b) => !country || b.country === country);
-  const cycle = COMP_CYCLES.find((c) => c.id === cycleId) ?? COMP_CYCLES[0];
+  const bands = reward.bands.filter((b) => !country || b.country === country);
+  const cycle = cycles.find((c) => c.id === cycleId) ?? cycles[0];
+  const budget = cycle ? cycleBudgetUse(reward, cycle.id) : null;
+  const canPropose = cycleTakesProposals(cycle) && DEMO_ACCOUNTS.some((a) => canProposeFor(me, a.id));
+  const grades = [...new Set(reward.bands.map((b) => b.grade))].sort();
+  const report = (error: string | null, ok: string) => setReviewMsg(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
+  const done = (text: string) => {
+    setDialog(null);
+    setEditBand(null);
+    setReviewMsg({ tone: "ok", text });
+  };
 
   // Pay amounts: your own, or everyone's for HR (compensation & benefits) / Finance.
   const seesPay = (employeeId: string) => employeeId === me.id || canViewSalaryAmount(me, employeeId, { selfId: me.id }) !== "hidden";
@@ -142,6 +167,7 @@ export function CompensationPage() {
       </MetricGrid>
 
       <Tabs tabs={tabs} value={tabs.some((t) => t.id === tab) ? tab : tabs[0].id} onChange={setTab} />
+      {tab !== "cycles" && <Banner message={reviewMsg} />}
 
       {tab === "structures" && showStructures && (
         <Card title="Grades and salary ranges">
@@ -150,19 +176,26 @@ export function CompensationPage() {
               Country
               <select value={country} onChange={(e) => setCountry(e.target.value)}>
                 <option value="">All</option>
-                {[...new Set(GRADE_BANDS.map((b) => b.country))].map((c) => (
+                {[...new Set(reward.bands.map((b) => b.country))].map((c) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
             </label>
           </FilterBar>
           <DataTable
-            headers={["Grade", "Family", "Country", "Currency", "Min", "Mid", "Max"]}
-            rows={bands.map((b) =>
-              access.ranges === "full"
+            headers={["Grade", "Family", "Country", "Currency", "Min", "Mid", "Max", ...(payHr ? [""] : [])]}
+            rows={bands.map((b) => [
+              ...(access.ranges === "full"
                 ? [b.grade, b.family, b.country, b.currency, b.min, b.mid, b.max]
-                : [b.grade, b.family, b.country, b.currency, "••••", "••••", "••••"],
-            )}
+                : [b.grade, b.family, b.country, b.currency, "••••", "••••", "••••"]),
+              ...(payHr
+                ? [
+                    <button key={b.id} type="button" className="quiet-link" onClick={() => setEditBand(b)}>
+                      Edit
+                    </button>,
+                  ]
+                : []),
+            ])}
           />
         </Card>
       )}
@@ -182,34 +215,75 @@ export function CompensationPage() {
           <FilterBar>
             <label className="filter-label">
               Cycle
-              <select value={cycleId} onChange={(e) => setCycleId(e.target.value)}>
-                {COMP_CYCLES.map((c) => (
+              <select value={cycle?.id ?? ""} onChange={(e) => setCycleId(e.target.value)}>
+                {cycles.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name} · {c.status}
                   </option>
                 ))}
               </select>
             </label>
+            {payHr && (
+              <button type="button" className="btn" onClick={() => setDialog("cycle")}>
+                New cycle
+              </button>
+            )}
           </FilterBar>
+          <Banner message={reviewMsg} />
           {cycle && (
-            <Card title={cycle.name}>
+            <Card
+              title={cycle.name}
+              action={
+                payHr ? (
+                  cycle.status === "Planning" || cycle.status === "Closed" ? (
+                    <button type="button" className="btn-ghost" onClick={() => report(setCompCycleStatus(me, cycle.id, "Open"), `${cycle.name} is open.`)}>
+                      {cycle.status === "Closed" ? "Reopen" : "Open now"}
+                    </button>
+                  ) : (
+                    <button type="button" className="btn-ghost" onClick={() => report(setCompCycleStatus(me, cycle.id, "Closed"), `${cycle.name} is closed.`)}>
+                      Close cycle
+                    </button>
+                  )
+                ) : undefined
+              }
+            >
               <dl className="info-grid">
                 <div className="info-fact"><dt>Status</dt><dd><StatusBadge status={cycle.status} literal /></dd></div>
                 <div className="info-fact"><dt>Window</dt><dd>{cycle.window}</dd></div>
                 <div className="info-fact"><dt>Countries</dt><dd>{cycle.countries.join(", ")}</dd></div>
+                {cycle.effectiveDate && <div className="info-fact"><dt>New pay effective</dt><dd>{formatShortDate(cycle.effectiveDate)}</dd></div>}
+                {cycle.budgetPct !== undefined && (
+                  <div className="info-fact">
+                    <dt>Budget</dt>
+                    <dd>
+                      {cycle.budgetPct}%{compTeam && budget ? ` · ${budget.usedPct}% proposed` : ""}
+                    </dd>
+                  </div>
+                )}
+                {cycle.createdBy && <div className="info-fact"><dt>Created by</dt><dd>{cycle.createdBy}</dd></div>}
               </dl>
             </Card>
           )}
-          <Card title="Increase proposals">
+          <Card
+            title="Increase proposals"
+            action={
+              canPropose ? (
+                <button type="button" className="btn" onClick={() => setDialog("propose")}>
+                  Propose
+                </button>
+              ) : undefined
+            }
+          >
             <p className="note">Approval: someone above the employee (not the proposer), then HR. HR's own pay is finalised by their line manager.</p>
-            {cycle?.status === "Closed" && <Banner message={{ tone: "info", text: "This cycle is closed." }} />}
-            <Banner message={reviewMsg} />
+            {cycle && !cycleTakesProposals(cycle) && (
+              <Banner
+                message={{ tone: "info", text: cycle.status === "Closed" ? "This cycle is closed." : `This cycle is in ${cycle.status.toLowerCase()} and not taking proposals.` }}
+              />
+            )}
             <DataTable
               headers={["Employee", "Proposed by", "Grade", "Current", "Proposed", "Incr %", "Bonus", "Status", "Line approval", "Final", "Action"]}
               rows={visibleReviews.map((r) => {
                 const vis = amountAccess(r.employeeId);
-                const report = (error: string | null, ok: string) =>
-                  setReviewMsg(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
                 let action: ReactNode = <span className="muted">—</span>;
                 if (canDecideCompReview(me, r)) {
                   action = (
@@ -222,7 +296,7 @@ export function CompensationPage() {
                       </button>
                     </span>
                   );
-                } else if (r.status === "Draft" && r.managerId === me.id && cycle?.status !== "Closed") {
+                } else if (r.status === "Draft" && r.managerId === me.id && cycleTakesProposals(cycle)) {
                   action = (
                     <button type="button" className="btn" onClick={() => report(submitCompReview(me, r.id), `${r.employeeName}: submitted.`)}>
                       Submit
@@ -250,20 +324,60 @@ export function CompensationPage() {
       )}
 
       {tab === "bonuses" && (
-        <Card title={compTeam ? "Bonus and incentive records" : "My bonuses"}>
+        <Card
+          title={compTeam ? "Bonus and incentive records" : "My bonuses"}
+          action={
+            payHr ? (
+              <button type="button" className="btn" onClick={() => setDialog("bonus")}>
+                Record bonus
+              </button>
+            ) : undefined
+          }
+        >
           <DataTable
-            headers={[...(compTeam ? ["Employee"] : []), "Type", "Period", "Amount", "Status"]}
+            headers={[...(compTeam ? ["Employee"] : []), "Type", "Period", "Amount", "Status", ...(payHr ? [""] : [])]}
             rows={visibleBonuses.map((b) => [
               ...(compTeam ? [b.employeeName] : []),
               b.type,
               b.period,
               b.amount,
               <StatusBadge key={b.id} status={b.status} literal />,
+              ...(payHr
+                ? [
+                    b.status === "Accrued" && b.employeeId !== me.id ? (
+                      <span key={`${b.id}-a`} className="reward-actions">
+                        <button type="button" className="btn-ghost" onClick={() => report(setBonusStatus(me, b.id, "Paid"), `${b.employeeName}: bonus marked paid.`)}>
+                          Mark paid
+                        </button>
+                        <button type="button" className="btn-ghost" onClick={() => report(setBonusStatus(me, b.id, "Forfeited"), `${b.employeeName}: bonus forfeited.`)}>
+                          Forfeit
+                        </button>
+                      </span>
+                    ) : (
+                      "—"
+                    ),
+                  ]
+                : []),
             ])}
             empty={<EmptyState title="No bonuses" description="Nothing recorded yet." />}
           />
         </Card>
       )}
+
+      {dialog === "cycle" && (
+        <NewCycleDialog
+          actor={me}
+          countries={[...new Set(reward.bands.map((b) => b.country))]}
+          onClose={() => setDialog(null)}
+          onDone={(text) => {
+            done(text);
+            setCycleId(getRewardState().cycles[0]?.id ?? "");
+          }}
+        />
+      )}
+      {dialog === "propose" && cycle && <ProposeDialog actor={me} cycle={cycle} grades={grades} onClose={() => setDialog(null)} onDone={done} />}
+      {dialog === "bonus" && <BonusDialog actor={me} onClose={() => setDialog(null)} onDone={done} />}
+      {editBand && <BandDialog actor={me} band={editBand} onClose={() => setEditBand(null)} onDone={done} />}
     </Page>
   );
 }
@@ -301,6 +415,12 @@ export function BenefitsPage() {
   const [tab, setTab] = useState("plans");
   const [planId, setPlanId] = useState("");
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [depDialog, setDepDialog] = useState<Dependent | "new" | null>(null);
+  const [cover, setCover] = useState<{ planId: string; planName: string } | null>(null);
+  const [eventType, setEventType] = useState(LIFE_EVENT_TYPES[0]);
+  const [eventDate, setEventDate] = useState(todayISO());
+  const [winStart, setWinStart] = useState(reward.openEnrollment.start);
+  const [winEnd, setWinEnd] = useState(reward.openEnrollment.end);
 
   const isBenefitsAdmin = canAdminBenefits(demoProfile);
   const canSeeOthers = isBenefitsAdmin;
@@ -316,6 +436,7 @@ export function BenefitsPage() {
     "";
   const inScope = (employeeId: string) =>
     canSeeOthers ? !country || countryOf(employeeId) === country : employeeId === employee.id;
+  const nameOf = (employeeId: string) => demoAccounts.find((a) => a.id === employeeId)?.fullName ?? employeeId;
 
   const plans = BENEFIT_PLANS.filter((p) => (canSeeOthers ? !country || p.country === country : p.country === ownCountry));
   const selectedPlan = plans.find((p) => p.id === planId) ?? plans[0];
@@ -327,31 +448,87 @@ export function BenefitsPage() {
       ? !country || e.country === country
       : e.employeeId === employee.id || (e.status === "Pending" && decidesFor(e.employeeId)),
   );
-  const myPlanIds = new Set(reward.enrollments.filter((e) => e.employeeId === employee.id).map((e) => e.planId));
-  const availablePlans = plans.filter((p) => p.country === ownCountry && !myPlanIds.has(p.id) && !p.mandatory);
+  const myPlanIds = new Set(reward.enrollments.filter((e) => e.employeeId === employee.id && e.status !== "Waived").map((e) => e.planId));
+  const availablePlans = BENEFIT_PLANS.filter((p) => p.country === ownCountry && !myPlanIds.has(p.id) && !p.mandatory);
   const changeRequests = reward.changeRequests.filter((c) =>
     canSeeOthers ? inScope(c.employeeId) : c.employeeId === employee.id || (c.status === "Pending" && decidesFor(c.employeeId)),
   );
 
-  const dependents = DEPENDENTS.filter((d) => inScope(d.employeeId));
-  const history = BENEFIT_HISTORY.filter((h) => inScope(h.employeeId));
+  const myDependents = reward.dependents.filter((d) => d.employeeId === employee.id);
+  const dependents = reward.dependents.filter(
+    (d) => inScope(d.employeeId) || (d.verification === "Pending" && decidesFor(d.employeeId)),
+  );
+  const history = reward.benefitHistory.filter((h) => inScope(h.employeeId));
+  const lifeEvents = reward.lifeEvents.filter((e) =>
+    canSeeOthers ? inScope(e.employeeId) : e.employeeId === employee.id || decidesFor(e.employeeId),
+  );
+  const changeWin = changeWindowFor(reward, employee.id);
+  const myEvent = activeLifeEvent(reward, employee.id);
+  const oe = reward.openEnrollment;
+  const oeOpen = openEnrollmentIsOpen(oe);
+  const coveredBy = (planName: string, employeeId: string) =>
+    reward.dependents.filter((d) => d.employeeId === employeeId && d.coveredPlans.includes(planName)).map((d) => d.name);
 
   function run(error: string | null, okText: string) {
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: okText });
     return error;
   }
 
+  /** Elections and changes only inside a window; outside it, say why instead of acting. */
+  function inWindow(action: () => void) {
+    if (!changeWin.open) {
+      setMsg({ tone: "err", text: changeWin.text });
+      return;
+    }
+    action();
+  }
+
+  function join(planIdToJoin: string) {
+    const plan = BENEFIT_PLANS.find((p) => p.id === planIdToJoin);
+    if (!plan) return;
+    inWindow(() => {
+      const err = run(requestEnrollment(demoProfile, plan.id), "Enrollment request sent to HR.");
+      if (!err && plan.coversDependents && myDependents.length) setCover({ planId: plan.id, planName: plan.name });
+    });
+  }
+
+  function eligibilityCell(planIdToCheck: string): ReactNode {
+    const plan = BENEFIT_PLANS.find((p) => p.id === planIdToCheck);
+    if (!plan) return "—";
+    const check = planEligibility(plan, employee.id);
+    return check.eligible ? (
+      <StatusBadge key={`${plan.id}-el`} status="Eligible" tone="ok" literal />
+    ) : (
+      <span key={`${plan.id}-el`} className="muted">Not eligible – {check.reason}</span>
+    );
+  }
+
   function enrollmentAction(e: (typeof enrollments)[number]): ReactNode {
     const mandatory = isMandatoryPlan(e.planId);
     if (e.employeeId === employee.id) {
-      if (e.status === "Pending") return <span className="muted">Awaiting HR</span>;
+      const plan = BENEFIT_PLANS.find((p) => p.id === e.planId);
+      const coverBtn =
+        plan?.coversDependents && (e.status === "Enrolled" || e.status === "Pending") ? (
+          <button type="button" className="quiet-link" onClick={() => inWindow(() => setCover({ planId: e.planId, planName: e.planName }))}>
+            Dependents
+          </button>
+        ) : null;
+      if (e.status === "Pending") return <span className="reward-actions"><span className="muted">Awaiting HR</span>{coverBtn}</span>;
       if (e.status === "Enrolled") {
-        if (mandatory) return <span className="muted">Mandatory</span>;
-        if (pendingChangeFor(reward, e.id)) return <span className="muted">Change requested</span>;
-        return <ChangeRequestButton onSend={(note) => run(requestEnrollmentChange(demoProfile, e.id, note), "Change request sent to HR.")} />;
+        let main: ReactNode;
+        if (mandatory) main = <span className="muted">Mandatory</span>;
+        else if (pendingChangeFor(reward, e.id)) main = <span className="muted">Change requested</span>;
+        else if (!changeWin.open) {
+          main = (
+            <button type="button" className="quiet-link" onClick={() => setMsg({ tone: "err", text: changeWin.text })}>
+              Request change
+            </button>
+          );
+        } else main = <ChangeRequestButton onSend={(note) => run(requestEnrollmentChange(demoProfile, e.id, note), "Change request sent to HR.")} />;
+        return <span className="reward-actions">{main}{coverBtn}</span>;
       }
       return (
-        <button type="button" className="quiet-link" onClick={() => run(requestEnrollment(demoProfile, e.planId), "Enrollment request sent to HR.")}>
+        <button type="button" className="quiet-link" onClick={() => join(e.planId)}>
           Request enrollment
         </button>
       );
@@ -371,6 +548,36 @@ export function BenefitsPage() {
       );
     }
     return "—";
+  }
+
+  function dependentAction(d: Dependent): ReactNode {
+    if (d.employeeId === employee.id) {
+      return (
+        <span className="reward-actions">
+          <button type="button" className="quiet-link" onClick={() => setDepDialog(d)}>
+            Edit
+          </button>
+          <button type="button" className="quiet-link" onClick={() => run(removeDependent(demoProfile, d.id), `${d.name} removed.`)}>
+            Remove
+          </button>
+        </span>
+      );
+    }
+    if (d.verification !== "Verified" && canDecideBenefitFor(demoProfile, d.employeeId)) {
+      return (
+        <span className="reward-actions">
+          <button type="button" className="btn" onClick={() => run(verifyDependent(demoProfile, d.id, "Verified"), `${d.name} verified.`)}>
+            Verify
+          </button>
+          {d.verification !== "Rejected" && (
+            <button type="button" className="btn-ghost" onClick={() => run(verifyDependent(demoProfile, d.id, "Rejected"), `${d.name} rejected.`)}>
+              Reject
+            </button>
+          )}
+        </span>
+      );
+    }
+    return d.verifiedBy ? `${d.verifiedBy} · ${d.verifiedOn ?? ""}` : "—";
   }
 
   if (!hasModuleAccess(demoProfile, "benefits")) {
@@ -418,7 +625,7 @@ export function BenefitsPage() {
         <div className="mgr-home-grid">
           <Card title={`Benefit plans · ${country || "All countries"}`}>
             <DataTable
-              headers={["Plan", "Category", "Provider", "Employee cost", ""]}
+              headers={["Plan", "Category", "Provider", "Employee cost", "Your eligibility", ""]}
               rows={plans.map((p) => [
                 <>
                   {p.name}
@@ -427,6 +634,7 @@ export function BenefitsPage() {
                 p.category,
                 p.provider,
                 p.employeeCost,
+                eligibilityCell(p.id),
                 <button key={p.id} type="button" className="quiet-link" onClick={() => setPlanId(p.id)}>
                   Details
                 </button>,
@@ -443,6 +651,14 @@ export function BenefitsPage() {
               ) : selectedPlan.autoEnrolled ? (
                 <p className="note">You are enrolled automatically. Ask HR to opt out.</p>
               ) : null}
+              {selectedPlan.coversDependents && <p className="note">You can add verified dependents to this plan.</p>}
+              <h3 style={{ fontSize: 14, marginTop: 12 }}>Who can join</h3>
+              <ul className="todo">
+                {eligibilityRules(selectedPlan).map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+              <p className="note">You: {eligibilityCell(selectedPlan.id)}</p>
               <h3 style={{ fontSize: 14, marginTop: 12 }}>Plan documents</h3>
               <ul className="todo">
                 {selectedPlan.documents.map((d) => (
@@ -465,15 +681,127 @@ export function BenefitsPage() {
 
       {tab === "enrollment" && (
         <div className="stack">
+          <Card
+            title="Enrollment window"
+            action={
+              isBenefitsAdmin ? (
+                <span className="reward-actions">
+                  {oeOpen ? (
+                    <button type="button" className="btn-ghost" onClick={() => run(setOpenEnrollmentOverride(demoProfile, "closed"), "Open enrollment closed.")}>
+                      Close now
+                    </button>
+                  ) : (
+                    <button type="button" className="btn-ghost" onClick={() => run(setOpenEnrollmentOverride(demoProfile, "open"), "Open enrollment opened.")}>
+                      Open now
+                    </button>
+                  )}
+                  {oe.override && (
+                    <button type="button" className="btn-ghost" onClick={() => run(setOpenEnrollmentOverride(demoProfile, null), "Window follows its dates again.")}>
+                      Use dates
+                    </button>
+                  )}
+                </span>
+              ) : undefined
+            }
+          >
+            <dl className="info-grid">
+              <div className="info-fact"><dt>Open enrollment</dt><dd>{openEnrollmentLabel(oe)}</dd></div>
+              <div className="info-fact">
+                <dt>Status</dt>
+                <dd>
+                  <StatusBadge status={oeOpen ? "Open" : "Closed"} tone={oeOpen ? "ok" : "neutral"} literal />
+                  {oe.override && <span className="muted"> · set by {oe.updatedBy ?? "HR"}</span>}
+                </dd>
+              </div>
+              <div className="info-fact"><dt>Plan year</dt><dd>{oe.year}</dd></div>
+            </dl>
+            <Banner message={{ tone: changeWin.open ? "info" : "warn", text: changeWin.text }} />
+            {isBenefitsAdmin && (
+              <form
+                className="form-actions"
+                onSubmit={(ev) => {
+                  ev.preventDefault();
+                  run(setOpenEnrollmentDates(demoProfile, winStart, winEnd), "Enrollment dates saved.");
+                }}
+              >
+                <label className="filter-label">
+                  Start
+                  <input type="date" value={winStart} onChange={(ev) => setWinStart(ev.target.value)} />
+                </label>
+                <label className="filter-label">
+                  End
+                  <input type="date" value={winEnd} onChange={(ev) => setWinEnd(ev.target.value)} />
+                </label>
+                <button type="submit" className="btn-ghost">
+                  Save dates
+                </button>
+              </form>
+            )}
+          </Card>
+
+          <Card title="Life events">
+            <p className="note">A life event lets you change benefits for 30 days from the event date.</p>
+            {myEvent ? (
+              <p className="note">Your {myEvent.type.toLowerCase()} window is open until {formatShortDate(myEvent.windowEnds)}.</p>
+            ) : (
+              <form
+                className="form-actions"
+                onSubmit={(ev) => {
+                  ev.preventDefault();
+                  run(raiseLifeEvent(demoProfile, eventType, eventDate), `${eventType} reported. You can change benefits for 30 days.`);
+                }}
+              >
+                <label className="filter-label">
+                  Event
+                  <select value={eventType} onChange={(ev) => setEventType(ev.target.value)}>
+                    {LIFE_EVENT_TYPES.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="filter-label">
+                  Date
+                  <input type="date" value={eventDate} max={todayISO()} onChange={(ev) => setEventDate(ev.target.value)} />
+                </label>
+                <button type="submit" className="btn">
+                  Report event
+                </button>
+              </form>
+            )}
+            {lifeEvents.length > 0 && (
+              <DataTable
+                headers={[...(canSeeOthers ? ["Employee"] : []), "Event", "Date", "Window until", "Status", ""]}
+                rows={lifeEvents.map((le) => {
+                  const live = le.status === "Open" && todayISO() <= le.windowEnds;
+                  return [
+                    ...(canSeeOthers ? [le.employeeName] : []),
+                    le.type,
+                    formatShortDate(le.eventDate),
+                    formatShortDate(le.windowEnds),
+                    <StatusBadge key={le.id} status={live ? "Open" : "Closed"} tone={live ? "ok" : "neutral"} literal />,
+                    live && canDecideBenefitFor(demoProfile, le.employeeId) ? (
+                      <button key={`${le.id}-a`} type="button" className="btn-ghost" onClick={() => run(closeLifeEvent(demoProfile, le.id), "Life event window closed.")}>
+                        Close window
+                      </button>
+                    ) : (
+                      le.closedBy ? `Closed by ${le.closedBy}` : "—"
+                    ),
+                  ];
+                })}
+              />
+            )}
+          </Card>
+
           <Card title="Enrollment status">
             <DataTable
-              headers={["Employee", "Plan", "Country", "Status", "Effective", "Action"]}
+              headers={["Employee", "Plan", "Country", "Status", "Effective", "Dependents", "Action"]}
               rows={enrollments.map((e) => [
                 e.employeeName,
                 e.planName,
                 e.country,
                 <StatusBadge key={e.id} status={e.status} literal />,
                 e.effective,
+                coveredBy(e.planName, e.employeeId).join(", ") || "—",
                 <span key={`${e.id}-a`}>{enrollmentAction(e)}</span>,
               ])}
               empty={<EmptyState title="No enrollments" />}
@@ -509,20 +837,23 @@ export function BenefitsPage() {
           {availablePlans.length > 0 && (
             <Card title="Plans you can join">
               <DataTable
-                headers={["Plan", "Category", "Employee cost", ""]}
-                rows={availablePlans.map((p) => [
-                  p.name,
-                  p.category,
-                  p.employeeCost,
-                  <button
-                    key={p.id}
-                    type="button"
-                    className="quiet-link"
-                    onClick={() => run(requestEnrollment(demoProfile, p.id), "Enrollment request sent to HR.")}
-                  >
-                    Request enrollment
-                  </button>,
-                ])}
+                headers={["Plan", "Category", "Employee cost", "Eligibility", ""]}
+                rows={availablePlans.map((p) => {
+                  const ok = planEligibility(p, employee.id).eligible;
+                  return [
+                    p.name,
+                    p.category,
+                    p.employeeCost,
+                    eligibilityCell(p.id),
+                    ok ? (
+                      <button key={p.id} type="button" className="quiet-link" onClick={() => join(p.id)}>
+                        Request enrollment
+                      </button>
+                    ) : (
+                      "—"
+                    ),
+                  ];
+                })}
               />
             </Card>
           )}
@@ -530,23 +861,70 @@ export function BenefitsPage() {
       )}
 
       {tab === "dependents" && (
-        <Card title="Dependents">
+        <Card
+          title="Dependents"
+          action={
+            <button type="button" className="btn" onClick={() => setDepDialog("new")}>
+              Add dependent
+            </button>
+          }
+        >
           <DataTable
-            headers={["Name", "Relationship", "Covered plans"]}
-            rows={dependents.map((d) => [d.name, d.relationship, d.coveredPlans.join(", ")])}
+            headers={[...(canSeeOthers ? ["Employee"] : []), "Name", "Relationship", "Date of birth", "Gender", "Covered plans", "Verification", "Action"]}
+            rows={dependents.map((d) => [
+              ...(canSeeOthers ? [nameOf(d.employeeId)] : []),
+              d.name,
+              d.relationship,
+              d.dateOfBirth ? formatShortDate(d.dateOfBirth) : "—",
+              d.gender ?? "—",
+              d.coveredPlans.join(", ") || "—",
+              <StatusBadge
+                key={`${d.id}-v`}
+                status={d.verification ?? "Verified"}
+                tone={d.verification === "Rejected" ? "danger" : d.verification === "Pending" ? "warn" : "ok"}
+                literal
+              />,
+              <span key={`${d.id}-a`}>{dependentAction(d)}</span>,
+            ])}
             empty={<EmptyState title="No dependents on file" />}
           />
+          <p className="note">HR checks new and edited dependents before they can be added to a plan. Cover changes need an open enrollment or life event window.</p>
         </Card>
       )}
 
       {tab === "history" && (
         <Card title="Benefit history">
           <DataTable
-            headers={["Date", "Event", "Detail"]}
-            rows={history.map((h) => [h.date, h.event, h.detail])}
+            headers={[...(canSeeOthers ? ["Employee"] : []), "Date", "Event", "Detail"]}
+            rows={history.map((h) => [...(canSeeOthers ? [nameOf(h.employeeId)] : []), h.date, h.event, h.detail])}
             empty={<EmptyState title="No history" description="No benefit events yet." />}
           />
         </Card>
+      )}
+
+      {depDialog && (
+        <DependentDialog
+          actor={demoProfile}
+          row={depDialog === "new" ? null : depDialog}
+          onClose={() => setDepDialog(null)}
+          onDone={(text) => {
+            setDepDialog(null);
+            setMsg({ tone: "ok", text });
+          }}
+        />
+      )}
+      {cover && (
+        <CoverDialog
+          actor={demoProfile}
+          planId={cover.planId}
+          planName={cover.planName}
+          dependents={myDependents}
+          onClose={() => setCover(null)}
+          onDone={(text) => {
+            setCover(null);
+            setMsg({ tone: "ok", text });
+          }}
+        />
       )}
     </Page>
   );
