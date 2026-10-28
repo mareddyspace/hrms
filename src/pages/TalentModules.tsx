@@ -1,4 +1,8 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type InputHTMLAttributes } from "react";
+import { getPerson } from "../data/peopleLocal.ts";
+import { hasStarted } from "../data/peopleData.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { apiMyRecruitingActivity, type ActivityOut } from "../api/syncTalent.ts";
 import { Link } from "react-router-dom";
 import {
   Banner,
@@ -15,7 +19,6 @@ import {
   Tabs,
 } from "../components/ui.tsx";
 import {
-  COURSES,
   LEARNING_PATHS,
   LEVEL_RANK,
   PIPELINE_STAGES,
@@ -29,6 +32,9 @@ import {
   type OfferStatus,
   type OnboardingJoiner,
   type OnboardingTask,
+  type PreboardingForm,
+  EQUIPMENT_ITEMS,
+  EQUIPMENT_LABEL,
   type Requisition,
   type PerfGoal,
   type PerfReview,
@@ -82,6 +88,10 @@ import {
   verifyCertification,
   visibleRating,
   type GoalInput,
+  courseCatalog,
+  talentAction,
+  talentApiNotice,
+  clearTalentApiNotice,
   type TalentActor,
   canEditOnboarding,
   canEditRecruiting,
@@ -97,6 +107,7 @@ import {
   SELF_PROGRESS_CAP,
   setJoinerPolicyAck,
   setOnboardingTaskStatus,
+  submitPreboarding,
   setOfferStatus,
   setRequisitionApproval,
   skillProfileFor,
@@ -116,6 +127,8 @@ import { TIMEZ_COUNTRIES, maskEmail, todayISO } from "../model.ts";
 import { money } from "../countryPay.ts";
 import { GRADE_BANDS } from "../data/rewardData.ts";
 import { usePortal } from "../store.tsx";
+import { MaskedValue } from "../components/MaskedValue.tsx";
+import { canRevealCandidate, candidateRevealer } from "../data/piiReveal.ts";
 import { Award, Download, Eye } from "lucide-react";
 import {
   CertificateDialog,
@@ -125,8 +138,9 @@ import {
 } from "../components/CertificateViewer.tsx";
 import { canManagePeople } from "../data/peoplePermissions.ts";
 import { DevPlanEditor, FeedbackPanel, OneOnOnePanel, Pending360Requests, Reviewers360 } from "./PerformanceCheckIns.tsx";
-import { CandidateCards, CandidatePipelineView, MyPipeline, PipelineByMonth, RequisitionTracker } from "./recruiting/CandidatePipeline.tsx";
-import { canSeeTeamInterests, CareerInterestsPanel, RoleMatchesPanel, TeamInterestsPanel } from "./CareerPanels.tsx";
+import { CandidateCards, CandidatePipelineView, CompareCandidates, MyPipeline, PipelineByMonth, RequisitionTracker } from "./recruiting/CandidatePipeline.tsx";
+import { canSeeTeamInterests, CareerInterestsPanel, RoleMatchesPanel, SkillsLibraryPanel, TeamInterestsPanel } from "./CareerPanels.tsx";
+import { apiTargetRoles } from "../api/syncCareer.ts";
 
 function useTalent() {
   return useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
@@ -147,6 +161,25 @@ function Progress({ value, label }: { value: number; label?: string }) {
       </div>
     </div>
   );
+}
+
+/**
+ * Range input for progress. Without the backend each move is saved at once (as before); in backend mode the value
+ * is sent once the person lets go, and `settled` is called when the server has answered.
+ */
+function ProgressSlider({
+  value,
+  onCommit,
+  ...rest
+}: { value: number; onCommit: (value: number, settled: () => void) => void } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type">) {
+  const [draft, setDraft] = useState<number | null>(null);
+  if (!API_ENABLED) return <input {...rest} type="range" value={value} onChange={(e) => onCommit(Number(e.target.value), () => {})} />;
+  const commit = () => {
+    if (draft === null) return;
+    if (draft === value) setDraft(null);
+    else onCommit(draft, () => setDraft(null));
+  };
+  return <input {...rest} type="range" value={draft ?? value} onChange={(e) => setDraft(Number(e.target.value))} onPointerUp={commit} onKeyUp={commit} onBlur={commit} />;
 }
 
 function MiniBars({ items }: { items: { label: string; value: number }[] }) {
@@ -174,6 +207,83 @@ type Notice = { tone: "ok" | "err"; text: string } | null;
 function noticeFor(error: string | null, okText?: string): Notice {
   if (error) return { tone: "err", text: error };
   return okText ? { tone: "ok", text: okText } : null;
+}
+
+/** Backend mode: a change made on another page (e.g. Approvals) that the server refused. */
+function TalentApiNotice() {
+  const text = useSyncExternalStore(subscribeTalent, talentApiNotice, talentApiNotice);
+  if (!text) return null;
+  return (
+    <p className="note" role="alert">
+      {text}{" "}
+      <button type="button" className="quiet-link" onClick={clearTalentApiNotice}>
+        Dismiss
+      </button>
+    </p>
+  );
+}
+
+const ACTIVITY_LABEL: Record<string, string> = {
+  requisition_raised: "Raised requisition",
+  requisition_on_hold: "Put requisition on hold",
+  requisition_resumed: "Resumed requisition",
+  candidate_added: "Added candidate",
+  candidate_updated: "Updated candidate",
+  candidate_stage_moved: "Moved candidate",
+  candidate_cv_uploaded: "Uploaded CV",
+  interview_scheduled: "Scheduled interview",
+  interview_feedback_submitted: "Gave interview feedback",
+  offer_created: "Prepared offer",
+  offer_submitted: "Submitted offer",
+  offer_approved: "Approved offer",
+  offer_step_approved: "Approved offer step",
+  offer_sent_back: "Sent offer back",
+  offer_sent: "Sent offer",
+  offer_accepted: "Recorded offer accepted",
+  offer_declined: "Recorded offer declined",
+  offer_withdrawn: "Withdrew offer",
+};
+
+/** Backend mode: recruiting actions I took in the last 90 days (loaded when opened). */
+function MyRecruitingActivity() {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<ActivityOut[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    apiMyRecruitingActivity(90, 30)
+      .then((r) => live && setRows(r))
+      .catch((e: unknown) => live && setError(e instanceof Error ? e.message : "Could not load your activity."));
+    return () => {
+      live = false;
+    };
+  }, [open]);
+  return (
+    <details className="card" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary>My recent recruiting activity</summary>
+      {error ? (
+        <p className="muted">{error}</p>
+      ) : !rows ? (
+        <p className="muted">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="muted">Nothing in the last 90 days.</p>
+      ) : (
+        <ul className="todo">
+          {rows.map((r, i) => {
+            const stage = typeof r.details?.stage === "string" && r.action === "candidate_stage_moved" ? ` → ${r.details.stage}` : "";
+            return (
+              <li key={`${r.at}-${i}`}>
+                {new Date(r.at).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })} ·{" "}
+                {ACTIVITY_LABEL[r.action] ?? r.action.replace(/_/g, " ")} · {r.entity_id ?? r.entity}
+                {stage}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </details>
+  );
 }
 
 function NotAuthorized({ module }: { module: string }) {
@@ -286,24 +396,27 @@ export function RecruitingPage() {
 
   function submitFeedback() {
     const score = Number(fbScore);
-    const error = submitInterviewFeedback(actor, fbInterview, score, fbText);
-    setNotice(noticeFor(error, "Interview feedback submitted."));
-    if (!error) {
-      setFbInterview("");
-      setFbText("");
-    }
+    talentAction(() => submitInterviewFeedback(actor, fbInterview, score, fbText), (error) => {
+      setNotice(noticeFor(error, "Interview feedback submitted."));
+      if (!error) {
+        setFbInterview("");
+        setFbText("");
+      }
+    });
   }
 
   function prepareOffer() {
-    const error = createOffer(actor, {
+    const input = {
       candidateId: offerForm.candidateId,
       grade: offerForm.grade,
       baseSalary: Number(offerForm.baseSalary),
       startDate: offerForm.startDate,
       packageNote: offerForm.packageNote,
+    };
+    talentAction(() => createOffer(actor, input), (error) => {
+      setNotice(noticeFor(error, "Offer created."));
+      if (!error) setOfferForm({ candidateId: "", grade: "", baseSalary: "", startDate: "", packageNote: "" });
     });
-    setNotice(noticeFor(error, "Offer created."));
-    if (!error) setOfferForm({ candidateId: "", grade: "", baseSalary: "", startDate: "", packageNote: "" });
   }
 
   return (
@@ -315,6 +428,8 @@ export function RecruitingPage() {
         </p>
       )}
       <Banner message={notice} />
+      <TalentApiNotice />
+      {API_ENABLED && canEdit && <MyRecruitingActivity />}
       <MetricGrid>
         <MetricCard label="Total positions" value={totalPositions} hint={`${approvedReqs.length} approved req${approvedReqs.length === 1 ? "" : "s"}`} />
         <MetricCard label="Open" value={totalPositions - filledPositions} />
@@ -384,7 +499,11 @@ export function RecruitingPage() {
                   literal
                   tone={r.approvalStatus === "Approved" ? "ok" : r.approvalStatus === "Rejected" || r.approvalStatus === "On hold" ? "warn" : "info"}
                 />,
-                <button key={`${r.id}-v`} type="button" className="quiet-link" onClick={() => { setSelectedReq(r.id); setReqNote(""); }}>
+                <button key={`${r.id}-v`} type="button" className="quiet-link" onClick={() => {
+                    setSelectedReq(r.id);
+                    setReqNote("");
+                    setTimeout(() => document.getElementById("req-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+                  }}>
                   Details
                 </button>,
               ])}
@@ -425,12 +544,14 @@ export function RecruitingPage() {
                         type="button"
                         className="btn btn-tiny"
                         onClick={() => {
-                          const error = raiseRequisition(actor, { ...raiseForm, openings: Number(raiseForm.openings) });
-                          setNotice(noticeFor(error, "Requisition raised. Sent for approval."));
-                          if (!error) {
-                            setRaiseOpen(false);
-                            setRaiseForm({ title: "", department: "", country: "", location: "", openings: "1" });
-                          }
+                          const input = { ...raiseForm, openings: Number(raiseForm.openings) };
+                          talentAction(() => raiseRequisition(actor, input), (error) => {
+                            setNotice(noticeFor(error, "Requisition raised. Sent for approval."));
+                            if (!error) {
+                              setRaiseOpen(false);
+                              setRaiseForm({ title: "", department: "", country: "", location: "", openings: "1" });
+                            }
+                          });
                         }}
                       >
                         Send for approval
@@ -445,6 +566,7 @@ export function RecruitingPage() {
             )}
           </Card>
           {requisition && (
+            <div id="req-detail">
             <Card title={`Requisition · ${requisition.id}`}>
               <RequisitionTracker req={requisition} />
               <p className="muted">
@@ -494,16 +616,17 @@ export function RecruitingPage() {
                         className={next === "Approved" || next === "Pending approval" ? "btn btn-tiny" : "btn-ghost btn-tiny"}
                         onClick={() => {
                           const before = requisitionWaitingFor(requisition);
-                          const error = setRequisitionApproval(actor, requisition.id, next, reqNote, assignTo);
-                          const after = getTalentState().requisitions.find((r) => r.id === requisition.id);
-                          const okText =
-                            next === "Approved" && after?.approvalStatus === "Pending approval"
-                              ? `${requisition.id}: approved. ${requisitionWaitingFor(after) === before ? "Waiting for the other approvers." : `Now with ${requisitionWaitingFor(after).split(" · ")[0]!.toLowerCase()}.`}`
-                              : next === "Pending approval"
-                                ? `${requisition.id}: sent for approval.`
-                                : `${requisition.id}: ${next}.`;
-                          setNotice(noticeFor(error, okText));
-                          setReqNote("");
+                          talentAction(() => setRequisitionApproval(actor, requisition.id, next, reqNote, assignTo), (error) => {
+                            const after = getTalentState().requisitions.find((r) => r.id === requisition.id);
+                            const okText =
+                              next === "Approved" && after?.approvalStatus === "Pending approval"
+                                ? `${requisition.id}: approved. ${requisitionWaitingFor(after) === before ? "Waiting for the other approvers." : `Now with ${requisitionWaitingFor(after).split(" · ")[0]!.toLowerCase()}.`}`
+                                : next === "Pending approval"
+                                  ? `${requisition.id}: sent for approval.`
+                                  : `${requisition.id}: ${next}.`;
+                            setNotice(noticeFor(error, okText));
+                            if (!error) setReqNote("");
+                          });
                         }}
                       >
                         {next === "Pending approval" ? "Send for approval" : next === "On hold" ? "Put on hold" : next === "Approved" ? (requisition.recruiterId || !requisitionApprovalCompletes(actor, requisition) ? "Approve" : "Approve & assign") : "Reject"}
@@ -534,6 +657,7 @@ export function RecruitingPage() {
                 </>
               )}
             </Card>
+            </div>
           )}
         </div>
       )}
@@ -549,8 +673,12 @@ export function RecruitingPage() {
             ) : (
               <EmptyState title="Candidates restricted" description="Your role can't view candidates." />
             )}
-            {canEdit && <p className="muted">One stage at a time. The hiring manager decides at Final Review; Hired needs an accepted offer.</p>}
           </Card>
+          {API_ENABLED && canSeeCandidates && (
+            <Card title="Compare candidates">
+              <CompareCandidates actor={actor} talent={talent} candidates={pipelineCandidates} />
+            </Card>
+          )}
         </div>
       )}
 
@@ -581,7 +709,10 @@ export function RecruitingPage() {
                 c.country,
                 c.stage,
                 <span key={`${c.id}-o`} className="row-gap">
-                  <button type="button" className="quiet-link" onClick={() => setSelectedCand(c.id)}>
+                  <button type="button" className="quiet-link" onClick={() => {
+                    setSelectedCand(c.id);
+                    setTimeout(() => document.getElementById("cand-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+                  }}>
                     Profile
                   </button>
                   <button type="button" className="quiet-link" onClick={() => setOpenCand(c.id)}>
@@ -593,6 +724,7 @@ export function RecruitingPage() {
             />
           </Card>
           {candidate && canSeeCandidates && (
+            <div id="cand-detail">
             <Card title={`Profile · ${candidate.name}`}>
               <dl className="info-grid">
                 <div className="info-fact">
@@ -601,7 +733,14 @@ export function RecruitingPage() {
                 </div>
                 <div className="info-fact">
                   <dt>Phone</dt>
-                  <dd>{accessFor(candidate) === "masked" ? "••••••••" : candidate.phone}</dd>
+                  <dd>
+                    <MaskedValue
+                      value={candidate.phone}
+                      kind="phone"
+                      canReveal={accessFor(candidate) !== "masked" && canRevealCandidate(demoProfile)}
+                      onReveal={candidateRevealer(candidate.id, candidate.phone)}
+                    />
+                  </dd>
                 </div>
                 <div className="info-fact"><dt>Requisition</dt><dd>{candidate.requisitionId}</dd></div>
                 <div className="info-fact"><dt>Source</dt><dd>{candidate.source}</dd></div>
@@ -610,6 +749,7 @@ export function RecruitingPage() {
               </dl>
               <p className="note">{accessFor(candidate) === "masked" ? "Resume details limited for this role." : candidate.resumeNote}</p>
             </Card>
+            </div>
           )}
           {!canSeeCandidates && <EmptyState title="Candidates restricted" description="Your role can't view candidate profiles." />}
         </div>
@@ -674,7 +814,11 @@ export function RecruitingPage() {
                   o.startDate,
                   <span key={o.id} className="stack">
                     <StatusBadge status={o.status} literal />
-                    {o.responseNote && <span className="muted">{o.responseNote} ({o.responseRecordedBy}, {o.respondedOn})</span>}
+                    {o.responseNote && (
+                      <span className="muted">
+                        {o.responseNote} ({[o.responseRecordedBy, o.respondedOn].filter(Boolean).join(", ")})
+                      </span>
+                    )}
                   </span>,
                   o.approvals.length ? o.approvals.map((a) => `${a.role}: ${a.by}, ${a.on}`).join(" · ") : "—",
                   <OfferActions key={`${o.id}-a`} offer={o} req={req} actor={actor} onResult={setNotice} />,
@@ -794,16 +938,17 @@ function OfferActions({
   if (answer) {
     return (
       <span className="stack">
-        <input aria-label="Interview note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="How was the answer received?" />
+        <input aria-label="Answer note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="How was the answer received?" />
         <span className="row-gap">
           <button
             type="button"
             className="btn btn-tiny"
             disabled={note.trim().length < 5}
             onClick={() => {
-              const error = setOfferStatus(actor, offer.id, answer, note);
-              onResult(noticeFor(error, `${offer.candidateName}'s answer recorded.`));
-              if (!error) setAnswer(null);
+              talentAction(() => setOfferStatus(actor, offer.id, answer, note), (error) => {
+                onResult(noticeFor(error, `${offer.candidateName}'s answer recorded.`));
+                if (!error) setAnswer(null);
+              });
             }}
           >
             Save
@@ -824,7 +969,7 @@ function OfferActions({
   return (
     <span className="row-gap">
       {canApprove && (
-        <button type="button" className="btn btn-tiny" onClick={() => onResult(noticeFor(approveOffer(actor, offer.id), `Offer for ${offer.candidateName} approved.`))}>
+        <button type="button" className="btn btn-tiny" onClick={() => talentAction(() => approveOffer(actor, offer.id), (res) => onResult(noticeFor(res, `Offer for ${offer.candidateName} approved.`)))}>
           {step === "Hiring manager" ? "Agree" : "Approve"}
         </button>
       )}
@@ -833,7 +978,7 @@ function OfferActions({
           key={m}
           type="button"
           className={m === "Withdrawn" || m === "Preparing" ? "btn-ghost btn-tiny" : "btn btn-tiny"}
-          onClick={() => onResult(noticeFor(setOfferStatus(actor, offer.id, m), `${offer.candidateName}'s offer: ${m}.`))}
+          onClick={() => talentAction(() => setOfferStatus(actor, offer.id, m), (res) => onResult(noticeFor(res, `${offer.candidateName}'s offer: ${m}.`)))}
         >
           {OFFER_ACTION_LABEL[m] ?? m}
         </button>
@@ -875,9 +1020,11 @@ function TaskStatusCell({
         disabled={!owner && reason.trim().length < 5}
         title={!owner ? "Add a reason first" : undefined}
         onChange={(e) => {
-          const error = setOnboardingTaskStatus(actor, task.id, e.target.value as OnboardingTask["status"], reason);
-          onResult(noticeFor(error));
-          if (!error) setReason("");
+          const next = e.target.value as OnboardingTask["status"];
+          talentAction(() => setOnboardingTaskStatus(actor, task.id, next, reason), (error) => {
+            onResult(noticeFor(error));
+            if (!error) setReason("");
+          });
         }}
       >
         {(["Pending", "In progress", "Done"] as const).map((s) => (
@@ -887,6 +1034,122 @@ function TaskStatusCell({
       {!owner && <input aria-label="Reason" value={reason} maxLength={120} onChange={(e) => setReason(e.target.value)} placeholder={`Reason (owner: ${task.owner})`} />}
       {task.overrideNote && <span className="muted">{task.overrideNote}</span>}
     </span>
+  );
+}
+
+const IT_SYSTEMS = ["Email", "VPN", "Slack", "Jira", "GitHub", "Finance tools", "HR portal"] as const;
+
+function emptyPreboarding(joiner: OnboardingJoiner): PreboardingForm {
+  return (
+    joiner.preboarding ?? {
+      personal: { confirmed: false },
+      emergencyContact: { name: "", relationship: "", phone: "" },
+      equipment: ["laptop"],
+      itRequest: { systems: ["Email"] },
+    }
+  );
+}
+
+/** Pre-boarding form: the joiner (or HR) confirms details and asks for equipment and IT access. */
+function PreboardingCard({ joiner, actor, onResult }: { joiner: OnboardingJoiner; actor: TalentActor; onResult: (n: Notice) => void }) {
+  const [form, setForm] = useState<PreboardingForm>(() => emptyPreboarding(joiner));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when another joiner opens or the form was saved
+  useEffect(() => setForm(emptyPreboarding(joiner)), [joiner.id, joiner.preboardingOn]);
+  const editable = canAcknowledgePolicies(actor, joiner) && joiner.overallStatus !== "Completed";
+  const set = (patch: Partial<PreboardingForm>) => setForm((f) => ({ ...f, ...patch }));
+  const toggle = <T extends string>(list: readonly T[], item: T): T[] => (list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
+
+  if (!editable) {
+    const p = joiner.preboarding;
+    return (
+      <Card title="Pre-boarding form">
+        {!p ? (
+          <p className="muted">Not filled in yet.</p>
+        ) : (
+          <dl className="info-grid">
+            <div className="info-fact"><dt>Details confirmed</dt><dd>{p.personal.confirmed ? "Yes" : "No"}</dd></div>
+            <div className="info-fact"><dt>Emergency contact</dt><dd>{p.emergencyContact.name} ({p.emergencyContact.relationship})</dd></div>
+            <div className="info-fact"><dt>Equipment</dt><dd>{p.equipment.map((e) => EQUIPMENT_LABEL[e]).join(", ") || "—"}</dd></div>
+            <div className="info-fact"><dt>IT access</dt><dd>{p.itRequest.systems.join(", ") || "—"}</dd></div>
+          </dl>
+        )}
+      </Card>
+    );
+  }
+
+  function save() {
+    talentAction(() => submitPreboarding(actor, joiner.id, form), (error) => onResult(noticeFor(error, "Pre-boarding form saved. IT tasks added.")));
+  }
+
+  return (
+    <Card title="Pre-boarding form" action={joiner.preboardingOn ? <span className="muted">Sent {joiner.preboardingOn}</span> : undefined}>
+      <div className="form-grid-2">
+        <Field label="Preferred name">
+          <input value={form.personal.preferredName ?? ""} maxLength={200}
+            onChange={(e) => set({ personal: { ...form.personal, preferredName: e.target.value } })} />
+        </Field>
+        <Field label="Mobile">
+          <input value={form.personal.mobile ?? ""} maxLength={40}
+            onChange={(e) => set({ personal: { ...form.personal, mobile: e.target.value } })} />
+        </Field>
+        <Field label="Personal email">
+          <input type="email" value={form.personal.personalEmail ?? ""} maxLength={200}
+            onChange={(e) => set({ personal: { ...form.personal, personalEmail: e.target.value } })} />
+        </Field>
+        <Field label="Address">
+          <input value={form.personal.address ?? ""} maxLength={500}
+            onChange={(e) => set({ personal: { ...form.personal, address: e.target.value } })} />
+        </Field>
+        <Field label="Emergency contact">
+          <input value={form.emergencyContact.name} maxLength={200} placeholder="Name"
+            onChange={(e) => set({ emergencyContact: { ...form.emergencyContact, name: e.target.value } })} />
+        </Field>
+        <Field label="Relationship">
+          <input value={form.emergencyContact.relationship} maxLength={60}
+            onChange={(e) => set({ emergencyContact: { ...form.emergencyContact, relationship: e.target.value } })} />
+        </Field>
+        <Field label="Contact phone">
+          <input value={form.emergencyContact.phone} maxLength={40}
+            onChange={(e) => set({ emergencyContact: { ...form.emergencyContact, phone: e.target.value } })} />
+        </Field>
+        <Field label="IT notes">
+          <input value={form.itRequest.notes ?? ""} maxLength={1000}
+            onChange={(e) => set({ itRequest: { ...form.itRequest, notes: e.target.value } })} />
+        </Field>
+      </div>
+      <fieldset className="stack" style={{ border: 0, padding: 0, marginTop: 8 }}>
+        <legend className="muted">Equipment</legend>
+        <span className="row-gap">
+          {EQUIPMENT_ITEMS.map((item) => (
+            <label key={item} className="row-gap">
+              <input type="checkbox" checked={form.equipment.includes(item)} onChange={() => set({ equipment: toggle(form.equipment, item) })} />
+              {EQUIPMENT_LABEL[item]}
+            </label>
+          ))}
+        </span>
+      </fieldset>
+      <fieldset className="stack" style={{ border: 0, padding: 0, marginTop: 8 }}>
+        <legend className="muted">IT access</legend>
+        <span className="row-gap">
+          {IT_SYSTEMS.map((sys) => (
+            <label key={sys} className="row-gap">
+              <input type="checkbox" checked={form.itRequest.systems.includes(sys)}
+                onChange={() => set({ itRequest: { ...form.itRequest, systems: toggle(form.itRequest.systems, sys) } })} />
+              {sys}
+            </label>
+          ))}
+        </span>
+      </fieldset>
+      <label className="row-gap" style={{ marginTop: 8 }}>
+        <input type="checkbox" checked={form.personal.confirmed} onChange={(e) => set({ personal: { ...form.personal, confirmed: e.target.checked } })} />
+        My personal details are correct
+      </label>
+      <div className="row-gap" style={{ marginTop: 8 }}>
+        <button type="button" className="btn" onClick={save}>
+          {joiner.preboarding ? "Update form" : "Send form"}
+        </button>
+      </div>
+    </Card>
   );
 }
 
@@ -971,12 +1234,10 @@ export function OnboardingPage() {
                   className="btn"
                   disabled={joiner.policyAck === "Complete"}
                   onClick={() =>
-                    setNotice(
-                      noticeFor(
-                        setJoinerPolicyAck(actor, joiner.id, "Complete"),
+                    talentAction(() => setJoinerPolicyAck(actor, joiner.id, "Complete"), (res) => setNotice(noticeFor(res,
                         ackForJoiner ? `Recorded for ${joiner.name}.` : "Policies acknowledged.",
                       ),
-                    )
+                    ))
                   }
                 >
                   {ackForJoiner ? "Record acknowledgment" : "Acknowledge policies"}
@@ -990,6 +1251,8 @@ export function OnboardingPage() {
           </Card>
         )}
       </div>
+
+      {joiner && <PreboardingCard joiner={joiner} actor={actor} onResult={setNotice} />}
 
       <Card
         title="Onboarding checklist"
@@ -1009,12 +1272,15 @@ export function OnboardingPage() {
           <EmptyState title="Select a joiner" />
         ) : (
           <DataTable
-            headers={["Task", "Owner", "Category", "Due", "Status", "Update"]}
+            headers={["Task", "Owner", "Category", "Due", "After", "Status", "Update"]}
             rows={tasks.map((t) => [
               t.title,
               t.owner,
               t.category,
               t.due,
+              (t.dependsOn ?? [])
+                .map((k) => talent.tasks.find((x) => x.joinerId === t.joinerId && x.key === k)?.title ?? k)
+                .join(", ") || "—",
               <StatusBadge key={t.id} status={t.status} literal tone={t.status === "Done" ? "ok" : "warn"} />,
               <TaskStatusCell key={`${t.id}-u`} task={t} joiner={joiner} actor={actor} onResult={setNotice} />,
             ])}
@@ -1065,9 +1331,10 @@ function CycleDialog({ actor, onClose }: { actor: TalentActor; onClose: (message
   const set = (patch: Partial<CycleInput>) => setForm((f) => ({ ...f, ...patch }));
 
   function save() {
-    const err = createReviewCycle(actor, form);
-    if (err) setError(err);
-    else onClose(`${form.name.trim()} created. Move it to Active to open reviews.`);
+    talentAction(() => createReviewCycle(actor, form), (err) => {
+      if (err) setError(err);
+      else onClose(`${form.name.trim()} created. Move it to Active to open reviews.`);
+    });
   }
 
   return (
@@ -1119,9 +1386,10 @@ function GoalDialog({
   const others = goalWeightTotal(talent.goals, form.ownerId, form.cycleId, form.id);
 
   function save() {
-    const err = saveGoal(actor, form);
-    if (err) setError(err);
-    else onClose(form.id ? "Goal updated." : "Goal added.");
+    talentAction(() => saveGoal(actor, form), (err) => {
+      if (err) setError(err);
+      else onClose(form.id ? "Goal updated." : "Goal added.");
+    });
   }
 
   return (
@@ -1185,7 +1453,12 @@ export function PerformancePage() {
   const inCycle = inReviewCycle(actor.id);
 
   const goals = talent.goals.filter((g) => g.cycleId === cycleId && canViewReview(actor, g.ownerId));
-  const reviews = talent.reviews.filter((r) => r.cycleId === cycleId && canViewReview(actor, r.employeeId));
+  // Pre-boarding joiners aren't reviewed until they start.
+  const started = (id: string) => {
+    const person = getPerson(id);
+    return !person || hasStarted(person);
+  };
+  const reviews = talent.reviews.filter((r) => r.cycleId === cycleId && canViewReview(actor, r.employeeId) && started(r.employeeId));
   const run = (error: string | null, okText?: string) => setNotice(noticeFor(error, okText));
   const asked360 = pending360For(talent, actor.id);
 
@@ -1218,7 +1491,7 @@ export function PerformancePage() {
           </select>
         </label>
         {hr && next && (
-          <button type="button" className="btn-ghost" onClick={() => run(advanceCycle(actor, cycleId), `Cycle moved to ${next}.`)}>
+          <button type="button" className="btn-ghost" onClick={() => talentAction(() => advanceCycle(actor, cycleId), (res) => run(res, `Cycle moved to ${next}.`))}>
             Move to {next}
           </button>
         )}
@@ -1292,14 +1565,17 @@ export function PerformancePage() {
                 `${g.weight ?? 0}%`,
                 g.period || "—",
                 <Progress key={g.id} value={g.progress} />,
-                <input aria-label="Goal progress"
+                <ProgressSlider
+                  aria-label="Goal progress"
                   key={`${g.id}-p`}
-                  type="range"
                   min={0}
                   max={100}
                   value={g.progress}
                   disabled={!editable}
-                  onChange={(e) => run(updateGoalProgress(actor, g.id, Number(e.target.value)))}
+                  onCommit={(v, settled) => talentAction(() => updateGoalProgress(actor, g.id, v), (res) => {
+                    settled();
+                    run(res);
+                  })}
                 />,
                 editable ? (
                   <button
@@ -1379,7 +1655,7 @@ export function PerformancePage() {
                     status={r.selfStatus}
                     editable={r.employeeId === actor.id && r.selfStatus !== "Submitted" && status === "Active"}
                     onSave={(text, submit) =>
-                      run(saveSelfAssessment(actor, r.id, text, submit), submit ? "Self-assessment submitted." : "Draft saved.")
+                      talentAction(() => saveSelfAssessment(actor, r.id, text, submit), (res) => run(res, submit ? "Self-assessment submitted." : "Draft saved."))
                     }
                   />
                 </li>
@@ -1413,7 +1689,7 @@ export function PerformancePage() {
                         status={r.managerStatus}
                         editable={writer && r.managerStatus !== "Submitted" && status === "Active"}
                         onSave={(text, submit) =>
-                          run(saveManagerAssessment(actor, r.id, text, submit), submit ? "Manager assessment submitted." : "Draft saved.")
+                          talentAction(() => saveManagerAssessment(actor, r.id, text, submit), (res) => run(res, submit ? "Manager assessment submitted." : "Draft saved."))
                         }
                       />
                     )}
@@ -1429,7 +1705,7 @@ export function PerformancePage() {
         <div className="stack">
           <Pending360Requests me={actor} requests={asked360} onResult={run} />
           <Card title="360-degree feedback">
-            <p className="muted">The employee or their manager nominates up to 3 reviewers. Managers and HR see the answers.</p>
+            <p className="muted">Up to 3 reviewers.</p>
             {reviews.length === 0 ? (
               <EmptyState title="No reviews" description="No reviews in view for this cycle." />
             ) : (
@@ -1442,7 +1718,7 @@ export function PerformancePage() {
                         aria-label="360 feedback status"
                         value={r.feedback360Status}
                         disabled={!canWriteManagerReview(actor, r.employeeId) || status !== "Active"}
-                        onChange={(e) => run(set360Status(actor, r.id, e.target.value as PerfReview["feedback360Status"]))}
+                        onChange={(e) => talentAction(() => set360Status(actor, r.id, e.target.value as PerfReview["feedback360Status"]), (res) => run(res))}
                       >
                         {(["Not started", "In progress", "Complete"] as const).map((s) => (
                           <option key={s} value={s}>{s}</option>
@@ -1479,7 +1755,7 @@ export function PerformancePage() {
                     value={r.rating ?? ""}
                     disabled={!ready}
                     title={!ready ? "Needs both assessments submitted" : undefined}
-                    onChange={(e) => run(setRating(actor, r.id, e.target.value || undefined))}
+                    onChange={(e) => talentAction(() => setRating(actor, r.id, e.target.value || undefined), (res) => run(res))}
                   >
                     <option value="">Select…</option>
                     {RATINGS.map((s) => (
@@ -1492,7 +1768,7 @@ export function PerformancePage() {
                 r.released ? (
                   `${r.releasedOn ?? ""}`
                 ) : canRelease ? (
-                  <button key={`${r.id}-rel`} type="button" className="btn btn-tiny" onClick={() => run(releaseRating(actor, r.id), `Rating released to ${r.employeeName}.`)}>
+                  <button key={`${r.id}-rel`} type="button" className="btn btn-tiny" onClick={() => talentAction(() => releaseRating(actor, r.id), (res) => run(res, `Rating released to ${r.employeeName}.`))}>
                     Release
                   </button>
                 ) : (
@@ -1574,7 +1850,7 @@ export function LearningPage() {
   const [renewExpiry, setRenewExpiry] = useState<Record<string, string>>({});
   const [credIds, setCredIds] = useState<Record<string, string>>({});
 
-  const catalog = COURSES.filter((c) => {
+  const catalog = courseCatalog().filter((c) => {
     if (mandatoryOnly && !c.mandatory) return false;
     if (q && !`${c.title} ${c.category}`.toLowerCase().includes(q.toLowerCase())) return false;
     return true;
@@ -1589,7 +1865,7 @@ export function LearningPage() {
   const courseCertificates: CertificateDoc[] = talent.enrollments
     .filter((e) => earnedCertificate(e) && (hr || e.employeeId === employee.id))
     .map((e) => {
-      const course = COURSES.find((c) => c.id === e.courseId);
+      const course = courseCatalog().find((c) => c.id === e.courseId);
       return {
         id: `course-${e.id}`,
         kind: "course" as const,
@@ -1624,10 +1900,10 @@ export function LearningPage() {
   return (
     <Page title="Learning">
       <MetricGrid>
-        <MetricCard label="Catalog courses" value={COURSES.length} />
+        <MetricCard label="Catalog courses" value={courseCatalog().length} />
         <MetricCard label="My enrollments" value={mine.length} />
         <MetricCard label="Completed" value={mine.filter((e) => e.status === "Completed").length} />
-        <MetricCard label="Mandatory open" value={mine.filter((e) => e.status !== "Completed" && COURSES.find((c) => c.id === e.courseId)?.mandatory).length} />
+        <MetricCard label="Mandatory open" value={mine.filter((e) => e.status !== "Completed" && courseCatalog().find((c) => c.id === e.courseId)?.mandatory).length} />
         <MetricCard label="Overdue" value={overdue.length} />
       </MetricGrid>
 
@@ -1637,7 +1913,7 @@ export function LearningPage() {
             tone: "warn",
             text: [
               overdue.length
-                ? `Overdue: ${overdue.map((e) => COURSES.find((c) => c.id === e.courseId)?.title ?? e.courseId).join(", ")}.`
+                ? `Overdue: ${overdue.map((e) => courseCatalog().find((c) => c.id === e.courseId)?.title ?? e.courseId).join(", ")}.`
                 : "",
               certsNeedingRenewal.length ? `${certsNeedingRenewal.length} certification${certsNeedingRenewal.length > 1 ? "s need" : " needs"} renewal.` : "",
             ]
@@ -1698,7 +1974,7 @@ export function LearningPage() {
                     key={c.id}
                     type="button"
                     className="btn-ghost"
-                    onClick={() => setNotice(noticeFor(enrollInCourse(demoProfile, c.id), `Enrolled in ${c.title}.`))}
+                    onClick={() => talentAction(() => enrollInCourse(demoProfile, c.id), (res) => setNotice(noticeFor(res, `Enrolled in ${c.title}.`)))}
                   >
                     Enroll
                   </button>
@@ -1721,7 +1997,7 @@ export function LearningPage() {
                 p.title,
                 p.audience,
                 p.courses
-                  .map((id) => `${isDone(id) ? "✓ " : ""}${COURSES.find((c) => c.id === id)?.title ?? id}`)
+                  .map((id) => `${isDone(id) ? "✓ " : ""}${courseCatalog().find((c) => c.id === id)?.title ?? id}`)
                   .join(" · "),
                 <Progress key={p.id} value={(done / p.courses.length) * 100} label={`${done} of ${p.courses.length} courses`} />,
               ];
@@ -1742,7 +2018,7 @@ export function LearningPage() {
                   (a.due ?? "9999").localeCompare(b.due ?? "9999"),
               )
               .map((e) => {
-                const course = COURSES.find((c) => c.id === e.courseId);
+                const course = courseCatalog().find((c) => c.id === e.courseId);
                 const due = dueStatus(e, today);
                 return [
                   <span key={`${e.id}-t`}>
@@ -1760,13 +2036,15 @@ export function LearningPage() {
                     <span key={`${e.id}-r`} className="muted">Completed</span>
                   ) : (
                     <span key={`${e.id}-r`} className="learning-progress-input">
-                      <input
-                        type="range"
+                      <ProgressSlider
                         min={0}
                         max={SELF_PROGRESS_CAP}
                         value={Math.min(e.progress, SELF_PROGRESS_CAP)}
                         aria-label="Progress"
-                        onChange={(ev) => setNotice(noticeFor(updateEnrollmentProgress(demoProfile, e.id, Number(ev.target.value))))}
+                        onCommit={(v, settled) => talentAction(() => updateEnrollmentProgress(demoProfile, e.id, v), (res) => {
+                          settled();
+                          setNotice(noticeFor(res));
+                        })}
                       />
                       {e.progress >= SELF_PROGRESS_CAP && <span className="muted">Waiting for HR to confirm</span>}
                     </span>
@@ -1861,12 +2139,10 @@ export function LearningPage() {
                             className="btn btn-tiny"
                             disabled={!c.validityYears && !renewExpiry[c.id]}
                             onClick={() =>
-                              setNotice(
-                                noticeFor(
-                                  requestCertificationRenewal(demoProfile, c.id, renewExpiry[c.id]),
+                              talentAction(() => requestCertificationRenewal(demoProfile, c.id, renewExpiry[c.id]), (res) => setNotice(noticeFor(res,
                                   "Renewal recorded. HR will verify it.",
                                 ),
-                              )
+                              ))
                             }
                           >
                             Record renewal
@@ -1877,7 +2153,7 @@ export function LearningPage() {
                         <button
                           type="button"
                           className="btn btn-tiny"
-                          onClick={() => setNotice(noticeFor(verifyCertificationRenewal(demoProfile, c.id), `Renewal verified for ${c.employeeName}.`))}
+                          onClick={() => talentAction(() => verifyCertificationRenewal(demoProfile, c.id), (res) => setNotice(noticeFor(res, `Renewal verified for ${c.employeeName}.`)))}
                         >
                           Verify renewal
                         </button>
@@ -1895,7 +2171,7 @@ export function LearningPage() {
                             type="button"
                             className="btn btn-tiny"
                             onClick={() =>
-                              setNotice(noticeFor(verifyCertification(demoProfile, c.id, credIds[c.id] ?? ""), `${c.name} verified.`))
+                              talentAction(() => verifyCertification(demoProfile, c.id, credIds[c.id] ?? ""), (res) => setNotice(noticeFor(res, `${c.name} verified.`)))
                             }
                           >
                             Verify
@@ -1917,7 +2193,7 @@ export function LearningPage() {
             headers={["Employee", "Course", "Status", "Progress", ""]}
             rows={teamEnrollments.map((e) => [
               e.employeeName,
-              COURSES.find((c) => c.id === e.courseId)?.title ?? e.courseId,
+              courseCatalog().find((c) => c.id === e.courseId)?.title ?? e.courseId,
               <StatusBadge key={e.id} status={e.status} literal />,
               <Progress key={`${e.id}-p`} value={e.progress} />,
               e.status === "Completed" ? (
@@ -1932,7 +2208,7 @@ export function LearningPage() {
                   key={`${e.id}-a`}
                   type="button"
                   className="btn btn-tiny"
-                  onClick={() => setNotice(noticeFor(completeEnrollment(demoProfile, e.id), `Course marked complete for ${e.employeeName}.`))}
+                  onClick={() => talentAction(() => completeEnrollment(demoProfile, e.id), (res) => setNotice(noticeFor(res, `Course marked complete for ${e.employeeName}.`)))}
                 >
                   Mark complete
                 </button>
@@ -1940,7 +2216,7 @@ export function LearningPage() {
                 <ScoreCompletion
                   key={`${e.id}-a`}
                   onSubmit={(score) =>
-                    setNotice(noticeFor(completeEnrollment(demoProfile, e.id, score), `Passed. Course complete for ${e.employeeName}.`))
+                    talentAction(() => completeEnrollment(demoProfile, e.id, score), (res) => setNotice(noticeFor(res, `Passed. Course complete for ${e.employeeName}.`)))
                   }
                 />
               ),
@@ -1964,11 +2240,11 @@ export function SkillsCareerPage() {
   const [tab, setTab] = useState("profile");
   const [notice, setNotice] = useState<Notice>(null);
   const track = starterSkillsFor(demoProfile.id).track;
-  const roles = TARGET_ROLES.filter((t) => t.track === track);
+  const roles = (apiTargetRoles() ?? TARGET_ROLES).filter((t) => t.track === track);
   const [targetId, setTargetId] = useState(roles[0]?.id ?? "");
   const skills = skillProfileFor(talent, demoProfile.id);
   const setSkill = (skillId: string, patch: { level?: string; targetLevel?: string }) =>
-    setNotice(noticeFor(updateEmployeeSkill(demoProfile, demoProfile.id, skillId, patch)));
+    talentAction(() => updateEmployeeSkill(demoProfile, demoProfile.id, skillId, patch), (res) => setNotice(noticeFor(res)));
   const target = roles.find((t) => t.id === targetId) ?? roles[0];
 
   const gaps = useMemo(() => {
@@ -1984,7 +2260,7 @@ export function SkillsCareerPage() {
   const myEnrollments = talent.enrollments.filter((e) => e.employeeId === demoProfile.id);
   const recommendations = useMemo(() => {
     const needing = new Set(gaps.filter((g) => g.gap > 0).map((g) => g.skillId));
-    return COURSES.filter(
+    return courseCatalog().filter(
       (c) =>
         c.skills.some((s) => needing.has(s)) &&
         courseOpenTo(c, demoProfile) &&
@@ -2016,14 +2292,7 @@ export function SkillsCareerPage() {
       {tab === "matches" && <RoleMatchesPanel me={demoProfile} />}
       {tab === "team" && seesTeamInterests && <TeamInterestsPanel me={demoProfile} />}
 
-      {tab === "library" && (
-        <Card title="Skills library">
-          <DataTable
-            headers={["Skill", "Category", "Proficiency scale"]}
-            rows={SKILL_LIBRARY.map((s) => [s.name, s.category, s.levels.join(" → ")])}
-          />
-        </Card>
-      )}
+      {tab === "library" && <SkillsLibraryPanel me={demoProfile} />}
 
       {tab === "profile" && (
         <Card title="My skills">

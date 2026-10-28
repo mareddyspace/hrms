@@ -7,6 +7,8 @@ import { appendAuditEntries } from "./auditTrail.ts";
 import { pushPersonTaskAlert } from "./collabLocal.ts";
 import { resolveFlow, workflowVersion, type FlowDecision, type FlowStep } from "./approvalWorkflows.ts";
 import { decideFlowStep, isWaitingOn, waitingApproverIds } from "./expenseFlow.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { apiDecideTravel, apiSubmitTravel, apiWithdrawTravel, claimsMirror } from "../api/syncTimeExpenses.ts";
 
 export const TRAVEL_MODES = ["Flight", "Train", "Bus", "Car", "Other"] as const;
 export type TravelMode = (typeof TRAVEL_MODES)[number];
@@ -52,6 +54,8 @@ let cachedRaw: string | null | undefined;
 let cached: TravelRequest[] = EMPTY;
 
 function read(): TravelRequest[] {
+  // Backend mode: requests come from the API (kept in memory).
+  if (API_ENABLED) return claimsMirror.get().trips;
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(KEY);
@@ -85,9 +89,11 @@ export function subscribeTravel(fn: () => void) {
     if (event.key === KEY) fn();
   };
   window.addEventListener("storage", onStorage);
+  const off = API_ENABLED ? claimsMirror.subscribe(fn) : undefined;
   return () => {
     listeners.delete(fn);
     window.removeEventListener("storage", onStorage);
+    off?.();
   };
 }
 
@@ -123,7 +129,7 @@ function audit(actor: TravelActor, t: TravelRequest, action: "Created" | "Update
   ]);
 }
 
-export function submitTravel(actor: TravelActor, input: TravelInput): string | null {
+export async function submitTravel(actor: TravelActor, input: TravelInput): Promise<string | null> {
   const purpose = input.purpose.trim();
   const fromCity = input.fromCity.trim();
   const toCity = input.toCity.trim();
@@ -148,6 +154,8 @@ export function submitTravel(actor: TravelActor, input: TravelInput): string | n
       input.departOn <= t.returnOn,
   );
   if (overlap) return "You already have a trip on these dates.";
+  // Backend mode: the API fixes the approval steps and tells the approvers.
+  if (API_ENABLED) return apiSubmitTravel({ ...input, purpose, fromCity, toCity });
 
   const steps = resolveFlow("travel", actor.id, { amount: input.estimatedCost });
   const today = todayISO();
@@ -193,21 +201,27 @@ export function submitTravel(actor: TravelActor, input: TravelInput): string | n
 }
 
 export function canDecideTravel(t: TravelRequest, myId: string, canApprove: (employeeId: string) => boolean): boolean {
+  // Backend mode: the API says whose step it is.
+  if (API_ENABLED) return t.status === "pending" && claimsMirror.get().toDecide.has(t.id);
   return isWaitingOn(t, myId, canApprove);
 }
 
-export function decideTravel(
+export async function decideTravel(
   actor: TravelActor,
   id: string,
   decision: "approved" | "rejected",
   note: string | undefined,
   canApprove: (employeeId: string) => boolean,
-): string | null {
+): Promise<string | null> {
   const all = read();
   const t = all.find((item) => item.id === id);
   if (!t) return "Travel request not found.";
   if (t.employeeId === actor.id) return "You cannot decide your own request.";
   if (t.status !== "pending") return "This request has already been decided.";
+  if (API_ENABLED) {
+    if (!canDecideTravel(t, actor.id, canApprove)) return "This request isn't waiting on you.";
+    return apiDecideTravel(id, decision === "approved" ? "approve" : "reject", note);
+  }
   const today = todayISO();
   const cleanNote = note?.trim() || undefined;
   const result = decideFlowStep(t, actor, decision, cleanNote, canApprove, today);
@@ -216,7 +230,7 @@ export function decideTravel(
   const stepDecisions = [...t.stepDecisions, ...result.entries];
   const updated: TravelRequest =
     outcome === "waiting" || outcome === "advanced"
-      ? { ...t, stepDecisions, currentStep: result.currentStep }
+      ? { ...t, stepDecisions, currentStep: result.currentStep, steps: result.steps }
       : {
           ...t,
           stepDecisions,
@@ -259,12 +273,13 @@ export function decideTravel(
   return null;
 }
 
-export function withdrawTravel(actor: TravelActor, id: string): string | null {
+export async function withdrawTravel(actor: TravelActor, id: string): Promise<string | null> {
   const all = read();
   const t = all.find((item) => item.id === id);
   if (!t) return "Travel request not found.";
   if (t.employeeId !== actor.id) return "Only the person who raised this request can withdraw it.";
   if (t.status !== "pending") return "Only open requests can be withdrawn.";
+  if (API_ENABLED) return apiWithdrawTravel(id);
   const updated: TravelRequest = { ...t, status: "withdrawn" };
   write(all.map((item) => (item.id === id ? updated : item)));
   audit(actor, updated, "Updated", [{ field: "Status", before: "pending", after: "withdrawn" }]);

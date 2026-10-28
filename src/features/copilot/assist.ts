@@ -7,12 +7,14 @@ import type { CopilotAction, CopilotAnswer, CopilotLetterDraft } from "../../dat
 import type { DemoAccount } from "../../demoAccounts.ts";
 import type { PersonRecord } from "../../data/peopleData.ts";
 import { appendAuditEntries } from "../../data/auditTrail.ts";
+import { API_ENABLED } from "../../api/client.ts";
+import { apiAuditAiAction } from "../../api/syncProfile.ts";
 import { aiFeatureOn } from "../../data/aiSettings.ts";
 import { canRequestType, previewLetter } from "../../data/letterService.ts";
 import { FIELD_LABELS, type LetterFields } from "../../data/letterTemplates.ts";
 import { canManageLetters } from "../../data/rbac.ts";
 import { LETTER_TEMPLATES, letterTemplate, type CompHistoryRow, type LetterRequest, type LetterType } from "../../data/rewardData.ts";
-import { addDaysISO, maskMobile, parseISODate, toISO, type LeaveCode } from "../../model.ts";
+import { addDaysISO, maskAddress, maskMobile, parseISODate, toISO, type LeaveCode } from "../../model.ts";
 import { analyticsAnswer, isAnalyticsQuestion, plainText, type AnalyticsSources } from "./analytics.ts";
 
 type Raw = CopilotAnswer;
@@ -21,15 +23,30 @@ type Raw = CopilotAnswer;
 
 /** "Copilot action" audit rows: one when Copilot prepares something, one when the person confirms it. */
 export function logCopilotAction(
-  stage: "Proposed" | "Confirmed",
+  stage: "Proposed" | "Confirmed" | "Cancelled",
   actor: { id: string; name: string },
   what: { action?: CopilotAction; letter?: CopilotLetterDraft },
   result?: string,
 ): void {
+  // Backend mode: the server audit gets the action and stage, never the personal values.
+  if (API_ENABLED) {
+    const a = what.action;
+    const name = a?.kind === "profile" ? `update_${a.field}` : a?.kind === "leave" ? "apply_leave" : what.letter ? "request_letter" : "other";
+    const summary =
+      a?.kind === "profile"
+        ? a.field === "mobile" ? "Mobile number change" : "Address change"
+        : a?.kind === "leave"
+          ? `Leave request: ${a.codeName}`
+          : what.letter
+            ? `Letter: ${what.letter.label}`
+            : "";
+    void apiAuditAiAction(name, stage === "Proposed" ? "proposed" : stage === "Confirmed" ? "confirmed" : "cancelled", result ? `${summary} · ${result}` : summary);
+  }
   const changes: { field: string; before: string; after: string }[] = [{ field: "status", before: stage === "Proposed" ? "—" : "Proposed", after: stage }];
   let subjectId = actor.id;
   if (what.action?.kind === "profile") {
-    const mask = (v: string) => (what.action?.kind === "profile" && what.action.field === "mobile" ? maskMobile(v) : v || "—");
+    // Audit rows never hold the full number or address.
+    const mask = (v: string) => (what.action?.kind === "profile" && what.action.field === "mobile" ? maskMobile(v) : maskAddress(v));
     changes.push({ field: what.action.field, before: mask(what.action.current), after: mask(what.action.proposed) || "—" });
   } else if (what.action?.kind === "leave") {
     const a = what.action;

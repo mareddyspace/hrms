@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Card, DataTable, EmptyState, MetricCard, MetricGrid, StatusBadge, Tabs } from "../components/ui.tsx";
 import { COMPANY_NAME } from "../brand.ts";
@@ -17,9 +17,15 @@ import { COURSES, PERF_CYCLES } from "../data/talentData.ts";
 import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
-import { leaveRows, maskAddress, maskEmail, maskMobile, parseISODate, toISO, todayISO, type CountryCode } from "../model.ts";
+import { leaveRows, parseISODate, toISO, todayISO, type CountryCode } from "../model.ts";
+import { MaskedValue } from "../components/MaskedValue.tsx";
+import { canRevealPersonal, personRevealer } from "../data/piiReveal.ts";
+import { isMasked } from "../utils/mask.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { revealPersonDetail } from "../api/portalSync.ts";
 import { usePortal } from "../store.tsx";
 import { DraftTag } from "../features/ai/DraftTag.tsx";
+import { apiEmployeeSummary } from "../api/syncCareer.ts";
 import { useAiOn } from "../features/ai/flags.ts";
 
 function Progress({ value, label }: { value: number; label: string }) {
@@ -112,19 +118,31 @@ export function Employee360View({
   const terminated = isTerminated(person);
   const exit = getExitDetails(person);
   const [tab, setTab] = useState<TabId>("personal");
-  const [revealPii, setRevealPii] = useState(false);
   const [revealPay, setRevealPay] = useState(false);
-  const show = access.personal && revealPii;
+  // Personal details are masked; the person, and HR / admin in scope, can show one field at a time.
+  const canReveal = access.personal && canRevealPersonal(viewer, person.id, selfId, access.personal);
   const firstName = person.preferredName || person.firstName || person.fullName.split(" ")[0];
 
   // Self-maintained details (preferred name, personal email, emergency contact) win over the HR record.
   const preferredName = extras.preferredName || person.preferredName;
   const personalEmail = extras.personalEmail || person.personalEmail;
   const mobile = isSelf ? employee.mobile || person.mobile : person.mobile;
-  const address = isSelf ? employee.address || person.address : person.address;
-  const emergency = extras.emergencyName
-    ? [extras.emergencyName, extras.emergencyRelation, extras.emergencyPhone].filter(Boolean).join(" · ")
-    : "";
+  // Backend mode: address and emergency contact come from the server record (masked parts arrive masked).
+  const address = API_ENABLED ? person.address : isSelf ? employee.address || person.address : person.address;
+  const emergencyName = API_ENABLED ? person.emergencyName ?? "" : extras.emergencyName;
+  const emergencyPhone = API_ENABLED ? person.emergencyPhone ?? "" : extras.emergencyPhone;
+  const emergencyRelation = API_ENABLED ? person.emergencyRelationship ?? "" : extras.emergencyRelation;
+  const emergency = emergencyName ? [emergencyName, emergencyRelation].filter(Boolean).join(" · ") : "";
+  const revealAddress =
+    API_ENABLED && isMasked(address)
+      ? async () => {
+          const [line, postcode] = await Promise.all([
+            person.addressLine ? revealPersonDetail(person.id, "address_line") : Promise.resolve(null),
+            person.addressPostcode ? revealPersonDetail(person.id, "address_postcode") : Promise.resolve(null),
+          ]);
+          return [line, person.addressCity, postcode, person.addressCountry].filter(Boolean).join(", ");
+        }
+      : undefined;
 
   /* ───── Reporting line ───── */
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
@@ -284,6 +302,23 @@ export function Employee360View({
   const summaryOn = useAiOn("employee360");
   const [summaryRun, setSummaryRun] = useState(0);
   const [summaryAt, setSummaryAt] = useState(() => new Date());
+  // Backend mode: the server drafts the paragraph from what this viewer may see; the rule-based one is the fallback.
+  const [aiParagraph, setAiParagraph] = useState<{ key: string; text: string | null } | null>(null);
+  const summaryKey = `${person.id}:${summaryRun}`;
+  useEffect(() => {
+    if (!API_ENABLED || !summaryOn) return;
+    let live = true;
+    apiEmployeeSummary(person.id)
+      .then((r) => {
+        if (live) setAiParagraph({ key: summaryKey, text: r.used_ai ? r.summary : null });
+      })
+      .catch(() => {
+        if (live) setAiParagraph({ key: summaryKey, text: null });
+      });
+    return () => {
+      live = false;
+    };
+  }, [summaryOn, person.id, summaryKey]);
   const summary = useMemo(() => {
     const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
     const tenure = tenureText(person.dateOfJoining, today);
@@ -445,7 +480,7 @@ export function Employee360View({
             </div>
           }
         >
-          <p>{summary.paragraph}</p>
+          <p>{aiParagraph?.key === summaryKey && aiParagraph.text ? aiParagraph.text : summary.paragraph}</p>
           <ul className="ai-bullets">
             {summary.bullets.map((b) => (
               <li key={b.label}>
@@ -454,26 +489,14 @@ export function Employee360View({
               </li>
             ))}
           </ul>
-          <p className="ai-note">
-            Generated {summaryAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} from the sections you can see on this profile
-            {access.work ? "" : " (role and tenure only)"}. Pay, personal and document details are never included. Check it before sharing.
-          </p>
+          <p className="ai-note">Generated {summaryAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
         </Card>
       )}
 
       <Tabs tabs={tabs} value={activeTab} onChange={(id) => setTab(id as TabId)} />
 
       {activeTab === "personal" && (
-        <Card
-          title="Personal information"
-          action={
-            access.personal ? (
-              <button type="button" className="btn-ghost" onClick={() => setRevealPii((v) => !v)}>
-                {revealPii ? "Hide details" : "Show details"}
-              </button>
-            ) : undefined
-          }
-        >
+        <Card title="Personal information">
           <dl className="info-grid">
             {access.personal && <Fact label="Employee ID" value={person.employeeCode} />}
             <Fact label="First name" value={person.firstName} />
@@ -485,14 +508,57 @@ export function Employee360View({
               <>
                 <Fact
                   label="Date of birth"
-                  value={show ? `${person.dateOfBirth} · ${ageOn(person.dateOfBirth, today)} yrs` : MASK}
+                  value={
+                    <MaskedValue
+                      value={person.dateOfBirth}
+                      kind="dob"
+                      canReveal={canReveal}
+                      onReveal={personRevealer(person.id, "date_of_birth", person.dateOfBirth)}
+                      format={(dob) => (isMasked(dob) ? dob : `${dob} · ${ageOn(dob, today)} yrs`)}
+                    />
+                  }
                 />
                 <Fact label="Gender" value={person.gender} />
                 <Fact label="Nationality" value={person.nationality} />
-                <Fact label="Personal email" value={show ? personalEmail : maskEmail(personalEmail)} />
-                <Fact label="Phone" value={show ? mobile : maskMobile(mobile)} />
-                <Fact label="Address" value={show ? address : maskAddress(address)} />
-                <Fact label="Emergency contact" value={emergency ? (show ? emergency : MASK) : "Not provided"} />
+                <Fact
+                  label="Personal email"
+                  value={
+                    <MaskedValue
+                      value={personalEmail}
+                      kind="email"
+                      canReveal={canReveal}
+                      onReveal={personRevealer(person.id, "personal_email", personalEmail)}
+                    />
+                  }
+                />
+                <Fact
+                  label="Phone"
+                  value={<MaskedValue value={mobile} kind="phone" canReveal={canReveal} onReveal={personRevealer(person.id, "mobile", mobile)} />}
+                />
+                <Fact label="Address" value={<MaskedValue value={address} kind="address" canReveal={canReveal} onReveal={revealAddress} />} />
+                <Fact
+                  label="Emergency contact"
+                  value={
+                    emergency ? (
+                      <>
+                        {emergency}
+                        {emergencyPhone && (
+                          <>
+                            {" · "}
+                            <MaskedValue
+                              value={emergencyPhone}
+                              kind="phone"
+                              canReveal={canReveal}
+                              onReveal={personRevealer(person.id, "emergency_phone", emergencyPhone)}
+                            />
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      "Not provided"
+                    )
+                  }
+                />
                 <Fact label="Time zone" value={person.timeZone} />
               </>
             )}
@@ -536,7 +602,7 @@ export function Employee360View({
               <ul className="todo">
                 {person.dependents.map((d) => (
                   <li key={d.name}>
-                    <strong>{d.name}</strong> · {d.relation} · {show ? d.dateOfBirth : MASK}
+                    <strong>{d.name}</strong> · {d.relation} · <MaskedValue value={d.dateOfBirth} kind="dob" canReveal={canReveal} />
                   </li>
                 ))}
               </ul>
@@ -556,6 +622,11 @@ export function Employee360View({
             <Fact label="Joining date" value={`${person.dateOfJoining} · ${tenureText(person.dateOfJoining, today)}`} />
             <Fact label="Work location" value={`${person.location}, ${person.countryName}`} />
             <Fact label="Work arrangement" value={person.workArrangement} />
+            {person.company && <Fact label="Company" value={person.company} />}
+            {access.personal && person.holidayCalendar && <Fact label="Holiday calendar" value={person.holidayCalendar} />}
+            {access.personal && person.leavePolicy && <Fact label="Leave policy" value={person.leavePolicy} />}
+            {access.personal && person.payrollStatus && <Fact label="Payroll status" value={person.payrollStatus} />}
+            {access.personal && person.aiProfileStatus && <Fact label="AI profile status" value={person.aiProfileStatus} />}
             <Fact label="Working hours" value={schedule.hoursLabel} />
             <Fact label="Time zone" value={person.timeZone} />
           </dl>

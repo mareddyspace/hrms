@@ -1,0 +1,125 @@
+[
+  {
+    "code": "comp_off",
+    "name": "Comp off",
+    "quota": 0
+  },
+  {
+    "code": "pto",
+    "name": "Privilege leave",
+    "quota": 18,
+    "accrual": "monthly",
+    "carryForwardMax": 10,
+    "byCountry": {
+      "US": {
+        "quota": 15,
+        "name": "Paid time off",
+        "carryForwardMax": 0
+      },
+      "GB": {
+        "quota": 25,
+        "name": "Annual leave",
+        "carryForwardMax": 5
+      },
+      "AU": {
+        "quota": 20,
+        "name": "Annual leave",
+        "carryForwardMax": 0
+      },
+      "CA": {
+        "quota": 10,
+        "name": "Vacation",
+        "carryForwardMax": 0
+      },
+      "DE": {
+        "quota": 28,
+        "name": "Urlaub (annual leave)",
+        "carryForwardMax": 0
+      },
+      "AE": {
+        "quota": 30,
+        "name": "Annual leave",
+        "carryForwardMax": 0
+      },
+      "SA": {
+        "quota": 21,
+        "name": "Annual leave",
+        "carryForwardMax": 0
+      }
+    }
+  },
+  {
+    "code": "casual",
+    "name": "Casual leave",
+    "quota": 6,
+    "byCountry": {
+      "US": {
+        "quota": 0
+      },
+      "GB": {
+        "quota": 0
+      },
+      "AU": {
+        "quota": 0
+      },
+      "CA": {
+        "quota": 0
+      },
+      "DE": {
+        "quota": 0
+      },
+      "AE": {
+        "quota": 0
+      },
+      "SA": {
+        "quota": 0
+      }
+    }
+  },
+  {
+    "code": "sick",
+    "name": "Sick leave",
+    "quota": 10,
+    "byCountry": {
+      "US": {
+        "quota": 5
+      },
+      "AU": {
+        "quota": 10,
+        "name": "Personal/carer's leave"
+      },
+      "CA": {
+        "quota": 5
+      },
+      "DE": {
+        "quota": 30
+      },
+      "AE": {
+        "quota": 15
+      },
+      "SA": {
+        "quota": 30
+      }
+    }
+  },
+  {
+    "code": "wfh",
+    "name": "Work from home",
+    "quota": 8
+  },
+  {
+    "code": "emergency_wfh",
+    "name": "Emergency WFH",
+    "quota": 3
+  },
+  {
+    "code": "bereavement",
+    "name": "Bereavement leave",
+    "quota": 3
+  },
+  {
+    "code": "unpaid",
+    "name": "Leave without pay",
+    "quota": 12
+  }
+]

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
@@ -19,6 +19,10 @@ import { usePortal } from "../store.tsx";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import { ticketsAssignedTo, useTickets } from "../data/ticketStore.ts";
 import type { Project, Task } from "../model.ts";
+import { addDaysISO } from "../model.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { loadApiUtilization, timeMirror, type UtilizationOut } from "../api/syncTimeSheets.ts";
+import { nameOf as apiNameOf } from "../api/syncShared.ts";
 import "./tickets.css";
 
 const DAY_TARGET = 8;
@@ -97,6 +101,24 @@ export function TimesheetPage() {
     [employee.id, state.tasks],
   );
   const loggableTasks = myTasks.filter((t) => t.accepted);
+  // Backend mode: the API lists only the weeks this user decides, and knows why a week was sent back.
+  const apiTime = useSyncExternalStore(timeMirror.subscribe, timeMirror.get, timeMirror.get);
+  const decides = (personId: string) => API_ENABLED || canDecideFor(personId);
+  const [utilization, setUtilization] = useState<UtilizationOut | null>(null);
+  useEffect(() => {
+    if (!API_ENABLED || view !== "company") return;
+    let stale = false;
+    loadApiUtilization(weekStart, addDaysISO(weekStart, 6))
+      .then((out) => {
+        if (!stale) setUtilization(out);
+      })
+      .catch(() => {
+        if (!stale) setUtilization(null);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [view, weekStart, apiTime]);
 
   useEffect(() => {
     if (!isManager && view === "company") setView("mine");
@@ -165,20 +187,25 @@ export function TimesheetPage() {
     : weekSheets.some((sheet) => sheet.status === "submitted")
       ? "submitted"
       : "draft";
-  const locked = weekStatus === "approved";
+  // The API also keeps a submitted week closed until the manager decides it.
+  const locked = weekStatus === "approved" || (API_ENABLED && weekStatus === "submitted");
 
-  /** Tickets carry a project id; tasks a project or client name. Falls back to the first current project. */
+  /** Tickets carry a project id; tasks a project or client name. Unmatched work goes to the internal project. */
   function projectForWork(type: WorkType, id: string): Project | undefined {
+    const same = (a?: string, b?: string) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+    const internal =
+      projects.find((p) => /internal/i.test(p.name) || p.client === "Internal") ?? projects[0];
     if (type === "ticket") {
       const t = tickets.find((x) => x.id === id);
-      return projects.find((p) => p.id === t?.projectId) ?? projects.find((p) => p.name === t?.projectName) ?? projects[0];
+      return projects.find((p) => p.id === t?.projectId) ?? projects.find((p) => same(p.name, t?.projectName)) ?? internal;
     }
     if (type === "task") {
       const t = state.tasks.find((x) => x.id === id);
       return (
-        projects.find((p) => !!t?.projectName && p.name === t.projectName) ??
-        projects.find((p) => !!t?.client && p.client === t.client) ??
-        projects[0]
+        projects.find((p) => same(p.name, t?.projectName)) ??
+        projects.find((p) => !!t?.projectName && p.name.toLowerCase().startsWith(t.projectName.toLowerCase().split(" ")[0])) ??
+        projects.find((p) => same(p.client, t?.client)) ??
+        internal
       );
     }
     return projects.find((p) => p.id === id) ?? projects[0];
@@ -250,7 +277,7 @@ export function TimesheetPage() {
     return "";
   }
 
-  function onLog(event: FormEvent) {
+  async function onLog(event: FormEvent) {
     event.preventDefault();
     if (logKind === "leave") return;
     if (logKind !== "project" && !workId) {
@@ -261,7 +288,7 @@ export function TimesheetPage() {
       setMessage({ tone: "err", text: `${formatShortDate(date)}: ${offDays[date]}. No hours on this day.` });
       return;
     }
-    const error = addTimeEntry(projectId, weekStart, {
+    const error = await addTimeEntry(projectId, weekStart, {
       date,
       startHour: Number(startHour),
       hours: Number(hours),
@@ -292,8 +319,8 @@ export function TimesheetPage() {
     };
   }, [blocks]);
 
-  function onSubmitWeek() {
-    const error = submitWeekTimesheets(weekStart);
+  async function onSubmitWeek() {
+    const error = await submitWeekTimesheets(weekStart);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Week submitted for approval." });
   }
 
@@ -410,6 +437,48 @@ export function TimesheetPage() {
               </button>
             ))}
           </div>
+          {API_ENABLED && utilization && (
+            <Card title="Utilization this week" action={<span className="muted">Everyone in your scope</span>}>
+              <section className="summary-row" aria-label="Utilization">
+                <div className="summary">
+                  <span>Hours logged</span>
+                  <strong>{formatHoursAmount(utilization.total_hours)}</strong>
+                </div>
+                <div className="summary">
+                  <span>Billable</span>
+                  <strong>{formatHoursAmount(utilization.billable_hours)}</strong>
+                </div>
+                <div className="summary">
+                  <span>Billable share</span>
+                  <strong>{utilization.billable_pct}%</strong>
+                </div>
+              </section>
+              {utilization.projects.length > 0 && (
+                <div className="table-scroll">
+                  <table className="data">
+                    <thead>
+                      <tr>
+                        <th>Project</th>
+                        <th>Hours</th>
+                        <th>Billable</th>
+                        <th>Billable %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {utilization.projects.map((p) => (
+                        <tr key={p.id}>
+                          <td>{p.name}</td>
+                          <td>{formatHoursAmount(p.total_hours)}</td>
+                          <td>{formatHoursAmount(p.billable_hours)}</td>
+                          <td>{p.billable_pct}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          )}
           <Card title="Organization timesheets">
             <div className="table-scroll">
               <table className="data">
@@ -443,16 +512,19 @@ export function TimesheetPage() {
                       <td>{row.status === "missing" ? "—" : formatHoursAmount(row.hours)}</td>
                       <td>
                         <StatusPill status={row.status} />
+                        {row.status === "submitted" && row.approvalProgress && (
+                          <span className="muted request-decision">{row.approvalProgress}</span>
+                        )}
                       </td>
                       <td>
                         {/* Only the person's reporting line decides — never their own row. */}
-                        {row.status === "submitted" && canDecideFor(row.personId) && (
+                        {row.status === "submitted" && decides(row.personId) && (
                           <span className="form-actions">
                             <button
                               className="btn btn-tiny"
                               type="button"
-                              onClick={() => {
-                                const error = setOrgTimesheetStatus(row.id, "approved");
+                              onClick={async () => {
+                                const error = await setOrgTimesheetStatus(row.id, "approved");
                                 setMessage(
                                   error
                                     ? { tone: "err", text: error }
@@ -465,8 +537,8 @@ export function TimesheetPage() {
                             <button
                               className="btn-ghost btn-tiny"
                               type="button"
-                              onClick={() => {
-                                const error = setOrgTimesheetStatus(row.id, "draft");
+                              onClick={async () => {
+                                const error = await setOrgTimesheetStatus(row.id, "draft");
                                 setMessage(
                                   error
                                     ? { tone: "err", text: error }
@@ -478,7 +550,7 @@ export function TimesheetPage() {
                             </button>
                           </span>
                         )}
-                        {row.status === "submitted" && !canDecideFor(row.personId) && (
+                        {row.status === "submitted" && !decides(row.personId) && (
                           <span className="muted">Waiting for their manager</span>
                         )}
                         {row.status === "missing" && <span className="muted">Awaiting employee</span>}
@@ -500,8 +572,15 @@ export function TimesheetPage() {
           {weekStatus === "approved"
             ? "Timesheet approved"
             : weekStatus === "submitted"
-              ? "Timesheet submitted — waiting on manager"
+              ? `Timesheet submitted — waiting on ${(API_ENABLED && apiTime.weeks[weekStart]?.approval?.current_label?.toLowerCase()) || "manager"}`
               : "Timesheet unsubmitted"}
+          {API_ENABLED && apiTime.weeks[weekStart]?.status === "rejected" && (
+            <>
+              {" "}
+              · sent back by {apiNameOf(apiTime.weeks[weekStart]?.decided_by)}
+              {apiTime.weeks[weekStart]?.decision_note ? `: “${apiTime.weeks[weekStart]?.decision_note}”` : ""}
+            </>
+          )}
         </span>
         {weekStatus !== "approved" && weekStatus !== "submitted" && (
           <button className="btn btn-tiny" type="button" onClick={onSubmitWeek}>
@@ -640,8 +719,8 @@ export function TimesheetPage() {
                             type="button"
                             className="ts-block-x"
                             aria-label="Remove time block"
-                            onClick={() => {
-                              const error = removeTimeEntry(block.projectId, weekStart, block.id);
+                            onClick={async () => {
+                              const error = await removeTimeEntry(block.projectId, weekStart, block.id);
                               setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Time block removed." });
                             }}
                           >
@@ -780,7 +859,7 @@ export function TimesheetPage() {
                       </ul>
                     )}
                     <p className="muted">
-                      Approved leave shows on the calendar. No hours can be logged. <Link to="/leave">Leave</Link>
+                      No hours on leave days. <Link to="/leave">Leave</Link>
                     </p>
                   </div>
                 ) : (

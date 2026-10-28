@@ -10,6 +10,8 @@ import {
   type PlusActor,
   type PlusResult,
 } from "./shared.ts";
+import { API_ENABLED, apiRun, createApiMirror, subscribeAll } from "../../api/syncOps.ts";
+import { apiAnswerSurvey, apiCloseSurvey, apiCreateSurvey, apiPublishSurvey, loadApiSurveys } from "../../api/syncOpsEngagement.ts";
 
 export type QuestionKind = "rating" | "enps" | "text";
 
@@ -31,6 +33,8 @@ export interface Survey {
   published: boolean;
   createdBy: string;
   createdAt: string;
+  /** Backend mode: set when HR closed the survey early. */
+  closedAt?: string;
 }
 
 /** Anonymous: no employee id, no timestamp. `lineIds` lets managers see team aggregates only above the threshold. */
@@ -43,11 +47,31 @@ export interface SurveyResponse {
   lineIds: string[];
 }
 
-interface SurveyState {
+/** Backend mode: aggregate results as the API returns them (no single answers). */
+export interface ApiSurveyResults {
+  surveyId: string;
+  phase: string;
+  responses: number;
+  audience: number;
+  participationPct: number;
+  threshold: number;
+  suppressed: boolean;
+  engagement: number | null;
+  enps: number | null;
+  questions: QuestionResult[];
+  departments: { name: string; responses: number; suppressed: boolean; engagement: number | null; enps: number | null }[];
+  countries: { name: string; responses: number; suppressed: boolean; engagement: number | null; enps: number | null }[];
+}
+
+export interface SurveyState {
   surveys: Survey[];
   responses: SurveyResponse[];
   /** surveyId → employee ids who already answered. Only used to stop double answers. */
   responded: Record<string, string[]>;
+  /** Backend mode only: results by survey id (HR, admin, executive). */
+  apiResults?: Record<string, ApiSurveyResults>;
+  /** Backend mode only: engagement trend of closed company-wide surveys. */
+  apiTrend?: EngagementPoint[];
 }
 
 export const MIN_RESPONSES = 5;
@@ -57,6 +81,7 @@ export type SurveyPhase = "Draft" | "Scheduled" | "Open" | "Closed";
 
 export function surveyPhase(survey: Survey, today = todayISO()): SurveyPhase {
   if (!survey.published) return "Draft";
+  if (survey.closedAt) return "Closed";
   if (today < survey.openDate) return "Scheduled";
   if (today > survey.closeDate) return "Closed";
   return "Open";
@@ -154,9 +179,23 @@ try {
 }
 const store = createLocalStore<SurveyState>("kastech.surveys.v4", defaults, normalize);
 
-export const subscribeSurveys = store.subscribe;
-export const getSurveysState = store.getState;
+/** Backend mode: surveys, who answered and aggregate results come from the API. */
+const mirror = createApiMirror<SurveyState>(() => ({ surveys: [], responses: [], responded: {}, apiResults: {}, apiTrend: [] }), loadApiSurveys);
+
+export const subscribeSurveys = API_ENABLED ? subscribeAll(store.subscribe, mirror.subscribe) : store.subscribe;
+export const getSurveysState: () => SurveyState = API_ENABLED ? mirror.get : store.getState;
 export const resetSurveys = store.reset;
+
+/* Backend mode: async changes (the API checks the same rules), then a reload. */
+export function createSurveyApi(input: SurveyDraftInput, publish: boolean): Promise<PlusResult> {
+  const error = validateDraft(input, todayISO());
+  if (error) return Promise.resolve(error);
+  return apiRun(() => apiCreateSurvey(input, publish), mirror);
+}
+export const publishSurveyApi = (surveyId: string) => apiRun(() => apiPublishSurvey(surveyId), mirror);
+export const closeSurveyApi = (surveyId: string) => apiRun(() => apiCloseSurvey(surveyId), mirror);
+export const submitResponseApi = (surveyId: string, answers: Record<string, number | string>) =>
+  apiRun(() => apiAnswerSurvey(surveyId, answers), mirror);
 
 /* ───────────── Audience ───────────── */
 
@@ -454,6 +493,7 @@ function pointFor(survey: Survey, responses: SurveyResponse[]): EngagementPoint 
 /** HR only: engagement and eNPS for every closed company-wide survey, oldest first. */
 export function engagementTrend(actor: PlusActor, state: SurveyState = getSurveysState()): EngagementPoint[] {
   if (!isHr(actor.role)) return [];
+  if (API_ENABLED) return [...(state.apiTrend ?? [])].sort((a, b) => a.closedOn.localeCompare(b.closedOn));
   const today = todayISO();
   const live = state.surveys
     .filter((s) => s.published && surveyPhase(s, today) === "Closed" && s.audience.type === "all")

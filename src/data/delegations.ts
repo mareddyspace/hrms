@@ -1,6 +1,8 @@
 import { DEMO_ACCOUNTS, RETIRED_ACCOUNT_IDS, RETIRED_COUNTRY_MANAGER_IDS, managementChain, mentionsRetiredAccount } from "../demoAccounts.ts";
 import { todayISO } from "../model.ts";
 import { getPerson, listPeople, managerChainIds } from "./peopleLocal.ts";
+import { API_ENABLED, api } from "../api/client.ts";
+import { apiDelete, errorText } from "../api/syncShared.ts";
 
 /**
  * Approval delegation (blueprint §25): someone who decides requests hands that authority to a colleague
@@ -146,7 +148,8 @@ export function personLabel(id: string): string {
 
 function everyoneIds(): string[] {
   const ids = new Set<string>(DEMO_ACCOUNTS.map((a) => a.id));
-  for (const p of listPeople()) if (p.employmentStatus !== "Terminated") ids.add(p.id);
+  // Joiners who haven't started (Onboarding) can't cover approvals yet.
+  for (const p of listPeople()) if (p.employmentStatus !== "Terminated" && p.employmentStatus !== "Onboarding") ids.add(p.id);
   return [...ids];
 }
 
@@ -331,4 +334,92 @@ export function parseOnBehalf(note?: string): { onBehalfOf?: string; note?: stri
   const rest = note.slice(ON_BEHALF_PREFIX.length);
   const cut = rest.indexOf(" — ");
   return cut < 0 ? { onBehalfOf: rest } : { onBehalfOf: rest.slice(0, cut), note: rest.slice(cut + 3) };
+}
+
+// ---------- Backend mode (VITE_API_URL): delegations live on the server ----------
+
+/** backend/app/schemas/approval_chains.py DelegationOut */
+interface DelegationOut {
+  id: string;
+  delegator_id: string;
+  delegate_id: string;
+  from: string;
+  to: string;
+  types: string[] | null;
+  note: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Portal scope -> server approval type ("other" = every other type). */
+const SCOPE_TO_TYPE: Record<DelegationScope, string> = {
+  leave: "leave",
+  expenses: "expense",
+  timesheets: "timesheet",
+  attendance: "attendance_correction",
+  others: "other",
+};
+
+function fromApi(d: DelegationOut): Delegation {
+  const scopes = d.types
+    ? DELEGATION_SCOPES.map((s) => s.id).filter((id) => d.types!.includes(SCOPE_TO_TYPE[id]))
+    : null;
+  return {
+    id: d.id,
+    delegatorId: d.delegator_id,
+    delegateId: d.delegate_id,
+    from: d.from,
+    to: d.to,
+    ...(d.note ? { note: d.note } : {}),
+    scope: scopes && scopes.length ? scopes : "all",
+    createdOn: d.created_at.slice(0, 10),
+    ...(d.active ? {} : { endedOn: d.updated_at.slice(0, 10) }),
+  };
+}
+
+/** Loads the delegations I gave or received from the API into this store (backend mode). */
+export async function loadApiDelegations(): Promise<string | null> {
+  if (!API_ENABLED) return null;
+  try {
+    const rows = await api.get<DelegationOut[]>("/delegations", { include_ended: true });
+    cache = { ...getDelegationState(), delegations: rows.map(fromApi) };
+    listeners.forEach((fn) => fn());
+    return null;
+  } catch (error) {
+    return errorText(error, "Could not load delegations.");
+  }
+}
+
+/** Backend mode: create on the server (it checks dates, overlaps and loops), then reload. */
+export async function apiCreateDelegation(input: {
+  delegateId: string;
+  from: string;
+  to: string;
+  note?: string;
+  scope: "all" | DelegationScope[];
+}): Promise<string | null> {
+  if (!input.delegateId) return "Choose who will decide on your behalf.";
+  if (input.scope !== "all" && input.scope.length === 0) return "Pick at least one request type.";
+  try {
+    await api.post("/delegations", {
+      delegate_id: input.delegateId,
+      from: input.from,
+      to: input.to,
+      note: input.note?.trim() || null,
+      types: input.scope === "all" ? null : input.scope.map((s) => SCOPE_TO_TYPE[s]),
+    });
+  } catch (error) {
+    return errorText(error, "Could not save. Try again.");
+  }
+  return loadApiDelegations();
+}
+
+export async function apiEndDelegation(id: string): Promise<string | null> {
+  try {
+    await apiDelete(`/delegations/${encodeURIComponent(id)}`);
+  } catch (error) {
+    return errorText(error, "Could not end it. Try again.");
+  }
+  return loadApiDelegations();
 }

@@ -37,7 +37,7 @@ import {
   locationOptions,
   parentTypeOf,
   positionDefFor,
-  saveJobProfile,
+  saveJobProfileAsync,
   savePosition,
   setJobProfileActive,
   setPositionActive,
@@ -48,6 +48,7 @@ import {
   type OrgUnit,
   type OrgUnitType,
 } from "../data/orgStructureLocal.ts";
+import { API_ENABLED } from "../api/syncOps.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { hasModuleAccess } from "../data/peoplePermissions.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
@@ -57,6 +58,7 @@ import { usePortal } from "../store.tsx";
 import { JobDescriptionWriter } from "../features/ai/JobDescriptionWriter.tsx";
 import { useAiOn } from "../features/ai/flags.ts";
 import "../features/lifecycle/lifecycle.css";
+import { AsOfOrgTree, JobProfileDetails, OrgHistoryList, UnitDatedChange } from "../features/org/OrgHistoryPanels.tsx";
 
 type Message = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -181,21 +183,28 @@ function UnitForm({
   const [name, setName] = useState(unit?.name ?? "");
   const [code, setCode] = useState(unit?.code ?? "");
   const [error, setError] = useState<string | null>(null);
-  const parentType = parentTypeOf(type);
-  const parents = units.filter((u) => u.type === parentType && u.countryCode === countryCode && u.active);
+  // Backend mode: the API's tree is company-wide (departments have no country), so any active unit can be the parent.
+  const parentType = API_ENABLED ? "any" : parentTypeOf(type);
+  const parents = API_ENABLED
+    ? units.filter((u) => u.active && u.type !== "location" && (!u.countryCode || !countryCode || u.countryCode === countryCode))
+    : units.filter((u) => u.type === parentType && u.countryCode === countryCode && u.active);
+  const [busy, setBusy] = useState(false);
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
-    const result = unit
+    if (busy) return;
+    setBusy(true);
+    const result = await (unit
       ? updateOrgUnit(demoProfile, people, unit.key, { name, code })
-      : addOrgUnit(demoProfile, people, { type, countryCode, name, code, parentKey });
+      : addOrgUnit(demoProfile, people, { type, countryCode, name, code, parentKey }));
+    setBusy(false);
     if (result) setError(result);
     else onDone({ tone: "ok", text: unit ? `${name.trim()} saved.` : `${unitTypeLabel(type)} ${name.trim()} added.` });
   }
 
-  function toggleActive() {
+  async function toggleActive() {
     if (!unit) return;
-    const result = updateOrgUnit(demoProfile, people, unit.key, { active: !unit.active });
+    const result = await updateOrgUnit(demoProfile, people, unit.key, { active: !unit.active });
     if (result) setError(result);
     else onDone({ tone: "ok", text: `${unit.name} ${unit.active ? "deactivated" : "reactivated"}.` });
   }
@@ -220,6 +229,7 @@ function UnitForm({
         </Field>
         <Field label="Country">
           <select value={countryCode} disabled={Boolean(unit)} onChange={(e) => { setCountryCode(e.target.value); setParentKey(""); }}>
+            {API_ENABLED && <option value="">All countries</option>}
             {TIMEZ_COUNTRIES.map((c) => (
               <option key={c.code} value={c.code}>
                 {c.name}
@@ -227,7 +237,20 @@ function UnitForm({
             ))}
           </select>
         </Field>
-        {!unit && parentType !== "country" && (
+        {!unit && parentType === "any" && (
+          <Field label="Parent unit" wide>
+            <select value={parentKey} onChange={(e) => setParentKey(e.target.value)}>
+              <option value="">The company</option>
+              {parents.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.name} · {unitTypeLabel(p.type)}
+                  {p.countryCode ? ` · ${p.countryCode}` : ""}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+        {!unit && parentType !== "country" && parentType !== "any" && (
           <Field label={`Parent ${unitTypeLabel(parentType).toLowerCase()}`} wide>
             <select value={parentKey} onChange={(e) => setParentKey(e.target.value)} required>
               <option value="">Choose…</option>
@@ -247,7 +270,7 @@ function UnitForm({
         </Field>
       </div>
       <div className="row-gap">
-        <button className="btn" type="submit">
+        <button className="btn" type="submit" disabled={busy}>
           {unit ? "Save" : "Add unit"}
         </button>
         {unit && (
@@ -279,6 +302,8 @@ export function OrganizationPage() {
   const [dialog, setDialog] = useState<{ key: string | null } | null>(null);
   const [unitType, setUnitType] = useState("");
   const [unitQ, setUnitQ] = useState("");
+  // Effective-dated history of one unit (API mode).
+  const [historyUnit, setHistoryUnit] = useState<OrgUnit | null>(null);
   const countries = (tree.children ?? []).filter((c) => (c.headcount ?? 0) > 0 || c.children?.some((x) => x.id.startsWith("added-")));
   const canEdit = canEditOrganisation(demoProfile.role);
   const editing = dialog?.key ? units.find((u) => u.key === dialog.key) ?? null : null;
@@ -370,6 +395,12 @@ export function OrganizationPage() {
         </Card>
       )}
 
+      {tab === "structure" && API_ENABLED && (
+        <Card title="Structure on a date">
+          <AsOfOrgTree />
+        </Card>
+      )}
+
       {tab === "units" && (
         <Card title="Org units">
           <FilterBar>
@@ -399,13 +430,18 @@ export function OrganizationPage() {
               u.code || "—",
               u.headcount,
               <StatusBadge key={`st-${u.key}`} status={u.active ? "Active" : "Inactive"} tone={u.active ? "ok" : "neutral"} literal />,
-              canEdit ? (
-                <button key={`e-${u.key}`} type="button" className="btn-ghost btn-tiny" onClick={() => setDialog({ key: u.key })}>
-                  Edit
-                </button>
-              ) : (
-                ""
-              ),
+              <div key={`e-${u.key}`} className="row-gap">
+                {canEdit && (
+                  <button type="button" className="btn-ghost btn-tiny" onClick={() => setDialog({ key: u.key })}>
+                    Edit
+                  </button>
+                )}
+                {API_ENABLED && (
+                  <button type="button" className="btn-ghost btn-tiny" onClick={() => setHistoryUnit(u)}>
+                    History
+                  </button>
+                )}
+              </div>,
             ])}
             empty={<EmptyState title="No units" description="Try other filters." />}
           />
@@ -462,6 +498,9 @@ export function OrganizationPage() {
           />
         )}
       </Dialog>
+      <Dialog open={Boolean(historyUnit)} title={historyUnit ? `${historyUnit.name} · history` : "History"} onClose={() => setHistoryUnit(null)} wide>
+        {historyUnit && <UnitDatedChange key={historyUnit.key} unitId={historyUnit.key} canEdit={canEdit} />}
+      </Dialog>
     </Page>
   );
 }
@@ -488,16 +527,16 @@ function ProfileForm({
   const [description, setDescription] = useState(profile?.description ?? "");
   const [error, setError] = useState<string | null>(null);
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
-    const result = saveJobProfile(demoProfile, profile?.id ?? null, { title, familyName, gradeBand, description });
+    const result = await saveJobProfileAsync(demoProfile, profile?.id ?? null, { title, familyName, gradeBand, description });
     if (result) setError(result);
     else onDone({ tone: "ok", text: `${title.trim()} saved.` });
   }
 
-  function toggleActive() {
+  async function toggleActive() {
     if (!profile) return;
-    const result = setJobProfileActive(demoProfile, profile.id, Boolean(profile.inactive));
+    const result = await setJobProfileActive(demoProfile, profile.id, Boolean(profile.inactive));
     if (result) setError(result);
     else onDone({ tone: "ok", text: `${profile.title} ${profile.inactive ? "reactivated" : "deactivated"}.` });
   }
@@ -590,10 +629,10 @@ function PositionForm({
   const locations = useMemo(() => locationOptions(people), [people]);
   const familyProfiles = profiles.filter((p) => p.familyName === jobFamily && (!p.inactive || p.id === jobProfileId));
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const [countryCode, ...rest] = location.split("|");
-    const result = savePosition(demoProfile, position, {
+    const result = await savePosition(demoProfile, position, {
       title,
       department,
       jobFamily,
@@ -609,9 +648,9 @@ function PositionForm({
     else onDone({ tone: "ok", text: `${title.trim()} saved.` });
   }
 
-  function toggleActive() {
+  async function toggleActive() {
     if (!position) return;
-    const result = setPositionActive(demoProfile, position, Boolean(position.inactive));
+    const result = await setPositionActive(demoProfile, position, Boolean(position.inactive));
     if (result) setError(result);
     else onDone({ tone: "ok", text: `${position.title} ${position.inactive ? "reactivated" : "deactivated"}.` });
   }
@@ -725,6 +764,8 @@ export function JobsPage() {
   const [message, setMessage] = useState<Message>(null);
   const [profileDialog, setProfileDialog] = useState<{ id: string | null } | null>(null);
   const [positionDialog, setPositionDialog] = useState<{ id: string | null } | null>(null);
+  // Job level, experience, education, responsibilities and history of one profile (API mode).
+  const [detailsProfileId, setDetailsProfileId] = useState<string | null>(null);
   const { id } = useParams();
   const canEdit = canEditOrganisation(demoProfile.role);
   const jdOn = useAiOn("jobDescription");
@@ -865,13 +906,18 @@ export function JobsPage() {
                 p.gradeBand,
                 p.description.length > 120 ? `${p.description.slice(0, 120).replace(/\s+/g, " ")}…` : p.description,
                 <StatusBadge key={`ps-${p.id}`} status={p.inactive ? "Inactive" : "Active"} tone={p.inactive ? "neutral" : "ok"} literal />,
-                canEdit ? (
-                  <button key={`pe-${p.id}`} type="button" className="btn-ghost btn-tiny" onClick={() => setProfileDialog({ id: p.id })}>
-                    Edit
-                  </button>
-                ) : (
-                  ""
-                ),
+                <div key={`pe-${p.id}`} className="row-gap">
+                  {canEdit && (
+                    <button type="button" className="btn-ghost btn-tiny" onClick={() => setProfileDialog({ id: p.id })}>
+                      Edit
+                    </button>
+                  )}
+                  {API_ENABLED && overlay.api?.profiles.some((x) => x.id === p.id) && (
+                    <button type="button" className="btn-ghost btn-tiny" onClick={() => setDetailsProfileId(p.id)}>
+                      Details
+                    </button>
+                  )}
+                </div>,
               ])}
             />
           )}
@@ -1000,6 +1046,11 @@ export function JobsPage() {
               Open recruiting
             </Link>
           </Card>
+          {API_ENABLED && overlay.api?.positions.some((p) => p.id === selected.id) && (
+            <Card title="Position history">
+              <OrgHistoryList key={selected.id} entity="positions" id={selected.id} />
+            </Card>
+          )}
           <Card title="Open positions">
             <ul className="todo">
               {activePositions.filter((p) => p.id !== selected.id && p.status !== "Filled").map((p) => (
@@ -1045,6 +1096,14 @@ export function JobsPage() {
         {profileDialog && (
           <ProfileForm key={profileDialog.id ?? "new"} profile={editingProfile} families={familyNames} profiles={allProfiles} onDone={done} />
         )}
+      </Dialog>
+      <Dialog
+        open={Boolean(detailsProfileId)}
+        title={`${allProfiles.find((p) => p.id === detailsProfileId)?.title ?? "Job profile"} · details`}
+        onClose={() => setDetailsProfileId(null)}
+        wide
+      >
+        {detailsProfileId && <JobProfileDetails key={detailsProfileId} profileId={detailsProfileId} canEdit={canEdit} />}
       </Dialog>
       <Dialog open={Boolean(positionDialog) && canEdit} title={editingPosition ? "Edit position" : "Add position"} onClose={() => setPositionDialog(null)}>
         {positionDialog && (

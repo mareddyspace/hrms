@@ -1,6 +1,8 @@
 import { DEMO_ACCOUNTS, findDemoById, managementChain, type DemoAccount } from "../../demoAccounts.ts";
-import { taskPersonById } from "../../data/taskTeam.ts";
-import { getPerson } from "../../data/peopleLocal.ts";
+import { taskPersonById, taskTeamFor, type TaskTeamPerson } from "../../data/taskTeam.ts";
+import { getPerson, listPeople } from "../../data/peopleLocal.ts";
+import { hasStarted } from "../../data/peopleData.ts";
+import { API_ENABLED } from "../../api/syncOps.ts";
 import { pushPersonTaskAlert } from "../../data/collabLocal.ts";
 import { delegatedAuthority, type DelegationScope } from "../../data/delegations.ts";
 import { formatShortDate, parseISODate, toISO, type UserRole } from "../../model.ts";
@@ -11,6 +13,39 @@ export type WorkforceActor = Pick<DemoAccount, "id" | "fullName" | "role">;
 export type WorkforceResult = string | null;
 
 export const SAVE_FAILED = "Could not save. Please try again.";
+
+/**
+ * People a manager rosters. Backend mode: direct reports from the people directory (the API only
+ * accepts those); otherwise the demo task team.
+ */
+export function rosterTeamFor(managerId: string, onOrBefore: string = toISO(new Date())): TaskTeamPerson[] {
+  // Pre-boarding joiners show up from the roster week of their start date.
+  const joined = (id: string) => {
+    const person = getPerson(id);
+    return !person || person.dateOfJoining <= onOrBefore;
+  };
+  if (!API_ENABLED) return taskTeamFor(managerId).filter((p) => joined(p.id));
+  return listPeople()
+    .filter((p) => p.managerId === managerId && p.id !== managerId && p.dateOfJoining <= onOrBefore)
+    .map((p) => ({
+      id: p.id,
+      shortName: p.preferredName || p.firstName || p.fullName.split(" ")[0],
+      fullName: p.fullName,
+      department: p.department,
+      role: p.designation,
+    }));
+}
+
+/**
+ * Local mode: whether this colleague can be asked to swap on this day — they need a sign-in account (to respond)
+ * and to have started (pre-boarding joiners can't). The API checks the same.
+ */
+export function swapPartnerError(personId: string, date: string): string | null {
+  const person = getPerson(personId);
+  if (person && (person.dateOfJoining > date || !hasStarted(person))) return `${person.fullName} hasn't started yet, so they can't swap shifts.`;
+  if (!findDemoById(personId)) return `${personName(personId)} has no sign-in account, so they can't respond to a swap.`;
+  return null;
+}
 
 export function isHrRole(role: UserRole): boolean {
   return role === "hr" || role === "hr_admin" || role === "hrbp" || role === "super_admin";

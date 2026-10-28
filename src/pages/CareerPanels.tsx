@@ -1,7 +1,18 @@
-import { useState, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { Banner, Card, DataTable, EmptyState, Field, StatusBadge } from "../components/ui.tsx";
-import { TARGET_ROLES } from "../data/talentData.ts";
+import { SKILL_LIBRARY, TARGET_ROLES, type Course } from "../data/talentData.ts";
+import { API_ENABLED } from "../api/client.ts";
+import {
+  apiAddSkill,
+  apiRetireSkill,
+  apiRoleMatches,
+  apiSaveCareerProfile,
+  apiTargetRoles,
+  careerMirror,
+  toInterests,
+  type CareerMatchesOut,
+} from "../api/syncCareer.ts";
 import {
   addDevAction,
   CAREER_FUNCTIONS,
@@ -18,10 +29,12 @@ import {
   skillProfileFor,
   subscribeTalent,
   visibleCareerInterests,
+  courseCatalog,
+  talentAction,
   type CareerTimeframe,
   type TalentActor,
 } from "../data/talentLocal.ts";
-import { rankRoles } from "../data/careerMatch.ts";
+import { rankRoles, type RoleMatch } from "../data/careerMatch.ts";
 import { openPostings } from "../features/talentplus/jobBoardStore.ts";
 import { accountHasNavAccess, type DemoAccount } from "../demoAccounts.ts";
 import { getPerson } from "../data/peopleLocal.ts";
@@ -38,10 +51,15 @@ function useInterests() {
   return useSyncExternalStore(subscribeTalent, getCareerInterestsList, getCareerInterestsList);
 }
 
-const ROLE_IDS = TARGET_ROLES.map((r) => r.id);
-const roleTitle = (id: string) => TARGET_ROLES.find((r) => r.id === id)?.title ?? id;
+/** Backend mode: skills library, career paths and profiles from the server (api/syncCareer.ts). */
+function useCareer() {
+  return useSyncExternalStore(careerMirror.subscribe, careerMirror.get, careerMirror.get);
+}
 
-function nameOf(id: string): string {
+const targetRoles = () => apiTargetRoles() ?? TARGET_ROLES;
+const roleTitle = (id: string) => targetRoles().find((r) => r.id === id)?.title ?? id;
+
+function personName(id: string): string {
   return getPerson(id)?.fullName ?? taskPersonById(id)?.fullName ?? id;
 }
 
@@ -55,7 +73,15 @@ function plusDays(days: number): string {
 
 export function CareerInterestsPanel({ me }: { me: TalentActor }) {
   const list = useInterests();
-  const saved = careerInterestsFor(me.id, list);
+  const career = useCareer();
+  if (API_ENABLED) {
+    const saved = toInterests(career.me);
+    return <InterestsForm key={career.me?.updated_at ?? "new"} me={me} saved={saved} mentor={career.me?.mentor_name ?? null} />;
+  }
+  return <InterestsForm me={me} saved={careerInterestsFor(me.id, list)} mentor={null} />;
+}
+
+function InterestsForm({ me, saved, mentor }: { me: TalentActor; saved: ReturnType<typeof careerInterestsFor>; mentor: string | null }) {
   const [roles, setRoles] = useState<string[]>(saved?.targetRoleIds ?? []);
   const [functions, setFunctions] = useState<string[]>(saved?.functions ?? []);
   const [relocate, setRelocate] = useState(saved?.openToRelocation ?? false);
@@ -66,21 +92,30 @@ export function CareerInterestsPanel({ me }: { me: TalentActor }) {
   const toggle = (value: string, current: string[], set: (v: string[]) => void) =>
     set(current.includes(value) ? current.filter((v) => v !== value) : [...current, value]);
 
+  const ok = { tone: "ok" as const, text: "Career interests saved. Your manager and HR can see them." };
   function submit(e: FormEvent) {
     e.preventDefault();
-    const error = saveCareerInterests(me, { targetRoleIds: roles, functions, openToRelocation: relocate, timeframe, note }, ROLE_IDS);
-    setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: "Career interests saved. Your manager and HR can see them." });
+    const input = { targetRoleIds: roles, functions, openToRelocation: relocate, timeframe, note };
+    if (API_ENABLED) {
+      void apiSaveCareerProfile(input).then((error) => setNotice(error ? { tone: "err", text: error } : ok));
+      return;
+    }
+    const error = saveCareerInterests(me, input, TARGET_ROLES.map((r) => r.id));
+    setNotice(error ? { tone: "err", text: error } : ok);
   }
 
   return (
     <Card title="My career interests">
       <form className="stack" onSubmit={submit}>
         <Banner message={notice} />
-        <p className="muted">Visible to you, your manager and HR. {saved ? `Last updated ${saved.updatedOn}.` : "Not shared yet."}</p>
+        <p className="muted">
+          Visible to you, your manager and HR. {saved ? `Last updated ${saved.updatedOn}.` : "Not shared yet."}
+          {mentor ? ` Mentor: ${mentor}.` : ""}
+        </p>
         <fieldset className="stack">
           <legend>Target roles (up to 3)</legend>
           <div className="row-gap" style={{ flexWrap: "wrap" }}>
-            {TARGET_ROLES.map((r) => (
+            {targetRoles().map((r) => (
               <label key={r.id} className="row-gap">
                 <input type="checkbox" checked={roles.includes(r.id)} onChange={() => toggle(r.id, roles, setRoles)} />
                 <span>{r.title}</span>
@@ -127,21 +162,71 @@ export function CareerInterestsPanel({ me }: { me: TalentActor }) {
 
 /* ───────────── Role matches ───────────── */
 
+type ServerMatch = CareerMatchesOut["matches"][number];
+
+/** Backend mode: role matches computed on the server (same rules as careerMatch.ts), with courses and a timeline. */
+function useServerMatches(employeeId: string): CareerMatchesOut | null {
+  const career = useCareer();
+  const [data, setData] = useState<CareerMatchesOut | null>(null);
+  const savedAt = career.me?.updated_at ?? "";
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let live = true;
+    apiRoleMatches()
+      .then((d) => {
+        if (live) setData(d);
+      })
+      .catch(() => {
+        if (live) setData({ employee_id: employeeId, skills_saved: false, matches: [] });
+      });
+    return () => {
+      live = false;
+    };
+  }, [employeeId, savedAt]);
+  return data;
+}
+
+function fromServer(m: ServerMatch, catalog: Course[]): RoleMatch & { timeline: ServerMatch["timeline"] } {
+  const course = (c: { id: string; title: string; duration_hours: number }): Course =>
+    catalog.find((x) => x.id === c.id) ?? { id: c.id, title: c.title, category: "", durationHours: c.duration_hours, mandatory: false, audience: "All", skills: [] };
+  return {
+    role: {
+      key: m.key,
+      title: m.title,
+      source: m.source,
+      function: m.function,
+      required: {},
+      ...(m.target_role_id ? { targetRoleId: m.target_role_id } : {}),
+      ...(m.location ? { location: m.location } : {}),
+      ...(m.posting_id ? { postingId: m.posting_id } : {}),
+    },
+    match: m.match,
+    score: m.score,
+    reasons: m.reasons,
+    gaps: m.gaps.map((g) => ({ skillId: g.skill_id, name: g.name, have: g.have, need: g.need, levels: g.levels, courses: g.courses.map(course) })),
+    timeline: m.timeline,
+  };
+}
+
 export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
   const talent = useTalent();
   const list = useInterests();
+  const career = useCareer();
+  const server = useServerMatches(me.id);
   const [notice, setNotice] = useState<Notice>(null);
   const [open, setOpen] = useState<string | null>(null);
-  const interests = careerInterestsFor(me.id, list);
+  const interests = API_ENABLED ? toInterests(career.me) : careerInterestsFor(me.id, list);
   const skills = skillProfileFor(talent, me.id);
   const person = getPerson(me.id);
   const learner = { id: me.id, fullName: me.fullName, role: me.role, department: person?.department ?? me.department };
   const myEnrollments = talent.enrollments.filter((e) => e.employeeId === me.id);
+  // Backend mode: the server picks each gap's courses (open to the person, not completed yet).
+  const gapCourses = (g: { skillId: string; courses: Course[] }): Course[] => g.courses;
   const seesJobs = accountHasNavAccess(me, "internaljobs");
   const review = openDevPlanReview(talent, me.id);
   const planTitles = review ? devActionsOf(review).map((a) => a.title) : [];
 
-  const matches = rankRoles({
+  const local = API_ENABLED ? [] : rankRoles({
         skills,
         interests,
         currentTitle: person?.designation ?? me.designation,
@@ -150,6 +235,9 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
         courseOpen: (c) => courseOpenTo(c, learner),
         completedCourseIds: myEnrollments.filter((e) => e.status === "Completed").map((e) => e.courseId),
       });
+  const matches: (RoleMatch & { timeline?: ServerMatch["timeline"] })[] = API_ENABLED
+    ? (server?.matches ?? []).map((m) => fromServer(m, courseCatalog()))
+    : local;
 
   const planText = (courseTitle: string, skill: string) => `Complete "${courseTitle}" to build ${skill}`;
 
@@ -157,10 +245,12 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
     <div className="stack">
       <Banner message={notice} />
       {!interests && (
-        <p className="note info">Add your career interests to rank roles by what you want next, not only by skills.</p>
+        <p className="note info">Add career interests for better matches.</p>
       )}
       <Card title="Top role matches">
-        {matches.length === 0 ? (
+        {API_ENABLED && !server ? (
+          <p className="muted">Loading matches…</p>
+        ) : matches.length === 0 ? (
           <EmptyState title="No roles to suggest" />
         ) : (
           <DataTable
@@ -182,7 +272,6 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
             ])}
           />
         )}
-        <p className="muted">Match compares your skills profile with each role's required levels. Keep your profile current for better matches.</p>
       </Card>
 
       {matches
@@ -201,11 +290,11 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
                     <strong>
                       {g.name}: {g.have} → {g.need}
                     </strong>
-                    {g.courses.length === 0 ? (
-                      <p className="muted">No course in the catalogue yet — agree a stretch task with your manager.</p>
+                    {gapCourses(g).length === 0 ? (
+                      <p className="muted">No course yet.</p>
                     ) : (
                       <ul className="todo">
-                        {g.courses.map((c) => {
+                        {gapCourses(g).map((c) => {
                           const enrolled = myEnrollments.some((e) => e.courseId === c.id);
                           const text = planText(c.title, g.name);
                           const inPlan = planTitles.includes(text);
@@ -219,8 +308,9 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
                                   className="btn-ghost btn-tiny"
                                   type="button"
                                   onClick={() => {
-                                    const error = enrollInCourse(learner, c.id);
-                                    setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Enrolled in ${c.title}.` });
+                                    talentAction(() => enrollInCourse(learner, c.id), (error) =>
+                                      setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Enrolled in ${c.title}.` }),
+                                    );
                                   }}
                                 >
                                   Enroll
@@ -234,8 +324,9 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
                                     className="btn btn-tiny"
                                     type="button"
                                     onClick={() => {
-                                      const error = addDevAction(me, review.id, { title: text, due: plusDays(60) });
-                                      setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: "Added to your development plan." });
+                                      talentAction(() => addDevAction(me, review.id, { title: text, due: plusDays(60) }), (error) =>
+                                        setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: "Added to your development plan." }),
+                                      );
                                     }}
                                   >
                                     Add to my development plan
@@ -248,6 +339,18 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
                     )}
                   </div>
                 ))}
+                {m.timeline && m.timeline.length > 0 && (
+                  <div className="stack">
+                    <strong>Suggested timeline</strong>
+                    <ul className="todo">
+                      {m.timeline.map((t) => (
+                        <li key={`${t.from_week}-${t.text}`}>
+                          Weeks {t.from_week}–{t.to_week}: {t.text}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <p className="muted">
                   {review ? "Plan items show under Performance → Development plan." : "No open review cycle — enroll directly or ask your manager to add a plan item."}{" "}
                   {m.role.postingId && seesJobs && <Link to="/internal-jobs">See the job</Link>}
@@ -269,7 +372,11 @@ export function canSeeTeamInterests(actor: TalentActor): boolean {
 
 export function TeamInterestsPanel({ me }: { me: TalentActor }) {
   const list = useInterests();
-  const rows = visibleCareerInterests(me, list).sort((a, b) => nameOf(a.employeeId).localeCompare(nameOf(b.employeeId)));
+  const career = useCareer();
+  const serverNames = new Map(career.team.map((p) => [p.employee_id, p.employee_name ?? p.employee_id]));
+  const nameOf = (id: string) => serverNames.get(id) ?? personName(id);
+  const source = API_ENABLED ? career.team.map(toInterests).filter((i): i is NonNullable<typeof i> => !!i) : visibleCareerInterests(me, list);
+  const rows = [...source].sort((a, b) => nameOf(a.employeeId).localeCompare(nameOf(b.employeeId)));
   const today = todayISO();
   return (
     <Card title="Team career interests">
@@ -289,5 +396,100 @@ export function TeamInterestsPanel({ me }: { me: TalentActor }) {
         empty={<EmptyState title="No career interests shared yet" />}
       />
     </Card>
+  );
+}
+
+/* ───────────── Skills library ───────────── */
+
+/** The skills library. Backend mode: from the server; HR can add and retire skills. */
+export function SkillsLibraryPanel({ me }: { me: TalentActor }) {
+  const career = useCareer();
+  const [notice, setNotice] = useState<Notice>(null);
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState<"technical" | "behavioural">("technical");
+  const [area, setArea] = useState("");
+  const [description, setDescription] = useState("");
+  if (!API_ENABLED) {
+    return (
+      <Card title="Skills library">
+        <DataTable headers={["Skill", "Category", "Proficiency scale"]} rows={SKILL_LIBRARY.map((s) => [s.name, s.category, s.levels.join(" → ")])} />
+      </Card>
+    );
+  }
+  const canEdit = career.isHr && isHrRole(me.role);
+  const add = (e: FormEvent) => {
+    e.preventDefault();
+    const clean = name.trim();
+    void apiAddSkill({ name: clean, category, area: area.trim(), description: description.trim() }).then((error) => {
+      setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Added ${clean}.` });
+      if (!error) {
+        setName("");
+        setArea("");
+        setDescription("");
+      }
+    });
+  };
+  const retire = (id: string, skillName: string) =>
+    void apiRetireSkill(id).then((error) => setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Retired ${skillName}.` }));
+  const courseTitle = (id: string) => courseCatalog().find((c) => c.id === id)?.title ?? id;
+  return (
+    <div className="stack">
+      <Banner message={notice} />
+      <Card title="Skills library">
+        <DataTable
+          headers={["Skill", "Type", "Area", "Courses", "Certifications", ...(canEdit ? [""] : [])]}
+          rows={career.skills.map((s) => [
+            <span key="n">
+              <strong>{s.name}</strong>
+              {s.description && <span className="muted" style={{ display: "block" }}>{s.description}</span>}
+            </span>,
+            s.category === "technical" ? "Technical" : "Behavioural",
+            s.area ?? "—",
+            s.related_course_ids.map(courseTitle).join(", ") || "—",
+            s.certifications.join(", ") || "—",
+            ...(canEdit
+              ? [
+                  s.active ? (
+                    <button key="r" className="btn-ghost btn-tiny" type="button" onClick={() => retire(s.id, s.name)}>
+                      Retire
+                    </button>
+                  ) : (
+                    <span key="r" className="muted">Retired</span>
+                  ),
+                ]
+              : []),
+          ])}
+          empty={<EmptyState title="No skills yet" />}
+        />
+      </Card>
+      {canEdit && (
+        <Card title="Add a skill">
+          <form className="stack" onSubmit={add}>
+            <div className="form-grid-2">
+              <Field label="Name">
+                <input value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
+              </Field>
+              <Field label="Type">
+                <select value={category} onChange={(e) => setCategory(e.target.value as "technical" | "behavioural")}>
+                  <option value="technical">Technical</option>
+                  <option value="behavioural">Behavioural</option>
+                </select>
+              </Field>
+              <Field label="Area (optional)">
+                <input value={area} maxLength={64} onChange={(e) => setArea(e.target.value)} />
+              </Field>
+              <Field label="Description (optional)" wide>
+                <textarea value={description} maxLength={1000} rows={2} onChange={(e) => setDescription(e.target.value)} />
+              </Field>
+            </div>
+            <div className="row-gap">
+              <button className="btn" type="submit" disabled={name.trim().length < 2}>
+                Add skill
+              </button>
+            </div>
+          </form>
+        </Card>
+      )}
+    </div>
   );
 }

@@ -14,7 +14,9 @@ import {
   canManageCase,
   caseAssignees,
   caseMoves,
+  downloadCaseFile,
   enforceCaseRetention,
+  escalateCase,
   findCaseByCode,
   getGrievanceState,
   isCaseArchived,
@@ -29,6 +31,7 @@ import {
   slaDaysLeft,
   slaDueOn,
   subscribeGrievance,
+  uploadCaseFile,
   type CaseCategory,
   type CaseEntry,
   type CaseRecord,
@@ -38,6 +41,7 @@ import { formatStamp, isHr, personName, type ComplianceActor } from "./shared.ts
 import { PersonPicker, toneFor } from "./ComplianceUi.tsx";
 import { useComplianceActor } from "./useActor.ts";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../../data/requestTemplates.ts";
+import { API_ENABLED } from "../../api/syncOps.ts";
 import "./compliance.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -156,10 +160,10 @@ function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (cod
   const [error, setError] = useState("");
   const [pickerKey, setPickerKey] = useState(0);
 
-  function submit() {
+  async function submit() {
     if (hasTemplateBlanks(description)) return setError(TEMPLATE_BLANKS_ERROR);
     if (namePerson && !againstId) return setError("Choose the person from the list, or untick “Name a person”.");
-    const result = raiseCase(actor, { category, description, againstId: namePerson ? againstId : undefined, anonymous });
+    const result = await raiseCase(actor, { category, description, againstId: namePerson ? againstId : undefined, anonymous });
     if ("error" in result) return setError(result.error);
     setError("");
     resetDescription();
@@ -361,6 +365,114 @@ function Timeline({ entries }: { entries: CaseEntry[] }) {
   );
 }
 
+/** Backend mode: priority, escalation and evidence files on a case. */
+function CaseExtras({ c, staff, onMsg }: { c: CaseRecord; staff: boolean; onMsg: (m: Msg) => void }) {
+  const [reason, setReason] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [confidentialFile, setConfidentialFile] = useState(staff);
+  const [busy, setBusy] = useState(false);
+  const [inputKey, setInputKey] = useState(0);
+  if (!API_ENABLED) return null;
+  const open = isCaseOpen(c) && !isCaseArchived(c);
+  const files = c.files ?? [];
+
+  async function run(fn: () => Promise<string | null>, ok: string) {
+    setBusy(true);
+    const err = await fn();
+    setBusy(false);
+    onMsg(err ? { tone: "err", text: err } : { tone: "ok", text: ok });
+    return !err;
+  }
+
+  return (
+    <div className="stack">
+      <span className="cmp-meta">
+        {c.priority && <span>Priority: {c.priority}</span>}
+        {(c.escalationCount ?? 0) > 0 && (
+          <span>
+            Escalated {plural(c.escalationCount ?? 0, "time")}
+            {c.escalatedAt ? ` · last ${formatStamp(c.escalatedAt)}` : ""}
+          </span>
+        )}
+      </span>
+      {open && (
+        <div className="cmp-form">
+          <Field label="Escalate (tell every HR member, priority Urgent)" wide>
+            <input value={reason} maxLength={1000} onChange={(e) => setReason(e.target.value)} placeholder="Why this needs attention now" />
+          </Field>
+          <div>
+            <button
+              className="btn-ghost"
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                if (await run(() => escalateCase(c.id, reason), "Case escalated.")) setReason("");
+              }}
+            >
+              Escalate
+            </button>
+          </div>
+        </div>
+      )}
+      <h3 style={{ margin: 0, fontSize: 15 }}>Files</h3>
+      {files.length ? (
+        <ul className="cmp-files">
+          {files.map((f) => (
+            <li key={f.id} className="row-gap">
+              <button
+                type="button"
+                className="quiet-link"
+                onClick={async () => {
+                  const err = await downloadCaseFile(c.id, f);
+                  if (err) onMsg({ tone: "err", text: err });
+                }}
+              >
+                {f.name}
+              </button>
+              <span className="muted">
+                {Math.max(1, Math.round(f.size / 1024))} KB · {formatStamp(f.at)}
+                {f.byReporter ? " · from reporter" : ""}
+                {f.confidential ? " · Confidential" : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">No files yet.</p>
+      )}
+      {!isCaseArchived(c) && (
+        <div className="cmp-form">
+          <Field label="Add a file" wide>
+            <input key={inputKey} type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          </Field>
+          {staff && (
+            <label className="cmp-check">
+              <input type="checkbox" checked={confidentialFile} onChange={(e) => setConfidentialFile(e.target.checked)} />
+              Confidential (hidden from reporter)
+            </label>
+          )}
+          <div>
+            <button
+              className="btn-ghost"
+              type="button"
+              disabled={!file || busy}
+              onClick={async () => {
+                if (!file) return;
+                if (await run(() => uploadCaseFile(c.id, file, staff && confidentialFile), `${file.name} added.`)) {
+                  setFile(null);
+                  setInputKey((k) => k + 1);
+                }
+              }}
+            >
+              Upload
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: ComplianceActor; onClose: () => void }) {
   const [next, setNext] = useState<CaseStatus | "">("");
   const [statusNote, setStatusNote] = useState("");
@@ -421,8 +533,8 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
               <button
                 className="btn-ghost"
                 type="button"
-                onClick={() => {
-                  const err = assignCase(actor, c.id, assignee);
+                onClick={async () => {
+                  const err = await assignCase(actor, c.id, assignee);
                   setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: assignee ? "Case assigned." : "Assignment cleared." });
                 }}
               >
@@ -449,9 +561,9 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
               <button
                 className="btn"
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   if (!next) return setMsg({ tone: "err", text: "Choose the new status." });
-                  const err = setCaseStatus(actor, c.id, next, statusNote);
+                  const err = await setCaseStatus(actor, c.id, next, statusNote);
                   setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: `Case moved to ${next}.` });
                   if (!err) {
                     setNext("");
@@ -478,8 +590,8 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
               <button
                 className="btn-ghost"
                 type="button"
-                onClick={() => {
-                  const err = addCaseNote(actor, c.id, note, confidential);
+                onClick={async () => {
+                  const err = await addCaseNote(actor, c.id, note, confidential);
                   setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: "Note added." });
                   if (!err) setNote("");
                 }}
@@ -489,6 +601,8 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
             </div>
           </div>
         )}
+
+        <CaseExtras c={c} staff onMsg={setMsg} />
 
         <h3 style={{ margin: 0, fontSize: 15 }}>Timeline</h3>
         <Timeline entries={c.timeline} />
@@ -525,6 +639,7 @@ function ReporterCaseDialog({ c, actor, code, onClose }: { c: CaseRecord; actor:
         </div>
         <p className="cmp-desc">{c.description}</p>
         {c.resolution && <p className="note ok">Resolution: {c.resolution}</p>}
+        <CaseExtras c={c} staff={false} onMsg={setMsg} />
         <h3 style={{ margin: 0, fontSize: 15 }}>Timeline</h3>
         <Timeline entries={reporterTimeline(c)} />
         {c.status !== "Closed" && !isCaseArchived(c) && (
@@ -536,8 +651,8 @@ function ReporterCaseDialog({ c, actor, code, onClose }: { c: CaseRecord; actor:
               <button
                 className="btn"
                 type="button"
-                onClick={() => {
-                  const err = code ? addCommentByCode(actor, code, comment) : addCaseNote(actor, c.id, comment, false);
+                onClick={async () => {
+                  const err = await (code ? addCommentByCode(actor, code, comment) : addCaseNote(actor, c.id, comment, false));
                   setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: "Comment added." });
                   if (!err) setComment("");
                 }}

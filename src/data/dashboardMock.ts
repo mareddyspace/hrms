@@ -1,9 +1,9 @@
 import { TIMEZ_COUNTRIES } from "../model.ts";
-import { getBasePeople } from "./peopleData.ts";
+import { getBasePeople, inHeadcount } from "./peopleData.ts";
 import { PERF_CYCLES } from "./talentData.ts";
 import { cycleCompletion, getTalentState } from "./talentLocal.ts";
 
-const BASE_PEOPLE = getBasePeople().filter((p) => p.employmentStatus !== "Terminated");
+const BASE_PEOPLE = getBasePeople().filter((p) => inHeadcount(p));
 const MAIN_DEPARTMENTS = ["Engineering", "Product", "Sales", "People", "Finance", "Operations", "Customer Success", "Legal"];
 const REGION_BY_COUNTRY: Record<string, string> = {
   IN: "TimeZ India",

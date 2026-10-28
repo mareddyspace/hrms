@@ -82,7 +82,7 @@ export function employeeSummary(input: {
   if (input.waitingOnMe) lines.push({ text: `${plural(input.waitingOnMe, "item waits", "items wait")} on your approval.`, to: "/approvals" });
   if (input.pendingRequests.length) {
     const kinds = [...new Set(input.pendingRequests.map((r) => r.type.toLowerCase()))];
-    lines.push({ text: `${plural(input.pendingRequests.length, "request is", "requests are")} waiting for a decision (${names(kinds)}).` });
+    lines.push({ text: `${plural(input.pendingRequests.length, "request is", "requests are")} waiting for a decision (${names(kinds)}).`, to: "/approvals?tab=mine" });
   }
 
   // Leave and holidays.

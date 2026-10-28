@@ -9,6 +9,7 @@ import { Banner, Card, Field, Page } from "../components/ui.tsx";
 import type { DemoAccount } from "../demoAccounts.ts";
 import { maskEmail, maskMobile } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { MFA_CODE_NEEDED, apiMfaSetupRequired } from "../api/client.ts";
 
 type ResetChannel = "email" | "mobile";
 
@@ -43,7 +44,10 @@ export function LoginPage() {
   const [demoOtp, setDemoOtp] = useState("");
   const [sentTo, setSentTo] = useState("");
   const [sentChannel, setSentChannel] = useState<ResetChannel>("email");
-  const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: "ok" | "err" | "info"; text: string } | null>(null);
+  // Two-step sign-in: after the password, the code from the authenticator app (or a backup code).
+  const [mfaStep, setMfaStep] = useState(false);
+  const [mfaCode, setMfaCode] = useState("");
 
   if (signedIn) return <Navigate to="/" replace />;
 
@@ -61,29 +65,41 @@ export function LoginPage() {
       setMessage({ tone: "err", text: "Fix the highlighted fields to continue." });
       return;
     }
-    const error = await signIn(email, password, remember);
+    if (mfaStep && !mfaCode.trim()) {
+      setMessage({ tone: "err", text: "Enter the code from your app." });
+      return;
+    }
+    const error = await signIn(email, password, remember, mfaStep ? mfaCode : undefined);
+    if (error === MFA_CODE_NEEDED) {
+      setMfaStep(true);
+      setMfaCode("");
+      setMessage({ tone: "info", text: error });
+      window.setTimeout(() => document.querySelector<HTMLInputElement>(".login-card input[name=mfa-code]")?.focus(), 50);
+      return;
+    }
     if (error) setMessage({ tone: "err", text: error });
-    else navigate("/");
+    else navigate(apiMfaSetupRequired() ? "/settings/security" : "/");
+  }
+
+  function leaveMfaStep() {
+    setMfaStep(false);
+    setMfaCode("");
+    setMessage(null);
   }
 
   function fillDemo(account: DemoAccount) {
-    // Fill only the email: the stored password may have been changed by the user.
+    // Fills the email and default password; the person then presses Sign in.
     setEmail(account.email);
-    setPassword("");
+    setPassword(account.password);
+    setMfaStep(false);
+    setMfaCode("");
     setFieldErrors({});
-    setMessage({ tone: "ok", text: "Enter your password to sign in." });
+    setMessage({ tone: "ok", text: `${account.fullName}'s details are filled in. Press Sign in.` });
+    // On narrow screens the form is above the list; bring it into view.
+    document.querySelector(".login-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => document.querySelector<HTMLButtonElement>(".login-card button[type=submit]")?.focus(), 50);
   }
 
-  async function quickSignIn(account: DemoAccount) {
-    // One-click sign-in exists only in local development builds.
-    if (!SHOW_DEV_ACCOUNTS) return fillDemo(account);
-    setEmail(account.email);
-    const error = await signIn(account.email, account.password, remember);
-    if (error) {
-      setPassword("");
-      setMessage({ tone: "err", text: "Password was changed for this account. Enter it to sign in." });
-    } else navigate("/");
-  }
 
   function sendResetOtp() {
     const result = requestPasswordResetOtp(email, channel);
@@ -162,6 +178,23 @@ export function LoginPage() {
             </span>
             <h1>{COMPANY_NAME}</h1>
             <p className="lede">{PRODUCT_TAGLINE}</p>
+            {mfaStep ? (
+              <div className="stack">
+                <p className="muted">Signing in as {email}</p>
+                <Field label="Code from your authenticator app" wide>
+                  <input
+                    name="mfa-code"
+                    value={mfaCode}
+                    onChange={(event) => setMfaCode(event.target.value)}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="123456"
+                    maxLength={16}
+                  />
+                </Field>
+                <p className="muted">Lost your phone? Enter a backup code instead.</p>
+              </div>
+            ) : (
             <div className="stack">
               <Field label="Work email" wide>
                 <input
@@ -211,10 +244,16 @@ export function LoginPage() {
                 <span>Remember me on this device</span>
               </label>
             </div>
+            )}
             <div className="login-actions">
               <button className="btn" type="submit">
-                Sign in
+                {mfaStep ? "Verify" : "Sign in"}
               </button>
+              {mfaStep && (
+                <button className="btn-ghost" type="button" onClick={leaveMfaStep}>
+                  Back
+                </button>
+              )}
               <button className="btn-ghost sso-demo" type="button" disabled title="Single sign-on is not enabled">
                 Continue with SSO
               </button>
@@ -225,7 +264,7 @@ export function LoginPage() {
           {SHOW_DEV_ACCOUNTS && (
           <aside className="login-demo-panel" aria-label="Development accounts">
             <div className="login-demo-head">
-              <h2>Development accounts</h2>
+              <h2>Accounts</h2>
               <p>{demoAccounts.length} accounts</p>
             </div>
             <div className="login-demo-grid">
@@ -243,11 +282,8 @@ export function LoginPage() {
                     </small>
                   </div>
                   <div className="login-demo-actions">
-                    <button type="button" className="btn-ghost btn-tiny" onClick={() => fillDemo(account)}>
+                    <button type="button" className="btn btn-tiny" onClick={() => fillDemo(account)}>
                       Fill
-                    </button>
-                    <button type="button" className="btn btn-tiny" onClick={() => quickSignIn(account)}>
-                      Sign in
                     </button>
                   </div>
                 </article>

@@ -1,5 +1,5 @@
 import type { DemoAccount } from "../demoAccounts.ts";
-import { isAbove } from "./peopleLocal.ts";
+import { isAbove, isBasicOnly } from "./peopleLocal.ts";
 import { canViewSensitivePiiFor } from "./peoplePermissions.ts";
 
 /** What one viewer may see on another person's profile / Employee 360. */
@@ -26,6 +26,20 @@ const HR_ROLES = new Set(["hr", "hr_admin", "hrbp"]);
 
 export function profileAccessFor(viewer: DemoAccount, personId: string, selfId: string): ProfileAccess {
   const isSelf = personId === selfId;
+  // Backend directory: the API sent only the basic card for this person, so only basic info is shown.
+  if (!isSelf && isBasicOnly(personId)) {
+    return {
+      isSelf,
+      isHr: false,
+      aboveInLine: false,
+      personal: false,
+      work: false,
+      compensation: false,
+      benefits: false,
+      documents: false,
+      unreleasedRatings: false,
+    };
+  }
   const isHr = HR_ROLES.has(viewer.role);
   const aboveInLine = !isSelf && isAbove(selfId, personId);
   const personal =

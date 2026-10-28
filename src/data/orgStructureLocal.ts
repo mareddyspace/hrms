@@ -12,6 +12,25 @@ import {
   type PersonRecord,
   type PositionRecord,
 } from "./peopleData.ts";
+import { API_ENABLED, subscribeAll } from "../api/syncOps.ts";
+import {
+  apiCreateJobFamily,
+  apiCreateJobProfile,
+  apiCreateOrgUnit,
+  apiCreatePosition,
+  apiDeactivateJobProfile,
+  apiDeactivateOrgUnit,
+  apiDeactivatePosition,
+  apiUpdateJobProfile,
+  apiUpdateOrgUnit,
+  apiUpdatePosition,
+  cleanOrgCode,
+  makeOrgCode,
+  orgMirror,
+  type ApiOrgData,
+  type ApiOrgUnitType,
+  type OrgUnitOut,
+} from "../api/syncOpsOrg.ts";
 
 /**
  * Local edits on top of the seeded organisation: org units (legal entity, business unit, division,
@@ -102,6 +121,8 @@ interface OrgOverlay {
   profileEdits: Record<string, ProfileEdit>;
   addedProfiles: (JobProfile & { active: boolean })[];
   changes: OrgChange[];
+  /** Backend mode only: org units, job families, profiles and positions from the API. */
+  api?: ApiOrgData;
 }
 
 export type OrgActor = { id: string; fullName: string };
@@ -134,17 +155,26 @@ function read(): OrgOverlay {
 let cache: OrgOverlay | null = null;
 const listeners = new Set<() => void>();
 
-export function subscribeOrgOverlay(listener: () => void) {
+function subscribeLocalOverlay(listener: () => void) {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
 }
 
-/** Stable snapshot for useSyncExternalStore. */
+export const subscribeOrgOverlay: (listener: () => void) => () => void = API_ENABLED
+  ? subscribeAll(subscribeLocalOverlay, orgMirror.subscribe)
+  : subscribeLocalOverlay;
+
+let composedOverlay: { local: OrgOverlay; api: ApiOrgData; out: OrgOverlay } | null = null;
+
+/** Stable snapshot for useSyncExternalStore. In backend mode it also carries the API's org data. */
 export function getOrgOverlay(): OrgOverlay {
   if (!cache) cache = read();
-  return cache;
+  if (!API_ENABLED) return cache;
+  const api = orgMirror.get();
+  if (composedOverlay?.local !== cache || composedOverlay.api !== api) composedOverlay = { local: cache, api, out: { ...cache, api } };
+  return composedOverlay.out;
 }
 
 function write(next: OrgOverlay): string | null {
@@ -222,6 +252,7 @@ const unitsCache = new WeakMap<object, Map<OrgOverlay, OrgUnit[]>>();
 
 /** Every org unit (seeded from the directory, plus added ones) with local edits applied. */
 export function listOrgUnits(people: PersonRecord[], overlay = getOrgOverlay()): OrgUnit[] {
+  if (overlay.api) return apiOrgUnits(people, overlay.api);
   const byOverlay = unitsCache.get(people);
   const hit = byOverlay?.get(overlay);
   if (hit) return hit;
@@ -314,6 +345,7 @@ export function locationOptions(people: PersonRecord[]): { location: string; lab
 }
 /** Apply renames, deactivations and added units to the built org tree. */
 export function applyOrgOverlay(tree: OrgNode, people: PersonRecord[], overlay = getOrgOverlay()): OrgNode {
+  if (overlay.api) return apiApplyTree(tree, people, overlay.api);
   const units = listOrgUnits(people, overlay);
   const byParent = new Map<string, OrgUnit[]>();
   for (const u of units) {
@@ -365,9 +397,10 @@ export function addOrgUnit(
   actor: OrgActor,
   people: PersonRecord[],
   input: { type: OrgUnitType; countryCode: string; name: string; code: string; parentKey: string },
-): string | null {
+): string | null | Promise<string | null> {
   const err = validName(input.name);
   if (err) return err;
+  if (API_ENABLED) return apiAddUnit(input);
   if (!TIMEZ_COUNTRIES.some((c) => c.code === input.countryCode)) return "Choose a country.";
   const units = listOrgUnits(people);
   const parentType = parentTypeOf(input.type);
@@ -405,9 +438,10 @@ export function updateOrgUnit(
   people: PersonRecord[],
   key: string,
   patch: { name?: string; code?: string; active?: boolean },
-): string | null {
+): string | null | Promise<string | null> {
   const unit = listOrgUnits(people).find((u) => u.key === key);
   if (!unit) return "Unit not found.";
+  if (API_ENABLED) return apiEditUnit(unit, patch);
   const next = { name: patch.name?.trim() ?? unit.name, code: patch.code?.trim() ?? unit.code, active: patch.active ?? unit.active };
   if (patch.name !== undefined) {
     const err = validName(next.name);
@@ -436,6 +470,7 @@ export function updateOrgUnit(
 
 /** Seed profiles plus added ones, with edits; inactive ones are flagged. */
 export function listJobProfiles(overlay = getOrgOverlay()): JobProfile[] {
+  if (overlay.api) return apiJobProfiles(overlay.api);
   const seed = JOB_PROFILES.map((p) => {
     const e = overlay.profileEdits[p.id];
     return e ? { ...p, ...stripActive(e), inactive: e.active === false } : p;
@@ -464,11 +499,26 @@ export function listJobFamilies(profiles: JobProfile[]): JobFamily[] {
 
 export const GRADE_OPTIONS = ["L3", "L4", "L5", "L6", "M1", "M2", "M3", "E1"];
 
+/**
+ * Synchronous callers (e.g. the AI job-description writer) get null as soon as a backend save starts;
+ * a failure is logged. Use saveJobProfileAsync to wait for the API's answer.
+ */
 export function saveJobProfile(
   actor: OrgActor,
   id: string | null,
   input: { title: string; familyName: string; gradeBand: string; description: string },
 ): string | null {
+  const result = saveJobProfileAsync(actor, id, input);
+  if (typeof result !== "object" || result === null) return result;
+  void result.then((error) => error && console.warn("Job profile save failed:", error));
+  return null;
+}
+
+export function saveJobProfileAsync(
+  actor: OrgActor,
+  id: string | null,
+  input: { title: string; familyName: string; gradeBand: string; description: string },
+): string | null | Promise<string | null> {
   const title = input.title.trim();
   if (!title) return "Enter a title.";
   if (title.length > 80) return "Title must be 80 characters or fewer.";
@@ -478,6 +528,7 @@ export function saveJobProfile(
   if (profiles.some((p) => p.id !== id && p.title.toLowerCase() === title.toLowerCase() && p.familyName === input.familyName)) {
     return "This family already has a profile with this title.";
   }
+  if (API_ENABLED) return apiSaveProfile(id, { title, familyName: input.familyName.trim(), gradeBand: input.gradeBand.trim(), description: input.description.trim() });
   const overlay = getOrgOverlay();
   const values = { title, familyName: input.familyName.trim(), gradeBand: input.gradeBand.trim(), description: input.description.trim() };
   if (!id) {
@@ -504,10 +555,11 @@ export function saveJobProfile(
   return error;
 }
 
-export function setJobProfileActive(actor: OrgActor, id: string, active: boolean): string | null {
+export function setJobProfileActive(actor: OrgActor, id: string, active: boolean): string | null | Promise<string | null> {
   const current = listJobProfiles().find((p) => p.id === id);
   if (!current) return "Profile not found.";
   if (!current.inactive === active) return "Nothing changed.";
+  if (API_ENABLED) return active ? apiUpdateJobProfile(id, { active: true }) : apiDeactivateJobProfile(id);
   const overlay = getOrgOverlay();
   const error = write({
     ...overlay,
@@ -528,6 +580,7 @@ export function setJobProfileActive(actor: OrgActor, id: string, active: boolean
  * position gets headcount / filled / vacant. One-person positions (an employee's own) are filled by them.
  */
 export function applyPositionOverlay(positions: PositionRecord[], people: PersonRecord[], overlay = getOrgOverlay()): PositionRecord[] {
+  if (overlay.api) return apiPositions(positions, people, overlay.api);
   const managerFor = (cc: string, dept: string) => {
     const group = people.filter((p) => String(p.countryCode) === cc && p.department === dept && p.employmentStatus !== "Terminated");
     const ids = new Set(group.map((p) => p.id));
@@ -583,6 +636,23 @@ export function applyPositionOverlay(positions: PositionRecord[], people: Person
 
 /** The editable fields of a vacant position (seeded or added). */
 export function positionDefFor(p: PositionRecord, overlay = getOrgOverlay()): PositionDef {
+  const fromApi = overlay.api?.positions.find((x) => x.id === p.id);
+  if (fromApi) {
+    return {
+      id: p.id,
+      code: p.code,
+      title: p.title,
+      jobFamily: p.jobFamily,
+      jobProfileId: p.jobProfileId,
+      grade: p.grade,
+      department: p.department,
+      countryCode: fromApi.country_code,
+      location: p.location,
+      headcount: fromApi.headcount,
+      status: fromApi.status === "frozen" ? "Frozen" : "Open",
+      requirements: p.requirements,
+    };
+  }
   const added = overlay.addedPositions.find((a) => a.id === p.id);
   const cc = added?.countryCode ?? overlay.positionEdits[p.id]?.countryCode ?? TIMEZ_COUNTRIES.find((c) => c.name === p.country)?.code ?? "IN";
   return {
@@ -607,7 +677,7 @@ export function savePosition(
   actor: OrgActor,
   existing: PositionRecord | null,
   input: Omit<PositionDef, "id" | "code" | "jobFamily"> & { jobFamily?: string },
-): string | null {
+): string | null | Promise<string | null> {
   const title = input.title.trim();
   if (!title) return "Enter a title.";
   if (title.length > 80) return "Title must be 80 characters or fewer.";
@@ -616,6 +686,7 @@ export function savePosition(
   if (!input.grade) return "Choose a grade.";
   if (!Number.isInteger(input.headcount) || input.headcount < 1 || input.headcount > 500) return "Headcount must be a whole number from 1 to 500.";
   if (existing?.incumbentId) return "Filled positions change through lifecycle actions.";
+  if (API_ENABLED) return apiSavePosition(existing, input);
   const overlay = getOrgOverlay();
   const values: Omit<PositionDef, "id" | "code"> = {
     title,
@@ -656,9 +727,13 @@ export function savePosition(
   return error;
 }
 
-export function setPositionActive(actor: OrgActor, position: PositionRecord, active: boolean): string | null {
+export function setPositionActive(actor: OrgActor, position: PositionRecord, active: boolean): string | null | Promise<string | null> {
   if (position.incumbentId) return "Filled positions close when the person moves or leaves.";
   if (!position.inactive === active) return "Nothing changed.";
+  if (API_ENABLED) {
+    if (!getOrgOverlay().api?.positions.some((x) => x.id === position.id)) return "Only positions kept on the server can change here.";
+    return active ? apiUpdatePosition(position.id, { active: true }) : apiDeactivatePosition(position.id);
+  }
   const overlay = getOrgOverlay();
   const error = write({
     ...overlay,
@@ -670,6 +745,232 @@ export function setPositionActive(actor: OrgActor, position: PositionRecord, act
   });
   if (!error) audit(actor, "Position", position.id, false, [{ field: "active", before: String(!active), after: String(active) }]);
   return error;
+}
+
+/* ───────────── Backend mode (VITE_API_URL): the API's org units, profiles and positions ───────────── */
+
+const TYPE_TO_API: Record<OrgUnitType, ApiOrgUnitType> = {
+  legalEntity: "legal_entity",
+  businessUnit: "business_unit",
+  division: "division",
+  department: "department",
+  costCenter: "cost_centre",
+  location: "location",
+};
+const TYPE_FROM_API: Partial<Record<ApiOrgUnitType, OrgUnitType>> = {
+  legal_entity: "legalEntity",
+  business_unit: "businessUnit",
+  division: "division",
+  department: "department",
+  team: "department",
+  cost_centre: "costCenter",
+  location: "location",
+};
+const CODE_PREFIX: Record<OrgUnitType, string> = {
+  legalEntity: "LE",
+  businessUnit: "BU",
+  division: "DIV",
+  department: "DEPT",
+  costCenter: "CC",
+  location: "LOC",
+};
+
+/** Country of a unit: its own, else its parent's, else the one in a cost-centre code (CC-IN-ENG). */
+function apiCountryOf(u: OrgUnitOut, byId: Map<string, OrgUnitOut>): string {
+  for (let cur: OrgUnitOut | undefined = u, hops = 0; cur && hops < 10; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined, hops++) {
+    if (cur.country_code) return cur.country_code;
+  }
+  return u.code.match(/^CC-([A-Z]{2})-/)?.[1] ?? "";
+}
+
+function personField(p: PersonRecord, type: OrgUnitType): string {
+  switch (type) {
+    case "legalEntity":
+      return p.legalEntity;
+    case "businessUnit":
+      return p.businessUnit;
+    case "division":
+      return p.division || divisionForDepartment(p.department);
+    case "department":
+      return p.department;
+    case "costCenter":
+      return p.costCenter;
+    default:
+      return p.location;
+  }
+}
+
+const apiUnitsCache = new WeakMap<object, { api: ApiOrgData; out: OrgUnit[] }>();
+
+function apiOrgUnits(people: PersonRecord[], api: ApiOrgData): OrgUnit[] {
+  const hit = apiUnitsCache.get(people);
+  if (hit?.api === api) return hit.out;
+  const byId = new Map(api.units.map((u) => [u.id, u]));
+  const active = people.filter((p) => p.employmentStatus !== "Terminated");
+  const out: OrgUnit[] = [];
+  for (const u of api.units) {
+    const type = TYPE_FROM_API[u.type];
+    if (!type) continue;
+    const cc = apiCountryOf(u, byId);
+    const parent = u.parent_id ? byId.get(u.parent_id) : undefined;
+    const names = new Set([u.name.toLowerCase(), u.code.toLowerCase()]);
+    out.push({
+      key: u.id,
+      type,
+      countryCode: cc,
+      name: u.name,
+      value: u.name,
+      code: u.code,
+      parentKey: parent && parent.type !== "company" ? parent.id : "",
+      active: u.active,
+      added: false,
+      headcount: active.filter((p) => names.has(personField(p, type).toLowerCase()) && (!cc || String(p.countryCode) === cc)).length,
+    });
+  }
+  const order = ORG_UNIT_TYPES.map((t) => t.id);
+  out.sort((a, b) => a.countryCode.localeCompare(b.countryCode) || order.indexOf(a.type) - order.indexOf(b.type) || a.name.localeCompare(b.name));
+  apiUnitsCache.set(people, { api, out });
+  return out;
+}
+
+/** The directory tree with the API's names, codes and inactive flags on matching units. */
+function apiApplyTree(tree: OrgNode, people: PersonRecord[], api: ApiOrgData): OrgNode {
+  const units = apiOrgUnits(people, api);
+  const find = (type: OrgUnitType, name: string, cc: string) =>
+    units.find((u) => u.type === type && u.value.toLowerCase() === name.toLowerCase() && (!u.countryCode || u.countryCode === cc)) ??
+    units.find((u) => u.type === type && u.code.toLowerCase() === name.toLowerCase());
+  const visit = (node: OrgNode, cc: string): OrgNode => {
+    const country = node.type === "country" ? String(node.code ?? cc) : cc;
+    let next: OrgNode = node;
+    if (ORG_UNIT_TYPES.some((t) => t.id === node.type)) {
+      const unit = find(node.type as OrgUnitType, node.name, country);
+      if (unit) next = { ...node, unitKey: unit.key, code: unit.code || node.code, inactive: !unit.active };
+    }
+    return node.children ? { ...next, children: node.children.map((c) => visit(c, country)) } : next;
+  };
+  return visit(tree, "");
+}
+
+async function apiAddUnit(input: { type: OrgUnitType; countryCode: string; name: string; code: string; parentKey: string }): Promise<string | null> {
+  const api = getOrgOverlay().api;
+  const name = input.name.trim();
+  if (api?.units.some((u) => TYPE_FROM_API[u.type] === input.type && u.name.toLowerCase() === name.toLowerCase() && (u.country_code ?? "") === input.countryCode)) {
+    return `A ${unitTypeLabel(input.type).toLowerCase()} with this name already exists.`;
+  }
+  const company = api?.units.find((u) => u.type === "company");
+  return apiCreateOrgUnit({
+    code: cleanOrgCode(input.code) || makeOrgCode(input.countryCode ? `${CODE_PREFIX[input.type]}-${input.countryCode}` : CODE_PREFIX[input.type], name),
+    name,
+    type: TYPE_TO_API[input.type],
+    parent_id: input.parentKey || company?.id || null,
+    country_code: input.countryCode || null,
+  });
+}
+
+async function apiEditUnit(unit: OrgUnit, patch: { name?: string; code?: string; active?: boolean }): Promise<string | null> {
+  if (patch.active === false && unit.active) return apiDeactivateOrgUnit(unit.key);
+  const body: { name?: string; code?: string; active?: boolean } = {};
+  if (patch.name !== undefined && patch.name.trim() !== unit.name) {
+    const err = validName(patch.name);
+    if (err) return err;
+    body.name = patch.name.trim();
+  }
+  if (patch.code !== undefined && cleanOrgCode(patch.code) && cleanOrgCode(patch.code) !== unit.code) body.code = cleanOrgCode(patch.code);
+  if (patch.active === true && !unit.active) body.active = true;
+  if (!Object.keys(body).length) return "Nothing changed.";
+  return apiUpdateOrgUnit(unit.key, body);
+}
+
+function apiJobProfiles(api: ApiOrgData): JobProfile[] {
+  const families = new Map(api.families.map((f) => [f.id, f.name]));
+  return api.profiles.map((p) => ({
+    id: p.id,
+    familyId: p.family_id ?? "",
+    familyName: (p.family_id && families.get(p.family_id)) || "Other",
+    title: p.title,
+    gradeBand: p.grade ?? "",
+    description: p.description ?? "",
+    ...(p.active ? {} : { inactive: true }),
+  }));
+}
+
+async function apiSaveProfile(id: string | null, values: { title: string; familyName: string; gradeBand: string; description: string }): Promise<string | null> {
+  const api = getOrgOverlay().api;
+  let familyId = api?.families.find((f) => f.name.toLowerCase() === values.familyName.toLowerCase())?.id ?? null;
+  if (!familyId && values.familyName && values.familyName !== "Other") {
+    const created = await apiCreateJobFamily({ code: makeOrgCode("JF", values.familyName), name: values.familyName });
+    if (typeof created === "string") return created;
+    familyId = created.id;
+  }
+  const body = { title: values.title, family_id: familyId, grade: values.gradeBand || null, description: values.description || null };
+  if (!id) return apiCreateJobProfile({ code: makeOrgCode("JP", values.title), ...body });
+  return apiUpdateJobProfile(id, body);
+}
+
+function apiPositions(seed: PositionRecord[], people: PersonRecord[], api: ApiOrgData): PositionRecord[] {
+  const units = new Map(api.units.map((u) => [u.id, u]));
+  const profiles = new Map(api.profiles.map((p) => [p.id, p]));
+  const families = new Map(api.families.map((f) => [f.id, f.name]));
+  const countryName = (cc: string) => TIMEZ_COUNTRIES.find((c) => c.code === cc)?.name ?? cc;
+  // People's own seats come from the directory; vacancies and budgeted seats come from the API.
+  // Their job profile: the API profile with the same title when the directory doesn't name one the API knows.
+  const profileByTitle = new Map(api.profiles.filter((p) => p.active).map((p) => [p.title.toLowerCase(), p.id]));
+  const own = seed.filter((p) => p.incumbentId).map((p): PositionRecord => ({
+    ...p,
+    jobProfileId: profiles.has(p.jobProfileId) ? p.jobProfileId : (profileByTitle.get(p.title.toLowerCase()) ?? p.jobProfileId),
+    headcount: 1,
+    filled: 1,
+    openings: 0,
+  }));
+  const fromApi = api.positions.map((p): PositionRecord => {
+    const profile = profiles.get(p.profile_id);
+    const department = (p.department_id && units.get(p.department_id)?.name) || "";
+    const manager = p.manager_id ? people.find((x) => x.id === p.manager_id)?.fullName ?? "" : "";
+    const vacant = Math.max(0, p.headcount - p.filled);
+    return {
+      id: p.id,
+      code: p.code,
+      title: p.title ?? profile?.title ?? p.code,
+      jobProfileId: p.profile_id,
+      jobFamily: (profile?.family_id && families.get(profile.family_id)) || familyForDepartment(department),
+      grade: p.grade ?? profile?.grade ?? "",
+      country: countryName(p.country_code),
+      location: (p.location_id && units.get(p.location_id)?.name) || "",
+      department,
+      legalEntity: LEGAL_BY_COUNTRY[p.country_code] ?? "",
+      managerName: manager,
+      status: p.status === "frozen" ? "Frozen" : vacant === 0 ? "Filled" : "Open",
+      requirements: profile?.required_skills ?? [],
+      openings: vacant,
+      headcount: p.headcount,
+      filled: p.filled,
+      ...(p.active ? {} : { inactive: true }),
+      added: true,
+    };
+  });
+  return [...own, ...fromApi];
+}
+
+async function apiSavePosition(
+  existing: PositionRecord | null,
+  input: Omit<PositionDef, "id" | "code" | "jobFamily"> & { jobFamily?: string },
+): Promise<string | null> {
+  const api = getOrgOverlay().api;
+  if (!api) return "Still loading. Try again.";
+  if (!input.jobProfileId) return "Choose a job profile.";
+  const department = api.units.find((u) => (u.type === "department" || u.type === "team") && u.name === input.department);
+  const location = api.units.find((u) => u.type === "location" && u.name === input.location);
+  const body = {
+    profile_id: input.jobProfileId,
+    department_id: department?.id ?? null,
+    location_id: location?.id ?? null,
+    grade: input.grade || null,
+    headcount: input.headcount,
+    status: input.status === "Frozen" ? ("frozen" as const) : ("open" as const),
+  };
+  if (!existing) return apiCreatePosition({ ...body, country_code: input.countryCode, manager_id: null, filled: 0 });
+  if (!api.positions.some((p) => p.id === existing.id)) return "Only positions kept on the server can change here.";
+  return apiUpdatePosition(existing.id, body);
 }
 
 export function canEditOrganisation(role: string): boolean {

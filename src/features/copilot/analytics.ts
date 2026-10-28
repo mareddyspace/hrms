@@ -5,7 +5,7 @@
  * HR, executives and admins see company-wide numbers; managers see their own reporting line only.
  */
 import type { CopilotAnswer } from "../../data/platformData.ts";
-import type { PersonRecord } from "../../data/peopleData.ts";
+import { inHeadcount, type PersonRecord } from "../../data/peopleData.ts";
 import { getExitDetails } from "../../data/peopleLocal.ts";
 import { shiftFor } from "../../data/hrAnalytics.ts";
 import { buildAttendanceHistory, type AttendanceCorrection, type TodaySession } from "../../data/attendanceData.ts";
@@ -259,7 +259,7 @@ export function analyticsAnswer(question: string, src: AnalyticsSources): Copilo
     (!country || p.countryName === country) &&
     (!dept || p.department === dept);
   const scoped = src.people.filter(inScope);
-  const active = scoped.filter((p) => p.employmentStatus !== "Terminated");
+  const active = scoped.filter((p) => inHeadcount(p, today));
   const defaultDim: Dim = org ? "department" : "person";
   const filters: string[] = [org ? "Scope: whole company" : `Scope: your team (${src.teamIds.size} ${src.teamIds.size === 1 ? "person" : "people"})`];
   if (country) filters.push(`Country: ${country}`);

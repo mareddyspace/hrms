@@ -169,7 +169,8 @@ function normalizeStatusLabel(status: string): string {
   const key = status.trim().toLowerCase().replace(/[_-]+/g, " ");
   if (key === "pending" || key === "submitted") return "Pending";
   if (key === "approved" || key === "done" || key === "completed") return "Approved";
-  if (key === "rejected" || key === "withdrawn") return "Rejected";
+  if (key === "rejected") return "Rejected";
+  if (key === "withdrawn") return "Withdrawn";
   if (key === "draft") return "Draft";
   if (key === "action required" || key === "actionrequired" || key === "returned") return "Action required";
   if (key === "progress" || key === "in progress") return "In progress";
@@ -245,11 +246,24 @@ export function Dialog({
   /** Wider panel for previews such as certificates. */
   wide?: boolean;
 }) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
   if (!open) return null;
   return (
     <div className="dialog-root" role="presentation">
       <button className="dialog-scrim" type="button" aria-label="Close dialog" onClick={onClose} />
       <div className={`dialog-panel${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+        <button className="dialog-close" type="button" aria-label="Close" onClick={onClose}>
+          ×
+        </button>
         <h2 id="dialog-title">{title}</h2>
         <div className="dialog-body">{children}</div>
         {actions && <div className="dialog-actions">{actions}</div>}
@@ -409,12 +423,26 @@ export function ProjectFacts({ project, hours }: { project: Project; hours?: num
     <div>
       <strong>{project.name}</strong>
       <dl className="meta">
-        <dt>Vendor</dt>
-        <dd>{partyName(project.vendor, "—")}</dd>
+        {project.code && (
+          <>
+            <dt>Code</dt>
+            <dd>{project.code}</dd>
+          </>
+        )}
+        {project.vendor && (
+          <>
+            <dt>Vendor</dt>
+            <dd>{partyName(project.vendor, "—")}</dd>
+          </>
+        )}
         <dt>Client</dt>
         <dd>{partyName(project.client, "—")}</dd>
-        <dt>Start</dt>
-        <dd>{formatShortDate(project.startDate)}</dd>
+        {project.startDate && (
+          <>
+            <dt>Start</dt>
+            <dd>{formatShortDate(project.startDate)}</dd>
+          </>
+        )}
         {hours != null && (
           <>
             <dt>Hours logged</dt>

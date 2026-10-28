@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { API_ENABLED } from "../../api/client.ts";
+import { apiRequestProfileOtp, apiUpdateOwnProfile, type ApiSelfProfileUpdate } from "../../api/syncProfile.ts";
 import { Banner, Field } from "../../components/ui.tsx";
 import type { CopilotAction, CopilotAnswer, CopilotChart as Chart, CopilotLetterDraft } from "../../data/platformData.ts";
 import { requestLetter } from "../../data/letterService.ts";
-import { maskMobile, type LeaveCode, type LeaveHalf } from "../../model.ts";
+import { maskAddress, maskMobile, type LeaveCode, type LeaveHalf } from "../../model.ts";
 import { usePortal } from "../../store.tsx";
 import { logCopilotAction } from "./assist.ts";
 
@@ -76,6 +78,10 @@ function LetterDraftPanel({ draft }: { draft: CopilotLetterDraft }) {
   const stillMissing = draft.missing.filter((m) => !(draft.detailsLabel && m === draft.detailsLabel && details.trim()) && !(m === "Effective date" && effective));
 
   function send() {
+    if (draft.detailsLabel && !details.trim()) {
+      setMessage({ tone: "err", text: `Add ${draft.detailsLabel.toLowerCase()}.` });
+      return;
+    }
     const error = requestLetter(demoProfile, {
       employeeId: draft.employeeId,
       type: draft.type,
@@ -121,12 +127,12 @@ function LetterDraftPanel({ draft }: { draft: CopilotLetterDraft }) {
       )}
       {stillMissing.length > 0 && (
         <p className="note warn" style={{ marginTop: 6 }}>
-          Missing: {stillMissing.join(", ")}. HR fills these before approving.
+          Missing: {stillMissing.join(", ")}.
         </p>
       )}
       {state === "open" && (
         <div className="row-gap" style={{ marginTop: 8 }}>
-          <button type="button" className="btn" onClick={send} disabled={Boolean(draft.detailsLabel && !details.trim())}>
+          <button type="button" className="btn" onClick={send}>
             Create draft and send for approval
           </button>
           <button
@@ -154,8 +160,20 @@ function ActionPanel({ action }: { action: CopilotAction }) {
 
 const validPhone = (v: string) => /^\+?[\d ]+$/.test(v.trim()) && v.replace(/\D/g, "").length >= 8 && v.replace(/\D/g, "").length <= 15;
 
+/** "12 MG Road, Kochi, 682016, India" -> address parts for the server; a short text stays the street line. */
+function splitAddress(text: string): ApiSelfProfileUpdate {
+  const parts = text.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 3) return { address_line: text };
+  const country = parts.pop()!;
+  const pcIndex = parts.findIndex((p, i) => i > 0 && /\d/.test(p) && /^[A-Za-z0-9 -]{3,10}$/.test(p));
+  const postcode = pcIndex > 0 ? parts.splice(pcIndex, 1)[0] : null;
+  const city = parts.length > 1 ? parts.pop()! : null;
+  return { address_line: parts.join(", "), address_city: city, address_postcode: postcode, address_country: country };
+}
+
 function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "profile" }> }) {
-  const { employee, requestProfileOtp, updateProfileWithOtp } = usePortal();
+  const { employee, requestProfileOtp, updateProfileWithOtp, verifyProfileOtp } = usePortal();
+  const [saving, setSaving] = useState(false);
   const [value, setValue] = useState(action.proposed);
   const [otp, setOtp] = useState("");
   const [code, setCode] = useState("");
@@ -164,7 +182,22 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
   const isMobile = action.field === "mobile";
   const label = isMobile ? "New mobile number" : "New address";
 
+  // Backend mode: only a new mobile needs a code (sent by the server); an address change is confirmed directly.
+  const needsCode = !API_ENABLED || isMobile;
+
   function sendCode() {
+    if (API_ENABLED) {
+      const next = value.trim();
+      if (!validPhone(next)) return setMessage({ tone: "err", text: "Enter a valid mobile number: 8–15 digits, optionally starting with +." });
+      void apiRequestProfileOtp("mobile", next).then((sent) => {
+        if (sent.error) return setMessage({ tone: "err", text: sent.error });
+        // "sent" marks the code step as open; the code itself is shown only when the server echoes it (dev).
+        setCode(sent.devCode ?? "sent");
+        setOtp("");
+        setMessage({ tone: "ok", text: `Code sent to ${sent.sentTo || "your email"}.` });
+      });
+      return;
+    }
     setCode(requestProfileOtp());
     setOtp("");
     setMessage({ tone: "ok", text: `Code sent to ${maskMobile(employee.mobile)}.` });
@@ -174,6 +207,23 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
     const next = value.trim();
     if (!next) return setMessage({ tone: "err", text: `Enter the ${isMobile ? "new number" : "new address"}.` });
     if (isMobile && !validPhone(next)) return setMessage({ tone: "err", text: "Enter a valid mobile number: 8–15 digits, optionally starting with +." });
+    if (API_ENABLED) {
+      // Backend mode: the server checks the code, saves (PATCH /people/me) and audits the change.
+      if (needsCode) {
+        const otpError = verifyProfileOtp(otp);
+        if (otpError) return setMessage({ tone: "err", text: otpError });
+      }
+      setSaving(true);
+      void apiUpdateOwnProfile(isMobile ? { mobile: next, otp_code: otp } : splitAddress(next)).then((failed) => {
+        setSaving(false);
+        if (failed) return setMessage({ tone: "err", text: failed });
+        logCopilotAction("Confirmed", { id: employee.id, name: employee.fullName }, { action: { ...action, proposed: next } }, "Profile updated");
+        setState("done");
+        setCode("");
+        setMessage({ tone: "ok", text: `${isMobile ? "Mobile number" : "Address"} updated.` });
+      });
+      return;
+    }
     const error = updateProfileWithOtp(
       {
         fullName: employee.fullName,
@@ -196,7 +246,7 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
   return (
     <div className="otp-box" style={{ marginTop: 10 }}>
       <p className="otp-title">{isMobile ? "Change mobile number" : "Change address"}</p>
-      <p className="note">Current: {isMobile ? maskMobile(action.current) : action.current || "—"}</p>
+      <p className="note">Current: {isMobile ? maskMobile(action.current) : maskAddress(action.current)}</p>
       {state === "open" && (
         <>
           <div className="form-grid" style={GRID}>
@@ -219,15 +269,19 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
               </Field>
             )}
           </div>
-          {code && <p className="note">Code: <strong>{code}</strong></p>}
+          {code && code !== "sent" && <p className="note">Code: <strong>{code}</strong></p>}
           <div className="row-gap" style={{ marginTop: 8 }}>
-            {!code ? (
+            {!needsCode ? (
+              <button type="button" className="btn" onClick={confirm} disabled={!value.trim() || saving}>
+                Confirm change
+              </button>
+            ) : !code ? (
               <button type="button" className="btn" onClick={sendCode} disabled={!value.trim()}>
                 Send code to confirm
               </button>
             ) : (
               <>
-                <button type="button" className="btn" onClick={confirm} disabled={otp.length !== 6}>
+                <button type="button" className="btn" onClick={confirm} disabled={otp.length !== 6 || saving}>
                   Confirm change
                 </button>
                 <button type="button" className="btn-ghost" onClick={sendCode}>
@@ -240,6 +294,7 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
               className="btn-ghost"
               onClick={() => {
                 setState("cancelled");
+                logCopilotAction("Cancelled", { id: employee.id, name: employee.fullName }, { action });
                 setMessage({ tone: "info", text: "Cancelled. Nothing was changed." });
               }}
             >
@@ -270,6 +325,7 @@ function LeaveChange({ action }: { action: Extract<CopilotAction, { kind: "leave
 
   async function confirm() {
     if (!from || !to) return setMessage({ tone: "err", text: "Choose the from and to dates." });
+    if (!reason.trim()) return setMessage({ tone: "err", text: "Add a reason." });
     setState("busy");
     const error = await applyLeave({ code, from, to, reason, half: canHalf && half ? half : undefined });
     if (error) {
@@ -328,7 +384,7 @@ function LeaveChange({ action }: { action: Extract<CopilotAction, { kind: "leave
             </Field>
           </div>
           <div className="row-gap" style={{ marginTop: 8 }}>
-            <button type="button" className="btn" onClick={confirm} disabled={state === "busy" || !reason.trim() || !from}>
+            <button type="button" className="btn" onClick={confirm} disabled={state === "busy"}>
               Confirm and apply
             </button>
             <button

@@ -43,6 +43,15 @@ import {
   type LifecycleActionType,
 } from "./lifecycleActionsStore.ts";
 import { isHrRole } from "./lifecycleShared.ts";
+import { API_ENABLED } from "../../api/client.ts";
+import { loadApiPeople } from "../../api/portalSync.ts";
+import {
+  apiDecideLifecycleAction,
+  apiRaiseLifecycleAction,
+  apiWithdrawLifecycleAction,
+  loadAssignmentHistory,
+  type AssignmentOut,
+} from "../../api/syncOpsLifecycle.ts";
 import "./lifecycle.css";
 
 type Message = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -183,10 +192,14 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
     if (current && actionBlocker(current, next)) pickEmployee("");
   }
 
-  function submit(event: FormEvent) {
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const [countryCode, loc] = location.includes("|") ? [location.split("|")[0], location.split("|").slice(1).join("|")] : ["", location];
-    const result = raiseLifecycleAction(demoProfile, {
+    const raise = API_ENABLED ? apiRaiseLifecycleAction : (input: Parameters<typeof raiseLifecycleAction>[1]) => Promise.resolve(raiseLifecycleAction(demoProfile, input));
+    setBusy(true);
+    const result = await raise({
       employeeId,
       type,
       effectiveDate,
@@ -202,6 +215,7 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
       leaveType,
       leaveEnd,
     });
+    setBusy(false);
     if (result) setError(result);
     else onDone({ tone: "ok", text: `${type} for ${person?.fullName ?? "the employee"} raised.` });
   }
@@ -316,7 +330,7 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
         </Field>
       </div>
       <div>
-        <button className="btn" type="submit" disabled={!employeeId}>
+        <button className="btn" type="submit" disabled={!employeeId || busy}>
           Submit for approval
         </button>
       </div>
@@ -333,14 +347,26 @@ function ActionDetail({ action, onDone }: { action: LifecycleAction; onDone: (m:
   const decidable = canDecide(demoProfile, action);
   const withdrawable = action.status === "Pending" && (action.raisedById === demoProfile.id || isHrRole(demoProfile.role));
 
-  function decide(decision: "approve" | "reject") {
-    const result = decideLifecycleAction(demoProfile, action.id, decision, note);
+  const [busy, setBusy] = useState(false);
+
+  async function decide(decision: "approve" | "reject") {
+    setBusy(true);
+    const result = API_ENABLED
+      ? await apiDecideLifecycleAction(action.id, decision, note)
+      : decideLifecycleAction(demoProfile, action.id, decision, note);
+    setBusy(false);
     if (result) setError(result);
-    else onDone({ tone: "ok", text: decision === "approve" ? "Approved." : "Rejected." });
+    else {
+      // An approved change may already be applied to the person's record.
+      if (API_ENABLED && decision === "approve") void loadApiPeople().catch(() => undefined);
+      onDone({ tone: "ok", text: decision === "approve" ? "Approved." : "Rejected." });
+    }
   }
 
-  function withdraw() {
-    const result = withdrawLifecycleAction(demoProfile, action.id);
+  async function withdraw() {
+    setBusy(true);
+    const result = API_ENABLED ? await apiWithdrawLifecycleAction(action.id) : withdrawLifecycleAction(demoProfile, action.id);
+    setBusy(false);
     if (result) setError(result);
     else onDone({ tone: "ok", text: "Withdrawn." });
   }
@@ -433,16 +459,17 @@ function ActionDetail({ action, onDone }: { action: LifecycleAction; onDone: (m:
         })}
         empty={<p className="muted">No approval steps. Applied on submit.</p>}
       />
+      {API_ENABLED && <JobHistory personId={action.employeeId} refreshKey={`${action.status}-${action.appliedOn ?? ""}`} />}
       {decidable && (
         <>
           <Field label="Note">
             <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Required when rejecting" />
           </Field>
           <div className="row-gap">
-            <button className="btn" type="button" onClick={() => decide("approve")}>
+            <button className="btn" type="button" disabled={busy} onClick={() => decide("approve")}>
               Approve
             </button>
-            <button className="btn-ghost" type="button" onClick={() => decide("reject")}>
+            <button className="btn-ghost" type="button" disabled={busy} onClick={() => decide("reject")}>
               Reject
             </button>
           </div>
@@ -450,11 +477,46 @@ function ActionDetail({ action, onDone }: { action: LifecycleAction; onDone: (m:
       )}
       {withdrawable && !decidable && (
         <div>
-          <button className="btn-ghost" type="button" onClick={withdraw}>
+          <button className="btn-ghost" type="button" disabled={busy} onClick={withdraw}>
             Withdraw
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Effective-dated job history from the backend (newest first). */
+function JobHistory({ personId, refreshKey }: { personId: string; refreshKey: string }) {
+  const [rows, setRows] = useState<AssignmentOut[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    loadAssignmentHistory(personId)
+      .then((r) => live && (setRows(r), setError(null)))
+      .catch(() => live && setError("Couldn't load the job history."));
+    return () => {
+      live = false;
+    };
+  }, [personId, refreshKey]);
+  if (error) return <p className="muted">{error}</p>;
+  if (!rows) return null;
+  return (
+    <div className="stack">
+      <strong>Job history</strong>
+      <DataTable
+        headers={["From", "To", "Title", "Grade", "Department", "Location", "Manager"]}
+        rows={rows.map((r) => [
+          formatShortDate(r.effective_from),
+          r.effective_to ? formatShortDate(r.effective_to) : "Now",
+          r.job_title,
+          r.grade,
+          r.department,
+          r.location,
+          r.manager_name ?? "—",
+        ])}
+        empty={<p className="muted">No history yet.</p>}
+      />
     </div>
   );
 }

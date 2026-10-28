@@ -13,10 +13,12 @@ import { TIMEZ_COUNTRIES, type CountryCode } from "../model.ts";
 import { localeLinks, navGroups, pinnedNavLinks } from "../nav.ts";
 import { appendAuditEntries } from "./auditTrail.ts";
 import { allReportIds, directReportIds, listPeople } from "./peopleLocal.ts";
+import { API_ENABLED, apiRun, createApiMirror } from "../api/syncOps.ts";
+import { apiPutDataScope, apiPutPageAccess, apiResetPageAccess, loadApiAccess, type ApiAccessData } from "../api/syncOpsAdmin.ts";
 
 /* —— Data scope —— */
 
-export type DataScope = "own" | "direct" | "line" | "department" | "country" | "entity" | "global";
+export type DataScope = "own" | "direct" | "line" | "department" | "country" | "entity" | "business_unit" | "location" | "global";
 
 export const DATA_SCOPES: { id: DataScope; label: string; hint: string }[] = [
   { id: "own", label: "Own", hint: "Only their own record" },
@@ -25,6 +27,8 @@ export const DATA_SCOPES: { id: DataScope; label: string; hint: string }[] = [
   { id: "department", label: "Department", hint: "Their department" },
   { id: "country", label: "Country", hint: "Their country" },
   { id: "entity", label: "Legal entity", hint: "Their legal entity" },
+  { id: "business_unit", label: "Business unit", hint: "Their business unit" },
+  { id: "location", label: "Location", hint: "Their work location" },
   { id: "global", label: "Global", hint: "Everyone" },
 ];
 
@@ -67,8 +71,36 @@ function isHrRole(role: string): boolean {
   return role === "hr" || role === "hr_admin" || role === "hrbp";
 }
 
+/* —— Backend mode (VITE_API_URL): data scope and page access live on the server —— */
+
+const accessMirror = createApiMirror<ApiAccessData | null>(() => null, loadApiAccess);
+
+function apiAccessAccount(accountId: string) {
+  return accessMirror.get()?.accounts.find((a) => a.account_id === accountId);
+}
+
+if (API_ENABLED) {
+  // The server's page edits replace this browser's copy, so the menu and route guards follow them.
+  accessMirror.subscribe(() => {
+    const data = accessMirror.get();
+    const map: Record<string, PageAccessOverride> = {};
+    for (const a of data?.accounts ?? []) {
+      if (a.page_access.custom) map[a.account_id] = { grant: a.page_access.grant, revoke: a.page_access.revoke };
+    }
+    if (data?.mine.custom) map[data.me] = { grant: data.mine.grant, revoke: data.mine.revoke };
+    setPageAccessOverrides(map);
+    scopeCache = null;
+    notify();
+  });
+}
+
 /** Defaults: managers see their whole reporting line; everyone else the company directory. */
 export function defaultDataScope(account: Pick<DemoAccount, "role">): DataScopeSetting {
+  if (API_ENABLED) {
+    // The server's rule: HR, admin and executives see everyone; everyone else their reporting line.
+    const global = isHrRole(account.role) || account.role === "admin" || account.role === "executive";
+    return { scope: global ? "global" : "line", countries: [] };
+  }
   if (account.role === "manager") return { scope: "line", countries: [] };
   return { scope: "global", countries: [] };
 }
@@ -104,11 +136,20 @@ function writeScopes(map: Record<string, DataScopeSetting>) {
 }
 
 export function hasCustomDataScope(accountId: string): boolean {
+  if (API_ENABLED) return Boolean(apiAccessAccount(accountId)?.data_scope.custom);
   return Boolean(readScopes()[accountId]);
 }
 
 /** The data scope for a sign-in account (saved setting, else the role default). */
 export function dataScopeFor(accountId: string): DataScopeSetting {
+  if (API_ENABLED) {
+    const row = apiAccessAccount(accountId)?.data_scope;
+    if (row && SCOPE_IDS.has(row.scope)) {
+      return { scope: row.scope as DataScope, countries: row.countries.filter((c): c is CountryCode => COUNTRY_CODES.has(c)) };
+    }
+    const account = DEMO_ACCOUNTS.find((a) => a.id === accountId);
+    return account ? defaultDataScope(account) : { scope: "own", countries: [] };
+  }
   const saved = readScopes()[accountId];
   if (saved) return saved;
   const account = DEMO_ACCOUNTS.find((a) => a.id === accountId);
@@ -125,9 +166,11 @@ export type ScopedPerson = {
   department?: string;
   countryCode?: string;
   legalEntity?: string;
+  businessUnit?: string;
+  location?: string;
 };
 
-type Viewer = { id: string; department?: string; countryCode?: string; legalEntity?: string };
+type Viewer = { id: string; department?: string; countryCode?: string; legalEntity?: string; businessUnit?: string; location?: string };
 
 function viewerFacts(viewerId: string): Viewer {
   const person = listPeople().find((p) => p.id === viewerId);
@@ -137,6 +180,8 @@ function viewerFacts(viewerId: string): Viewer {
     department: person?.department ?? account?.department,
     countryCode: String(person?.countryCode ?? account?.countryCode ?? ""),
     legalEntity: person?.legalEntity ?? account?.legalEntity,
+    businessUnit: person?.businessUnit,
+    location: person?.location ?? account?.location,
   };
 }
 
@@ -170,6 +215,10 @@ export function personFilterFor(viewerId: string): (person: ScopedPerson) => boo
         return Boolean(viewer.countryCode) && String(person.countryCode ?? "") === viewer.countryCode;
       case "entity":
         return Boolean(viewer.legalEntity) && person.legalEntity === viewer.legalEntity;
+      case "business_unit":
+        return Boolean(viewer.businessUnit) && person.businessUnit === viewer.businessUnit;
+      case "location":
+        return Boolean(viewer.location) && person.location === viewer.location;
       default:
         return true;
     }
@@ -182,11 +231,13 @@ export function canSeePerson(viewerId: string, person: ScopedPerson): boolean {
 
 type Actor = { id: string; name: string };
 
-export function saveDataScope(accountId: string, next: DataScopeSetting, actor: Actor): string | null {
+export function saveDataScope(accountId: string, next: DataScopeSetting, actor: Actor): string | null | Promise<string | null> {
   const account = DEMO_ACCOUNTS.find((a) => a.id === accountId);
   if (!account) return "Unknown account.";
   if (!SCOPE_IDS.has(next.scope)) return "Pick a data scope.";
   const countries = isHrRole(account.role) ? next.countries.filter((c) => COUNTRY_CODES.has(c)) : [];
+  // Backend mode: the API applies the scope on every request and audits the change.
+  if (API_ENABLED) return apiRun(() => apiPutDataScope(accountId, next.scope, countries), accessMirror);
   const before = dataScopeFor(accountId);
   const clean: DataScopeSetting = { scope: next.scope, countries };
   if (dataScopeLabel(before) === dataScopeLabel(clean)) return null;
@@ -260,7 +311,7 @@ export function effectivePageIds(account: DemoAccount): string[] {
  * Saves the pages an account may open. Returns an error, or null when saved.
  * Admins can't edit their own pages, and pay pages can only be granted by someone who holds them.
  */
-export function savePageAccess(account: DemoAccount, wanted: string[], actor: DemoAccount): string | null {
+export function savePageAccess(account: DemoAccount, wanted: string[], actor: DemoAccount): string | null | Promise<string | null> {
   if (actor.role !== "admin" && actor.role !== "super_admin") return "Only Admin can change page access.";
   if (account.id === actor.id) return "You can't change page access on your own account.";
   const want = new Set([...wanted, ...LOCKED_PAGE_IDS]);
@@ -277,6 +328,7 @@ export function savePageAccess(account: DemoAccount, wanted: string[], actor: De
   const added = [...want].filter((id) => !before.has(id));
   const removed = [...before].filter((id) => !want.has(id));
   if (!added.length && !removed.length) return null;
+  if (API_ENABLED) return apiRun(() => apiPutPageAccess(account.id, grant, revoke), accessMirror);
   const map = { ...getPageAccessOverrides() };
   map[account.id] = { grant, revoke };
   writePages(map);
@@ -300,9 +352,10 @@ export function savePageAccess(account: DemoAccount, wanted: string[], actor: De
 }
 
 /** Drops the page edits for an account so it goes back to its role's default pages. */
-export function resetPageAccess(account: DemoAccount, actor: DemoAccount): string | null {
+export function resetPageAccess(account: DemoAccount, actor: DemoAccount): string | null | Promise<string | null> {
   if (actor.role !== "admin" && actor.role !== "super_admin") return "Only Admin can change page access.";
   if (account.id === actor.id) return "You can't change page access on your own account.";
+  if (API_ENABLED) return apiRun(() => apiResetPageAccess(account.id), accessMirror);
   const map = { ...getPageAccessOverrides() };
   if (!map[account.id]) return null;
   const before = effectivePageIds(account);

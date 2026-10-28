@@ -61,9 +61,9 @@ export function TravelPage() {
     demoAccounts.find((a) => a.id === id)?.fullName ?? people.find((p) => p.id === id)?.fullName ?? id;
   const claimsFor = (tripId: string) => state.expenses.filter((x) => x.tripId === tripId && x.status !== "withdrawn" && x.status !== "rejected");
 
-  function onSubmit(event: FormEvent) {
+  async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    const error = submitTravel(actor, {
+    const error = await submitTravel(actor, {
       purpose,
       fromCity,
       toCity,
@@ -88,14 +88,14 @@ export function TravelPage() {
     }
   }
 
-  function decide(t: TravelRequest, d: "approved" | "rejected") {
-    const error = decideTravel(actor, t.id, d, notes[t.id], canApprove);
+  async function decide(t: TravelRequest, d: "approved" | "rejected") {
+    const error = await decideTravel(actor, t.id, d, notes[t.id], canApprove);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: d === "approved" ? "Trip approved." : "Trip declined." });
     if (!error) setNotes((prev) => ({ ...prev, [t.id]: "" }));
   }
 
-  function withdraw(t: TravelRequest) {
-    const error = withdrawTravel(actor, t.id);
+  async function withdraw(t: TravelRequest) {
+    const error = await withdrawTravel(actor, t.id);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Request withdrawn." });
   }
 

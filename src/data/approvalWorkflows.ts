@@ -26,6 +26,17 @@ export interface ApprovalStep {
   minAmount?: number;
   /** Step only applies when the increase is at least this percent (pay proposals). */
   minPercent?: number;
+  /** Backend mode: hours the step may wait before it is escalated. */
+  slaHours?: number;
+  /** Backend mode: the step only applies when the requester's country / department / grade is one of these. */
+  condition?: StepCondition;
+  /** Backend mode (leave): the step only applies when the leave needs HR (long, unpaid, maternity...). */
+  onlyIf?: "needs_hr";
+}
+
+export interface StepCondition {
+  field: "country" | "department" | "grade";
+  values: string[];
 }
 
 export type ApprovalWorkflows = Record<WorkflowType, ApprovalStep[]>;
@@ -407,20 +418,73 @@ export function legacyRole(role: ApprovalStepRole): LegacyStepRole {
   return role === "executive" ? "admin" : role;
 }
 
+/** Fallback when a group loses everyone because they approved an earlier step: admin, then executive. */
+function fallbackFor(role: string, employeeId: string, blocked: ReadonlySet<string>, accounts: readonly DemoAccount[]): string[] {
+  const order: ApprovalStepRole[] = role === "executive" ? [] : role === "admin" ? ["executive"] : ["admin", "executive"];
+  for (const alt of order) {
+    const ids = approversForRole(alt, employeeId, accounts).filter((id) => !blocked.has(id));
+    if (ids.length) return ids;
+  }
+  return [];
+}
+
+/** Drop earlier approvers from a group; if that empties it, fall back (still never them). */
+function keepApprovers(role: string, ids: string[], employeeId: string, prior: ReadonlySet<string>, blocked: ReadonlySet<string>, accounts: readonly DemoAccount[]): string[] {
+  const left = ids.filter((id) => !blocked.has(id));
+  if (left.length || !ids.some((id) => prior.has(id))) return left;
+  return fallbackFor(role, employeeId, blocked, accounts);
+}
+
+/** People who will have approved this step once it completes (the only person in a group that must approve). */
+function certainApprovers(step: Pick<FlowStep, "approverIds" | "mode" | "groups">): string[] {
+  if (new Set(step.approverIds).size === 1) return [step.approverIds[0]!];
+  if (step.groups && step.mode !== "any") return step.groups.filter((g) => g.approverIds.length === 1).map((g) => g.approverIds[0]!);
+  return [];
+}
+
+type RetargetStep = { role: string; approverIds: string[]; groups?: { role: string; approverIds: string[] }[] };
+
+/**
+ * A later step of a request without anyone who approved an earlier step (nobody approves two steps). A group left
+ * empty falls back to admin, then executive; returns null when nobody is left (the step is skipped).
+ */
+export function withoutPriorApprovers<S extends RetargetStep>(
+  step: S,
+  prior: ReadonlySet<string>,
+  employeeId: string,
+  excludeIds: Iterable<string> = [],
+  accounts: readonly DemoAccount[] = DEMO_ACCOUNTS,
+): S | null {
+  const blocked = new Set([...prior, ...excludeIds, employeeId]);
+  if (step.groups && step.groups.length > 1) {
+    const groups = step.groups
+      .map((g) => ({ ...g, approverIds: keepApprovers(g.role, g.approverIds, employeeId, prior, blocked, accounts) }))
+      .filter((g) => g.approverIds.length);
+    if (!groups.length) return null;
+    return { ...step, groups, approverIds: [...new Set(groups.flatMap((g) => g.approverIds))] };
+  }
+  const approverIds = keepApprovers(step.groups?.[0]?.role ?? step.role, step.approverIds, employeeId, prior, blocked, accounts);
+  return approverIds.length ? { ...step, approverIds } : null;
+}
+
 /**
  * Steps for this request with approvers resolved, parallel groups kept. Groups (and steps) nobody can decide
- * are dropped; groups with exactly the same people are merged.
+ * are dropped; groups with exactly the same people are merged. Whoever is the only approver of a step is left
+ * out of the later steps (nobody approves two steps of one request).
  */
 export function resolveFlow(type: WorkflowType, employeeId: string, opts: ResolveOptions = {}, accounts: readonly DemoAccount[] = DEMO_ACCOUNTS): FlowStep[] {
   const exclude = new Set(opts.excludeIds ?? []);
   const lineFromSelf = LINE_FROM_REQUESTER.includes(type);
   const out: FlowStep[] = [];
+  const prior = new Set<string>();
   for (const step of readSteps()[type]) {
     if (!applies(step, opts)) continue;
     const roles = stepRoles(step);
     const groups: FlowGroup[] = [];
+    const blocked = new Set([...exclude, ...prior, employeeId]);
     for (const role of roles) {
-      const ids = approversForRole(role, employeeId, accounts, lineFromSelf).filter((id) => !exclude.has(id));
+      const all = approversForRole(role, employeeId, accounts, lineFromSelf).filter((id) => !exclude.has(id));
+      const ids = keepApprovers(role, all, employeeId, prior, blocked, accounts);
       if (!ids.length) continue;
       const key = [...ids].sort().join(",");
       const same = groups.find((g) => [...g.approverIds].sort().join(",") === key);
@@ -432,11 +496,12 @@ export function resolveFlow(type: WorkflowType, employeeId: string, opts: Resolv
     }
     if (!groups.length) continue;
     const approverIds = [...new Set(groups.flatMap((g) => g.approverIds))];
-    if (groups.length === 1) {
-      out.push({ role: legacyRole(groups[0]!.role), label: step.label, approverIds });
-    } else {
-      out.push({ role: legacyRole(groups[0]!.role), label: step.label, approverIds, mode: step.mode === "any" ? "any" : "all", groups });
-    }
+    const resolved: FlowStep =
+      groups.length === 1
+        ? { role: legacyRole(groups[0]!.role), label: step.label, approverIds }
+        : { role: legacyRole(groups[0]!.role), label: step.label, approverIds, mode: step.mode === "any" ? "any" : "all", groups };
+    out.push(resolved);
+    certainApprovers(resolved).forEach((id) => prior.add(id));
   }
   return out;
 }

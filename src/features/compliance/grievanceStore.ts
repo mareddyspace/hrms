@@ -4,6 +4,19 @@ import { DEMO_ACCOUNTS } from "../../demoAccounts.ts";
 import { pushPersonTaskAlert } from "../../data/collabLocal.ts";
 import { appendAuditEntries } from "../../data/auditTrail.ts";
 import { getPrivacyState } from "./privacyStore.ts";
+import { API_ENABLED, apiRun, createApiMirror, subscribeAll } from "../../api/syncOps.ts";
+import {
+  apiAssignCase,
+  apiCaseComment,
+  apiCaseNote,
+  apiCaseStatus,
+  apiDownloadCaseFile,
+  apiEscalateCase,
+  apiRaiseCase,
+  apiUploadCaseFile,
+  loadApiCases,
+  type ApiFile,
+} from "../../api/syncOpsCases.ts";
 import {
   createLocalStore,
   daysBetween,
@@ -63,6 +76,11 @@ export type CaseRecord = {
   /** Set when the case file was cut down to a stub under the retention rule. */
   archivedOn?: string;
   timeline: CaseEntry[];
+  /** Backend mode only: priority, escalations and evidence files. */
+  priority?: string;
+  escalationCount?: number;
+  escalatedAt?: string;
+  files?: ApiFile[];
 };
 
 type GrievanceState = { cases: CaseRecord[] };
@@ -182,8 +200,14 @@ function defaults(): GrievanceState {
 
 const store = createLocalStore<GrievanceState>("kastech.grievance.v2", defaults);
 
-export const subscribeGrievance = store.subscribe;
-export const getGrievanceState = store.getState;
+/** Backend mode: cases come from the API (kept in memory, never in this browser's storage). */
+const apiCases = createApiMirror<GrievanceState>(
+  () => ({ cases: [] }),
+  async (accountId) => ({ cases: await loadApiCases(accountId) }),
+);
+
+export const subscribeGrievance = API_ENABLED ? subscribeAll(store.subscribe, apiCases.subscribe) : store.subscribe;
+export const getGrievanceState: () => GrievanceState = API_ENABLED ? apiCases.get : store.getState;
 export const resetGrievance = store.reset;
 export const GRIEVANCE_KEY = store.key;
 
@@ -280,7 +304,10 @@ function makeCode(existing: CaseRecord[]): string {
 
 export type CaseInput = { category: CaseCategory; description: string; againstId?: string; anonymous: boolean };
 
-export function raiseCase(actor: ComplianceActor, input: CaseInput): { code: string } | { error: string } {
+type RaiseResult = { code: string } | { error: string };
+
+export function raiseCase(actor: ComplianceActor, input: CaseInput): RaiseResult | Promise<RaiseResult> {
+  if (API_ENABLED) return raiseCaseApi(actor, input);
   let code = "";
   const error = store.guarded((s) => {
     if (!CASE_CATEGORIES.includes(input.category)) return "Choose a category.";
@@ -314,6 +341,17 @@ export function raiseCase(actor: ComplianceActor, input: CaseInput): { code: str
   return error ? { error } : { code };
 }
 
+async function raiseCaseApi(actor: ComplianceActor, input: CaseInput): Promise<RaiseResult> {
+  const text = input.description.trim();
+  if (text.length < 20) return { error: "Describe what happened in at least 20 characters." };
+  if (input.againstId && input.againstId === actor.id) return { error: "You cannot name yourself in a case." };
+  let code = "";
+  const error = await apiRun(async () => {
+    code = (await apiRaiseCase({ ...input, description: text })).code;
+  }, apiCases);
+  return error ? { error } : { code };
+}
+
 const TRANSITIONS: Record<CaseStatus, CaseStatus[]> = {
   Open: ["Investigating", "Closed"],
   Investigating: ["Resolved", "Closed"],
@@ -333,7 +371,8 @@ export function caseMoves(c: CaseRecord): CaseStatus[] {
   return TRANSITIONS[c.status];
 }
 
-export function setCaseStatus(actor: ComplianceActor, id: string, next: CaseStatus, note: string): ComplianceResult {
+export function setCaseStatus(actor: ComplianceActor, id: string, next: CaseStatus, note: string): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return apiRun(() => apiCaseStatus(id, next, note), apiCases);
   const before = getGrievanceState().cases.find((c) => c.id === id)?.status;
   const error = store.guarded((s) => {
     const row = s.cases.find((c) => c.id === id);
@@ -354,7 +393,12 @@ export function setCaseStatus(actor: ComplianceActor, id: string, next: CaseStat
 }
 
 /** HR assigns the case to an HR person, who is notified. An empty id clears the assignment. */
-export function assignCase(actor: ComplianceActor, id: string, assigneeId: string): ComplianceResult {
+export function assignCase(actor: ComplianceActor, id: string, assigneeId: string): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) {
+    const row = getGrievanceState().cases.find((c) => c.id === id);
+    if (row && (row.assigneeId ?? "") === assigneeId) return "Already assigned.";
+    return apiRun(() => apiAssignCase(id, assigneeId), apiCases);
+  }
   const current = getGrievanceState().cases.find((c) => c.id === id);
   let code = "";
   const error = store.guarded((s) => {
@@ -403,6 +447,7 @@ function isClosedStatus(status: CaseStatus): boolean {
  * status "Archived (retention)". Closed cases missing a closed date get one from their last status change.
  */
 export function enforceCaseRetention(today = todayISO()): number {
+  if (API_ENABLED) return 0; // the backend applies retention
   const cutoff = caseRetentionCutoff(today);
   const due = (c: CaseRecord) => !!cutoff && isClosedStatus(c.status) && !!c.closedOn && c.closedOn < cutoff;
   const cases = getGrievanceState().cases;
@@ -442,7 +487,15 @@ export function enforceCaseRetention(today = todayISO()): number {
   return archived.length;
 }
 
-export function addCaseNote(actor: ComplianceActor, id: string, text: string, confidential: boolean): ComplianceResult {
+export function addCaseNote(actor: ComplianceActor, id: string, text: string, confidential: boolean): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) {
+    const row = getGrievanceState().cases.find((c) => c.id === id);
+    if (!row) return "Case not found.";
+    if (text.trim().length < 2) return "Write a note first.";
+    if (canManageCase(actor, row)) return apiRun(() => apiCaseNote(id, text, confidential), apiCases);
+    if (isReporter(actor, row)) return apiRun(() => apiCaseComment(id, text), apiCases);
+    return "You cannot comment on this case.";
+  }
   return store.guarded((s) => {
     const row = s.cases.find((c) => c.id === id);
     if (!row) return "Case not found.";
@@ -463,10 +516,36 @@ export function addCaseNote(actor: ComplianceActor, id: string, text: string, co
   });
 }
 
+/* Backend mode only: escalation and evidence files. */
+
+/** HR, the committee or the reporter escalates an open case (priority becomes Urgent; HR is told). */
+export function escalateCase(id: string, reason: string): Promise<ComplianceResult> {
+  if (reason.trim().length < 5) return Promise.resolve("Say why in at least 5 characters.");
+  return apiRun(() => apiEscalateCase(id, reason), apiCases);
+}
+
+/** Adds an evidence file. Confidential files (HR only) are hidden from the reporter. */
+export function uploadCaseFile(id: string, file: File, confidential: boolean): Promise<ComplianceResult> {
+  return apiRun(() => apiUploadCaseFile(id, file, confidential), apiCases);
+}
+
+export async function downloadCaseFile(caseId: string, file: ApiFile): Promise<ComplianceResult> {
+  try {
+    await apiDownloadCaseFile(caseId, file);
+    return null;
+  } catch (e) {
+    return e instanceof Error && e.message ? e.message : "That didn't work. Try again.";
+  }
+}
+
 /** Reporter comment via private code (anonymous follow-up). */
-export function addCommentByCode(actor: ComplianceActor, code: string, text: string): ComplianceResult {
+export function addCommentByCode(actor: ComplianceActor, code: string, text: string): ComplianceResult | Promise<ComplianceResult> {
   const found = findCaseByCode(actor, code);
   if (!found) return "No case found for that code.";
+  if (API_ENABLED) {
+    if (text.trim().length < 2) return "Write a comment first.";
+    return apiRun(() => apiCaseComment(found.id, text), apiCases);
+  }
   return store.guarded((s) => {
     const row = s.cases.find((c) => c.id === found.id);
     if (!row) return "Case not found.";

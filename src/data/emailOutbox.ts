@@ -2,7 +2,10 @@ import { useSyncExternalStore } from "react";
 import { findDemoById } from "../demoAccounts.ts";
 import type { NotifCategory } from "./collabData.ts";
 import { getBasePeople } from "./peopleData.ts";
+import { getPerson, listPeople } from "./peopleLocal.ts";
 import type { NotificationPref } from "./platformData.ts";
+import { API_ENABLED, apiRun, createApiMirror, errorText } from "../api/syncOps.ts";
+import { apiMarkEmailsSent, apiSetEmailSwitch, loadApiEmail, type ApiEmailData, type EmailSwitchOut } from "../api/syncOpsAdmin.ts";
 
 /**
  * Email events queued alongside in-app notifications. Nothing is sent from the browser:
@@ -64,6 +67,55 @@ function write(rows: EmailEvent[]) {
   listeners.forEach((fn) => fn());
 }
 
+/* ── Backend mode (VITE_API_URL): the server queues emails for its own notifications and keeps the switches ── */
+
+const API_EMAIL_PREFIX = "api-em-";
+
+/** Admins only (the API refuses others); empty until loaded. */
+const emailMirror = createApiMirror<ApiEmailData | null>(
+  () => null,
+  () => loadApiEmail().catch(() => ({ switches: [], outbox: [] })),
+);
+if (API_ENABLED) emailMirror.subscribe(() => listeners.forEach((fn) => fn()));
+
+let composedRows: { api: ApiEmailData | null; local: EmailEvent[]; people: unknown; out: EmailEvent[] } | null = null;
+
+function apiRows(): EmailEvent[] {
+  const api = emailMirror.get();
+  const local = read();
+  const people = listPeople(); // names for recipients who don't sign in
+  if (composedRows?.api === api && composedRows.local === local && composedRows.people === people) return composedRows.out;
+  const fromApi: EmailEvent[] = (api?.outbox ?? []).map((e) => ({
+    id: `${API_EMAIL_PREFIX}${e.id}`,
+    to: e.to_email,
+    recipientId: e.recipient_id,
+    recipientName: findDemoById(e.recipient_id)?.fullName ?? getPerson(e.recipient_id)?.fullName ?? e.recipient_id,
+    subject: e.subject,
+    body: e.body,
+    link: e.link ? absoluteLink(e.link) : undefined,
+    channel: e.channel,
+    category: e.category as NotifCategory,
+    createdAt: e.created_at,
+    status: e.status === "Sent" ? "Sent" : "Queued",
+    sentAt: e.sent_at ?? undefined,
+  }));
+  // Emails this browser queued for its own (local-only) notifications stay listed after the server's.
+  const out = [...fromApi, ...local].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  composedRows = { api, local, people, out };
+  return out;
+}
+
+/** Backend mode: the server's email switches (admins), or null before they load. */
+export function apiEmailSwitches(): EmailSwitchOut[] | null {
+  const api = emailMirror.get();
+  return api && api.switches.length ? api.switches : null;
+}
+
+/** Backend mode: turns email on or off for a channel on the server. */
+export function setApiEmailSwitch(channel: string, email: boolean): Promise<string | null> {
+  return apiRun(() => apiSetEmailSwitch(channel, email), emailMirror);
+}
+
 export function subscribeEmailOutbox(listener: () => void) {
   listeners.add(listener);
   return () => {
@@ -71,12 +123,14 @@ export function subscribeEmailOutbox(listener: () => void) {
   };
 }
 
+const snapshot = (): EmailEvent[] => (API_ENABLED ? apiRows() : read());
+
 export function listEmailOutbox(): EmailEvent[] {
-  return read();
+  return snapshot();
 }
 
 export function useEmailOutbox(): EmailEvent[] {
-  return useSyncExternalStore(subscribeEmailOutbox, read, read);
+  return useSyncExternalStore(subscribeEmailOutbox, snapshot, snapshot);
 }
 
 /** Admin notification channel for a notification category; null when no channel covers it. */
@@ -109,6 +163,8 @@ function adminPrefs(): Pick<NotificationPref, "id" | "email">[] {
 export function emailAllowedFor(category: NotifCategory): boolean {
   const channel = emailChannelFor(category);
   if (!channel) return true;
+  const server = API_ENABLED ? apiEmailSwitches() : null;
+  if (server) return server.find((s) => s.channel === channel)?.email !== false;
   const pref = adminPrefs().find((p) => p.id === channel);
   return pref ? pref.email !== false : true;
 }
@@ -187,6 +243,26 @@ export function markEmailsSent(ids: string[]): number {
 
 export function sendAllQueuedEmails(): number {
   return markEmailsSent(read().filter((e) => e.status === "Queued").map((e) => e.id));
+}
+
+/**
+ * Marks emails sent: the server's rows through the API, this browser's own rows here.
+ * Resolves to how many were marked, or an error message.
+ */
+export async function markEmailsSentAnywhere(ids: string[] | "all"): Promise<{ count: number } | { error: string }> {
+  const rows = snapshot();
+  const wanted = ids === "all" ? rows.filter((e) => e.status === "Queued").map((e) => e.id) : ids;
+  const apiIds = wanted.filter((id) => id.startsWith(API_EMAIL_PREFIX)).map((id) => Number(id.slice(API_EMAIL_PREFIX.length)));
+  const localCount = markEmailsSent(wanted.filter((id) => !id.startsWith(API_EMAIL_PREFIX)));
+  if (!API_ENABLED || !apiIds.length) return { count: localCount };
+  try {
+    const out = await apiMarkEmailsSent(ids === "all" ? "all" : apiIds);
+    return { count: localCount + out.marked };
+  } catch (e) {
+    return { error: errorText(e) };
+  } finally {
+    await emailMirror.reload();
+  }
 }
 
 export function clearSentEmails(): number {

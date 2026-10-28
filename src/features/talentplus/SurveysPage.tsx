@@ -15,22 +15,28 @@ import { TIMEZ_COUNTRIES, formatShortDate, todayISO } from "../../model.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { isHr } from "./shared.ts";
 import { useActor } from "./useActor.ts";
+import { API_ENABLED } from "../../api/syncOps.ts";
 import {
   ENPS_PROMPT,
   MIN_RESPONSES,
   audienceLabel,
+  closeSurveyApi,
   createSurvey,
+  createSurveyApi,
   deleteDraftSurvey,
   engagementTrend,
   getSurveysState,
   hasResponded,
   isInAudience,
   publishSurvey,
+  publishSurveyApi,
   resultsFor,
   submitResponse,
+  submitResponseApi,
   subscribeSurveys,
   summarize,
   surveyPhase,
+  type ApiSurveyResults,
   type EngagementPoint,
   type QuestionKind,
   type QuestionResult,
@@ -41,6 +47,8 @@ import {
 } from "./surveysStore.ts";
 import "./talentplus.css";
 import "./engagementTrend.css";
+
+const RESULT_ROLES = new Set(["hr", "hr_admin", "hrbp", "admin", "executive"]);
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -71,7 +79,7 @@ export function EngagementSurveysPage() {
     <Page title="Engagement surveys">
       <Tabs tabs={tabs} value={tabs.some((t) => t.id === tab) ? tab : "open"} onChange={setTab} />
       {tab === "open" && <OpenSurveys surveys={state.surveys} />}
-      {tab === "results" && <Results surveys={state.surveys} />}
+      {tab === "results" && (API_ENABLED ? <ApiResults surveys={state.surveys} results={state.apiResults ?? {}} /> : <Results surveys={state.surveys} />)}
       {tab === "manage" && hr && <Manage surveys={state.surveys} />}
     </Page>
   );
@@ -152,8 +160,13 @@ function AnswerForm({ survey, onCancel, onDone }: { survey: Survey; onCancel: ()
   const [msg, setMsg] = useState<Msg>(null);
   const set = (id: string, v: number | string) => setAnswers((a) => ({ ...a, [id]: v }));
 
-  function submit() {
-    const error = submitResponse(actor, survey.id, answers);
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (busy) return;
+    setBusy(true);
+    const error = API_ENABLED ? await submitResponseApi(survey.id, answers) : submitResponse(actor, survey.id, answers);
+    setBusy(false);
     if (error) setMsg({ tone: "err", text: error });
     else onDone();
   }
@@ -197,7 +210,7 @@ function AnswerForm({ survey, onCancel, onDone }: { survey: Survey; onCancel: ()
       ))}
       <Banner message={msg} />
       <div className="row-gap" style={{ marginTop: 12 }}>
-        <button type="button" className="btn" onClick={submit}>
+        <button type="button" className="btn" disabled={busy} onClick={() => void submit()}>
           Submit answers
         </button>
         <button type="button" className="btn btn-ghost" onClick={onCancel}>
@@ -274,49 +287,116 @@ function ResultsView({ survey, responses, scope }: { survey: Survey; responses: 
         </Card>
       ) : (
         <>
-          {summary.map((r) => (
-            <Card key={r.question.id} title={r.question.prompt}>
-              {r.kind === "rating" && (
-                <div className="tp-bars">
-                  {[5, 4, 3, 2, 1].map((n) => {
-                    const count = r.counts[n - 1];
-                    const pct = r.answered ? Math.round((count / r.answered) * 100) : 0;
-                    return (
-                      <div key={n} className="tp-bar">
-                        <span>{n}</span>
-                        <div className="tp-bar-track">
-                          <div className="tp-bar-fill" style={{ width: `${pct}%` }} />
-                        </div>
-                        <span>{count}</span>
-                      </div>
-                    );
-                  })}
-                  <p className="muted">Average {r.average} from {r.answered} answers</p>
-                </div>
-              )}
-              {r.kind === "enps" && (
-                <MetricGrid>
-                  <MetricCard label="Promoters (9–10)" value={r.promoters} />
-                  <MetricCard label="Passives (7–8)" value={r.passives} />
-                  <MetricCard label="Detractors (0–6)" value={r.detractors} />
-                </MetricGrid>
-              )}
-              {r.kind === "text" &&
-                (r.comments.length ? (
-                  <ul className="tp-comments">
-                    {r.comments.map((c, i) => (
-                      <li key={i}>{c}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="muted">No comments.</p>
-                ))}
-            </Card>
-          ))}
+          <QuestionCards summary={summary} />
           {scope === "all" && <Breakdown survey={survey} responses={responses} />}
         </>
       )}
     </>
+  );
+}
+
+function QuestionCards({ summary }: { summary: QuestionResult[] }) {
+  return (
+    <>
+      {summary.map((r) => (
+        <Card key={r.question.id} title={r.question.prompt}>
+          {r.kind === "rating" && (
+            <div className="tp-bars">
+              {[5, 4, 3, 2, 1].map((n) => {
+                const count = r.counts[n - 1];
+                const pct = r.answered ? Math.round((count / r.answered) * 100) : 0;
+                return (
+                  <div key={n} className="tp-bar">
+                    <span>{n}</span>
+                    <div className="tp-bar-track">
+                      <div className="tp-bar-fill" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span>{count}</span>
+                  </div>
+                );
+              })}
+              <p className="muted">Average {r.average} from {r.answered} answers</p>
+            </div>
+          )}
+          {r.kind === "enps" && (
+            <MetricGrid>
+              <MetricCard label="Promoters (9–10)" value={r.promoters} />
+              <MetricCard label="Passives (7–8)" value={r.passives} />
+              <MetricCard label="Detractors (0–6)" value={r.detractors} />
+            </MetricGrid>
+          )}
+          {r.kind === "text" &&
+            (r.comments.length ? (
+              <ul className="tp-comments">
+                {r.comments.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">No comments.</p>
+            ))}
+        </Card>
+      ))}
+    </>
+  );
+}
+
+/** Backend mode: aggregate results from the API (HR, admin and executives only). */
+function ApiResults({ surveys, results }: { surveys: Survey[]; results: Record<string, ApiSurveyResults> }) {
+  const actor = useActor();
+  const visible = surveys.filter((s) => s.published && results[s.id]);
+  const [surveyId, setSurveyId] = useState("");
+  const survey = visible.find((s) => s.id === surveyId) ?? visible[0];
+  if (!getSurveysState().apiResults || !RESULT_ROLES.has(actor.role)) {
+    return <EmptyState title="No team results" description="Survey results are shared by HR." />;
+  }
+  if (!survey) return <><EngagementTrend /><EmptyState title="No results yet" description="Results show once a survey is published." /></>;
+  const r = results[survey.id];
+  const ratings = r.questions.filter((q): q is Extract<QuestionResult, { kind: "rating" }> => q.kind === "rating");
+  const avg = ratings.length ? Math.round((ratings.reduce((a, q) => a + q.average, 0) / ratings.length) * 10) / 10 : null;
+  const bucketRows = (list: ApiSurveyResults["departments"]) =>
+    list.map((b) =>
+      b.suppressed
+        ? [b.name, `Fewer than ${r.threshold}`, "Hidden to protect anonymity", "—"]
+        : [b.name, String(b.responses), b.engagement === null ? "—" : String(b.engagement), signed(b.enps)],
+    );
+  return (
+    <div className="stack">
+      <EngagementTrend />
+      <Card>
+        <Field label="Survey">
+          <select value={survey.id} onChange={(e) => setSurveyId(e.target.value)}>
+            {visible.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.title} ({surveyPhase(s)})
+              </option>
+            ))}
+          </select>
+        </Field>
+      </Card>
+      <MetricGrid>
+        <MetricCard label="Responses" value={r.responses} />
+        <MetricCard label="Participation" value={`${r.participationPct}%`} hint={`Audience of ${r.audience}`} />
+        {!r.suppressed && <MetricCard label="Engagement" value={r.engagement ?? "—"} hint="0–100" />}
+        {!r.suppressed && r.enps !== null && <MetricCard label="eNPS" value={signed(r.enps)} hint="Promoters minus detractors" />}
+        {!r.suppressed && avg !== null && <MetricCard label="Average rating" value={`${avg} / 5`} />}
+      </MetricGrid>
+      {r.suppressed ? (
+        <Card>
+          <EmptyState title="Not enough responses to keep answers anonymous" description={`Results show once at least ${r.threshold} people respond.`} />
+        </Card>
+      ) : (
+        <>
+          <QuestionCards summary={r.questions} />
+          <Card title="By department">
+            <DataTable headers={["Department", "Responses", "Engagement", "eNPS"]} rows={bucketRows(r.departments)} />
+          </Card>
+          <Card title="By country">
+            <DataTable headers={["Country", "Responses", "Engagement", "eNPS"]} rows={bucketRows(r.countries)} />
+          </Card>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -419,7 +499,7 @@ function EngagementTrend() {
             }),
           ])}
         />
-        <p className="muted">Engagement is the average rating answer on a 0–100 scale. Groups under {MIN_RESPONSES} responses stay hidden.</p>
+        <p className="muted">Groups under {MIN_RESPONSES} responses are hidden.</p>
       </Card>
     </>
   );
@@ -470,9 +550,15 @@ function Manage({ surveys }: { surveys: Survey[] }) {
   const [msg, setMsg] = useState<Msg>(null);
   const [listMsg, setListMsg] = useState<Msg>(null);
 
-  function save(publish: boolean) {
+  const [busy, setBusy] = useState(false);
+
+  async function save(publish: boolean) {
+    if (busy) return;
     const audience: SurveyAudience = audType === "all" ? { type: "all" } : { type: audType, value: audValue };
-    const error = createSurvey(actor, { title, questions, audience, openDate, closeDate }, publish);
+    const input = { title, questions, audience, openDate, closeDate };
+    setBusy(true);
+    const error = API_ENABLED ? await createSurveyApi(input, publish) : createSurvey(actor, input, publish);
+    setBusy(false);
     if (error) {
       setMsg({ tone: "err", text: error });
       return;
@@ -486,8 +572,15 @@ function Manage({ surveys }: { surveys: Survey[] }) {
   const updateQ = (i: number, patch: Partial<DraftQuestion>) =>
     setQuestions((qs) => qs.map((q, j) => (j === i ? { ...q, ...patch, prompt: patch.kind === "enps" ? ENPS_PROMPT : patch.prompt ?? q.prompt } : q)));
 
+  async function listAction(run: () => string | null | Promise<string | null>, ok: string) {
+    const e = await run();
+    setListMsg(e ? { tone: "err", text: e } : { tone: "ok", text: ok });
+  }
+
   const rows = surveys.map((s) => {
-    const count = getSurveysState().responses.filter((r) => r.surveyId === s.id).length;
+    const state = getSurveysState();
+    const count = API_ENABLED ? state.apiResults?.[s.id]?.responses ?? 0 : state.responses.filter((r) => r.surveyId === s.id).length;
+    const phase = surveyPhase(s);
     return [
       s.title,
       audienceLabel(s.audience),
@@ -496,13 +589,23 @@ function Manage({ surveys }: { surveys: Survey[] }) {
       String(count),
       !s.published ? (
         <div key="a" className="row-gap">
-          <button type="button" className="btn btn-tiny" onClick={() => { const e = publishSurvey(actor, s.id); setListMsg(e ? { tone: "err", text: e } : { tone: "ok", text: "Survey published." }); }}>
+          <button
+            type="button"
+            className="btn btn-tiny"
+            onClick={() => void listAction(() => (API_ENABLED ? publishSurveyApi(s.id) : publishSurvey(actor, s.id)), "Survey published.")}
+          >
             Publish
           </button>
-          <button type="button" className="btn btn-ghost btn-tiny" onClick={() => { const e = deleteDraftSurvey(actor, s.id); setListMsg(e ? { tone: "err", text: e } : { tone: "ok", text: "Draft deleted." }); }}>
-            Delete
-          </button>
+          {!API_ENABLED && (
+            <button type="button" className="btn btn-ghost btn-tiny" onClick={() => void listAction(() => deleteDraftSurvey(actor, s.id), "Draft deleted.")}>
+              Delete
+            </button>
+          )}
         </div>
+      ) : API_ENABLED && (phase === "Open" || phase === "Scheduled") ? (
+        <button key="a" type="button" className="btn btn-ghost btn-tiny" onClick={() => void listAction(() => closeSurveyApi(s.id), "Survey closed.")}>
+          Close now
+        </button>
       ) : (
         <span key="a" className="muted">—</span>
       ),
@@ -578,10 +681,10 @@ function Manage({ surveys }: { surveys: Survey[] }) {
         </div>
         <Banner message={msg} />
         <div className="row-gap" style={{ marginTop: 12 }}>
-          <button type="button" className="btn" onClick={() => save(true)}>
+          <button type="button" className="btn" disabled={busy} onClick={() => void save(true)}>
             Publish survey
           </button>
-          <button type="button" className="btn btn-ghost" onClick={() => save(false)}>
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void save(false)}>
             Save draft
           </button>
         </div>

@@ -38,6 +38,10 @@ export interface CompCycle {
   opensOn?: string;
   closesOn?: string;
   createdBy?: string;
+  /** Backend mode: whether the cycle takes proposals today, and (HR) how much of the budget is used. */
+  acceptingProposals?: boolean;
+  budgetUsedPct?: number;
+  proposalCount?: number;
 }
 
 export interface CompReviewItem {
@@ -200,7 +204,7 @@ export type LetterType =
   | "Warning"
   | "Termination";
 
-export type LetterStatus = "Draft" | "Pending approval" | "Approved" | "Rejected" | "Issued";
+export type LetterStatus = "Draft" | "Pending approval" | "Approved" | "Rejected" | "Issued" | "Cancelled";
 
 /** Letters that must stay hidden from their subject until issued. */
 export const SENSITIVE_LETTER_TYPES: LetterType[] = ["Salary revision", "Promotion", "Warning", "Termination"];
@@ -241,6 +245,22 @@ export interface LetterRequest {
   approverId?: string;
   /** Generated versions, oldest first. The last one is current. */
   issued?: IssuedLetter[];
+  /** Backend mode only: the server-side PDF versions and what this viewer may do. */
+  api?: ApiLetterInfo;
+}
+
+/** A letter request loaded from the backend (VITE_API_URL mode). */
+export interface ApiLetterInfo {
+  /** Issued PDF versions, oldest first. */
+  issues: { version: number; referenceNo: string; on: string }[];
+  /** Waiting on this viewer for approval. */
+  canDecide: boolean;
+  /** HR may generate (again): approved or issued letters about someone else. */
+  canIssue: boolean;
+  /** The requester may cancel a pending request. */
+  canCancel: boolean;
+  /** Why the PDF could not be generated after approval. */
+  issueError?: string;
 }
 
 export interface DocLibraryItem {

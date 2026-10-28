@@ -140,7 +140,7 @@ export function WorkflowsPage() {
   const overdue = (list: TrackedRequest[]) => list.filter((r) => ageInDays(r.submittedOn, today) > 3).length;
 
   return (
-    <Page title="Workflows">
+    <Page title="Workflows & approvals">
       <MetricGrid>
         <MetricCard label="Waiting for you" value={toDecide.length} />
         <MetricCard label="Overdue (over 3 days)" value={overdue(toDecide)} />

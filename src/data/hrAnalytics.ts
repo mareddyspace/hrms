@@ -4,7 +4,7 @@
  */
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import { addDaysISO, holidaysForPerson, parseISODate, toISO, type PortalState } from "../model.ts";
-import { gradeRank, type PersonRecord } from "./peopleData.ts";
+import { gradeRank, inHeadcount, type PersonRecord } from "./peopleData.ts";
 import { buildAttendanceHistory, type AttendanceCorrection, type TodaySession } from "./attendanceData.ts";
 import type { OfferRecord, Requisition } from "./talentData.ts";
 import { TASK_TEAM } from "./taskTeam.ts";
@@ -12,7 +12,8 @@ import { scheduleForEmployee } from "./workSchedule.ts";
 
 const DAY_MS = 86_400_000;
 const WFH_CODES = new Set(["wfh", "emergency_wfh"]);
-const active = (p: PersonRecord) => p.employmentStatus !== "Terminated";
+/** In headcount: not left, and started (pre-boarding joiners don't count yet). */
+const active = (p: PersonRecord) => inHeadcount(p);
 const pct = (n: number, d: number) => (d ? Math.round((n / d) * 100) : 0);
 const daysBetween = (from: string, to: string) => Math.round((parseISODate(to).getTime() - parseISODate(from).getTime()) / DAY_MS);
 const dayShort = (iso: string) => parseISODate(iso).toLocaleDateString("en-GB", { weekday: "short" });

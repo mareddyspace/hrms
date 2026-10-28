@@ -1,3 +1,30 @@
+import { API_ENABLED, apiSessionAccount, onApiSession } from "../api/client.ts";
+import {
+  apiAddBonus,
+  apiAddDependent,
+  apiCloseLifeEvent,
+  apiCreateCycle,
+  apiCreateProposal,
+  apiDecideEnrollment,
+  apiDecideProposal,
+  apiRaiseLifeEvent,
+  apiRemoveDependent,
+  apiRequestEnrollment,
+  apiRequestLetter,
+  apiSetBonusStatus,
+  apiSetCoverage,
+  apiSetCycleStatus,
+  apiSetWindowDates,
+  apiSetWindowOverride,
+  apiUpdateBand,
+  apiUpdateDependent,
+  apiVerifyDependent,
+  forgetApiMe,
+  loadApiBenefits,
+  loadApiComp,
+  loadApiLetters,
+  type ApiBenefitsExtra,
+} from "../api/syncRewards.ts";
 import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../demoAccounts.ts";
 import { formatShortDate, parseISODate, toISO, todayISO } from "../model.ts";
 import { appendAuditEntries, type AuditEntry } from "./auditTrail.ts";
@@ -47,7 +74,7 @@ const OLD_KEYS = ["timez.reward.state.v1", "timez.reward.state.v2", "timez.rewar
 type RewardState = {
   cycles: CompCycle[];
   bands: GradeBand[];
-  reviews: CompReviewItem[];
+  reviews: CompProposal[];
   history: CompHistoryRow[];
   bonuses: BonusRecord[];
   enrollments: BenefitEnrollment[];
@@ -58,10 +85,24 @@ type RewardState = {
   lifeEvents: LifeEvent[];
   benefitHistory: BenefitHistoryRow[];
   openEnrollment: EnrollmentWindow;
+  /** Backend mode only (VITE_API_URL set): extras the API returns. Undefined in browser-only mode. */
+  api?: ApiRewardExtra;
 };
+
+/** What the backend adds on top of the store shapes (plans, eligibility, nominees, who may decide what). */
+export interface ApiRewardExtra {
+  loaded: boolean;
+  /** HR / compensation: sees everyone's pay in scope. */
+  payRole: boolean;
+  benefits: ApiBenefitsExtra | null;
+  error: string | null;
+}
 
 /** Mutations return null on success or a user-facing error message. */
 export type RewardResult = string | null;
+
+/** In backend mode mutations call the API, so the result arrives later. */
+export type RewardOutcome = RewardResult | Promise<RewardResult>;
 
 function defaults(): RewardState {
   return {
@@ -102,7 +143,28 @@ function withAutoEnrollments(state: RewardState): RewardState {
   return state;
 }
 
+/** Backend mode starts empty (no demo seed) until the API data arrives. */
+function apiEmpty(): RewardState {
+  return {
+    cycles: [],
+    bands: [],
+    reviews: [],
+    history: [],
+    bonuses: [],
+    enrollments: [],
+    changeRequests: [],
+    letters: [],
+    library: [],
+    dependents: [],
+    lifeEvents: [],
+    benefitHistory: [],
+    openEnrollment: { year: new Date().getFullYear(), start: "", end: "" },
+    api: { loaded: false, payRole: false, benefits: null, error: null },
+  };
+}
+
 function read(): RewardState {
+  if (API_ENABLED) return apiEmpty();
   const base = defaults();
   try {
     OLD_KEYS.forEach((k) => localStorage.removeItem(k));
@@ -136,15 +198,81 @@ const listeners = new Set<() => void>();
 let cache: RewardState | null = null;
 
 function write(state: RewardState): RewardResult {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(state));
-  } catch {
-    // Usually the storage quota — keep the previous cache so UI and storage agree.
-    return "Could not save — storage is full. Remove large uploads and try again.";
+  if (!API_ENABLED) {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(state));
+    } catch {
+      // Usually the storage quota — keep the previous cache so UI and storage agree.
+      return "Could not save — storage is full. Remove large uploads and try again.";
+    }
   }
   cache = state;
   listeners.forEach((fn) => fn());
   return null;
+}
+
+/* ───────────── Backend mode: load from the API ───────────── */
+
+export type ApiArea = "comp" | "benefits" | "letters";
+
+let apiGeneration = 0;
+
+/** Reloads the given areas (all by default) from the API into the store. */
+export async function refreshRewardApi(areas: ApiArea[] = ["comp", "benefits", "letters"]): Promise<void> {
+  const accountId = apiSessionAccount();
+  if (!API_ENABLED || !accountId) return;
+  const generation = apiGeneration;
+  try {
+    const [comp, benefits, letters] = await Promise.all([
+      areas.includes("comp") ? loadApiComp(accountId) : Promise.resolve(null),
+      areas.includes("benefits") ? loadApiBenefits(accountId) : Promise.resolve(null),
+      areas.includes("letters") ? loadApiLetters(accountId) : Promise.resolve(null),
+    ]);
+    if (generation !== apiGeneration) return; // signed out (or someone else signed in) meanwhile
+    const next = { ...getRewardState() };
+    const extra: ApiRewardExtra = { ...(next.api ?? apiEmpty().api!), loaded: true, error: null };
+    if (comp) {
+      Object.assign(next, { cycles: comp.cycles, bands: comp.bands, reviews: comp.reviews, history: comp.history, bonuses: comp.bonuses });
+      extra.payRole = comp.payRole;
+    }
+    if (benefits) {
+      Object.assign(next, {
+        enrollments: benefits.enrollments,
+        dependents: benefits.dependents,
+        lifeEvents: benefits.lifeEvents,
+        openEnrollment: benefits.openEnrollment,
+      });
+      extra.benefits = benefits.extra;
+    }
+    if (letters) next.letters = letters;
+    next.api = extra;
+    write(next);
+  } catch (error) {
+    if (generation !== apiGeneration) return;
+    console.error("Loading compensation, benefits or letters failed", error);
+    write({ ...getRewardState(), api: { ...(getRewardState().api ?? apiEmpty().api!), loaded: true, error: (error as Error).message || "Couldn't load from the server." } });
+  }
+}
+
+/** Backend mode: runs a call from syncRewards and reloads the given areas when it worked. */
+export function runRewardApi(call: Promise<string | null>, areas: ApiArea[]): Promise<RewardResult> {
+  return viaApi(call, areas);
+}
+
+/** Runs an API mutation; on success reloads the areas it touched. */
+async function viaApi(call: Promise<string | null>, areas: ApiArea[]): Promise<RewardResult> {
+  const error = await call;
+  if (!error) await refreshRewardApi(areas);
+  return error;
+}
+
+if (API_ENABLED) {
+  onApiSession((accountId) => {
+    apiGeneration += 1;
+    forgetApiMe();
+    write(apiEmpty());
+    if (accountId) void refreshRewardApi();
+  });
 }
 
 export function subscribeReward(listener: () => void) {
@@ -247,6 +375,7 @@ export function cycleById(state: Pick<RewardState, "cycles">, id: string): CompC
 
 /** Proposals can be made and submitted only while a cycle is open. */
 export function cycleTakesProposals(cycle: CompCycle | undefined): boolean {
+  if (cycle?.acceptingProposals !== undefined) return cycle.acceptingProposals;
   return !!cycle && (cycle.status === "Open" || cycle.status === "Manager review");
 }
 
@@ -260,7 +389,12 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 export function createCompCycle(
   actor: Actor,
   input: { name: string; effectiveDate: string; budgetPct: number; opensOn: string; closesOn: string; countries: string[] },
-): RewardResult {
+): RewardOutcome {
+  if (API_ENABLED) {
+    if (![input.effectiveDate, input.opensOn, input.closesOn].every((d) => ISO_DATE.test(d))) return "Fill in all three dates.";
+    if (!input.countries.length) return "Pick at least one country.";
+    return viaApi(apiCreateCycle(input), ["comp"]);
+  }
   if (!isPayHr(actor)) return "Only HR can create review cycles.";
   const name = input.name.trim();
   if (name.length < 3) return "Give the cycle a name.";
@@ -312,7 +446,8 @@ function notifyCycle(cycleId: string) {
 }
 
 /** HR opens or closes a cycle by hand. */
-export function setCompCycleStatus(actor: Actor, id: string, status: "Open" | "Closed"): RewardResult {
+export function setCompCycleStatus(actor: Actor, id: string, status: "Open" | "Closed"): RewardOutcome {
+  if (API_ENABLED) return viaApi(apiSetCycleStatus(id, status), ["comp"]);
   if (!isPayHr(actor)) return "Only HR can open or close review cycles.";
   const result = withCompAudit(actor, (s, log) => {
     const cycle = cycleById(s, id);
@@ -341,8 +476,29 @@ export function canProposeFor(actor: Actor, employeeId: string): boolean {
 /** A manager (or HR) proposes a pay change inside an open cycle. Saved as a draft unless `submit` is set. */
 export function createCompProposal(
   actor: Actor,
-  input: { cycleId: string; employeeId: string; proposedGrade: string; proposedBase: number; bonus: number; currentBase?: number; currentGrade?: string; submit?: boolean },
-): RewardResult {
+  input: {
+    cycleId: string;
+    employeeId: string;
+    proposedGrade: string;
+    proposedBase: number;
+    bonus: number;
+    currentBase?: number;
+    currentGrade?: string;
+    submit?: boolean;
+    /** Backend mode: the increase in percent (the server works out the new base, which managers may not see). */
+    increasePct?: number;
+  },
+): RewardOutcome {
+  if (API_ENABLED) {
+    if (!input.employeeId) return "Pick the employee.";
+    const pct = input.increasePct;
+    if (pct === undefined || !Number.isFinite(pct) || pct < 0 || pct > 100) return "Enter the increase (0–100%).";
+    if (!Number.isFinite(input.bonus) || input.bonus < 0) return "Bonus can't be negative.";
+    return viaApi(
+      apiCreateProposal({ cycleId: input.cycleId, employeeId: input.employeeId, increasePct: pct, proposedGrade: input.proposedGrade, bonus: input.bonus }),
+      ["comp"],
+    );
+  }
   const person = DEMO_ACCOUNTS.find((a) => a.id === input.employeeId);
   if (!person) return "Employee not found.";
   if (!canProposeFor(actor, person.id)) return "You can only propose for people below you in the reporting line.";
@@ -415,6 +571,14 @@ export type CompProposal = CompReviewItem & {
   stepDecisions?: FlowDecision[];
   submittedOn?: string;
   workflowVersion?: number;
+  /** Backend mode: false when the server hid the amounts from this viewer. */
+  payVisible?: boolean;
+  /** Backend mode: the proposal is waiting on this viewer. */
+  canDecide?: boolean;
+  /** Backend mode: a status the portal has no badge for (e.g. "Withdrawn"). */
+  statusLabel?: string;
+  /** Backend mode: the approval steps in words. */
+  approvalText?: string;
 };
 
 const NO_LINE_OVERRIDE = () => false;
@@ -455,6 +619,7 @@ function compAlert(ids: string[], employeeName: string, body: string) {
  * employee, never the proposer; final step = HR (or, for HR's own pay, their line manager).
  */
 export function canDecideCompReview(actor: Actor, row: CompProposal): boolean {
+  if (row.canDecide !== undefined) return row.canDecide;
   if (actor.id === row.employeeId || actor.id === row.managerId) return false;
   if (cycleById(getRewardState(), row.cycleId)?.status === "Closed") return false;
   if (row.steps?.length) return isWaitingOn(compFlow(row), actor.id, NO_LINE_OVERRIDE);
@@ -470,6 +635,7 @@ export function canDecideCompReview(actor: Actor, row: CompProposal): boolean {
 
 /** "HR approval ✓ Farhan · Compensation approval (waiting)" for workflow proposals; older ones show the line approver. */
 export function compApprovalText(row: CompProposal): string {
+  if (row.approvalText !== undefined) return row.approvalText;
   if (!row.steps?.length) return row.lineApprover ? `${row.lineApprover} · ${row.lineApprovedOn ?? ""}` : "—";
   const decisions = row.stepDecisions ?? [];
   const open = row.status === "Pending approval" || row.status === "Pending final approval";
@@ -486,6 +652,7 @@ export function compApprovalText(row: CompProposal): string {
 
 /** The proposer sends a draft for approval. */
 export function submitCompReview(actor: Actor, id: string): RewardResult {
+  if (API_ENABLED) return "Proposals are submitted when you create them.";
   let alert: { ids: string[]; employeeName: string; body: string } | null = null;
   const result = withCompAudit(actor, (s, log) => {
     const row = s.reviews.find((r) => r.id === id) as CompProposal | undefined;
@@ -539,7 +706,8 @@ function applyApprovedProposal(s: RewardState, row: CompProposal, log: AuditLog,
   }
 }
 
-export function decideCompReview(actor: Actor, id: string, decision: "Approved" | "Rejected"): RewardResult {
+export function decideCompReview(actor: Actor, id: string, decision: "Approved" | "Rejected"): RewardOutcome {
+  if (API_ENABLED) return viaApi(apiDecideProposal(id, decision === "Approved" ? "approve" : "reject"), ["comp"]);
   let notify: { to: string; title: string; body: string } | null = null;
   let nextAlert: { ids: string[]; employeeName: string; body: string } | null = null;
   const result = withCompAudit(actor, (s, log) => {
@@ -577,6 +745,7 @@ export function decideCompReview(actor: Actor, id: string, decision: "Approved" 
         return;
       }
       if (res.outcome === "waiting" || res.outcome === "advanced") {
+        row.steps = res.steps as FlowStep[];
         row.currentStep = res.currentStep;
         row.status = stepStatus(row);
         log(row.id, row.employeeId, "Updated", [
@@ -628,11 +797,12 @@ export function decideCompReview(actor: Actor, id: string, decision: "Approved" 
 /* ── Grade bands ── */
 
 /** HR changes a salary range. Amounts are whole numbers in the band's currency. */
-export function updateGradeBand(actor: Actor, id: string, input: { min: number; mid: number; max: number }): RewardResult {
-  if (!isPayHr(actor)) return "Only HR can change salary ranges.";
+export function updateGradeBand(actor: Actor, id: string, input: { min: number; mid: number; max: number }): RewardOutcome {
   const { min, mid, max } = input;
   if (![min, mid, max].every((n) => Number.isFinite(n) && n > 0)) return "Enter min, mid and max.";
   if (!(min <= mid && mid <= max)) return "Min must be at most mid, and mid at most max.";
+  if (API_ENABLED) return viaApi(apiUpdateBand(id, input), ["comp"]);
+  if (!isPayHr(actor)) return "Only HR can change salary ranges.";
   return withCompAudit(actor, (s, log) => {
     const band = s.bands.find((b) => b.id === id);
     if (!band) return "Range not found.";
@@ -648,7 +818,13 @@ export function updateGradeBand(actor: Actor, id: string, input: { min: number; 
 
 /* ── Bonuses ── */
 
-export function addBonus(actor: Actor, input: { employeeId: string; type: string; period: string; amount: number }): RewardResult {
+export function addBonus(actor: Actor, input: { employeeId: string; type: string; period: string; amount: number }): RewardOutcome {
+  if (API_ENABLED) {
+    if (!input.employeeId) return "Pick the employee.";
+    if (!input.type.trim() || !input.period.trim()) return "Fill in the type and period.";
+    if (!Number.isFinite(input.amount) || input.amount <= 0) return "Enter the amount.";
+    return viaApi(apiAddBonus(input), ["comp"]);
+  }
   if (!isPayHr(actor)) return "Only HR can record bonuses.";
   if (input.employeeId === actor.id) return "Someone else must record your own bonus.";
   const person = DEMO_ACCOUNTS.find((a) => a.id === input.employeeId);
@@ -677,7 +853,11 @@ export function addBonus(actor: Actor, input: { employeeId: string; type: string
   });
 }
 
-export function setBonusStatus(actor: Actor, id: string, status: BonusRecord["status"]): RewardResult {
+export function setBonusStatus(actor: Actor, id: string, status: BonusRecord["status"]): RewardOutcome {
+  if (API_ENABLED) {
+    if (status === "Accrued") return "Only paid or forfeited can be set.";
+    return viaApi(apiSetBonusStatus(id, status), ["comp"]);
+  }
   if (!isPayHr(actor)) return "Only HR can change bonus status.";
   return withCompAudit(actor, (s, log) => {
     const row = s.bonuses.find((b) => b.id === id);
@@ -693,7 +873,9 @@ export function setBonusStatus(actor: Actor, id: string, status: BonusRecord["st
 }
 
 /** Share of the cycle budget used by live proposals (approved or in progress), against current base. */
-export function cycleBudgetUse(state: Pick<RewardState, "reviews">, cycleId: string): { usedPct: number; count: number } {
+export function cycleBudgetUse(state: Pick<RewardState, "reviews" | "cycles">, cycleId: string): { usedPct: number; count: number } {
+  const apiCycle = state.cycles.find((c) => c.id === cycleId);
+  if (apiCycle?.budgetUsedPct !== undefined) return { usedPct: apiCycle.budgetUsedPct, count: apiCycle.proposalCount ?? 0 };
   const rows = state.reviews.filter((r) => r.cycleId === cycleId && r.status !== "Rejected");
   const current = rows.reduce((sum, r) => sum + (parseAmount(r.currentBase) || 0), 0);
   const proposed = rows.reduce((sum, r) => sum + (parseAmount(r.proposedBase) || 0), 0);
@@ -712,12 +894,37 @@ export function canDecideBenefitFor(actor: Pick<DemoAccount, "id" | "role">, emp
   return payDecidersFor(employeeId, (a) => canAdminBenefits(a)).some((a) => a.id === actor.id);
 }
 
+/** Benefit plans: from the API in backend mode, else the built-in catalogue. */
+export function benefitPlans(state: Pick<RewardState, "api"> = getRewardState()): BenefitPlan[] {
+  return state.api ? (state.api.benefits?.plans ?? []) : BENEFIT_PLANS;
+}
+
 export function isMandatoryPlan(planId: string): boolean {
-  return !!BENEFIT_PLANS.find((p) => p.id === planId)?.mandatory;
+  return !!benefitPlans().find((p) => p.id === planId)?.mandatory;
 }
 
 export function isAutoPlan(planId: string): boolean {
-  return !!BENEFIT_PLANS.find((p) => p.id === planId)?.autoEnrolled;
+  return !!benefitPlans().find((p) => p.id === planId)?.autoEnrolled;
+}
+
+/** Who may decide this enrollment request now (backend mode: the server's to-decide list). */
+export function canDecideEnrollmentRow(actor: Pick<DemoAccount, "id" | "role">, row: BenefitEnrollment): boolean {
+  const extra = getRewardState().api?.benefits;
+  if (getRewardState().api) return row.status === "Pending" && !!extra?.decidableEnrollments.includes(row.id);
+  return row.status === "Pending" && canDecideBenefitFor(actor, row.employeeId);
+}
+
+/** Who may verify or reject this dependent (backend mode: HR's verification queue). */
+export function canVerifyDependentRow(actor: Pick<DemoAccount, "id" | "role">, row: Dependent): boolean {
+  const extra = getRewardState().api?.benefits;
+  if (getRewardState().api) return !!extra?.verifiableDependents.includes(row.id);
+  return row.verification !== "Verified" && canDecideBenefitFor(actor, row.employeeId);
+}
+
+/** Who may close a life-event window early. */
+export function canCloseLifeEventRow(actor: Pick<DemoAccount, "id" | "role">, row: LifeEvent): boolean {
+  if (getRewardState().api) return actor.id !== row.employeeId && canAdminBenefits(actor);
+  return canDecideBenefitFor(actor, row.employeeId);
 }
 
 function addDays(iso: string, days: number): string {
@@ -761,6 +968,8 @@ function monthsBetween(from: string, to: string): number {
 
 /** Plan rules, in plain words. */
 export function eligibilityRules(plan: BenefitPlan): string[] {
+  const fromApi = getRewardState().api?.benefits?.rules[plan.id];
+  if (fromApi) return fromApi;
   const rules = [`Works in ${plan.country}`];
   const e = plan.eligibility;
   if (e?.excludeEmploymentTypes?.length) rules.push(`Not ${e.excludeEmploymentTypes.join(" or ").toLowerCase()} staff`);
@@ -771,6 +980,12 @@ export function eligibilityRules(plan: BenefitPlan): string[] {
 
 /** Checks a plan's rules against the person. */
 export function planEligibility(plan: BenefitPlan, employeeId: string, today = todayISO()): { eligible: boolean; reason: string } {
+  const state = getRewardState();
+  if (state.api) {
+    // The server checks the signed-in employee's own country plans only.
+    const check = state.api.benefits?.eligibility[plan.id];
+    return check ?? { eligible: false, reason: `Only for staff in ${plan.country}` };
+  }
   const f = personFacts(employeeId);
   if (f.country !== plan.country) return { eligible: false, reason: `Only for staff in ${plan.country}` };
   const e = plan.eligibility;
@@ -807,7 +1022,13 @@ export function activeLifeEvent(state: Pick<RewardState, "lifeEvents">, employee
 }
 
 /** Whether `employeeId` may make benefit elections or changes today, and why. */
-export function changeWindowFor(state: Pick<RewardState, "lifeEvents" | "openEnrollment">, employeeId: string, today = todayISO()): ChangeWindow {
+export function changeWindowFor(
+  state: Pick<RewardState, "lifeEvents" | "openEnrollment" | "api">,
+  employeeId: string,
+  today = todayISO(),
+): ChangeWindow {
+  // Backend mode: the server's answer for the signed-in employee.
+  if (state.api) return state.api.benefits?.changeWindow ?? { open: false, text: "Loading the enrollment window…" };
   if (openEnrollmentIsOpen(state.openEnrollment, today)) {
     return { open: true, text: `Open enrollment is open${state.openEnrollment.override === "open" ? "" : ` until ${formatShortDate(state.openEnrollment.end)}`}.` };
   }
@@ -825,29 +1046,32 @@ function windowError(s: RewardState, employeeId: string): string | null {
 }
 
 /** HR sets the open enrollment dates (clears any manual open/close). */
-export function setOpenEnrollmentDates(actor: DemoAccount, start: string, end: string): RewardResult {
+export function setOpenEnrollmentDates(actor: DemoAccount, start: string, end: string): RewardOutcome {
   if (!canAdminBenefits(actor)) return "Only HR can change the enrollment window.";
   if (!ISO_DATE.test(start) || !ISO_DATE.test(end)) return "Fill in both dates.";
   if (end < start) return "The end date must be after the start date.";
+  if (API_ENABLED) return viaApi(apiSetWindowDates(getRewardState().api?.benefits?.windowId ?? null, start, end), ["benefits"]);
   return updateReward((s) => {
     s.openEnrollment = { year: Number(end.slice(0, 4)) + (Number(end.slice(5, 7)) >= 10 ? 1 : 0), start, end, updatedBy: actor.fullName };
   });
 }
 
 /** HR opens or closes open enrollment now, or goes back to the dates (null). */
-export function setOpenEnrollmentOverride(actor: DemoAccount, override: "open" | "closed" | null): RewardResult {
+export function setOpenEnrollmentOverride(actor: DemoAccount, override: "open" | "closed" | null): RewardOutcome {
   if (!canAdminBenefits(actor)) return "Only HR can open or close enrollment.";
+  if (API_ENABLED) return viaApi(apiSetWindowOverride(getRewardState().api?.benefits?.windowId ?? null, override), ["benefits"]);
   return updateReward((s) => {
     s.openEnrollment = { ...s.openEnrollment, override: override ?? undefined, updatedBy: actor.fullName };
   });
 }
 
 /** Employee reports a life event; it opens a 30-day change window from the event date. */
-export function raiseLifeEvent(actor: DemoAccount, type: string, eventDate: string): RewardResult {
+export function raiseLifeEvent(actor: DemoAccount, type: string, eventDate: string): RewardOutcome {
   const today = todayISO();
   if (!type) return "Pick the life event.";
   if (!ISO_DATE.test(eventDate)) return "Enter the event date.";
   if (eventDate > today) return "The event date can't be in the future.";
+  if (API_ENABLED) return viaApi(apiRaiseLifeEvent(type, eventDate), ["benefits"]);
   const windowEnds = addDays(eventDate, 30);
   if (windowEnds < today) return "Life events must be reported within 30 days.";
   const result = updateReward((s) => {
@@ -869,7 +1093,8 @@ export function raiseLifeEvent(actor: DemoAccount, type: string, eventDate: stri
 }
 
 /** HR closes a life-event window early. */
-export function closeLifeEvent(actor: DemoAccount, id: string): RewardResult {
+export function closeLifeEvent(actor: DemoAccount, id: string): RewardOutcome {
+  if (API_ENABLED) return viaApi(apiCloseLifeEvent(id), ["benefits"]);
   return updateReward((s) => {
     const row = s.lifeEvents.find((e) => e.id === id);
     if (!row) return "Life event not found.";
@@ -892,9 +1117,10 @@ function checkDependent(input: DependentInput): string | null {
   return null;
 }
 
-export function addDependent(actor: DemoAccount, input: DependentInput): RewardResult {
+export function addDependent(actor: DemoAccount, input: DependentInput): RewardOutcome {
   const error = checkDependent(input);
   if (error) return error;
+  if (API_ENABLED) return viaApi(apiAddDependent(input), ["benefits"]);
   const name = input.name.trim();
   const result = updateReward((s) => {
     if (s.dependents.some((d) => d.employeeId === actor.id && d.name.toLowerCase() === name.toLowerCase())) return `${name} is already on file.`;
@@ -914,9 +1140,10 @@ export function addDependent(actor: DemoAccount, input: DependentInput): RewardR
   return result;
 }
 
-export function updateDependent(actor: DemoAccount, id: string, input: DependentInput): RewardResult {
+export function updateDependent(actor: DemoAccount, id: string, input: DependentInput): RewardOutcome {
   const error = checkDependent(input);
   if (error) return error;
+  if (API_ENABLED) return viaApi(apiUpdateDependent(id, input), ["benefits"]);
   let changed = false;
   const result = updateReward((s) => {
     const row = s.dependents.find((d) => d.id === id);
@@ -936,7 +1163,8 @@ export function updateDependent(actor: DemoAccount, id: string, input: Dependent
   return result;
 }
 
-export function removeDependent(actor: DemoAccount, id: string): RewardResult {
+export function removeDependent(actor: DemoAccount, id: string): RewardOutcome {
+  if (API_ENABLED) return viaApi(apiRemoveDependent(id), ["benefits"]);
   return updateReward((s) => {
     const row = s.dependents.find((d) => d.id === id);
     if (!row || row.employeeId !== actor.id) return "You can only remove your own dependents.";
@@ -946,7 +1174,8 @@ export function removeDependent(actor: DemoAccount, id: string): RewardResult {
   });
 }
 
-export function verifyDependent(actor: DemoAccount, id: string, status: "Verified" | "Rejected"): RewardResult {
+export function verifyDependent(actor: DemoAccount, id: string, status: "Verified" | "Rejected"): RewardOutcome {
+  if (API_ENABLED) return viaApi(apiVerifyDependent(id, status), ["benefits"]);
   let target: Dependent | undefined;
   const result = updateReward((s) => {
     const row = s.dependents.find((d) => d.id === id);
@@ -967,10 +1196,17 @@ export function verifyDependent(actor: DemoAccount, id: string, status: "Verifie
 }
 
 /** Sets which of the employee's verified dependents a plan covers. Only inside a change window. */
-export function setPlanDependents(actor: DemoAccount, planId: string, dependentIds: string[]): RewardResult {
-  const plan = BENEFIT_PLANS.find((p) => p.id === planId);
+export function setPlanDependents(actor: DemoAccount, planId: string, dependentIds: string[]): RewardOutcome {
+  const plan = benefitPlans().find((p) => p.id === planId);
   if (!plan) return "Plan not found.";
   if (!plan.coversDependents) return "This plan doesn't cover dependents.";
+  if (API_ENABLED) {
+    const enrollment = getRewardState().enrollments.find(
+      (e) => e.employeeId === actor.id && e.planId === planId && (e.status === "Enrolled" || e.status === "Pending"),
+    );
+    if (!enrollment) return "Join the plan first.";
+    return viaApi(apiSetCoverage(enrollment.id, dependentIds), ["benefits"]);
+  }
   return updateReward((s) => {
     const enrollment = s.enrollments.find((e) => e.employeeId === actor.id && e.planId === planId);
     if (!enrollment || (enrollment.status !== "Enrolled" && enrollment.status !== "Pending")) return "Join the plan first.";
@@ -1001,7 +1237,8 @@ export function setPlanDependents(actor: DemoAccount, planId: string, dependentI
 /* ── Elections ── */
 
 /** Employee asks to join a plan in their own country (creates a Pending row). */
-export function requestEnrollment(actor: DemoAccount, planId: string, dependentIds: string[] = []): RewardResult {
+export function requestEnrollment(actor: DemoAccount, planId: string, dependentIds: string[] = []): RewardOutcome {
+  if (API_ENABLED) return viaApi(apiRequestEnrollment(planId, dependentIds), ["benefits"]);
   const plan = BENEFIT_PLANS.find((p) => p.id === planId);
   if (!plan) return "Plan not found.";
   if (plan.country !== actor.countryName) return "You can only enroll in plans for your own country.";
@@ -1047,6 +1284,7 @@ export function pendingChangeFor(state: Pick<RewardState, "changeRequests">, enr
 
 /** Employee asks HR to change an enrolled plan. The enrollment stays active until HR acts. */
 export function requestEnrollmentChange(actor: DemoAccount, enrollmentId: string, note: string): RewardResult {
+  if (API_ENABLED) return "Ask HR directly to change an enrolled plan.";
   return updateReward((s) => {
     const row = s.enrollments.find((e) => e.id === enrollmentId);
     if (!row || row.employeeId !== actor.id) return "You can only change your own enrollments.";
@@ -1089,7 +1327,8 @@ export function decideEnrollment(
   actor: DemoAccount,
   enrollmentId: string,
   status: "Enrolled" | "Waived",
-): RewardResult {
+): RewardOutcome {
+  if (API_ENABLED) return viaApi(apiDecideEnrollment(enrollmentId, status === "Enrolled" ? "approve" : "waive"), ["benefits"]);
   return updateReward((s) => {
     const row = s.enrollments.find((e) => e.id === enrollmentId);
     if (!row) return "Enrollment not found.";
@@ -1184,6 +1423,13 @@ export function addLetterRequest(
 ): RewardResult {
   if (input.employeeId !== actor.id && !isLetterHr(actor)) {
     return "You can only request letters for yourself.";
+  }
+  if (API_ENABLED) {
+    // Exit / probation / copilot flows call this synchronously: send it and reload; failures are logged.
+    void viaApi(apiRequestLetter(input), ["letters"]).then((error) => {
+      if (error) console.warn(`Letter request not saved: ${error}`);
+    });
+    return null;
   }
   return updateReward((s) => {
     const open = s.letters.some(

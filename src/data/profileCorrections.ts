@@ -24,10 +24,22 @@ import {
 import { getPerson, upsertPerson, wouldCreateLoop, type LocalPersonRecord } from "./peopleLocal.ts";
 import { canManagePeople } from "./peoplePermissions.ts";
 import { profileExtrasFor, saveProfileExtras } from "./profileExtras.ts";
+import { API_ENABLED, onApiSession } from "../api/client.ts";
+import {
+  apiDecideCorrection,
+  apiListCorrections,
+  apiRequestCorrection,
+  apiUpdateOwnProfile,
+  apiWithdrawCorrection,
+  type ApiCorrectionField,
+  type ProfileCorrectionOut,
+} from "../api/syncProfile.ts";
 
 type Actor = { id: string; fullName: string; role: UserRole };
 /** null when saved, otherwise the reason it was refused. */
 export type ProfileResult = string | null;
+/** In backend mode the save goes to the server, so the result arrives later. */
+export type ProfileResultAsync = ProfileResult | Promise<ProfileResult>;
 
 function localToday(): string {
   const d = new Date();
@@ -74,7 +86,19 @@ function validateBackground(input: OwnBackgroundInput, today: string): ProfileRe
 }
 
 /** Save the employee-editable background fields on your own directory record. */
-export function saveOwnBackground(actor: Pick<Actor, "id" | "fullName">, input: OwnBackgroundInput): ProfileResult {
+export function saveOwnBackground(actor: Pick<Actor, "id" | "fullName">, input: OwnBackgroundInput): ProfileResultAsync {
+  if (API_ENABLED) {
+    const error = validateBackground(input, localToday());
+    if (error) return error;
+    return apiUpdateOwnProfile({
+      preferred_name: input.preferredName,
+      preferred_language: input.preferredLanguage,
+      languages: input.spokenLanguages,
+      education: input.education.map((e) => ({ degree: e.degree.trim(), institution: e.institution.trim(), year: Number(e.year) })),
+      experience: input.experience.map((x) => ({ employer: x.employer.trim(), title: x.title.trim(), from: x.from, to: x.to })),
+      career_goals: input.careerGoals,
+    });
+  }
   const person = getPerson(actor.id);
   if (!person) return "Your directory record was not found.";
   const today = localToday();
@@ -176,13 +200,90 @@ export interface ProfileCorrection {
   decisionNote?: string;
   /** Approved name corrections: the person's full name after the change (shown in their own header and top bar). */
   appliedName?: string;
+  /** Backend mode: the server says this viewer may decide it. */
+  canDecide?: boolean;
 }
 
 const KEY = "timez.profile.corrections.v1";
 const listeners = new Set<() => void>();
 let cache: ProfileCorrection[] | null = null;
 
+/* ───────────── Backend mode: requests live on the server ───────────── */
+
+const TO_API_FIELD: Record<CorrectionField, ApiCorrectionField> = {
+  fullName: "full_name",
+  middleName: "middle_name",
+  dateOfBirth: "date_of_birth",
+  nationality: "nationality",
+  designation: "job_title",
+  department: "department",
+  managerId: "manager_id",
+  workArrangement: "work_arrangement",
+};
+const FROM_API_FIELD = Object.fromEntries(Object.entries(TO_API_FIELD).map(([k, v]) => [v, k])) as Record<ApiCorrectionField, CorrectionField>;
+const API_STATUS: Record<ProfileCorrectionOut["status"], CorrectionStatus> = {
+  pending: "Pending",
+  approved: "Approved",
+  rejected: "Rejected",
+  withdrawn: "Withdrawn",
+};
+
+let apiRows: ProfileCorrection[] = [];
+
+function fromApi(r: ProfileCorrectionOut): ProfileCorrection {
+  const field = FROM_API_FIELD[r.field] ?? "nationality";
+  const requester = getPerson(r.requested_by);
+  const decider = r.decided_by ? getPerson(r.decided_by) : undefined;
+  return {
+    id: r.id,
+    personId: r.employee_id,
+    personName: r.employee_name ?? r.employee_id,
+    field,
+    currentValue: r.current_value ?? "",
+    requestedValue: field === "managerId" ? (r.requested_label ?? r.requested_value ?? "") : (r.requested_value ?? ""),
+    requestedId: field === "managerId" ? (r.requested_value ?? undefined) : undefined,
+    reason: r.reason,
+    requestedById: r.requested_by,
+    requestedBy: requester?.fullName ?? r.requested_by,
+    requestedOn: r.created_at.slice(0, 10),
+    status: API_STATUS[r.status] ?? "Pending",
+    decidedById: r.decided_by ?? undefined,
+    decidedBy: decider?.fullName ?? r.decided_by ?? undefined,
+    decidedOn: r.decided_at ? r.decided_at.slice(0, 10) : undefined,
+    decisionNote: r.decision_note ?? undefined,
+    canDecide: r.can_decide,
+  };
+}
+
+/** Reload requests from the server (backend mode). */
+export async function refreshApiCorrections(): Promise<void> {
+  if (!API_ENABLED) return;
+  try {
+    apiRows = (await apiListCorrections()).map(fromApi);
+  } catch {
+    return; // keep what is shown
+  }
+  listeners.forEach((fn) => fn());
+}
+
+if (API_ENABLED) {
+  onApiSession((account) => {
+    if (account) void refreshApiCorrections();
+    else {
+      apiRows = [];
+      listeners.forEach((fn) => fn());
+    }
+  });
+}
+
+async function afterApi(result: Promise<ProfileResult>): Promise<ProfileResult> {
+  const error = await result;
+  if (!error) await refreshApiCorrections();
+  return error;
+}
+
 function read(): ProfileCorrection[] {
+  if (API_ENABLED) return apiRows;
   if (cache) return cache;
   try {
     const raw = localStorage.getItem(KEY);
@@ -246,6 +347,7 @@ export function currentFieldValue(person: PersonRecord, field: CorrectionField):
 }
 
 export function canDecideCorrection(actor: Pick<Actor, "id" | "role">, row: ProfileCorrection): boolean {
+  if (API_ENABLED) return row.status === "Pending" && Boolean(row.canDecide);
   return row.status === "Pending" && canManagePeople(actor.role) && actor.id !== row.personId;
 }
 
@@ -299,7 +401,7 @@ function validateRequested(person: PersonRecord, field: CorrectionField, value: 
 export function requestProfileCorrection(
   actor: Pick<Actor, "id" | "fullName">,
   input: { field: CorrectionField; requestedValue: string; requestedId?: string; reason: string },
-): ProfileResult {
+): ProfileResultAsync {
   const person = getPerson(actor.id);
   if (!person) return "Your directory record was not found.";
   if (!CORRECTION_FIELD_LABEL[input.field]) return "Choose a field.";
@@ -314,6 +416,15 @@ export function requestProfileCorrection(
   }
   const invalid = validateRequested(person, input.field, requestedValue, input.requestedId);
   if (invalid) return invalid;
+  if (API_ENABLED) {
+    return afterApi(
+      apiRequestCorrection(person.id, {
+        field: TO_API_FIELD[input.field],
+        requested_value: input.field === "managerId" ? (input.requestedId ?? "") : requestedValue,
+        reason,
+      }),
+    );
+  }
   if (read().some((c) => c.personId === person.id && c.field === input.field && c.status === "Pending")) {
     return `You already have an open ${CORRECTION_FIELD_LABEL[input.field].toLowerCase()} correction.`;
   }
@@ -385,7 +496,11 @@ function applyCorrection(person: PersonRecord, row: ProfileCorrection): LocalPer
   return next;
 }
 
-export function decideProfileCorrection(actor: Actor, id: string, decision: "approve" | "reject", note: string): ProfileResult {
+export function decideProfileCorrection(actor: Actor, id: string, decision: "approve" | "reject", note: string): ProfileResultAsync {
+  if (API_ENABLED) {
+    if (decision === "reject" && !note.trim()) return "Add a note explaining the rejection.";
+    return afterApi(apiDecideCorrection(id, decision, note));
+  }
   const list = read();
   const row = list.find((c) => c.id === id);
   if (!row) return "Request not found.";
@@ -444,7 +559,8 @@ export function decideProfileCorrection(actor: Actor, id: string, decision: "app
   return null;
 }
 
-export function withdrawProfileCorrection(actor: Pick<Actor, "id" | "fullName">, id: string): ProfileResult {
+export function withdrawProfileCorrection(actor: Pick<Actor, "id" | "fullName">, id: string): ProfileResultAsync {
+  if (API_ENABLED) return afterApi(apiWithdrawCorrection(id));
   const list = read();
   const row = list.find((c) => c.id === id);
   if (!row) return "Request not found.";

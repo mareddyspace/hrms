@@ -1,5 +1,9 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
-import { decideCorrection, getAttendanceState, subscribeAttendance } from "../data/attendanceLocal.ts";
+import { useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { decideCorrectionAsync, getAttendanceState, subscribeAttendance } from "../data/attendanceLocal.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { apiDecideInstance, pendingMirror, reloadTimeArea, type PendingItemOut } from "../api/syncTimeApprovals.ts";
+import { claimsMirror } from "../api/syncTimeExpenses.ts";
 import { DEMO_ACCOUNTS, managementChain } from "../demoAccounts.ts";
 import {
   compOffCandidates,
@@ -36,7 +40,7 @@ import {
 import { DelegationSettings } from "./DelegationSettings.tsx";
 import { currentStepOf, isWaitingOn, stepText, waitingApproverIds } from "../data/expenseFlow.ts";
 import { decideTravel, getTravelRequests, subscribeTravel, withdrawTravel } from "../data/travelStore.ts";
-import { getTalentState, hiringManagerIdOf, requisitionMoves, requisitionWaitingFor, setRequisitionApproval, subscribeTalent } from "../data/talentLocal.ts";
+import { getTalentState, hiringManagerIdOf, requisitionMoves, requisitionWaitingFor, setRequisitionApproval, subscribeTalent, talentAction } from "../data/talentLocal.ts";
 
 /** Which delegation scope (§25) a request kind falls under. */
 function scopeOf(kind: string): DelegationScope {
@@ -134,14 +138,18 @@ export function countWaitingOnMe(
     0,
   );
   // Expense claims and travel requests follow their approval steps.
-  const stepped = [...state.expenses, ...getTravelRequests()].filter((item) =>
-    isWaitingOn(item, myId, (employeeId) => canApprove(employeeId, "expenses")),
-  ).length;
-  const timesheets = state.orgTimesheets.filter((row) => row.status === "submitted" && mine(row.personId, "timesheets")).length;
+  // Backend mode: expense, travel, timesheet and correction counts (and other approval types) come from GET /approvals/pending.
+  const apiPending = API_ENABLED ? pendingMirror.get().items.filter((i) => i.kind !== "leave" && !(i.kind === "approval" && i.type === "requisition")) : null;
+  const stepped = apiPending
+    ? apiPending.length
+    : [...state.expenses, ...getTravelRequests()].filter((item) => isWaitingOn(item, myId, (employeeId) => canApprove(employeeId, "expenses"))).length;
+  const timesheets = apiPending ? 0 : state.orgTimesheets.filter((row) => row.status === "submitted" && mine(row.personId, "timesheets")).length;
   const proofs = canVerifyProofs
     ? state.investmentProofs.filter((p) => p.status === "submitted" && p.employeeId !== myId).length
     : 0;
-  const corrections = getAttendanceState().corrections.filter((c) => c.status === "Pending" && mine(c.employeeId, "attendance")).length;
+  const corrections = apiPending
+    ? 0
+    : getAttendanceState().corrections.filter((c) => c.status === "Pending" && mine(c.employeeId, "attendance")).length;
   const shifts = getShiftState();
   const swaps = shifts.swaps.filter(
     (w) =>
@@ -164,10 +172,21 @@ export function ApprovalsCenterPage() {
   const delegations = useSyncExternalStore(subscribeDelegations, getDelegationState, getDelegationState);
   const travel = useSyncExternalStore(subscribeTravel, getTravelRequests, getTravelRequests);
   const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+  // Backend mode: what the API says is waiting on me, and which claims/trips sit with me.
+  const pending = useSyncExternalStore(pendingMirror.subscribe, pendingMirror.get, pendingMirror.get);
+  const claims = useSyncExternalStore(claimsMirror.subscribe, claimsMirror.get, claimsMirror.get);
+  useEffect(() => {
+    if (API_ENABLED) reloadTimeArea();
+  }, []);
   noteLeaves(state.leaveRequests);
   const actor = { id: employee.id, fullName: employee.fullName, role: portal.demoProfile.role };
   const rosterCtx = { leaves: state.leaveRequests, holidays: state.holidays };
-  const [tab, setTab] = useState<"waiting" | "mine" | "delegate">("waiting");
+  // Links like /approvals?tab=mine open straight on "My requests".
+  const [searchParams] = useSearchParams();
+  const linkedTab = searchParams.get("tab");
+  const [tab, setTab] = useState<"waiting" | "mine" | "delegate">(
+    linkedTab === "mine" || linkedTab === "delegate" ? linkedTab : "waiting",
+  );
   const canDelegate = useMemo(() => hasReports(employee.id), [employee.id, people]);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
@@ -223,6 +242,7 @@ export function ApprovalsCenterPage() {
         decided: r,
         decide: (d, note) => portal.setLeaveStatus(r.id, d, note),
         withdraw: () => portal.setLeaveStatus(r.id, "withdrawn"),
+        ...(API_ENABLED ? { canAct: pending.ids.has(r.id) } : {}),
       });
     }
     for (const e of state.encashments) {
@@ -252,7 +272,7 @@ export function ApprovalsCenterPage() {
         decided: x,
         decide: (d, note) => portal.setExpenseStatus(x.id, d, note),
         withdraw: () => portal.setExpenseStatus(x.id, "withdrawn"),
-        ...(x.steps?.length ? { canAct: portal.canDecideExpense(x), withText: withTextFor(x) } : {}),
+        ...(x.steps?.length || API_ENABLED ? { canAct: portal.canDecideExpense(x), withText: withTextFor(x) } : {}),
       });
     }
     for (const t of travel) {
@@ -270,7 +290,7 @@ export function ApprovalsCenterPage() {
         decided: t,
         decide: (d, note) => decideTravel(actorRef, t.id, d, note, (id) => canDecideFor(id, "expenses")),
         withdraw: () => withdrawTravel(actorRef, t.id),
-        canAct: isWaitingOn(t, employee.id, (id) => canDecideFor(id, "expenses")),
+        canAct: API_ENABLED ? t.status === "pending" && claims.toDecide.has(t.id) : isWaitingOn(t, employee.id, (id) => canDecideFor(id, "expenses")),
         withText: withTextFor(t),
       });
     }
@@ -286,7 +306,10 @@ export function ApprovalsCenterPage() {
         raisedOn: r.created.slice(0, 10),
         status: "pending",
         open: true,
-        decide: (d, note) => setRequisitionApproval(actor, r.id, d === "approved" ? "Approved" : "Rejected", note ?? ""),
+        decide: (d, note) =>
+          new Promise<string | null>((resolve) =>
+            talentAction(() => setRequisitionApproval(actor, r.id, d === "approved" ? "Approved" : "Rejected", note ?? ""), resolve),
+          ),
         canAct: requisitionMoves(actor, r).includes("Approved"),
         withText: requisitionWaitingFor(r) || undefined,
       });
@@ -390,6 +413,7 @@ export function ApprovalsCenterPage() {
         open: true,
         declineLabel: "Send back",
         decide: (d) => portal.setOrgTimesheetStatus(row.id, d === "approved" ? "approved" : "draft"),
+        ...(API_ENABLED ? { canAct: pending.ids.has(row.id) } : {}),
       });
     }
     for (const c of attendance.corrections) {
@@ -403,8 +427,27 @@ export function ApprovalsCenterPage() {
         status: c.status === "Pending" ? "pending" : c.status === "Approved" ? "approved" : "rejected",
         open: c.status === "Pending",
         decided: { decidedByName: c.decidedByName, decidedOn: c.decidedAt?.slice(0, 10), decisionNote: c.decisionNote },
-        decide: (d, note) => decideCorrection(c.id, actor, d === "approved" ? "Approved" : "Rejected", note),
+        decide: (d, note) => decideCorrectionAsync(c.id, actor, d === "approved" ? "Approved" : "Rejected", note),
+        ...(API_ENABLED ? { canAct: pending.ids.has(c.id) } : {}),
       });
+    }
+    // Backend mode: approval types with no list of their own here (e.g. lifecycle changes) are decided as they are.
+    if (API_ENABLED) {
+      const covered = new Set<string>(["expense", "travel", "requisition"]);
+      for (const p of pending.items as PendingItemOut[]) {
+        if (p.kind !== "approval" || covered.has(p.type)) continue;
+        list.push({
+          key: `apr-${p.id}`,
+          kind: p.type.replace(/_/g, " ").replace(/^./, (ch) => ch.toUpperCase()),
+          employeeId: p.employee_id,
+          title: p.summary,
+          raisedOn: p.submitted_at?.slice(0, 10),
+          status: "pending",
+          open: true,
+          decide: (d, note) => apiDecideInstance(p.id, d === "approved" ? "approve" : "reject", note),
+          canAct: true,
+        });
+      }
     }
     for (const w of shifts.swaps) {
       const shiftName = (id: string) => shiftById(id, shifts)?.name ?? "shift";
@@ -453,7 +496,7 @@ export function ApprovalsCenterPage() {
     }
     return list;
     // portal functions are recreated with state, so state is the real dependency
-  }, [state, portal, leaveTable, attendance, shifts, delegations, travel, talent]);
+  }, [state, portal, leaveTable, attendance, shifts, delegations, travel, talent, pending, claims]);
 
   const waiting = items.filter((item) => {
     if (!item.open || !item.decide || item.employeeId === employee.id) return false;
@@ -570,14 +613,14 @@ export function ApprovalsCenterPage() {
                     <button
                       type="button"
                       className="btn btn-tiny"
-                      onClick={() => run(() => item.decide!("approved", noteFor(notes[item.key])), `${item.kind} approved.`, item.key)}
+                      onClick={() => run(() => item.decide!("approved", noteFor(notes[item.key])), API_ENABLED ? `${item.kind}: approval recorded.` : `${item.kind} approved.`, item.key)}
                     >
                       {item.approveLabel ?? "Approve"}
                     </button>
                     <button
                       type="button"
                       className="btn-ghost btn-tiny"
-                      onClick={() => run(() => item.decide!("rejected", noteFor(notes[item.key])), `${item.kind} declined.`, item.key)}
+                      onClick={() => run(() => item.decide!("rejected", noteFor(notes[item.key])), item.declineLabel === "Send back" ? `${item.kind} sent back.` : `${item.kind} declined.`, item.key)}
                     >
                       {item.declineLabel ?? "Decline"}
                     </button>

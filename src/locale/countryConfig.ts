@@ -288,3 +288,38 @@ export function buildDefaultCountrySettings(): CountrySettings[] {
 export function countryByCode(code: string, list: CountrySettings[]): CountrySettings | undefined {
   return list.find((c) => c.code === code);
 }
+
+/* ───────── Server country config (backend mode: GET /countries, PUT /countries/{code}) ───────── */
+
+export interface ServerCountryConfig {
+  code: string;
+  languages: string[] | null;
+  work_week_days: string[] | null;
+  standard_daily_hours: number | null;
+  probation_months: number | null;
+  notice_days: number | null;
+  required_documents: string[] | null;
+  workflow_notes: string | null;
+}
+
+const LANGS = new Set<AppLanguage>(["en", "hi", "de", "ar"]);
+
+/** The local reference with the server's languages, work week, hours and required documents on top. */
+export function withServerConfig(local: CountrySettings, server: ServerCountryConfig | undefined): CountrySettings {
+  if (!server) return local;
+  const languages = (server.languages ?? []).filter((l): l is AppLanguage => LANGS.has(l as AppLanguage));
+  const days = server.work_week_days ?? [];
+  return {
+    ...local,
+    languages: languages.length ? languages : local.languages,
+    workingTime: {
+      ...local.workingTime,
+      weekStart: days[0] === "Sun" ? "Sunday" : days.length ? "Monday" : local.workingTime.weekStart,
+      workDays: days.length ? days.join(", ") : local.workingTime.workDays,
+      standardHours: server.standard_daily_hours != null ? `${server.standard_daily_hours} hours a day` : local.workingTime.standardHours,
+    },
+    documents: server.required_documents
+      ? server.required_documents.map((name, i) => ({ id: `${local.code}-srv-${i}`, name, required: true, note: "" }))
+      : local.documents,
+  };
+}

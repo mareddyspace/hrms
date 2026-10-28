@@ -189,7 +189,7 @@ export function canSeeDocument(actor: ComplianceActor, doc: IdDocument): boolean
   return doc.personId === actor.id || isHr(actor.role);
 }
 
-/** Full document numbers are shown only to HR and the document holder. */
+/** Full document numbers: masked by default; only HR and the document holder can press Show. */
 export function canSeeFullNumber(actor: ComplianceActor, doc: IdDocument): boolean {
   return canSeeDocument(actor, doc);
 }

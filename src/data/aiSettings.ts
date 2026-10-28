@@ -2,6 +2,8 @@ import { useSyncExternalStore } from "react";
 import { appendAuditEntries } from "./auditTrail.ts";
 import { AI_AGENTS } from "./platformData.ts";
 import { policyCatalog, type Policy } from "./policyLibrary.ts";
+import { API_ENABLED, createApiMirror, errorText } from "../api/syncOps.ts";
+import { apiPutAiSettings, loadApiAiSettings } from "../api/syncOpsAdmin.ts";
 
 /** AI features an admin can switch off. */
 export type AiFeatureKey = "employee360" | "cvReading" | "jdWriter" | "documentAssistant" | "plainAnalytics" | "homeSummaries";
@@ -40,7 +42,28 @@ function strings(list: unknown): string[] {
   return Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : [];
 }
 
+/* Backend mode (VITE_API_URL): the switches live on the server and apply to everyone. */
+const aiMirror = createApiMirror<AiSettingsState | null>(
+  () => null,
+  async () => {
+    const out = await loadApiAiSettings();
+    return {
+      disabledPolicies: out.disabled_policies,
+      disabledAgents: out.disabled_agents,
+      disabledFeatures: out.disabled_features.filter((k): k is AiFeatureKey => FEATURE_KEYS.has(k)),
+    };
+  },
+);
+let apiSaveError: string | null = null;
+if (API_ENABLED) aiMirror.subscribe(() => listeners.forEach((fn) => fn()));
+
+/** Backend mode: the last save error (shown on the AI settings page), or null. */
+export function aiSettingsError(): string | null {
+  return apiSaveError;
+}
+
 export function getAiSettings(): AiSettingsState {
+  if (API_ENABLED) return aiMirror.get() ?? EMPTY;
   if (cache) return cache;
   try {
     const raw = localStorage.getItem(KEY);
@@ -68,6 +91,21 @@ export function useAiSettings(): AiSettingsState {
 }
 
 function write(next: AiSettingsState, actor: { id: string; name: string }, field: string, before: string, after: string) {
+  if (API_ENABLED) {
+    // Shown at once; the server keeps it and audits the change.
+    aiMirror.set(next);
+    apiPutAiSettings({ disabled_policies: next.disabledPolicies, disabled_agents: next.disabledAgents, disabled_features: next.disabledFeatures })
+      .then(
+        () => {
+          apiSaveError = null;
+        },
+        (e) => {
+          apiSaveError = errorText(e);
+        },
+      )
+      .finally(() => void aiMirror.reload());
+    return;
+  }
   cache = next;
   try {
     localStorage.setItem(KEY, JSON.stringify(next));

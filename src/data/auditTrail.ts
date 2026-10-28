@@ -87,15 +87,26 @@ const TRACKED: Record<string, string> = {
 
 type Row = { id: string; employeeId?: string; personId?: string } & Record<string, unknown>;
 
+/** System entries (actor "Auto", e.g. task reminders) appended to an activity list: nobody made that change. */
+function onlyAutoActivity(old: Row, row: Row, changes: { field: string }[]): boolean {
+  if (changes.length !== 1 || changes[0].field !== "activity") return false;
+  const before = Array.isArray(old.activity) ? old.activity : [];
+  const after = Array.isArray(row.activity) ? row.activity : [];
+  if (after.length <= before.length) return false;
+  return after.slice(before.length).every((entry) => (entry as { actor?: unknown })?.actor === "Auto");
+}
+
 /** Compares two versions of the portal state and describes every created, changed or removed record. */
 export function diffForAudit(
   before: Record<string, unknown>,
   after: Record<string, unknown>,
   actor: { id: string; name: string },
+  skip: ReadonlySet<string> = new Set(),
 ): Omit<AuditEntry, "id">[] {
   const at = new Date().toISOString();
   const out: Omit<AuditEntry, "id">[] = [];
   for (const [key, entity] of Object.entries(TRACKED)) {
+    if (skip.has(key)) continue;
     const prevList = before[key] as Row[] | undefined;
     const nextList = after[key] as Row[] | undefined;
     if (!Array.isArray(prevList) || !Array.isArray(nextList) || prevList === nextList) continue;
@@ -112,7 +123,7 @@ export function diffForAudit(
       const changes = Object.keys({ ...old, ...row })
         .filter((field) => JSON.stringify(old[field]) !== JSON.stringify(row[field]))
         .map((field) => ({ field, before: show(old[field]), after: show(row[field]) }));
-      if (changes.length) {
+      if (changes.length && !onlyAutoActivity(old, row, changes)) {
         out.push({ at, actorId: actor.id, actorName: actor.name, entity, entityId: row.id, subjectId, action: "Updated", changes });
       }
     }

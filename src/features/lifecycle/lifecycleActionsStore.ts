@@ -1,5 +1,7 @@
+import { API_ENABLED } from "../../api/client.ts";
+import { lifecycleMirror } from "../../api/syncOpsLifecycle.ts";
 import { DEMO_ACCOUNTS } from "../../demoAccounts.ts";
-import { resolveFlow, type ApprovalStepRole, type ParallelMode } from "../../data/approvalWorkflows.ts";
+import { resolveFlow, withoutPriorApprovers, type ApprovalStepRole, type ParallelMode } from "../../data/approvalWorkflows.ts";
 import { appendAuditEntries } from "../../data/auditTrail.ts";
 import { pushPersonTaskAlert } from "../../data/collabLocal.ts";
 import { recordLifecycleChanges } from "../../data/lifecycleHistory.ts";
@@ -190,14 +192,16 @@ function write(actions: LifecycleAction[]): LifecycleResult {
 }
 
 export function subscribeLifecycleActions(listener: () => void) {
+  if (API_ENABLED) return lifecycleMirror.subscribe(listener);
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
 }
 
-/** Stable snapshot for useSyncExternalStore, newest first. */
+/** Stable snapshot for useSyncExternalStore, newest first. With the backend on: the actions the API returns. */
 export function getLifecycleActions(): LifecycleAction[] {
+  if (API_ENABLED) return lifecycleMirror.get();
   if (!cache) cache = read().sort((a, b) => b.raisedOn.localeCompare(a.raisedOn) || b.id.localeCompare(a.id));
   return cache;
 }
@@ -316,6 +320,16 @@ function decideStep(step: ActionStep, actorId: string, info: DecisionInput): Act
   return done ? { ...step, groups, ...info, decision: rejected ? "Rejected" : "Approved" } : { ...step, groups };
 }
 
+/** Steps from `from` on (not yet decided) without anyone who approved an earlier step; emptied steps are dropped. */
+function withoutEarlierApprovers(steps: ActionStep[], from: number, employeeId: string): ActionStep[] {
+  const prior = new Set<string>();
+  for (const s of steps.slice(0, from)) {
+    for (const d of [s, ...(s.groups ?? [])]) if (d.decision === "Approved" && d.byId) prior.add(d.byId);
+  }
+  const later = steps.slice(from).flatMap((s) => (s.decision ? [s] : withoutPriorApprovers(s, prior, employeeId) ?? []));
+  return [...steps.slice(0, from), ...later];
+}
+
 export function canDecide(actor: LifecycleActor, action: LifecycleAction): boolean {
   if (action.status !== "Pending" || actor.id === action.employeeId) return false;
   return waitingIdsOf(action).includes(actor.id);
@@ -323,6 +337,7 @@ export function canDecide(actor: LifecycleActor, action: LifecycleAction): boole
 
 /** Actions this person may see: their own, ones they raised or decide, their reporting line, or everything for HR/admin. */
 export function canSeeAction(actor: LifecycleActor, action: LifecycleAction): boolean {
+  if (API_ENABLED) return true; // the API returns only what this person may see
   if (isHrRole(actor.role) || actor.role === "admin" || actor.role === "super_admin") return true;
   if (action.employeeId === actor.id || action.raisedById === actor.id) return true;
   if (action.steps.some((s) => s.approverIds.includes(actor.id))) return true;
@@ -498,6 +513,7 @@ function markLeaveReturned(employeeId: string, on: string) {
  * Returns how many leaves ended.
  */
 export function returnDueLeaves(): number {
+  if (API_ENABLED) return 0;
   const today = localToday();
   const actions = getLifecycleActions();
   const due = actions.filter((a) => a.type === "Leave of absence" && a.status === "Applied" && !a.returnedOn && a.leave && a.leave.end <= today);
@@ -525,6 +541,7 @@ export function returnDueLeaves(): number {
 
 /** Apply scheduled actions and end leaves of absence that are due today. Safe to call on every load (and on page mount); returns how many changed. */
 export function applyDueLifecycleActions(): number {
+  if (API_ENABLED) return 0; // the backend applies due changes itself
   return applyDueScheduled() + returnDueLeaves();
 }
 
@@ -631,12 +648,20 @@ export function raiseLifecycleAction(actor: LifecycleActor, input: RaiseInput): 
     approverIds: s.approverIds,
     ...(s.groups ? { mode: s.mode ?? "all", groups: s.groups.map((g) => ({ role: g.role, label: g.label, approverIds: g.approverIds })) } : {}),
   }));
-  // A step (or parallel group) the raiser would decide counts as approved by raising it.
-  const steps = resolved.map((step) =>
-    step.approverIds.includes(actor.id)
-      ? decideStep(step, actor.id, { decision: "Approved", byId: actor.id, by: actor.fullName, on: today, note: "Raised by approver" })
-      : step,
-  );
+  // A step (or parallel group) the raiser would decide counts as approved by raising it; after that they
+  // approve no other step (nobody approves two steps of one request).
+  const steps: ActionStep[] = [];
+  let raiserApproved = false;
+  for (const resolvedStep of resolved) {
+    const step = raiserApproved ? withoutPriorApprovers(resolvedStep, new Set([actor.id]), person.id) : resolvedStep;
+    if (!step) continue;
+    if (step.approverIds.includes(actor.id)) {
+      steps.push(decideStep(step, actor.id, { decision: "Approved", byId: actor.id, by: actor.fullName, on: today, note: "Raised by approver" }));
+      raiserApproved = true;
+    } else {
+      steps.push(step);
+    }
+  }
   let action: LifecycleAction = {
     id: `lca-${Date.now().toString(36)}`,
     employeeId: person.id,
@@ -688,7 +713,8 @@ export function decideLifecycleAction(actor: LifecycleActor, id: string, decisio
   const verdict = decision === "approve" ? ("Approved" as const) : ("Rejected" as const);
   const before = current.steps[index]!;
   const decided = decideStep(before, actor.id, { decision: verdict, byId: actor.id, by: actor.fullName, on: today, note: trimmed });
-  const steps = current.steps.map((s, i) => (i === index ? decided : s));
+  let steps = current.steps.map((s, i) => (i === index ? decided : s));
+  if (decided.decision === "Approved") steps = withoutEarlierApprovers(steps, index + 1, current.employeeId);
   let action: LifecycleAction = { ...current, steps };
   // Parallel step: one row per group this person decided.
   const decidedGroups = (decided.groups ?? []).filter((g, gi) => g.decision && !before.groups?.[gi]?.decision);

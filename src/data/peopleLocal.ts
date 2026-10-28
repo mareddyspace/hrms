@@ -84,6 +84,30 @@ function writeOverlay(overlay: Overlay) {
 const listeners = new Set<() => void>();
 let snapshot: PersonRecord[] | null = null;
 
+/* ───────────── Backend directory (VITE_API_URL) ───────────── */
+
+/** People loaded from the API after sign-in; when set they replace the generated directory. */
+let apiPeople: PersonRecord[] | null = null;
+/** People the API returned with basic fields only (outside the viewer's scope). */
+let apiBasicIds = new Set<string>();
+
+export function setApiPeople(people: PersonRecord[] | null, basicIds: Iterable<string> = []) {
+  apiPeople = people;
+  apiBasicIds = new Set(basicIds);
+  snapshot = null;
+  listeners.forEach((fn) => fn());
+}
+
+/** True while the directory comes from the backend. */
+export function usingApiPeople(): boolean {
+  return apiPeople !== null;
+}
+
+/** True when the backend sent only the basic directory card for this person. */
+export function isBasicOnly(id: string): boolean {
+  return apiPeople !== null && apiBasicIds.has(id);
+}
+
 export function subscribePeople(listener: () => void) {
   listeners.add(listener);
   return () => {
@@ -92,9 +116,12 @@ export function subscribePeople(listener: () => void) {
 }
 
 function buildPeople(): PersonRecord[] {
-  const base = getBasePeople();
+  const fromApi = apiPeople !== null;
+  const base = apiPeople ? apiPeople.map((p) => ({ ...p })) : getBasePeople();
   const { upserts, removedIds, scheduled } = readOverlay();
   const map = new Map<string, PersonRecord>(base.map((p) => [p.id, p]));
+  // With the backend the API list is the directory as is: local (browser-only) edits are not applied.
+  if (fromApi) return [...map.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
   for (const id of removedIds) map.delete(id);
   // Records saved before the personal/background fields existed keep the seed values for anything they lack.
   for (const person of upserts) map.set(person.id, ensureProfileDetails({ ...(map.get(person.id) ?? {}), ...person }));

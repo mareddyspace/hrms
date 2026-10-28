@@ -22,6 +22,8 @@ import {
 import { COMPANY_NAME } from "../brand.ts";
 import { Banner, Card, Dialog, EmptyState, Field, Page } from "../components/ui.tsx";
 import { SelfProfileEditor } from "../components/SelfProfileEditor.tsx";
+import { MaskedValue } from "../components/MaskedValue.tsx";
+import { canRevealPersonal, personRevealer } from "../data/piiReveal.ts";
 import { initials } from "../components/OrgChart.tsx";
 import { saveLocalMeeting } from "../data/calendarData.ts";
 import { startDirectChat } from "../data/collabLocal.ts";
@@ -39,6 +41,7 @@ import {
   skillProfileFor,
   SKILL_LEVELS,
   subscribeTalent,
+  talentAction,
   updateEmployeeSkill,
   type TalentActor,
 } from "../data/talentLocal.ts";
@@ -174,9 +177,13 @@ function OwnSkillsEditor({ actor, skills }: { actor: TalentActor; skills: Employ
   function add(event: FormEvent) {
     event.preventDefault();
     const clean = name.trim();
-    const error = addEmployeeSkill(actor, actor.id, clean, level);
-    show(error, `${clean} added.`);
-    if (!error) setName("");
+    talentAction(
+      () => addEmployeeSkill(actor, actor.id, clean, level),
+      (error) => {
+        show(error, `${clean} added.`);
+        if (!error) setName("");
+      },
+    );
   }
 
   return (
@@ -193,13 +200,16 @@ function OwnSkillsEditor({ actor, skills }: { actor: TalentActor; skills: Employ
               <select
                 aria-label={`${sk.skillName} level`}
                 value={sk.level}
-                onChange={(e) => show(updateEmployeeSkill(actor, actor.id, sk.skillId, { level: e.target.value }))}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  talentAction(() => updateEmployeeSkill(actor, actor.id, sk.skillId, { level: next }), (error) => show(error));
+                }}
               >
                 {SKILL_LEVELS.map((lv) => (
                   <option key={lv} value={lv}>{lv}</option>
                 ))}
               </select>
-              <button type="button" className="quiet-link" onClick={() => show(removeEmployeeSkill(actor, actor.id, sk.skillId), `${sk.skillName} removed.`)}>
+              <button type="button" className="quiet-link" onClick={() => talentAction(() => removeEmployeeSkill(actor, actor.id, sk.skillId), (error) => show(error, `${sk.skillName} removed.`))}>
                 Remove
               </button>
             </li>
@@ -545,7 +555,12 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
               {canSeePersonal && person.mobile && (
                 <li>
                   <Phone size={16} aria-hidden />
-                  <a href={`tel:${person.mobile.replace(/\s+/g, "")}`}>{person.mobile}</a>
+                  <MaskedValue
+                    value={person.mobile}
+                    kind="phone"
+                    canReveal={canRevealPersonal(demoProfile, person.id, employee.id, canSeePersonal)}
+                    onReveal={personRevealer(person.id, "mobile", person.mobile)}
+                  />
                 </li>
               )}
               {person.location && (

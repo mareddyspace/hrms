@@ -13,6 +13,15 @@ import { managementChain } from "../demoAccounts.ts";
 import { delegatedAuthority } from "./delegations.ts";
 import { pushPersonTaskAlert } from "./collabLocal.ts";
 import { appendAuditEntries } from "./auditTrail.ts";
+import { API_ENABLED } from "../api/client.ts";
+import {
+  apiBreak,
+  apiCheckIn,
+  apiCheckOut,
+  apiDecideCorrection,
+  apiRequestCorrection,
+  attendanceMirror,
+} from "../api/syncAttendance.ts";
 
 const KEY = "timez.attendance.state.v1";
 const CORRECTION_WINDOW_DAYS = 30;
@@ -62,12 +71,17 @@ function write(state: AttendanceState) {
 
 export function subscribeAttendance(listener: () => void) {
   listeners.add(listener);
+  // Backend mode: the API mirror changes after loads and punches.
+  const off = API_ENABLED ? attendanceMirror.subscribe(listener) : undefined;
   return () => {
     listeners.delete(listener);
+    off?.();
   };
 }
 
+/** Backend mode: sessions and corrections come from the API (in memory); otherwise from this browser. */
 export function getAttendanceState(): AttendanceState {
+  if (API_ENABLED) return attendanceMirror.get();
   if (!cache) cache = read();
   return cache;
 }
@@ -136,6 +150,15 @@ export function attendanceAction(
   action: "check_in" | "start_break" | "end_break" | "check_out",
   context?: AttendanceDayContext,
 ): string | null {
+  if (API_ENABLED) {
+    // Dashboards call this synchronously: report rule errors now, send the punch in the background.
+    const pre = apiPunchCheck(employeeId, action, context);
+    if (pre) return pre;
+    void runApiPunch(employeeId, action).then((err) => {
+      if (err) console.warn("Attendance punch failed", err);
+    });
+    return null;
+  }
   const today = todayISO();
   const nowIso = new Date().toISOString();
   const hm = nowHm();
@@ -214,6 +237,54 @@ export function attendanceAction(
   return error;
 }
 
+/* ───────── Backend mode (VITE_API_URL): punches and corrections go to the API ───────── */
+
+type PunchAction = "check_in" | "start_break" | "end_break" | "check_out";
+
+/** The same rule checks as the browser flow, against the API's sessions. */
+function apiPunchCheck(employeeId: string, action: PunchAction, context?: AttendanceDayContext): string | null {
+  const state = getAttendanceState();
+  const today = todayISO();
+  const current = getCurrentSession(employeeId, state);
+  if (action === "check_in") {
+    const blocked = context ? nonWorkingReason(employeeId, today, context) : null;
+    if (blocked) return `${blocked} Check-in is not needed.`;
+    if (current.date !== today && isOpen(current)) return `You are still checked in from ${formatShortDate(current.date)}. Check out first.`;
+    if (current.phase === "checked_out") return "You already checked out today.";
+    if (current.phase !== "not_started") return "You are already checked in for today.";
+    return null;
+  }
+  const open = getOpenSession(employeeId, state);
+  if (open && open.date < shiftISO(today, -1)) {
+    return `Your session from ${formatShortDate(open.date)} is missing a check-out — request a correction.`;
+  }
+  if (action === "start_break") {
+    if (!open || open.phase !== "checked_in") return open ? "You are already on a break." : "Check in before starting a break.";
+    return null;
+  }
+  if (action === "end_break") return open?.phase === "on_break" ? null : "You are not on a break.";
+  if (!open) return current.phase === "checked_out" ? "You already checked out today." : "Check in before checking out.";
+  if (open.phase === "on_break") return "End your break before checking out.";
+  return null;
+}
+
+async function runApiPunch(employeeId: string, action: PunchAction): Promise<string | null> {
+  if (action === "check_in") return apiCheckIn();
+  const open = getOpenSession(employeeId);
+  if (!open) return "Check in first.";
+  if (action === "check_out") return apiCheckOut(open);
+  apiBreak(open, action === "start_break" ? "start" : "end");
+  return null;
+}
+
+/** Punches that wait for the server in backend mode (its errors come back as text); same as attendanceAction otherwise. */
+export async function attendanceActionAsync(employeeId: string, action: PunchAction, context?: AttendanceDayContext): Promise<string | null> {
+  if (!API_ENABLED) return attendanceAction(employeeId, action, context);
+  const pre = apiPunchCheck(employeeId, action, context);
+  if (pre) return pre;
+  return runApiPunch(employeeId, action);
+}
+
 export function listCorrectionsForEmployee(employeeId: string): AttendanceCorrection[] {
   return getAttendanceState().corrections.filter((c) => c.employeeId === employeeId);
 }
@@ -232,6 +303,8 @@ export function listCorrectionsForApprover(
   canApprove: (employeeId: string) => boolean,
   viewer?: { id: string; role: string },
 ): AttendanceCorrection[] {
+  // Backend mode: the API only returns other people's corrections this user may decide (or has decided).
+  if (API_ENABLED) return getAttendanceState().corrections.filter((c) => c.employeeId !== viewer?.id);
   const hr = viewer ? isHrReviewer(viewer.role) : false;
   return getAttendanceState().corrections.filter(
     (c) => canApprove(c.employeeId) || (hr && c.employeeId !== viewer?.id),
@@ -254,7 +327,7 @@ export function correctionApproverFor(employeeId: string): string | undefined {
   return managementChain(employeeId)[0]?.id;
 }
 
-export function submitCorrection(input: {
+export interface CorrectionInput {
   employeeId: string;
   employeeName: string;
   managerId: string;
@@ -265,7 +338,40 @@ export function submitCorrection(input: {
   requestedCheckOut?: string;
   /** Non-working-day rules; when given, holidays, weekly offs and leave days are rejected. */
   context?: AttendanceDayContext;
-}): string | null {
+  /** Whether the day already has a check-in. False: no attendance that day, so both times are needed. */
+  dayHasCheckIn?: boolean;
+}
+
+/** Sends the correction to the API in backend mode (after the same checks); same as submitCorrection otherwise. */
+export async function submitCorrectionAsync(input: CorrectionInput): Promise<string | null> {
+  if (!API_ENABLED) return submitCorrection(input);
+  // The API routes it to the reporting line itself, so a missing manager in this browser's directory doesn't block it.
+  const invalid = correctionInputError({ ...input, managerId: input.managerId || "api" });
+  if (invalid) return invalid;
+  return apiRequestCorrection({
+    date: input.date,
+    checkIn: input.requestedCheckIn?.trim() || undefined,
+    checkOut: input.requestedCheckOut?.trim() || undefined,
+    reason: input.reason.trim(),
+  });
+}
+
+/** Decides through the API in backend mode; same as decideCorrection otherwise. */
+export async function decideCorrectionAsync(
+  id: string,
+  approver: { id: string; role: string; fullName?: string },
+  status: Extract<CorrectionStatus, "Approved" | "Rejected">,
+  note?: string,
+): Promise<string | null> {
+  if (!API_ENABLED) return decideCorrection(id, approver, status, note);
+  const row = getAttendanceState().corrections.find((c) => c.id === id);
+  if (!row) return "Correction not found.";
+  if (row.employeeId === approver.id) return "You cannot decide your own correction request.";
+  if (row.status !== "Pending") return "This request was already decided.";
+  return apiDecideCorrection(id, status === "Approved" ? "approve" : "reject", note);
+}
+
+function correctionInputError(input: CorrectionInput): string | null {
   const today = todayISO();
   const reason = input.reason.trim();
   const checkIn = input.requestedCheckIn?.trim() || undefined;
@@ -279,6 +385,12 @@ export function submitCorrection(input: {
   const offDay = input.context ? nonWorkingReason(input.employeeId, input.date, input.context) : null;
   if (offDay) return `${offDay} No attendance correction is needed.`;
   if (input.kind === "missing_check_in" && !checkIn) return "Enter the requested check-in time.";
+  if (input.kind === "missing_check_in" && input.dayHasCheckIn === false && !checkOut) {
+    return "No attendance that day: enter both check-in and check-out times.";
+  }
+  if (input.kind === "missing_check_out" && input.dayHasCheckIn === false && !checkIn) {
+    return "No check-in that day. Choose Missing check-in and enter both times.";
+  }
   if (input.kind === "missing_check_out" && !checkOut) return "Enter the requested check-out time.";
   if (input.kind === "wrong_time" && !checkIn && !checkOut) return "Enter the corrected check-in or check-out time.";
   if (checkIn && !HM.test(checkIn)) return "Check-in time must be HH:MM between 00:00 and 23:59.";
@@ -290,7 +402,15 @@ export function submitCorrection(input: {
   );
   if (sameDay.some((c) => c.status === "Pending")) return "A pending correction already exists for this date.";
   if (sameDay.some((c) => c.status === "Approved")) return "A correction for this date was already approved.";
+  return null;
+}
 
+export function submitCorrection(input: CorrectionInput): string | null {
+  const invalid = correctionInputError(input);
+  if (invalid) return invalid;
+  const reason = input.reason.trim();
+  const checkIn = input.requestedCheckIn?.trim() || undefined;
+  const checkOut = input.requestedCheckOut?.trim() || undefined;
   const id = `ac-local-${Date.now()}`;
   const current = sessionFor(getAttendanceState(), input.employeeId, input.date);
   update((s) => {

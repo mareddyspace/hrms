@@ -12,7 +12,7 @@ import {
   type Holiday,
   type PortalState,
 } from "../model.ts";
-import type { PersonRecord } from "./peopleData.ts";
+import { inHeadcount, type PersonRecord } from "./peopleData.ts";
 import { getExitDetails } from "./peopleLocal.ts";
 import { taskPersonById } from "./taskTeam.ts";
 import { getAttendanceState } from "./attendanceLocal.ts";
@@ -76,7 +76,7 @@ export function workforceStats(
       (filter.country === "ALL" || p.countryCode === filter.country) &&
       (!filter.department || filter.department === "All departments" || p.department === filter.department),
   );
-  const active = inScope.filter((p) => p.employmentStatus !== "Terminated");
+  const active = inScope.filter((p) => inHeadcount(p, filter.today)); // pre-boarding joiners not yet
   const from = rangeStart(filter.range, filter.today);
   const joiners = active.filter((p) => p.dateOfJoining >= from && p.dateOfJoining <= filter.today).length;
   const exits = inScope.filter((p) => {
@@ -135,7 +135,7 @@ export function workforceInsights(
   today: string,
 ): WorkforceInsight[] {
   const inScope = people.filter((p) => country === "ALL" || p.countryCode === country);
-  const active = inScope.filter((p) => p.employmentStatus !== "Terminated");
+  const active = inScope.filter((p) => inHeadcount(p, today));
   if (!active.length) return [];
   const yearAgo = addDaysISO(today, -365);
   const exits12 = inScope.filter((p) => {
@@ -195,7 +195,8 @@ function directManagerOf(id: string, people: Map<string, PersonRecord>): string 
 
 /**
  * Everyone below the viewer in the reporting line: anyone the viewer decides for (canDecideFor),
- * plus everyone whose directory manager chain reaches the viewer. Terminated people are left out.
+ * plus everyone whose directory manager chain reaches the viewer. Terminated people and pre-boarding joiners
+ * (not started yet) are left out.
  */
 export function teamBelow(
   viewerId: string,
@@ -220,7 +221,7 @@ export function teamBelow(
   for (const id of candidates) {
     if (id === viewerId || !reaches(id)) continue;
     const person = byId.get(id);
-    if (person?.employmentStatus === "Terminated") continue;
+    if (person && !inHeadcount(person)) continue;
     const demo: DemoAccount | undefined = DEMO_ACCOUNTS.find((a) => a.id === id);
     const teammate = taskPersonById(id);
     out.push({

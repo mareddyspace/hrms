@@ -251,7 +251,10 @@ export function TasksPage() {
     setFilterDue("all");
     setFilterBlocked("all");
     setFilterStatus("");
-    if (focus === "all") return;
+    if (focus === "all") {
+      setTab(isManager ? "open" : "mine");
+      return;
+    }
     if (focus === "todo") {
       setTab(isManager ? "open" : "mine");
       setFilterStatus("todo");

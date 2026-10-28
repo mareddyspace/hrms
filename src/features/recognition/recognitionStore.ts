@@ -4,7 +4,17 @@ import { TASK_TEAM } from "../../data/taskTeam.ts";
 import { PRAISE_BADGES, type FeedbackItem, type PraiseBadge } from "../../data/talentData.ts";
 import { pushPersonTaskAlert } from "../../data/collabLocal.ts";
 import { appendAuditEntries } from "../../data/auditTrail.ts";
+import { listPeople } from "../../data/peopleLocal.ts";
 import { arrayOr, createLocalStore, isHr, newId, personName, type PlusActor, type PlusResult } from "../talentplus/shared.ts";
+import { API_ENABLED, apiRun, createApiMirror, subscribeAll } from "../../api/syncOps.ts";
+import {
+  apiCancelRedemption,
+  apiDecideRedemption,
+  apiGiveKudos,
+  apiRedeem,
+  apiToggleKudosLike,
+  loadApiRecognition,
+} from "../../api/syncOpsEngagement.ts";
 
 const ROUTE = "/recognition";
 
@@ -59,11 +69,25 @@ export interface Redemption {
   decisionNote?: string;
 }
 
-interface RecognitionState {
+/** Backend mode: the signed-in person's points as the API counts them. */
+export interface ApiPoints {
+  personId: string;
+  received: number;
+  spent: number;
+  balance: number;
+  givenThisMonth: number;
+  allowanceLeft: number;
+}
+
+export interface RecognitionState {
   kudos: Kudos[];
   redemptions: Redemption[];
   /** Likes on praise posted from Performance (feedback id → people who liked it). */
   praiseLikes: Record<string, string[]>;
+  /** Backend mode only. */
+  apiPoints?: ApiPoints;
+  /** Backend mode only: the reward catalogue. */
+  apiRewards?: Reward[];
 }
 
 function seedKudos(): Kudos[] {
@@ -101,9 +125,36 @@ function normalize(saved: unknown, base: RecognitionState): RecognitionState {
 
 const store = createLocalStore<RecognitionState>("kastech.recognition.v1", defaults, normalize);
 
-export const subscribeRecognition = store.subscribe;
-export const getRecognitionState = store.getState;
+/**
+ * Backend mode: kudos, likes, points, rewards and redemptions come from the API (in memory only).
+ * Likes on Performance praise stay in this browser, as before.
+ */
+const mirror = createApiMirror<RecognitionState>(
+  () => ({ kudos: [], redemptions: [], praiseLikes: {} }),
+  (accountId) => loadApiRecognition(accountId, {}),
+);
+let composed: { api: RecognitionState; local: RecognitionState; out: RecognitionState } | null = null;
+
+function composedState(): RecognitionState {
+  const api = mirror.get();
+  const local = store.getState();
+  if (composed?.api !== api || composed.local !== local) composed = { api, local, out: { ...api, praiseLikes: local.praiseLikes } };
+  return composed.out;
+}
+
+export const subscribeRecognition = API_ENABLED ? subscribeAll(store.subscribe, mirror.subscribe) : store.subscribe;
+export const getRecognitionState: () => RecognitionState = API_ENABLED ? composedState : store.getState;
 export const resetRecognition = store.reset;
+
+/** Rewards on offer: the API catalogue in backend mode, otherwise the built-in list. */
+export function rewardCatalogue(state: RecognitionState = getRecognitionState()): Reward[] {
+  return state.apiRewards ?? REWARDS;
+}
+
+/** The API's own count, when it is for this person (backend mode). */
+function apiPointsFor(personId: string, state: RecognitionState): ApiPoints | undefined {
+  return state.apiPoints?.personId === personId ? state.apiPoints : undefined;
+}
 
 /* ───────────── Helpers ───────────── */
 
@@ -127,6 +178,12 @@ const monthOf = (iso: string) => iso.slice(0, 7);
 
 /** Everyone who can receive kudos: sign-in people and their teammates. */
 export function recognitionPeople(): { id: string; fullName: string; department: string }[] {
+  if (API_ENABLED) {
+    return listPeople()
+      .filter((p) => p.employmentStatus !== "Terminated")
+      .map((p) => ({ id: p.id, fullName: p.fullName, department: p.department ?? "" }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName));
+  }
   const seen = new Set<string>();
   return TASK_TEAM.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true)))
     .map((p) => ({ id: p.id, fullName: p.fullName, department: p.department }))
@@ -134,25 +191,35 @@ export function recognitionPeople(): { id: string; fullName: string; department:
 }
 
 export function pointsGivenThisMonth(personId: string, state: RecognitionState = getRecognitionState(), today = todayISO()): number {
+  const api = apiPointsFor(personId, state);
+  if (api) return api.givenThisMonth;
   return state.kudos.filter((k) => k.fromId === personId && monthOf(k.createdOn) === monthOf(today)).reduce((a, k) => a + k.points, 0);
 }
 
 export function allowanceLeft(personId: string, state: RecognitionState = getRecognitionState()): number {
+  const api = apiPointsFor(personId, state);
+  if (api) return api.allowanceLeft;
   return Math.max(0, MONTHLY_ALLOWANCE - pointsGivenThisMonth(personId, state));
 }
 
 export function pointsReceived(personId: string, state: RecognitionState = getRecognitionState()): number {
+  const api = apiPointsFor(personId, state);
+  if (api) return api.received;
   return state.kudos.filter((k) => k.toId === personId).reduce((a, k) => a + k.points, 0);
 }
 
 /** Points held for open requests or spent on fulfilled ones. */
 export function pointsSpent(personId: string, state: RecognitionState = getRecognitionState()): number {
+  const api = apiPointsFor(personId, state);
+  if (api) return api.spent;
   return state.redemptions
     .filter((r) => r.personId === personId && (r.status === "Requested" || r.status === "Fulfilled"))
     .reduce((a, r) => a + r.points, 0);
 }
 
 export function pointsBalance(personId: string, state: RecognitionState = getRecognitionState()): number {
+  const api = apiPointsFor(personId, state);
+  if (api) return api.balance;
   return pointsReceived(personId, state) - pointsSpent(personId, state);
 }
 
@@ -160,7 +227,7 @@ export function pointsBalance(personId: string, state: RecognitionState = getRec
 
 export type KudosInput = { toId: string; value: string; message: string; points: number };
 
-export function giveKudos(actor: PlusActor, input: KudosInput): PlusResult {
+export function giveKudos(actor: PlusActor, input: KudosInput): PlusResult | Promise<PlusResult> {
   const message = input.message.trim().replace(/\s+/g, " ");
   if (!input.toId) return "Pick a colleague.";
   if (input.toId === actor.id) return "You can't give kudos to yourself.";
@@ -170,6 +237,8 @@ export function giveKudos(actor: PlusActor, input: KudosInput): PlusResult {
   if (message.length > 500) return "Keep the message under 500 characters.";
   if (!Number.isInteger(input.points) || input.points < 0) return "Points must be a whole number.";
   if (input.points > MAX_POINTS_PER_KUDOS) return `Up to ${MAX_POINTS_PER_KUDOS} points per kudos.`;
+  // Backend mode: the API checks the allowance, notifies and audits.
+  if (API_ENABLED) return apiRun(() => apiGiveKudos({ ...input, message }), mirror);
   const today = todayISO();
   const result = store.mutate((s) => {
     const left = MONTHLY_ALLOWANCE - pointsGivenThisMonth(actor.id, s, today);
@@ -203,7 +272,8 @@ export function giveKudos(actor: PlusActor, input: KudosInput): PlusResult {
 }
 
 /** Like or unlike a wall post (kudos or praise from Performance). */
-export function toggleLike(actor: PlusActor, itemId: string): PlusResult {
+export function toggleLike(actor: PlusActor, itemId: string): PlusResult | Promise<PlusResult> {
+  if (API_ENABLED && mirror.get().kudos.some((k) => k.id === itemId)) return apiRun(() => apiToggleKudosLike(itemId), mirror);
   return store.mutate((s) => {
     const kudos = s.kudos.find((k) => k.id === itemId);
     if (kudos) {
@@ -255,12 +325,13 @@ export function wallItems(state: RecognitionState, feedback: FeedbackItem[]): Wa
 
 /* ───────────── Rewards ───────────── */
 
-export function redeemReward(actor: PlusActor, rewardId: string, note: string): PlusResult {
-  const reward = REWARDS.find((r) => r.id === rewardId);
+export function redeemReward(actor: PlusActor, rewardId: string, note: string): PlusResult | Promise<PlusResult> {
+  const reward = rewardCatalogue().find((r) => r.id === rewardId);
   if (!reward) return "That reward is no longer available.";
   const text = note.trim();
   if (reward.needsDate && text.length < 3) return "Add your preferred date.";
   if (text.length > 300) return "Keep the note under 300 characters.";
+  if (API_ENABLED) return apiRun(() => apiRedeem(rewardId, text), mirror);
   const id = newId("rd");
   const result = store.mutate((s) => {
     const balance = pointsBalance(actor.id, s);
@@ -289,7 +360,8 @@ export function redeemReward(actor: PlusActor, rewardId: string, note: string): 
   return null;
 }
 
-export function cancelRedemption(actor: PlusActor, id: string): PlusResult {
+export function cancelRedemption(actor: PlusActor, id: string): PlusResult | Promise<PlusResult> {
+  if (API_ENABLED) return apiRun(() => apiCancelRedemption(id), mirror);
   return store.mutate((s) => {
     const row = s.redemptions.find((r) => r.id === id);
     if (!row) return "Request not found.";
@@ -302,10 +374,11 @@ export function cancelRedemption(actor: PlusActor, id: string): PlusResult {
 }
 
 /** HR fulfils or declines a request. Declined points go back to the person. */
-export function decideRedemption(actor: PlusActor, id: string, fulfil: boolean, note: string): PlusResult {
+export function decideRedemption(actor: PlusActor, id: string, fulfil: boolean, note: string): PlusResult | Promise<PlusResult> {
   if (!isHr(actor.role)) return "Only HR can fulfil reward requests.";
   const text = note.trim();
   if (!fulfil && text.length < 3) return "Add a reason for declining.";
+  if (API_ENABLED) return apiRun(() => apiDecideRedemption(id, fulfil, text), mirror);
   let row: Redemption | undefined;
   const result = store.mutate((s) => {
     row = s.redemptions.find((r) => r.id === id);

@@ -18,7 +18,7 @@ import {
   RECOGNITION_VALUES,
   recognitionPeople,
   redeemReward,
-  REWARDS,
+  rewardCatalogue,
   subscribeRecognition,
   toggleLike,
   wallItems,
@@ -92,10 +92,15 @@ function Wall({ actor }: { actor: PlusActor }) {
     filter === "received" ? i.toId === actor.id : filter === "given" ? i.fromId === actor.id : true,
   );
 
-  function submit(e: FormEvent) {
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
     e.preventDefault();
+    if (busy) return;
     const points = form.points === "" ? 0 : Number(form.points);
-    const error = giveKudos(actor, { ...form, points });
+    setBusy(true);
+    const error = await giveKudos(actor, { ...form, points });
+    setBusy(false);
     const name = people.find((p) => p.id === form.toId)?.fullName ?? "them";
     setMsg(result(error, `Kudos sent to ${name}.`));
     if (!error) setForm(BLANK);
@@ -140,7 +145,7 @@ function Wall({ actor }: { actor: PlusActor }) {
             </Field>
           </div>
           <div className="row-gap">
-            <button className="btn" type="submit">Send kudos</button>
+            <button className="btn" type="submit" disabled={busy}>Send kudos</button>
           </div>
         </form>
       </Card>
@@ -188,8 +193,8 @@ function WallPost({ item, actor, onError }: { item: WallItem; actor: PlusActor; 
         type="button"
         className={`rc-like${liked ? " on" : ""}`}
         aria-pressed={liked}
-        onClick={() => {
-          const error = toggleLike(actor, item.id);
+        onClick={async () => {
+          const error = await toggleLike(actor, item.id);
           if (error) onError(error);
         }}
       >
@@ -213,7 +218,7 @@ function Rewards({ actor }: { actor: PlusActor }) {
       <Banner message={msg} />
       <Card title="Rewards">
         <div className="rc-rewards">
-          {REWARDS.map((r) => (
+          {rewardCatalogue(data).map((r) => (
             <article key={r.id} className="rc-reward">
               <h3>{r.name}</h3>
               <p className="muted">{r.description}</p>
@@ -229,8 +234,8 @@ function Rewards({ actor }: { actor: PlusActor }) {
                 className="btn btn-tiny"
                 type="button"
                 disabled={balance < r.points}
-                onClick={() => {
-                  const error = redeemReward(actor, r.id, notes[r.id] ?? "");
+                onClick={async () => {
+                  const error = await redeemReward(actor, r.id, notes[r.id] ?? "");
                   setMsg(result(error, `${r.name} requested — HR will fulfil it.`));
                   if (!error) setNotes({ ...notes, [r.id]: "" });
                 }}
@@ -253,7 +258,7 @@ function Rewards({ actor }: { actor: PlusActor }) {
             formatShortDate(r.requestedOn),
             <StatusBadge key="s" status={r.status} tone={STATUS_TONE[r.status]} literal />,
             r.status === "Requested" ? (
-              <button key="c" className="btn-ghost btn-tiny" type="button" onClick={() => setMsg(result(cancelRedemption(actor, r.id), "Request cancelled — points returned."))}>
+              <button key="c" className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await cancelRedemption(actor, r.id), "Request cancelled — points returned."))}>
                 Cancel
               </button>
             ) : (
@@ -301,10 +306,10 @@ function Fulfilment({ actor }: { actor: PlusActor }) {
                       value={notes[r.id] ?? ""}
                       onChange={(e) => setNotes({ ...notes, [r.id]: e.target.value })}
                     />
-                    <button className="btn btn-tiny" type="button" onClick={() => setMsg(result(decideRedemption(actor, r.id, true, notes[r.id] ?? ""), `Marked fulfilled for ${r.personName}.`))}>
+                    <button className="btn btn-tiny" type="button" onClick={async () => setMsg(result(await decideRedemption(actor, r.id, true, notes[r.id] ?? ""), `Marked fulfilled for ${r.personName}.`))}>
                       Fulfil
                     </button>
-                    <button className="btn-ghost btn-tiny" type="button" onClick={() => setMsg(result(decideRedemption(actor, r.id, false, notes[r.id] ?? ""), "Request declined — points returned."))}>
+                    <button className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await decideRedemption(actor, r.id, false, notes[r.id] ?? ""), "Request declined — points returned."))}>
                       Decline
                     </button>
                   </div>

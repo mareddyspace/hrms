@@ -101,7 +101,7 @@ export function CashPage() {
   const pendingCount = rows.filter((item) => item.status === "pending").length;
 
   return (
-    <Page title="Cash advance" subtitle="Recovered from a later payslip">
+    <Page title="Cash advance">
       <section className="cash-summary" aria-label="Cash advance summary">
         <div className="cash-stat">
           <span>Total requested</span>

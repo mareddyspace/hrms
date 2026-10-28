@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Banner } from "../../components/ui.tsx";
 import type { JobProfile } from "../../data/peopleData.ts";
-import { saveJobProfile, type OrgActor } from "../../data/orgStructureLocal.ts";
+import { saveJobProfileAsync, type OrgActor } from "../../data/orgStructureLocal.ts";
 import { draftJobDescription, formatJobDraft, similarRoles, type JobDraftInput } from "./jobDescription.ts";
 import { DraftTag } from "./DraftTag.tsx";
 import "./ai.css";
@@ -33,6 +33,7 @@ export function JobDescriptionWriter({
   const [variant, setVariant] = useState(0);
   const [text, setText] = useState(() => (autoStart && input.title.trim() ? formatJobDraft(input.title, draftJobDescription(input, 0)) : ""));
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [saving, setSaving] = useState(false);
   const draft = useMemo(() => draftJobDescription(input, variant), [input, variant]);
   const similar = useMemo(
     () => similarRoles({ id: profile?.id, title: input.title, familyName: input.familyName, gradeBand: input.gradeBand }, profiles),
@@ -55,14 +56,16 @@ export function JobDescriptionWriter({
     setText(at < 0 ? `${text}\n- ${skill}` : `${text.slice(0, at + marker.length)}- ${skill}\n${text.slice(at + marker.length)}`);
   }
 
-  function save() {
-    if (!profile) return;
-    const result = saveJobProfile(actor, profile.id, {
+  async function save() {
+    if (!profile || saving) return;
+    setSaving(true);
+    const result = await saveJobProfileAsync(actor, profile.id, {
       title: profile.title,
       familyName: profile.familyName,
       gradeBand: profile.gradeBand,
       description: text,
     });
+    setSaving(false);
     setMessage(result ? { tone: "err", text: result } : { tone: "ok", text: `Saved to ${profile.title}.` });
   }
 
@@ -83,8 +86,8 @@ export function JobDescriptionWriter({
           </button>
         )}
         {text && !onUseText && canSave && profile && (
-          <button type="button" className="btn-ghost btn-tiny" onClick={save}>
-            Save to job profile
+          <button type="button" className="btn-ghost btn-tiny" disabled={saving} onClick={() => void save()}>
+            {saving ? "Saving…" : "Save to job profile"}
           </button>
         )}
         {text && !onUseText && !profile && <span className="muted">Link a job profile to save this.</span>}
@@ -120,7 +123,6 @@ export function JobDescriptionWriter({
           </ul>
         )}
       </div>
-      <p className="ai-note">Built from the title, family, grade and skills library. Edit before saving or posting.</p>
     </div>
   );
 }

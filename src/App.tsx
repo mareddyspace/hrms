@@ -16,8 +16,10 @@ const LifecycleActionsPage = lazy(() => import("./features/lifecycle/LifecycleAc
 const RecognitionPage = lazy(() => import("./pages/RecognitionPage.tsx").then((m) => ({ default: m.RecognitionPage })));
 const RolesPermissionsPage = lazy(() => import("./pages/RolesPermissionsPage.tsx").then((m) => ({ default: m.RolesPermissionsPage })));
 const AiSettingsPage = lazy(() => import("./pages/AiSettingsPage.tsx").then((m) => ({ default: m.AiSettingsPage })));
+const LeavePoliciesAdminPage = lazy(() => import("./pages/LeavePoliciesAdminPage.tsx").then((m) => ({ default: m.LeavePoliciesAdminPage })));
 const TravelPage = lazy(() => import("./pages/TravelPage.tsx").then((m) => ({ default: m.TravelPage })));
 const ApprovalWorkflowsPage = lazy(() => import("./pages/ApprovalWorkflowsPage.tsx").then((m) => ({ default: m.ApprovalWorkflowsPage })));
+const SecuritySettingsPage = lazy(() => import("./pages/SecuritySettingsPage.tsx").then((m) => ({ default: m.SecuritySettingsPage })));
 const PersonalisationPage = lazy(() => import("./pages/PersonalisationPage.tsx").then((m) => ({ default: m.PersonalisationPage })));
 const AuditLogPage = lazy(() => import("./pages/AuditLogPage.tsx").then((m) => ({ default: m.AuditLogPage })));
 const ExpensesPage = lazy(() => import("./pages/ExpensesPage.tsx").then((m) => ({ default: m.ExpensesPage })));
@@ -152,6 +154,7 @@ export function App() {
         <Route path="/admin/countries" element={<Allowed id="administration"><CountryAdminPage /></Allowed>} />
         <Route path="/admin/audit" element={<Allowed id="auditlog"><AuditLogPage /></Allowed>} />
         <Route path="/settings/personalisation" element={<PersonalisationPage />} />
+        <Route path="/settings/security" element={<SecuritySettingsPage />} />
         <Route path="/settings/locale" element={<Allowed id="locale"><LocaleSettingsPage /></Allowed>} />
         <Route path="/benefits/country" element={<Allowed id="administration"><CountryBenefitsConfigPage /></Allowed>} />
         <Route path="/documents/country" element={<Allowed id="administration"><CountryDocumentsConfigPage /></Allowed>} />
@@ -175,6 +178,7 @@ export function App() {
         <Route path="/recognition" element={<Allowed id="recognition"><RecognitionPage /></Allowed>} />
         <Route path="/admin/roles" element={<Allowed id="accessroles"><RolesPermissionsPage /></Allowed>} />
         <Route path="/admin/ai" element={<Allowed id="aisettings"><AiSettingsPage /></Allowed>} />
+        <Route path="/admin/leave-policies" element={<Allowed id="leavepolicies"><LeavePoliciesAdminPage /></Allowed>} />
         <Route path="/admin/workflows-config" element={<Allowed id="workflowsconfig"><ApprovalWorkflowsPage /></Allowed>} />
         <Route path="/approvals" element={<ApprovalsCenterPage />} />
         <Route path="/chat" element={<Allowed id="messages"><ChatPage /></Allowed>} />

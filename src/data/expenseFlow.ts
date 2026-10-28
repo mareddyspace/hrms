@@ -4,7 +4,7 @@
  * group has approved, with "any" the first approval completes it.
  */
 import type { ExpenseApprovalStep, ExpenseStepDecision } from "../model.ts";
-import { approversForStep, type FlowDecision, type FlowGroup, type ParallelMode } from "./approvalWorkflows.ts";
+import { approversForStep, withoutPriorApprovers, type FlowDecision, type FlowGroup, type ParallelMode } from "./approvalWorkflows.ts";
 
 /** A saved step: the expense claim shape, plus parallel groups on newer requests. */
 export type SavedStep = ExpenseApprovalStep & { mode?: ParallelMode; groups?: FlowGroup[] };
@@ -45,6 +45,11 @@ export function pendingGroups(request: Pick<SteppedRequest, "steps" | "currentSt
 
 const LINE_ROLES = new Set<string>(["manager", "skip_manager"]);
 
+/** People who approved a step before `step` (they don't approve a later step of the same request). */
+export function approvedBefore(request: Pick<SteppedRequest, "stepDecisions">, step: number): Set<string> {
+  return new Set((request.stepDecisions ?? []).filter((d) => d.step < step && d.decision === "approved").map((d) => d.byId));
+}
+
 function canDecideGroup(group: Pick<FlowGroup, "role" | "approverIds">, employeeId: string, myId: string, canApprove: (employeeId: string) => boolean) {
   return group.approverIds.includes(myId) || (LINE_ROLES.has(group.role) && canApprove(employeeId));
 }
@@ -67,6 +72,7 @@ export function isWaitingOn(
   if (!isOpenStatus(request.status) || request.employeeId === myId) return false;
   const step = currentStepOf(request);
   if (!step) return canApprove(request.employeeId);
+  if (approvedBefore(request, request.currentStep ?? 0).has(myId)) return false;
   if (isAllParallel(step)) return myPendingGroups(request, myId, canApprove).length > 0;
   if (step.approverIds.includes(myId)) return true;
   if (step.groups?.some((g) => canDecideGroup(g, request.employeeId, myId, canApprove))) return true;
@@ -90,6 +96,8 @@ export interface FlowResult {
   step: SavedStep;
   /** The step now open, when the outcome is "advanced". */
   next?: SavedStep;
+  /** Steps after an approval: later steps without anyone who already approved (save these). */
+  steps: SavedStep[];
 }
 
 /**
@@ -104,25 +112,36 @@ export function decideFlowStep(
   note: string | undefined,
   canApprove: (employeeId: string) => boolean,
   on: string,
+  /** People who may never approve (e.g. whoever proposed it). */
+  excludeIds: string[] = [],
 ): FlowResult | string {
   const step = currentStepOf(request);
   if (!step || !request.steps) return "This request has no open step.";
   if (!isWaitingOn(request, actor.id, canApprove)) return "This request isn't waiting on you.";
   const at = request.currentStep ?? 0;
+  const steps = request.steps;
   const base = { step: at, decision, byId: actor.id, byName: actor.fullName, on, note: note?.trim() || undefined };
+  const advance = (entries: FlowDecision[]): FlowResult => {
+    // Nobody approves two steps: later steps lose this step's approvers (fallback admin -> executive, else skipped).
+    const prior = approvedBefore({ stepDecisions: [...(request.stepDecisions ?? []), ...entries] }, at + 1);
+    const later = steps.slice(at + 1).flatMap((s) => withoutPriorApprovers(s, prior, request.employeeId, excludeIds) ?? []);
+    const nextSteps = [...steps.slice(0, at + 1), ...later];
+    const next = nextSteps[at + 1];
+    return next
+      ? { entries, outcome: "advanced", currentStep: at + 1, step, next, steps: nextSteps }
+      : { entries, outcome: "approved", currentStep: at, step, steps: nextSteps };
+  };
   if (isAllParallel(step)) {
     const mine = myPendingGroups(request, actor.id, canApprove);
     const entries: FlowDecision[] = mine.map(({ index, group }) => ({ ...base, label: group.label, role: group.role, group: index }));
-    if (decision === "rejected") return { entries, outcome: "rejected", currentStep: at, step };
+    if (decision === "rejected") return { entries, outcome: "rejected", currentStep: at, step, steps };
     const left = pendingGroups(request).length - mine.length;
-    if (left > 0) return { entries, outcome: "waiting", currentStep: at, step };
-    const next = request.steps[at + 1];
-    return next ? { entries, outcome: "advanced", currentStep: at + 1, step, next } : { entries, outcome: "approved", currentStep: at, step };
+    if (left > 0) return { entries, outcome: "waiting", currentStep: at, step, steps };
+    return advance(entries);
   }
   const entries: FlowDecision[] = [{ ...base, label: step.label }];
-  if (decision === "rejected") return { entries, outcome: "rejected", currentStep: at, step };
-  const next = request.steps[at + 1];
-  return next ? { entries, outcome: "advanced", currentStep: at + 1, step, next } : { entries, outcome: "approved", currentStep: at, step };
+  if (decision === "rejected") return { entries, outcome: "rejected", currentStep: at, step, steps };
+  return advance(entries);
 }
 
 /** People who still have to act on the open step (pending groups of a parallel step, or the step's approvers). */

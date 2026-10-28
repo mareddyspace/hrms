@@ -1,9 +1,12 @@
 import { useCallback } from "react";
+import { API_ENABLED, api, hasTokens } from "../../api/client.ts";
 import { appendAuditEntries } from "../../data/auditTrail.ts";
-import { answerCopilot, type CopilotAnswer } from "../../data/platformData.ts";
+import { answerCopilot, type CopilotAnswer, type CopilotContext, type CopilotSource } from "../../data/platformData.ts";
 import { usePortal } from "../../store.tsx";
+import { summaryTarget } from "./answers.ts";
 import { logCopilotAction } from "./assist.ts";
 import { useCopilotContext } from "./copilotContext.ts";
+import { policyHref } from "./policyAnswers.ts";
 
 /** Records one Copilot question in the audit trail: who asked, what, which sources, and whether access was denied. */
 export function logCopilotQuestion(question: string, answer: CopilotAnswer, asker: { id: string; name: string }): void {
@@ -28,7 +31,7 @@ export function logCopilotQuestion(question: string, answer: CopilotAnswer, aske
   ]);
 }
 
-/** Ask Copilot as the signed-in person: answers from fresh context and logs the question. */
+/** Ask Copilot as the signed-in person: answers from fresh context and logs the question (built-in rules only). */
 export function useAskCopilot(): (question: string) => CopilotAnswer {
   const { employee } = usePortal();
   const buildContext = useCopilotContext();
@@ -39,6 +42,112 @@ export function useAskCopilot(): (question: string) => CopilotAnswer {
       logCopilotQuestion(question, answer, asker);
       if (answer.action || answer.letterDraft) logCopilotAction("Proposed", asker, { action: answer.action, letter: answer.letterDraft });
       return answer;
+    },
+    [buildContext, employee.id, employee.fullName],
+  );
+}
+
+/* ───────── AI answers (backend POST /ai/ask, OpenRouter) ───────── */
+
+/** Where an answer came from: the AI model ("AI") or the portal's own rules ("Built-in"). */
+export type CopilotOrigin = "ai" | "builtin";
+
+export interface CopilotReply {
+  answer: CopilotAnswer;
+  origin: CopilotOrigin;
+  model?: string;
+}
+
+export interface CopilotHistoryTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+interface AiSourceOut {
+  title: string;
+  ref: string;
+  kind: "policy" | "data";
+  version?: string | null;
+  effective?: string | null;
+  section?: string | null;
+}
+
+interface AiAnswerOut {
+  answer: string | null;
+  sources: AiSourceOut[];
+  used_ai: boolean;
+  model: string | null;
+  denied: boolean;
+}
+
+/** How many earlier turns go with a question. */
+const HISTORY_TURNS = 6;
+
+/**
+ * Answers that stay on the built-in rules even when AI is on: prepared actions (leave, address, mobile),
+ * letter drafts, analytics tables/charts, person summaries, and anything the rules already refused.
+ */
+function keepBuiltIn(question: string, ctx: CopilotContext, builtIn: CopilotAnswer): boolean {
+  if (builtIn.denied || builtIn.action || builtIn.letterDraft || builtIn.chart) return true;
+  if (summaryTarget(question)) return true;
+  return Boolean(ctx.assist?.(question));
+}
+
+function fromAi(out: AiAnswerOut): CopilotAnswer {
+  const sources: CopilotSource[] = [];
+  const links: { label: string; to: string }[] = [];
+  for (const s of out.sources) {
+    if (s.kind === "policy") {
+      const [policyId] = s.ref.split("#");
+      const section = s.section ?? "";
+      sources.push({ title: s.title, version: s.version ?? "", effective: s.effective ?? "", section, to: policyHref(policyId, section) });
+    } else if (s.ref.startsWith("/") && !links.some((l) => l.to === s.ref)) {
+      links.push({ label: s.title, to: s.ref });
+    }
+  }
+  return {
+    kind: "text",
+    summary: out.answer ?? "",
+    denied: out.denied || undefined,
+    sources: sources.length ? sources : undefined,
+    links: links.length ? links : undefined,
+  };
+}
+
+/**
+ * Ask Copilot, using the AI model when the backend is on and the person is signed in to it. Falls back to the
+ * built-in answer (exactly as useAskCopilot) when AI is off, every model failed, or the request errored.
+ * The backend audits the questions it receives; questions it never saw are audited here as before.
+ */
+export function useAskCopilotAi(): (question: string, history?: CopilotHistoryTurn[]) => Promise<CopilotReply> {
+  const { employee } = usePortal();
+  const buildContext = useCopilotContext();
+  return useCallback(
+    async (question: string, history: CopilotHistoryTurn[] = []) => {
+      const ctx = buildContext();
+      const builtIn = answerCopilot(question, ctx);
+      const asker = { id: employee.id, name: employee.fullName };
+      const builtInReply = (audited: boolean): CopilotReply => {
+        if (!audited) logCopilotQuestion(question, builtIn, asker);
+        if (builtIn.action || builtIn.letterDraft) logCopilotAction("Proposed", asker, { action: builtIn.action, letter: builtIn.letterDraft });
+        return { answer: builtIn, origin: "builtin" };
+      };
+      if (!API_ENABLED || !hasTokens() || keepBuiltIn(question, ctx, builtIn)) return builtInReply(false);
+      try {
+        const out = await api.post<AiAnswerOut>("/ai/ask", {
+          question: question.trim().slice(0, 1000),
+          history: history
+            .filter((t) => t.content.trim())
+            .slice(-HISTORY_TURNS)
+            .map((t) => ({ role: t.role, content: t.content.slice(0, 1000) })),
+        });
+        if (out.answer && (out.used_ai || out.denied)) {
+          return { answer: fromAi(out), origin: out.used_ai ? "ai" : "builtin", model: out.model ?? undefined };
+        }
+        return builtInReply(true); // the backend already audited this question
+      } catch {
+        return builtInReply(false);
+      }
     },
     [buildContext, employee.id, employee.fullName],
   );
