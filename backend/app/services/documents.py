@@ -75,9 +75,7 @@ class SavedFile:
 
 def save_bytes(folder: str, file_id: str, data: bytes, content_type: str) -> SavedFile:
     relative = f"{folder}/{file_id}.{DOCUMENT_TYPES[content_type]}"
-    path = storage.storage_root() / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
+    storage.put_bytes(relative, data, content_type)
     return SavedFile(relative_path=relative, size_bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
 
 

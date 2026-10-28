@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     database_url_raw: str = Field(default="", validation_alias="DATABASE_URL", repr=False)
     jwt_secret: str = Field(default="", repr=False)
     cors_origins: str = "http://localhost:5173,http://localhost:5174"
+    # Extra allowed origins as a regular expression, e.g. Vercel preview URLs:
+    # ^https://hrms(-[a-z0-9-]+)?\.vercel\.app$   Empty = only CORS_ORIGINS.
+    cors_origin_regex: str = Field(default="", validation_alias="CORS_ORIGIN_REGEX")
+
+    # "production" turns on the strict start-up checks (JWT_SECRET) and HSTS.
+    app_env: str = Field(default="development", validation_alias="APP_ENV")
+    docs_enabled: bool = Field(default=True, validation_alias="DOCS_ENABLED")  # false hides /docs and /openapi.json
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    # Run `alembic upgrade head` once at start-up (Render free has no pre-deploy command).
+    run_migrations_on_start: bool = Field(default=False, validation_alias="RUN_MIGRATIONS_ON_START")
     access_token_minutes: int = 30
     refresh_token_days: int = 7
     max_failed_logins: int = 5
@@ -74,13 +84,29 @@ class Settings(BaseSettings):
         return self.database_url.startswith("sqlite")
 
     @property
+    def is_production(self) -> bool:
+        return self.app_env.strip().lower() in ("production", "prod")
+
+    @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+
+# Placeholder / sample values that must never sign real tokens.
+WEAK_SECRETS = {"changeme", "change-me", "change_me", "secret", "jwt-secret", "dev-secret", "development",
+                "test-secret-test-secret-test-secret", "your-secret-here", "please-change-me"}
+
+
+def check_jwt_secret(settings: Settings) -> None:
+    secret = settings.jwt_secret.strip()
+    if not secret or len(secret) < 16:
+        raise RuntimeError("JWT_SECRET must be set (at least 16 characters).")
+    if settings.is_production and (len(secret) < 32 or secret.lower() in WEAK_SECRETS or len(set(secret)) < 8):
+        raise RuntimeError("APP_ENV=production needs a strong random JWT_SECRET (at least 32 characters, not a sample value).")
 
 
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
-    if not settings.jwt_secret or len(settings.jwt_secret) < 16:
-        raise RuntimeError("JWT_SECRET in backend/.env must be set (at least 16 characters).")
+    check_jwt_secret(settings)
     return settings

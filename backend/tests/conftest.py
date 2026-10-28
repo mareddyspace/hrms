@@ -9,6 +9,9 @@ from pathlib import Path
 _TMP = Path(tempfile.mkdtemp(prefix="timez-test-"))
 os.environ["DATABASE_URL"] = f"sqlite:///{(_TMP / 'test.db').as_posix()}"  # environment wins over .env
 os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret")
+os.environ["STORAGE_BACKEND"] = "local"  # never the real bucket, whatever backend/.env says
+os.environ["RUN_MIGRATIONS_ON_START"] = "false"
+os.environ["APP_ENV"] = "test"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

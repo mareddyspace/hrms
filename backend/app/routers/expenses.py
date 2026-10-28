@@ -14,7 +14,7 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
@@ -310,7 +310,7 @@ async def add_receipt(
 
 
 @router.get("/receipts/{receipt_id}", response_class=FileResponse)
-def download_receipt(receipt_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> FileResponse:
+def download_receipt(receipt_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> Response:
     receipt = db.get(ExpenseReceipt, receipt_id)
     if receipt is None:
         raise NOT_FOUND
@@ -328,13 +328,12 @@ def download_receipt(receipt_id: str, request: Request, db: DbSession, user: Cur
         if not allowed:
             raise HTTPException(403, "Only the claimant, the approvers, Finance and HR can open receipts.")
     try:
-        path = storage.resolve(receipt.storage_path)
+        response = storage.download(receipt.storage_path, media_type=receipt.content_type, filename=receipt.file_name)
+    except storage.FileMissing as exc:
+        raise HTTPException(410, "The receipt file is no longer available.") from exc
     except storage.StorageError as exc:
         raise NOT_FOUND from exc
-    if not path.is_file():
-        raise HTTPException(410, "The receipt file is no longer available.")
     record_audit(db, actor_id=user.id, action="receipt_downloaded", entity="expense_receipt", entity_id=receipt.id,
                  subject_id=receipt.employee_id, ip=client_ip(request))
     db.commit()
-    return FileResponse(path, media_type=receipt.content_type, filename=receipt.file_name,
-                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+    return response

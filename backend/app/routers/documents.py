@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
@@ -274,23 +274,22 @@ def set_expiry(document_id: str, body: DocExpiryIn, request: Request, db: DbSess
 
 
 def _file_response(db: DbSession, user: CurrentUser, version: DocumentVersion, subject_id: str, request: Request,
-                   entity: str, entity_id: str) -> FileResponse:
+                   entity: str, entity_id: str) -> Response:
     try:
-        path = storage.resolve(version.storage_path)
+        response = storage.download(version.storage_path, media_type=version.content_type, filename=version.file_name)
+    except storage.FileMissing as exc:
+        raise HTTPException(410, "The file is no longer available.") from exc
     except storage.StorageError as exc:
         raise NOT_FOUND from exc
-    if not path.is_file():
-        raise HTTPException(410, "The file is no longer available.")
     record_audit(db, actor_id=user.id, action="document_downloaded", entity=entity, entity_id=entity_id, subject_id=subject_id,
                  after={"version": version.version, "file": version.id}, ip=client_ip(request))
     db.commit()
-    return FileResponse(path, media_type=version.content_type, filename=version.file_name,
-                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+    return response
 
 
 @router.get("/{document_id}/download", response_class=FileResponse)
 def download_document(document_id: str, request: Request, db: DbSession, user: CurrentUserDep,
-                      version: Annotated[int | None, Query(ge=1)] = None) -> FileResponse:
+                      version: Annotated[int | None, Query(ge=1)] = None) -> Response:
     doc, owner = _visible_doc(db, user, document_id)
     row = db.scalar(select(DocumentVersion).where(DocumentVersion.document_id == doc.id,
                                                   DocumentVersion.version == (version or doc.current_version)))
@@ -567,7 +566,7 @@ def cancel_letter(request_id: str, request: Request, db: DbSession, user: Curren
 
 @letters_router.get("/requests/{request_id}/download", response_class=FileResponse)
 def download_letter(request_id: str, request: Request, db: DbSession, user: CurrentUserDep,
-                    version: Annotated[int | None, Query(ge=1)] = None) -> FileResponse:
+                    version: Annotated[int | None, Query(ge=1)] = None) -> Response:
     """The issued PDF: the employee (once issued), HR in scope and the approvers."""
     req, emp = _visible_letter(db, user, request_id)
     allowed = (emp.id == user.employee_id or _is_letter_hr(user, emp) or _is_letter_approver(db, req, user.employee_id))
