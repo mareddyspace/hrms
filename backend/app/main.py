@@ -160,6 +160,11 @@ from app.routers import delegations  # noqa: E402
 
 app.include_router(delegations.router, prefix=API_PREFIX)
 
+# ---------- exits: resignation, termination, retirement, end of contract (migration 0014) ----------
+from app.routers import exits as exits_router  # noqa: E402
+
+app.include_router(exits_router.router, prefix=API_PREFIX)
+
 # ---------- start-up: optional migrations (outermost hook, so it runs before the jobs above touch the database) ----------
 from app import migrate as _migrate  # noqa: E402
 from app.services import storage as _storage  # noqa: E402

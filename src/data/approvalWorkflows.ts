@@ -31,7 +31,7 @@ export interface ApprovalStep {
   /** Backend mode: the step only applies when the requester's country / department / grade is one of these. */
   condition?: StepCondition;
   /** Backend mode (leave): the step only applies when the leave needs HR (long, unpaid, maternity...). */
-  onlyIf?: "needs_hr";
+  onlyIf?: "needs_hr" | "via_manager";
 }
 
 export interface StepCondition {

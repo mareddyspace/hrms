@@ -41,8 +41,12 @@ export async function revealPersonDetail(personId: string, field: RevealField): 
 function toPerson(p: PersonOut): PersonRecord {
   const country = TIMEZ_COUNTRIES.find((c) => c.code === p.country_code);
   const full = p.view === "full" ? p : null;
-  const status = (full?.employment_status ?? "Active") as EmploymentStatus;
+  // The server says "Exited" once the last working day has passed; the portal calls a leaver "Terminated".
+  const raw = full?.employment_status ?? "Active";
+  const status = (raw === "Exited" ? "Terminated" : raw) as EmploymentStatus;
+  const lastWorkingDay = full?.last_working_day ?? undefined;
   return {
+    ...(lastWorkingDay ? { lastWorkingDay, ...(raw === "Exited" ? { exitDate: lastWorkingDay } : {}) } : {}),
     id: p.id,
     employeeCode: full?.employee_code ?? "",
     fullName: p.full_name,

@@ -340,6 +340,8 @@ export interface PersonFullOut extends Omit<PersonBasicOut, "view"> {
   employment_type: string;
   employment_status: string;
   joining_date: string;
+  /** Set once an exit is approved (status "Notice period", then "Exited"). */
+  last_working_day?: string | null;
   time_zone: string;
   currency: string;
   date_of_birth: string | null;

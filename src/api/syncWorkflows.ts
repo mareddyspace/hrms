@@ -15,7 +15,7 @@ export interface ApiWorkflowStep {
   label?: string | null;
   sla_hours?: number | null;
   condition?: StepCondition | null;
-  only_if?: "needs_hr" | null;
+  only_if?: "needs_hr" | "via_manager" | null;
 }
 
 export interface ApiWorkflowType {

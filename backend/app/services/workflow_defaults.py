@@ -33,6 +33,11 @@ DEFAULT_WORKFLOWS: dict[str, list[dict[str, Any]]] = {
         {"roles": ["manager"], "mode": "any", "min_amount": None, "label": "Manager"},
         {"roles": ["hr"], "mode": "any", "min_amount": None, "label": "HR", "only_if": "needs_hr"},
     ],
+    # exits (app/services/exits.py): the manager step only when the employee raised it themselves and has a manager
+    "exit": [
+        {"roles": ["manager"], "mode": "any", "min_amount": None, "label": "Manager", "only_if": "via_manager"},
+        {"roles": ["hr"], "mode": "any", "min_amount": None, "label": "HR"},
+    ],
     "attendance_correction": [{"roles": ["manager"], "mode": "any", "min_amount": None, "label": "Manager"}],
     "timesheet": [{"roles": ["manager"], "mode": "any", "min_amount": None, "label": "Manager"}],
 }
@@ -40,6 +45,7 @@ DEFAULT_WORKFLOWS: dict[str, list[dict[str, Any]]] = {
 WORKFLOW_LABELS = {
     "expense": "Expenses", "travel": "Travel", "lifecycle": "Job changes", "leave": "Leave",
     "attendance_correction": "Attendance corrections", "timesheet": "Timesheets",
+    "exit": "Exits",
 }
 
 

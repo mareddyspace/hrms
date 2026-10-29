@@ -412,9 +412,11 @@ def cancel(db: Session, instance: ApprovalInstance, actor_id: str | None = None,
 def start(
     db: Session, type_: str, entity_id: str, requester: Employee, amount: float | None = None, actor_id: str | None = None,
     line_from_requester: bool = False, context: dict[str, Any] | None = None, fallback: bool = True,
+    exclude: set[str] | None = None,
 ) -> ApprovalInstance:
     """context: facts step conditions may use (country / department / grade override the requester's; flags such as
-    needs_hr for only_if)."""
+    needs_hr / via_manager for only_if). exclude: people who may never approve it besides the requester (e.g. the
+    subject of a request raised by someone else)."""
     definition = latest_definition(db, type_)
     if definition is None:
         raise ApprovalError(f"No approval workflow is set up for {type_}.")
@@ -436,7 +438,7 @@ def start(
         if not matched:
             step["applies"] = False
         steps.append(step)
-    steps = retarget(db, steps, 0, set(), amount, {requester.id})
+    steps = retarget(db, steps, 0, set(), amount, {requester.id} | (exclude or set()))
     instance = ApprovalInstance(
         id=f"apr-{uuid.uuid4().hex[:12]}",
         type=type_,

@@ -108,3 +108,8 @@ __all__ += ["LeaveCarryForward"]
 from app.models.delegations import ApprovalDelegation  # noqa: E402
 
 __all__ += ["ApprovalDelegation"]
+
+# Exits: resignation, termination, retirement, end of contract (migration 0014)
+from app.models.exits import ExitCase  # noqa: E402
+
+__all__ += ["ExitCase"]

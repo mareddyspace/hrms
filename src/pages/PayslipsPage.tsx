@@ -1,7 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { Card, Page, downloadText } from "../components/ui.tsx";
 import { legalEntityFor, money } from "../countryPay.ts";
-import { asDetailView, type PayslipDetailView } from "../data/payslipGenerator.ts";
+import { asDetailView, estimateMonthSoFar, type MonthSoFar, type PayslipDetailView } from "../data/payslipGenerator.ts";
 import { setTaxRegime, useTaxRegime } from "../data/taxRegime.ts";
 import { formatShortDate, parseISODate, toISO } from "../model.ts";
 import type { Employee, PayLine, PayslipView } from "../model.ts";
@@ -20,6 +20,8 @@ function payPeriod(month: string): { from: string; to: string } {
 
 function slipHeader(payslip: PayslipView, employee: Pick<Employee, "legalEntity" | "countryCode" | "countryName">) {
   const period = payPeriod(payslip.month);
+  // A final payslip ends on the last working day (paid from the 1st).
+  if (payslip.finalSettlement && payslip.paidDays != null) period.to = `${payslip.month}-${String(payslip.paidDays).padStart(2, "0")}`;
   return {
     entity: employee.legalEntity ?? legalEntityFor(employee.countryCode),
     country: employee.countryName ?? "India",
@@ -208,12 +210,69 @@ function RegimePicker({ employeeId }: { employeeId: string }) {
   );
 }
 
+function dayMonth(iso: string) {
+  return parseISODate(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+/** "1–29 Oct" (or "12–29 Oct" for a joiner). */
+function spanText(from: string, to: string) {
+  return `${Number(from.slice(8, 10))}–${dayMonth(to)}`;
+}
+
+/** Pay earned this month up to today: an estimate until payday. */
+function MonthSoFarCard({ est }: { est: MonthSoFar }) {
+  const c = est.currency;
+  return (
+    <Card title="This month so far">
+      <p className="muted" style={{ margin: "0 0 12px" }}>
+        Earned so far, {spanText(est.from, est.to)} · estimate; paid on payday
+      </p>
+      <div className="pay-head" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "8px 16px" }}>
+        <div>
+          <div className="muted">Gross</div>
+          <strong>{money(est.gross, c)}</strong>
+        </div>
+        <div>
+          <div className="muted">Deductions (est.)</div>
+          <strong>{money(est.deductionTotal, c)}</strong>
+        </div>
+        <div>
+          <div className="muted">Net (est.)</div>
+          <strong>{money(est.net, c)}</strong>
+        </div>
+        <div>
+          <div className="muted">Days counted</div>
+          <strong>
+            {est.daysCounted} of {est.totalDays}
+          </strong>
+        </div>
+      </div>
+      <p className="muted" style={{ margin: "12px 0 0" }}>
+        Payday: {formatShortDate(est.payday)} (last working day of the month)
+        {est.leavingThisMonth ? " · your final pay this month also settles unused leave" : ""}
+      </p>
+    </Card>
+  );
+}
+
 export function PayslipsPage() {
   const { employee } = usePortal();
   useTaxRegime(employee.id);
-  const { payslipViews } = usePortal();
+  const { payslipViews, payInput } = usePortal();
+  const est = estimateMonthSoFar(payInput);
+  const lwd = payInput.lastWorkingDay;
+  const leaving = Boolean(lwd && lwd >= payInput.today);
   return (
     <Page title="My payslips">
+      {leaving && lwd && (
+        <Card>
+          <p style={{ margin: 0 }}>
+            <strong>Notice period</strong> · last working day {formatShortDate(lwd)}. Your final payslip covers 1–{dayMonth(lwd)} and
+            includes unused leave.
+          </p>
+        </Card>
+      )}
+      {est && <MonthSoFarCard est={est} />}
       {employee.countryCode === "IN" && (
         <Card>
           <RegimePicker employeeId={employee.id} />

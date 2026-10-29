@@ -74,7 +74,7 @@ import { canApproveTeam, holidaysForPerson, maskAddress, maskMobile, setEarnedLe
 import { getOptionalHolidayState, subscribeOptionalHolidays } from "./features/workforce/optionalHolidaysStore.ts";
 import { editedPerson, getPerson, isAccountActive, listPeople, managerChainIds, subscribePeople } from "./data/peopleLocal.ts";
 import { delegatedAuthority, noteLeaves, type DelegationScope } from "./data/delegations.ts";
-import { cachedPayslips, generatePayslips } from "./data/payslipGenerator.ts";
+import { cachedPayslips, generatePayslips, type PayslipInput } from "./data/payslipGenerator.ts";
 import { getTaxRegime } from "./data/taxRegime.ts";
 import { getExitState, subscribeExits } from "./features/lifecycle/exitStore.ts";
 import { getNavOverrides } from "./data/platformLocal.ts";
@@ -375,6 +375,8 @@ interface PortalApi {
   leaveTable: ReturnType<typeof leaveRows>;
   counts: ReturnType<typeof actionCounts>;
   payslipViews: ReturnType<typeof toPayslipView>[];
+  /** Inputs the payslips are worked out from (also used for the "This month so far" estimate). */
+  payInput: PayslipInput;
   currentProjects: PortalState["projects"];
   previousProjects: PortalState["projects"];
   hoursFor: (projectId: string) => number;
@@ -1053,32 +1055,34 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       // month is pro-rated and settles unused privilege leave. Tax follows the country's rules, the
       // India regime choice and verified declarations; hourly staff are paid approved timesheet hours.
       // A getter so a regime change shows on the next read (cached per state + inputs).
-      get payslipViews() {
+      // Backend mode: the last working day and status come from the server's people record.
+      get payInput(): PayslipInput {
         const exit = getExitState().cases.find(
           (c) => c.employeeId === active.id && (c.status === "Accepted" || c.status === "Completed"),
         );
         const person = getPerson(active.id);
-        const regime = getTaxRegime(active.id);
-        const unusedLeaveDays = Math.max(0, leaveTable.find((row) => row.code === "pto")?.balance ?? 0);
-        const today = todayISO();
-        return cachedPayslips(state, [active.id, regime, exit?.lastWorkingDay ?? "", unusedLeaveDays, today].join("|"), () =>
-          generatePayslips({
-            employeeId: active.id,
-            role: active.role,
-            countryCode: active.countryCode,
-            joiningDate: person?.dateOfJoining,
-            lastWorkingDay: exit?.lastWorkingDay,
-            unusedLeaveDays,
-            today,
-            location: active.location ?? person?.location,
-            nationality: person?.nationality,
-            employmentStatus: person?.employmentStatus,
-            regime,
-            investmentProofs: state.investmentProofs,
-            timesheets: state.timesheets,
-            orgTimesheets: state.orgTimesheets,
-          }).map((slip) => ({ ...slip, ...toPayslipView(slip) })),
-        );
+        const lastWorkingDay = API_ENABLED ? (person?.lastWorkingDay ?? exit?.lastWorkingDay) : exit?.lastWorkingDay;
+        return {
+          employeeId: active.id,
+          role: active.role,
+          countryCode: active.countryCode,
+          joiningDate: person?.dateOfJoining,
+          lastWorkingDay,
+          unusedLeaveDays: Math.max(0, leaveTable.find((row) => row.code === "pto")?.balance ?? 0),
+          today: todayISO(),
+          location: active.location ?? person?.location,
+          nationality: person?.nationality,
+          employmentStatus: person?.employmentStatus,
+          regime: getTaxRegime(active.id),
+          investmentProofs: state.investmentProofs,
+          timesheets: state.timesheets,
+          orgTimesheets: state.orgTimesheets,
+        };
+      },
+      get payslipViews() {
+        const input = this.payInput;
+        const key = [active.id, input.regime, input.lastWorkingDay ?? "", input.unusedLeaveDays, input.today, input.employmentStatus ?? ""].join("|");
+        return cachedPayslips(state, key, () => generatePayslips(input).map((slip) => ({ ...slip, ...toPayslipView(slip) })));
       },
       currentProjects,
       previousProjects,

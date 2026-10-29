@@ -11,6 +11,8 @@ Run at API startup (never blocking it) and on demand with POST /api/v1/admin/job
   Leave, corrections and timesheet weeks in an approval chain are reminded through their approval instance.
 - archive_expired_cases(): retention rule for closed HR cases.
 - leave carry-forward into this year (app/services/leave_rules.py run_carry_forward; once per year).
+- complete_due_exits(): approved exits whose last working day has passed -> person "Exited", sign-in deactivated
+  (app/services/exits.py; only people with an approved exit are touched).
 """
 
 from __future__ import annotations
@@ -157,6 +159,9 @@ def run_all(db: Session, now: datetime | None = None) -> dict[str, Any]:
     from app.services.leave_rules import run_carry_forward_safely  # year-end leave carry-forward (idempotent per year)
 
     out["leave_carry_forward"] = run_carry_forward_safely(db, now.date())
+    from app.services.exits import complete_due_exits  # leavers past their last working day
+
+    out["exits_completed"] = len(complete_due_exits(db))
     return out
 
 

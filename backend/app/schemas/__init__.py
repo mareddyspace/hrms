@@ -121,6 +121,7 @@ class PersonFullOut(ORM):
     leave_policy_name: str | None
     payroll_status: str | None
     ai_profile_status: str | None
+    last_working_day: date | None = None  # set when an exit is approved (migration 0014)
     # Profile details (migration 0008). address_line, address_postcode and emergency_phone are always masked.
     company: str = "TimeZ"
     nationality: str | None = None
@@ -415,7 +416,7 @@ class WorkflowStep(BaseModel):
     label: str | None = Field(default=None, max_length=100)
     sla_hours: float | None = Field(default=None, gt=0, le=24 * 90)
     condition: WorkflowStepCondition | None = None
-    only_if: Literal["needs_hr"] | None = None
+    only_if: Literal["needs_hr", "via_manager"] | None = None
 
 
 class WorkflowIn(BaseModel):

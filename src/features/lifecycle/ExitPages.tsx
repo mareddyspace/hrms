@@ -1,4 +1,16 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { API_ENABLED } from "../../api/client.ts";
+import {
+  apiDecideExit,
+  apiMyNotice,
+  apiSetClearance,
+  apiSetSettlement,
+  apiSubmitInterview,
+  apiSubmitResignation,
+  apiWithdrawExit,
+} from "../../api/syncExits.ts";
+import { money } from "../../countryPay.ts";
+import { finalSettlementForCase } from "../../data/finalPay.ts";
 import {
   ActionButton,
   Banner,
@@ -57,8 +69,8 @@ function useExits() {
 function statusTone(status: ExitStatus): "ok" | "warn" | "danger" | "info" | "neutral" {
   if (status === "Completed") return "ok";
   if (status === "Accepted") return "info";
-  if (status === "Submitted") return "warn";
-  if (status === "Conversation requested") return "danger";
+  if (status === "Submitted" || status === "Manager approved") return "warn";
+  if (status === "Conversation requested" || status === "Rejected") return "danger";
   return "neutral";
 }
 
@@ -94,6 +106,15 @@ function ExitFacts({ row }: { row: ExitCase }) {
         <dt>Employee</dt>
         <dd>{row.employeeName}</dd>
       </div>
+      {row.api && (
+        <div>
+          <dt>Type</dt>
+          <dd>
+            {row.api.typeLabel}
+            {row.api.raisedById !== row.employeeId ? ` · raised by ${row.api.raisedBy}` : ""}
+          </dd>
+        </div>
+      )}
       <div>
         <dt>Country</dt>
         <dd>{exitCountry(row.employeeId)}</dd>
@@ -135,7 +156,21 @@ function ExitFacts({ row }: { row: ExitCase }) {
           <dd>{row.note}</dd>
         </div>
       )}
-      {row.decidedBy && (
+      {row.api && row.api.steps.length > 0 && (
+        <div style={{ gridColumn: "1 / -1" }}>
+          <dt>Approvals</dt>
+          <dd>
+            {row.api.steps
+              .map((st) =>
+                st.decision
+                  ? `${st.label}: ${st.decision === "approve" ? "approved" : "rejected"}${st.by ? ` by ${st.by}` : ""}${st.note ? ` — ${st.note}` : ""}`
+                  : `${st.label}: waiting`,
+              )
+              .join(" · ")}
+          </dd>
+        </div>
+      )}
+      {row.decidedBy && !row.api && (
         <div>
           <dt>Decision</dt>
           <dd>
@@ -171,6 +206,38 @@ function DecisionBlock({
 }) {
   const [note, setNote] = useState("");
   const [approveEarly, setApproveEarly] = useState(true);
+  if (API_ENABLED) {
+    if (!row.api?.canDecide) return null;
+    const run = async (decision: "approve" | "reject") => {
+      const error = await apiDecideExit(row.id, decision, note, row.earlyRelease ? approveEarly : undefined);
+      onMessage(error ? { tone: "err", text: error } : { tone: "ok", text: decision === "approve" ? `Approved for ${row.employeeName}.` : "Rejected." });
+      if (!error) setNote("");
+      return !error;
+    };
+    return (
+      <Card title="Decision">
+        <div className="stack">
+          {row.earlyRelease && (
+            <label className="lc-inline-check">
+              <input type="checkbox" checked={approveEarly} onChange={(e) => setApproveEarly(e.target.checked)} />
+              Approve early release to {formatShortDate(row.proposedLastDay)}
+            </label>
+          )}
+          <Field label="Note">
+            <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Needed to reject" />
+          </Field>
+          <div className="row-gap">
+            <ActionButton className="btn" busyLabel="Approving…" doneLabel="Approved" success={`Approved for ${row.employeeName}.`} onAction={() => run("approve")}>
+              Approve
+            </ActionButton>
+            <ActionButton className="btn-ghost" success="Rejected." onAction={() => run("reject")}>
+              Reject
+            </ActionButton>
+          </div>
+        </div>
+      </Card>
+    );
+  }
   if (row.status !== "Submitted" || !canActForEmployee(actor, row.employeeId)) return null;
 
   function decide(decision: "accept" | "conversation") {
@@ -237,7 +304,12 @@ function ClearanceList({ row, actor, onMessage }: { row: ExitCase; actor: Lifecy
                 checked={item.done}
                 disabled={!editable}
                 onChange={(e) => {
-                  const error = setClearanceItem(actor, row.id, item.id, e.target.checked);
+                  const done = e.target.checked;
+                  if (API_ENABLED) {
+                    void apiSetClearance(row.id, item.id, done).then((error) => onMessage(error ? { tone: "err", text: error } : null));
+                    return;
+                  }
+                  const error = setClearanceItem(actor, row.id, item.id, done);
                   onMessage(error ? { tone: "err", text: error } : null);
                 }}
               />
@@ -295,8 +367,9 @@ function InterviewForm({ row, actor, onMessage }: { row: ExitCase; actor: Lifecy
   const [comments, setComments] = useState("");
   const act = useAction();
 
-  function submit() {
-    const error = submitExitInterview(actor, row.id, { rating, reasons, wouldReturn, comments });
+  async function submit() {
+    const input = { rating, reasons, wouldReturn, comments };
+    const error = API_ENABLED ? await apiSubmitInterview(row.id, input) : submitExitInterview(actor, row.id, input);
     onMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Thank you — your exit interview was submitted." });
     return error ? false : true;
   }
@@ -356,6 +429,8 @@ function SettlementBlock({ row, actor, onMessage }: { row: ExitCase; actor: Life
   const next = SETTLEMENT_STEPS[SETTLEMENT_STEPS.indexOf(row.settlement) + 1];
   const canEdit =
     isHrRole(actor.role) && actor.id !== row.employeeId && (row.status === "Accepted" || row.status === "Completed");
+  const { state } = usePortal();
+  const summary = finalSettlementForCase(row, state);
   return (
     <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
       <span className="row-gap">
@@ -373,14 +448,38 @@ function SettlementBlock({ row, actor, onMessage }: { row: ExitCase; actor: Life
           busyLabel="Updating…"
           doneLabel="Updated"
           success={`Settlement for ${row.employeeName} marked ${next.toLowerCase()}.`}
-          onAction={() => {
-            const error = setSettlement(actor, row.id, next);
+          onAction={async () => {
+            const error = API_ENABLED ? await apiSetSettlement(row.id, next) : setSettlement(actor, row.id, next);
             onMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `Settlement marked ${next.toLowerCase()}.` });
             return error ? false : true;
           }}
         >
           Mark {next.toLowerCase()}
         </ActionButton>
+      )}
+      {summary && (
+        <dl className="lc-facts" style={{ width: "100%" }}>
+          <div>
+            <dt>Days paid · {formatShortDate(`${summary.month}-01`).slice(3)}</dt>
+            <dd>
+              {summary.paidDays} of {summary.totalDays} · to {formatShortDate(summary.lastWorkingDay)}
+            </dd>
+          </div>
+          <div>
+            <dt>Leave encashment</dt>
+            <dd>
+              {summary.encashmentDays} days · {money(summary.encashment, summary.currency)}
+            </dd>
+          </div>
+          <div>
+            <dt>Gross</dt>
+            <dd>{money(summary.gross, summary.currency)}</dd>
+          </div>
+          <div>
+            <dt>Net{summary.estimate ? " (estimate)" : ""}</dt>
+            <dd>{money(summary.net, summary.currency)}</dd>
+          </div>
+        </dl>
       )}
     </div>
   );
@@ -416,7 +515,7 @@ function ExitDetail({ row, onMessage }: { row: ExitCase; onMessage: (m: Message)
           </Card>
           <Card title="Exit interview">
             {!canSeeInterview(actor, row) ? (
-              <p className="muted">{row.interview ? "Submitted · confidential to HR" : "Not submitted yet"}</p>
+              <p className="muted">{row.interview || row.api?.interviewSubmitted ? "Submitted · confidential to HR" : "Not submitted yet"}</p>
             ) : row.interview ? (
               <InterviewAnswers interview={row.interview} />
             ) : (
@@ -428,7 +527,12 @@ function ExitDetail({ row, onMessage }: { row: ExitCase; onMessage: (m: Message)
               <SettlementBlock row={row} actor={actor} onMessage={onMessage} />
             </Card>
           )}
-          {hr && row.status === "Accepted" && (
+          {hr && row.status === "Accepted" && API_ENABLED && (
+            <Card title="Complete exit">
+              <p className="muted">Closes on its own after the last working day. Sign-in then stops.</p>
+            </Card>
+          )}
+          {hr && row.status === "Accepted" && !API_ENABLED && (
             <Card title="Complete exit">
               <div className="stack">
                 <p className="muted">
@@ -450,11 +554,29 @@ function ExitDetail({ row, onMessage }: { row: ExitCase; onMessage: (m: Message)
 
 /* ───────────── My exit ───────────── */
 
+/** Backend mode: notice days and earliest date from the server (country config). */
+function useServerNotice() {
+  const [notice, setNotice] = useState<{ days: number; earliest: string } | null>(null);
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let live = true;
+    apiMyNotice()
+      .then((n) => live && setNotice({ days: n.notice_days, earliest: n.earliest_last_day }))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  return notice;
+}
+
 function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessage: (m: Message) => void }) {
   const today = todayISO();
-  const noticeDays = noticeDaysFor(actor.id);
-  const earliest = earliestLastDay(actor.id, today);
-  const [lastDay, setLastDay] = useState(earliest);
+  const server = useServerNotice();
+  const noticeDays = server?.days ?? noticeDaysFor(actor.id);
+  const earliest = server?.earliest ?? earliestLastDay(actor.id, today);
+  const [picked, setLastDay] = useState("");
+  const lastDay = picked || earliest;
   const [reason, setReason] = useState("");
   const { value: note, setValue: setNote, ref: noteRef, fill: fillNote } = useTemplatedText();
   const [early, setEarly] = useState(false);
@@ -462,12 +584,13 @@ function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessag
   const act = useAction();
   const sentTo = lineManagerId(actor.id) ? `Resignation sent to ${personName(lineManagerId(actor.id)!)}.` : "Resignation recorded for the Board.";
 
-  function submit() {
+  async function submit() {
     if (hasTemplateBlanks(note)) {
       onMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
       return false;
     }
-    const error = submitResignation(actor, { proposedLastDay: lastDay, reason, note, earlyRelease: early && insideNotice });
+    const input = { proposedLastDay: lastDay, reason, note, earlyRelease: early && insideNotice };
+    const error = API_ENABLED ? await apiSubmitResignation(input) : submitResignation(actor, input);
     const toBoard = !lineManagerId(actor.id);
     onMessage(
       error
@@ -528,23 +651,33 @@ export function MyExitPage() {
   const [message, setMessage] = useState<Message>(null);
   const actor = demoProfile;
   const mine = cases.filter((c) => c.employeeId === actor.id);
-  const current = mine.find((c) => c.status === "Submitted" || c.status === "Accepted") ?? mine.find((c) => c.status === "Completed");
+  const current =
+    mine.find((c) => c.status === "Submitted" || c.status === "Manager approved" || c.status === "Accepted") ?? mine.find((c) => c.status === "Completed");
+  const canWithdraw = current ? (API_ENABLED ? Boolean(current.api?.canWithdraw) : current.status === "Submitted") : false;
   const history = mine.filter((c) => c !== current);
 
   return (
     <Page title="Resignation">
       <Banner message={message} />
+      {current?.status === "Accepted" && (
+        <Banner
+          message={{
+            tone: "info",
+            text: `Notice period · last working day ${formatShortDate(current.lastWorkingDay)}. You are paid up to that day; see My payslips.`,
+          }}
+        />
+      )}
       {!current && <ResignationForm actor={actor} onMessage={setMessage} />}
       {current && (
         <Card
           title="Resignation"
           action={
-            current.status === "Submitted" ? (
+            canWithdraw ? (
               <ActionButton
                 className="btn-ghost btn-tiny"
                 success="Resignation withdrawn."
-                onAction={() => {
-                  const error = withdrawResignation(actor, current.id);
+                onAction={async () => {
+                  const error = API_ENABLED ? await apiWithdrawExit(current.id) : withdrawResignation(actor, current.id);
                   setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Resignation withdrawn." });
                   return error ? false : true;
                 }}
@@ -565,6 +698,8 @@ export function MyExitPage() {
           <Card title="Exit interview">
             {current.interview ? (
               <InterviewAnswers interview={current.interview} />
+            ) : current.api?.interviewSubmitted ? (
+              <p className="muted">Sent to HR · confidential.</p>
             ) : current.status === "Accepted" ? (
               <InterviewForm row={current} actor={actor} onMessage={setMessage} />
             ) : (
@@ -590,15 +725,15 @@ export function MyExitPage() {
           />
         </Card>
       )}
-      <Card title="Notice periods">
-        <DataTable
-          headers={["Country", "Notice", "Basis"]}
-          rows={[
-            ...NOTICE_POLICY.map((p) => [p.country, `${p.days} days`, p.basis]),
-            ["Contractors (all countries)", "7 days", "Contract terms"],
-          ]}
-        />
-      </Card>
+      {/* Backend mode: notice comes from the server's country config (shown on the form). */}
+      {!API_ENABLED && (
+        <Card title="Notice periods">
+          <DataTable
+            headers={["Country", "Notice", "Basis"]}
+            rows={[...NOTICE_POLICY.map((p) => [p.country, `${p.days} days`, p.basis]), ["Contractors (all countries)", "7 days", "Contract terms"]]}
+          />
+        </Card>
+      )}
     </Page>
   );
 }
@@ -643,15 +778,18 @@ function ExitsBoard({ scope }: { scope: "team" | "all" }) {
   const visible = useMemo(
     () =>
       cases.filter((c) =>
-        c.employeeId !== actor.id && (scope === "all" ? hr : isAboveInLine(actor.id, c.employeeId)),
+        c.employeeId !== actor.id &&
+        (API_ENABLED ? (scope === "all" ? Boolean(c.api?.inAll) : Boolean(c.api?.inTeam)) : scope === "all" ? hr : isAboveInLine(actor.id, c.employeeId)),
       ),
     [cases, actor.id, scope, hr],
   );
   const today = todayISO();
-  const awaiting = visible.filter((c) => c.status === "Submitted");
+  const awaiting = visible.filter((c) => c.status === "Submitted" || c.status === "Manager approved");
   const clearing = visible.filter((c) => c.status === "Accepted");
-  const ready = clearing.filter((c) => !completionBlocker(c, today));
-  const closed = visible.filter((c) => c.status === "Completed" || c.status === "Withdrawn" || c.status === "Conversation requested");
+  const ready = API_ENABLED ? [] : clearing.filter((c) => !completionBlocker(c, today));
+  const closed = visible.filter(
+    (c) => c.status === "Completed" || c.status === "Withdrawn" || c.status === "Conversation requested" || c.status === "Rejected",
+  );
   const rows = tab === "open" ? [...awaiting, ...clearing] : tab === "closed" ? closed : visible;
   const selected = openId ? cases.find((c) => c.id === openId) : undefined;
 

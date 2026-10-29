@@ -55,7 +55,7 @@ function stepsSummary(steps: ApprovalStep[]): string {
         s.minAmount ? `from ${s.minAmount}` : "",
         s.minPercent ? `from ${s.minPercent}%` : "",
         s.condition?.values.length ? `${s.condition.field} ${s.condition.values.join("/")}` : "",
-        s.onlyIf === "needs_hr" ? "when HR is needed" : "",
+        s.onlyIf === "needs_hr" ? "when HR is needed" : s.onlyIf === "via_manager" ? "when the employee raised it" : "",
         s.slaHours ? `${s.slaHours} h limit` : "",
       ]
         .filter(Boolean)

@@ -36,7 +36,8 @@ export {
   type WorkArrangement,
 } from "./personProfileSeed.ts";
 
-export type EmploymentStatus = "Active" | "Onboarding" | "On Leave" | "Contractor" | "Terminated";
+/** "Notice period": an approved exit, still working until the last working day (backend mode). */
+export type EmploymentStatus = "Active" | "Onboarding" | "On Leave" | "Contractor" | "Notice period" | "Terminated";
 
 const PRE_START = new Set(["onboarding", "pre-boarding", "pre_boarding", "preboarding"]);
 
@@ -109,6 +110,8 @@ export interface PersonRecord {
   contractEndDate?: string;
   /** Date probation was completed (probation completion action). */
   confirmationDate?: string;
+  /** Last working day of an approved exit (backend mode: from the server). */
+  lastWorkingDay?: string;
   /** Latest rehire date, when the person left and came back. */
   rehireDate?: string;
   /** Current leave of absence, while the person is on one. */

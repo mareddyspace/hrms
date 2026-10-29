@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import { Card, Field, Page } from "../components/ui.tsx";
 import { legalEntityFor, money } from "../countryPay.ts";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
-import { asDetailView, generatePayslips } from "../data/payslipGenerator.ts";
+import { unusedLeaveFor } from "../data/finalPay.ts";
+import { asDetailView, finalSettlementFor, generatePayslips, type PayslipInput } from "../data/payslipGenerator.ts";
 import { getExitDetails, getPerson, listPeople } from "../data/peopleLocal.ts";
 import { getTaxRegime } from "../data/taxRegime.ts";
 import { getExitState } from "../features/lifecycle/exitStore.ts";
 import type { CountryCode } from "../model.ts";
-import { parseISODate, todayISO, toPayslipView } from "../model.ts";
+import { formatShortDate, parseISODate, todayISO, toPayslipView } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { TEAMMATES } from "../workforce.ts";
 import { PayslipBody, PayslipHead } from "./PayslipsPage.tsx";
@@ -103,17 +104,18 @@ export function PayPreviewPage() {
   const [month, setMonth] = useState("");
   const person = people.find((p) => p.id === personId);
 
-  const slips = useMemo(() => {
-    if (!person) return [];
+  const input = useMemo((): PayslipInput | null => {
+    if (!person) return null;
     const exit = getExitState().cases.find(
       (c) => c.employeeId === person.id && (c.status === "Accepted" || c.status === "Completed"),
     );
-    return generatePayslips({
+    return {
       employeeId: person.id,
       role: person.role,
       countryCode: person.countryCode,
       joiningDate: person.joiningDate,
-      lastWorkingDay: exit?.lastWorkingDay ?? person.exitDate,
+      lastWorkingDay: exit?.lastWorkingDay ?? getPerson(person.id)?.lastWorkingDay ?? person.exitDate,
+      unusedLeaveDays: exit ? unusedLeaveFor(exit, state) : undefined,
       today: todayISO(),
       location: person.location,
       nationality: person.nationality,
@@ -122,8 +124,10 @@ export function PayPreviewPage() {
       investmentProofs: state.investmentProofs,
       timesheets: state.timesheets,
       orgTimesheets: state.orgTimesheets,
-    }).map((slip) => ({ ...slip, ...toPayslipView(slip) }));
-  }, [person, state.investmentProofs, state.timesheets, state.orgTimesheets]);
+    };
+  }, [person, state]);
+  const slips = useMemo(() => (input ? generatePayslips(input).map((slip) => ({ ...slip, ...toPayslipView(slip) })) : []), [input]);
+  const settlement = useMemo(() => (input ? finalSettlementFor(input) : null), [input]);
 
   if (!allowed) {
     return (
@@ -175,6 +179,16 @@ export function PayPreviewPage() {
           </Field>
         </div>
       </Card>
+      {settlement && (
+        <Card title="Final settlement">
+          <p className="muted" style={{ margin: 0 }}>
+            Last working day {formatShortDate(settlement.lastWorkingDay)} · {settlement.paidDays} of {settlement.totalDays} days paid ·
+            leave encashment {settlement.encashmentDays} days ({money(settlement.encashment, settlement.currency)}) · gross{" "}
+            {money(settlement.gross, settlement.currency)} · net {money(settlement.net, settlement.currency)}
+            {settlement.estimate ? " · estimate" : ""}
+          </p>
+        </Card>
+      )}
       {person && slip && detail ? (
         <Card className="pay-sheet">
           <p className="muted" style={{ margin: "0 0 12px" }}>

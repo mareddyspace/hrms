@@ -23,6 +23,7 @@ from app.services.pii import EMPLOYEE_FIELDS, audit_reveal, can_reveal_employee
 router = APIRouter(prefix="/people", tags=["people"])
 
 NOT_FOUND = HTTPException(404, "Person not found.")
+LEFT_STATUSES = ("Terminated", "Exited")
 
 
 def present(user: CurrentUser, emp: Employee, manager_name: str | None) -> PersonBasicOut | PersonFullOut:
@@ -36,7 +37,7 @@ def present(user: CurrentUser, emp: Employee, manager_name: str | None) -> Perso
 
 def _directory_filter(user: CurrentUser):  # type: ignore[no-untyped-def]
     """People who have left stay visible only to those whose scope covers them."""
-    return or_(Employee.employment_status != "Terminated", user.scope.employee_filter())
+    return or_(Employee.employment_status.not_in(LEFT_STATUSES), user.scope.employee_filter())
 
 
 @router.get("", response_model=Page[PersonOut])
@@ -89,7 +90,7 @@ def list_people(
 
 def _get_visible(db: DbSession, user: CurrentUser, person_id: str) -> Employee:
     emp = db.get(Employee, person_id)
-    if emp is None or (emp.employment_status == "Terminated" and not user.scope.can_see(emp)):
+    if emp is None or (emp.employment_status in LEFT_STATUSES and not user.scope.can_see(emp)):
         raise NOT_FOUND
     return emp
 

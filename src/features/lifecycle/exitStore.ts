@@ -1,3 +1,5 @@
+import { API_ENABLED } from "../../api/client.ts";
+import { exitsMirror } from "../../api/syncExits.ts";
 import type { DemoAccount } from "../../demoAccounts.ts";
 import { getPerson, upsertPerson, type LocalPersonRecord } from "../../data/peopleLocal.ts";
 import { addLetterRequest } from "../../data/rewardLocal.ts";
@@ -18,7 +20,8 @@ import {
 
 const KEY = "kastech.exits.v1";
 
-export type ExitStatus = "Submitted" | "Accepted" | "Conversation requested" | "Withdrawn" | "Completed";
+/** "Manager approved" and "Rejected" come from the backend only ("Accepted" = the server's "Approved"). */
+export type ExitStatus = "Submitted" | "Manager approved" | "Accepted" | "Conversation requested" | "Rejected" | "Withdrawn" | "Completed";
 /** Who accepts the resignation: someone above the person, or the Board for the CEO. */
 export const BOARD = "Board";
 export type ClearanceOwner = "employee" | "manager" | "it" | "finance" | "hr";
@@ -64,6 +67,8 @@ export interface ClearanceItem {
   doneBy?: string;
   doneById?: string;
   doneOn?: string;
+  /** Backend mode: whether the signed-in person may tick it (the server decides). */
+  canTick?: boolean;
 }
 
 export interface ExitInterview {
@@ -102,11 +107,31 @@ export interface ExitCase {
   completionNote?: string;
   /** Set when the company starts the exit (e.g. probation not confirmed) rather than a resignation. */
   kind?: "Resignation" | "Probation not confirmed";
+  /** Backend mode only: what the server adds (approval steps, what this viewer may do, settlement days). */
+  api?: ExitApiExtras;
+}
+
+export interface ExitApiExtras {
+  exitType: string;
+  typeLabel: string;
+  standardLastDay: string;
+  earlyReleaseApproved: boolean | null;
+  raisedById: string;
+  raisedBy: string;
+  steps: { label: string; decision: string | null; by: string | null; note: string | null; on: string | null }[];
+  canDecide: boolean;
+  canWithdraw: boolean;
+  interviewSubmitted: boolean;
+  /** Unused privilege leave paid out in the final settlement (leaver and HR only). */
+  unusedLeaveDays?: number;
+  settlementFrozen?: boolean;
+  inTeam: boolean;
+  inAll: boolean;
 }
 
 type ExitState = { cases: ExitCase[] };
 
-export const OPEN_EXIT_STATUSES: ExitStatus[] = ["Submitted", "Accepted"];
+export const OPEN_EXIT_STATUSES: ExitStatus[] = ["Submitted", "Manager approved", "Accepted"];
 
 function buildClearance(caseId: string, assets: Pick<AssetAssignment, "id" | "name" | "tag">[]): ClearanceItem[] {
   const items: ClearanceItem[] = assets.map((asset) => ({
@@ -203,6 +228,7 @@ function write(state: ExitState): LifecycleResult {
 }
 
 export function subscribeExits(listener: () => void) {
+  if (API_ENABLED) return exitsMirror.subscribe(listener);
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -211,6 +237,7 @@ export function subscribeExits(listener: () => void) {
 
 /** Stable snapshot for useSyncExternalStore. */
 export function getExitState(): ExitState {
+  if (API_ENABLED) return exitsMirror.get();
   if (!cache) cache = read();
   return cache;
 }
@@ -239,10 +266,12 @@ export function earliestLastDay(employeeId: string, from = todayISO()): string {
 
 /** Exit interview answers are confidential: only the leaver and HR may read them. */
 export function canSeeInterview(actor: LifecycleActor, row: ExitCase): boolean {
+  if (API_ENABLED) return Boolean(row.interview); // the server sends the answers to HR only
   return actor.id === row.employeeId || isHrRole(actor.role);
 }
 
 export function canTickItem(actor: LifecycleActor, row: ExitCase, item: ClearanceItem): boolean {
+  if (API_ENABLED) return Boolean(item.canTick);
   if (row.status !== "Accepted") return false;
   if (actor.id === row.employeeId) return item.owner === "employee";
   switch (item.owner) {

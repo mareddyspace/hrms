@@ -86,6 +86,8 @@ class Employee(TimestampMixin, Base):
     education: Mapped[list[dict] | None] = mapped_column(JSON)  # [{degree, institution, year}]
     experience: Mapped[list[dict] | None] = mapped_column(JSON)  # [{employer, title, from, to}]
     career_goals: Mapped[str | None] = mapped_column(Text)
+    # Set when an exit is approved (migration 0014); status goes "Notice period", then "Exited" after this day.
+    last_working_day: Mapped[date | None] = mapped_column(Date)
 
 
 class EmployeeAssignment(TimestampMixin, Base):
