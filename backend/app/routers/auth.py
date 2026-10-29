@@ -13,7 +13,8 @@ from app.models import Account, RefreshToken
 from app.schemas import ChangePasswordIn, LoginIn, MeOut, RefreshIn, TokenOut
 from app.schemas.account_security import MfaLoginOut, MfaVerifyIn
 from app.security import (
-    create_access_token, create_mfa_token, create_refresh_token, decode_token, hash_password, verify_password,
+    create_access_token, create_mfa_token, create_refresh_token, decode_token, hash_password, password_needs_rehash,
+    verify_password,
 )
 from app.services import mfa
 from app.services.activity import record_audit
@@ -98,6 +99,9 @@ def login(body: LoginIn, request: Request, db: DbSession) -> MfaLoginOut:
     if not account.active or not verify_password(body.password, account.password_hash):
         _failed_attempt(db, account, request, "login_failed")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, LOGIN_FAILED)
+    if password_needs_rehash(account.password_hash):
+        # Upgrade older hashes to the current settings now that we have the plain password.
+        account.password_hash = hash_password(body.password)
 
     if account.mfa_enabled and account.mfa_secret:
         account.failed_attempts = 0
