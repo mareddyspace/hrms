@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Card, EmptyState, Page, Tabs } from "../components/ui.tsx";
+import { Card, EmptyState, Page, SubmitButton, Tabs, notify as toast, useAction } from "../components/ui.tsx";
 import { usePortal } from "../store.tsx";
 import { managementChain } from "../demoAccounts.ts";
 import { allReportIds, getPerson } from "../data/peopleLocal.ts";
@@ -132,13 +131,19 @@ export function MailPage() {
     startCompose(manager?.id ?? "");
   }
 
-  function onSend(event: FormEvent) {
-    event.preventDefault();
+  const sendAction = useAction();
+
+  function fail(text: string) {
+    setError(text);
+    return false;
+  }
+
+  function onSend() {
     setError("");
-    if (!toId) return setError("Choose who to send this to.");
-    if (!subject.trim()) return setError("Add a subject.");
-    if (!body.trim()) return setError("Write a message.");
-    if (!recipients.some((r) => r.id === toId)) return setError("You can only write to your reporting line, HR or your team here.");
+    if (!toId) return fail("Choose who to send this to.");
+    if (!subject.trim()) return fail("Add a subject.");
+    if (!body.trim()) return fail("Write a message.");
+    if (!recipients.some((r) => r.id === toId)) return fail("You can only write to your reporting line, HR or your team here.");
     const message = sendMail({
       fromId: me,
       fromName: employee.fullName,
@@ -153,9 +158,11 @@ export function MailPage() {
       text: `Sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.`,
       href: mailtoHref(message.toIds.map(emailOf).filter(Boolean), message.ccIds.map(emailOf).filter(Boolean), message.subject, message.body),
     });
+    toast(`Mail sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.`);
     setSubject("");
     setBody("");
     setCcIds([]);
+    return true;
   }
 
   function notify(ids: string[], subj: string, threadId: string) {
@@ -205,7 +212,7 @@ export function MailPage() {
 
       {view === "compose" ? (
         <Card title="New message">
-          <form className="mail-compose" onSubmit={onSend}>
+          <form className="mail-compose" onSubmit={sendAction.submit(onSend)}>
             <div className="mail-templates" aria-label="Quick templates">
               {TEMPLATES.map((t) => (
                 <button key={t.label} type="button" className="btn-ghost mail-chip" onClick={() => startCompose(undefined, t)}>
@@ -286,9 +293,9 @@ export function MailPage() {
               </p>
             )}
             <div className="mail-actions">
-              <button className="btn" type="submit">
+              <SubmitButton action={sendAction} className="btn">
                 Send
-              </button>
+              </SubmitButton>
               <a
                 className="btn-ghost"
                 href={mailtoHref(
@@ -438,9 +445,13 @@ function ThreadView({
   const ccIds = mode === "all" ? allIds.filter((id) => !replyTo.includes(id)) : [];
   const subject = replySubject(thread.subject);
 
-  function send(event: FormEvent) {
-    event.preventDefault();
-    if (!body.trim()) return setError("Write a reply.");
+  const replyAction = useAction();
+
+  function send() {
+    if (!body.trim()) {
+      setError("Write a reply.");
+      return false;
+    }
     const message = sendMail({ fromId: me, fromName: myName, toIds, ccIds, subject, body, category: thread.category, threadId: thread.threadId });
     onSent([...message.toIds, ...message.ccIds], message.subject);
     const offline = [...message.toIds, ...message.ccIds].filter((id) => !canSignIn(id));
@@ -448,9 +459,11 @@ function ThreadView({
       `Sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.` +
         (offline.length ? ` ${offline.map(nameOf).join(", ")} can't sign in yet; use your email app to reach them too.` : ""),
     );
+    toast(`Reply sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.`);
     setBody("");
     setMode(null);
     setError("");
+    return true;
   }
 
   return (
@@ -476,7 +489,7 @@ function ThreadView({
         </p>
       )}
       {mode ? (
-        <form className="mail-reply" onSubmit={send}>
+        <form className="mail-reply" onSubmit={replyAction.submit(send)}>
           <p className="note">
             {mode === "all" ? "Reply all" : "Reply"} to {toIds.map(nameOf).join(", ")}
             {ccIds.length > 0 && <> · Cc {ccIds.map(nameOf).join(", ")}</>}
@@ -484,9 +497,9 @@ function ThreadView({
           <textarea value={body} rows={5} onChange={(e) => setBody(e.target.value)} aria-label="Reply" autoFocus />
           {error && <p className="note err">{error}</p>}
           <div className="mail-actions">
-            <button className="btn" type="submit">
+            <SubmitButton action={replyAction} className="btn">
               Send
-            </button>
+            </SubmitButton>
             <a className="btn-ghost" href={mailtoHref(toIds.map(emailOf).filter(Boolean), ccIds.map(emailOf).filter(Boolean), subject, body)}>
               Open in email app
             </a>

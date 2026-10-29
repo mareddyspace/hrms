@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Banner } from "../../components/ui.tsx";
+import { ActionButton, Banner } from "../../components/ui.tsx";
 import type { JobProfile } from "../../data/peopleData.ts";
 import { saveJobProfileAsync, type OrgActor } from "../../data/orgStructureLocal.ts";
 import { draftJobDescription, formatJobDraft, similarRoles, type JobDraftInput } from "./jobDescription.ts";
@@ -33,7 +33,6 @@ export function JobDescriptionWriter({
   const [variant, setVariant] = useState(0);
   const [text, setText] = useState(() => (autoStart && input.title.trim() ? formatJobDraft(input.title, draftJobDescription(input, 0)) : ""));
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const [saving, setSaving] = useState(false);
   const draft = useMemo(() => draftJobDescription(input, variant), [input, variant]);
   const similar = useMemo(
     () => similarRoles({ id: profile?.id, title: input.title, familyName: input.familyName, gradeBand: input.gradeBand }, profiles),
@@ -57,16 +56,15 @@ export function JobDescriptionWriter({
   }
 
   async function save() {
-    if (!profile || saving) return;
-    setSaving(true);
+    if (!profile) return false;
     const result = await saveJobProfileAsync(actor, profile.id, {
       title: profile.title,
       familyName: profile.familyName,
       gradeBand: profile.gradeBand,
       description: text,
     });
-    setSaving(false);
     setMessage(result ? { tone: "err", text: result } : { tone: "ok", text: `Saved to ${profile.title}.` });
+    return result;
   }
 
   return (
@@ -86,9 +84,9 @@ export function JobDescriptionWriter({
           </button>
         )}
         {text && !onUseText && canSave && profile && (
-          <button type="button" className="btn-ghost btn-tiny" disabled={saving} onClick={() => void save()}>
-            {saving ? "Saving…" : "Save to job profile"}
-          </button>
+          <ActionButton className="btn-ghost btn-tiny" onAction={save} success={`Job description saved to ${profile.title}.`}>
+            Save to job profile
+          </ActionButton>
         )}
         {text && !onUseText && !profile && <span className="muted">Link a job profile to save this.</span>}
       </div>

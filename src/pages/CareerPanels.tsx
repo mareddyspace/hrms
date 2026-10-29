@@ -1,6 +1,6 @@
-import { useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
-import { Banner, Card, DataTable, EmptyState, Field, StatusBadge } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, EmptyState, Field, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { SKILL_LIBRARY, TARGET_ROLES, type Course } from "../data/talentData.ts";
 import { API_ENABLED } from "../api/client.ts";
 import {
@@ -33,6 +33,7 @@ import {
   talentAction,
   type CareerTimeframe,
   type TalentActor,
+  type TalentResult,
 } from "../data/talentLocal.ts";
 import { rankRoles, type RoleMatch } from "../data/careerMatch.ts";
 import { openPostings } from "../features/talentplus/jobBoardStore.ts";
@@ -61,6 +62,11 @@ const roleTitle = (id: string) => targetRoles().find((r) => r.id === id)?.title 
 
 function personName(id: string): string {
   return getPerson(id)?.fullName ?? taskPersonById(id)?.fullName ?? id;
+}
+
+/** talentAction as a promise, so the button waits for the backend call. */
+function runTalent(change: () => TalentResult): Promise<TalentResult> {
+  return new Promise((resolve) => talentAction(change, resolve));
 }
 
 function plusDays(days: number): string {
@@ -93,20 +99,18 @@ function InterestsForm({ me, saved, mentor }: { me: TalentActor; saved: ReturnTy
     set(current.includes(value) ? current.filter((v) => v !== value) : [...current, value]);
 
   const ok = { tone: "ok" as const, text: "Career interests saved. Your manager and HR can see them." };
-  function submit(e: FormEvent) {
-    e.preventDefault();
+  const saveAct = useAction();
+  async function submit() {
     const input = { targetRoleIds: roles, functions, openToRelocation: relocate, timeframe, note };
-    if (API_ENABLED) {
-      void apiSaveCareerProfile(input).then((error) => setNotice(error ? { tone: "err", text: error } : ok));
-      return;
-    }
-    const error = saveCareerInterests(me, input, TARGET_ROLES.map((r) => r.id));
+    const error = API_ENABLED ? await apiSaveCareerProfile(input) : saveCareerInterests(me, input, TARGET_ROLES.map((r) => r.id));
     setNotice(error ? { tone: "err", text: error } : ok);
+    if (!error) notify("Career interests saved and shared with your manager and HR.");
+    return error;
   }
 
   return (
     <Card title="My career interests">
-      <form className="stack" onSubmit={submit}>
+      <form className="stack" onSubmit={saveAct.submit(submit)}>
         <Banner message={notice} />
         <p className="muted">
           Visible to you, your manager and HR. {saved ? `Last updated ${saved.updatedOn}.` : "Not shared yet."}
@@ -153,7 +157,7 @@ function InterestsForm({ me, saved, mentor }: { me: TalentActor; saved: ReturnTy
           </Field>
         </div>
         <div className="row-gap">
-          <button className="btn" type="submit">Save interests</button>
+          <SubmitButton action={saveAct} className="btn">Save interests</SubmitButton>
         </div>
       </form>
     </Card>
@@ -304,33 +308,33 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
                               {enrolled ? (
                                 <span className="muted">· Enrolled </span>
                               ) : (
-                                <button
+                                <ActionButton
                                   className="btn-ghost btn-tiny"
-                                  type="button"
-                                  onClick={() => {
-                                    talentAction(() => enrollInCourse(learner, c.id), (error) =>
-                                      setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Enrolled in ${c.title}.` }),
-                                    );
+                                  success={`Enrolled in ${c.title}.`}
+                                  onAction={async () => {
+                                    const error = await runTalent(() => enrollInCourse(learner, c.id));
+                                    setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Enrolled in ${c.title}.` });
+                                    return error;
                                   }}
                                 >
                                   Enroll
-                                </button>
+                                </ActionButton>
                               )}{" "}
                               {review &&
                                 (inPlan ? (
                                   <span className="muted">· In your plan</span>
                                 ) : (
-                                  <button
+                                  <ActionButton
                                     className="btn btn-tiny"
-                                    type="button"
-                                    onClick={() => {
-                                      talentAction(() => addDevAction(me, review.id, { title: text, due: plusDays(60) }), (error) =>
-                                        setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: "Added to your development plan." }),
-                                      );
+                                    success="Added to your development plan."
+                                    onAction={async () => {
+                                      const error = await runTalent(() => addDevAction(me, review.id, { title: text, due: plusDays(60) }));
+                                      setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: "Added to your development plan." });
+                                      return error;
                                     }}
                                   >
                                     Add to my development plan
-                                  </button>
+                                  </ActionButton>
                                 ))}
                             </li>
                           );
@@ -409,6 +413,7 @@ export function SkillsLibraryPanel({ me }: { me: TalentActor }) {
   const [category, setCategory] = useState<"technical" | "behavioural">("technical");
   const [area, setArea] = useState("");
   const [description, setDescription] = useState("");
+  const addAct = useAction();
   if (!API_ENABLED) {
     return (
       <Card title="Skills library">
@@ -417,20 +422,24 @@ export function SkillsLibraryPanel({ me }: { me: TalentActor }) {
     );
   }
   const canEdit = career.isHr && isHrRole(me.role);
-  const add = (e: FormEvent) => {
-    e.preventDefault();
+  const add = async () => {
     const clean = name.trim();
-    void apiAddSkill({ name: clean, category, area: area.trim(), description: description.trim() }).then((error) => {
-      setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Added ${clean}.` });
-      if (!error) {
-        setName("");
-        setArea("");
-        setDescription("");
-      }
-    });
+    const error = await apiAddSkill({ name: clean, category, area: area.trim(), description: description.trim() });
+    setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Added ${clean}.` });
+    if (!error) {
+      notify(`${clean} added to the skills library.`);
+      setName("");
+      setArea("");
+      setDescription("");
+    }
+    return error;
   };
-  const retire = (id: string, skillName: string) =>
-    void apiRetireSkill(id).then((error) => setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Retired ${skillName}.` }));
+  const retire = async (id: string, skillName: string) => {
+    const error = await apiRetireSkill(id);
+    setNotice(error ? { tone: "err", text: error } : { tone: "ok", text: `Retired ${skillName}.` });
+    if (!error) notify(`${skillName} retired.`);
+    return error;
+  };
   const courseTitle = (id: string) => courseCatalog().find((c) => c.id === id)?.title ?? id;
   return (
     <div className="stack">
@@ -450,9 +459,9 @@ export function SkillsLibraryPanel({ me }: { me: TalentActor }) {
             ...(canEdit
               ? [
                   s.active ? (
-                    <button key="r" className="btn-ghost btn-tiny" type="button" onClick={() => retire(s.id, s.name)}>
+                    <ActionButton key="r" className="btn-ghost btn-tiny" busyLabel="Retiring…" doneLabel="Retired" onAction={() => retire(s.id, s.name)}>
                       Retire
-                    </button>
+                    </ActionButton>
                   ) : (
                     <span key="r" className="muted">Retired</span>
                   ),
@@ -464,7 +473,7 @@ export function SkillsLibraryPanel({ me }: { me: TalentActor }) {
       </Card>
       {canEdit && (
         <Card title="Add a skill">
-          <form className="stack" onSubmit={add}>
+          <form className="stack" onSubmit={addAct.submit(add)}>
             <div className="form-grid-2">
               <Field label="Name">
                 <input value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
@@ -483,9 +492,9 @@ export function SkillsLibraryPanel({ me }: { me: TalentActor }) {
               </Field>
             </div>
             <div className="row-gap">
-              <button className="btn" type="submit" disabled={name.trim().length < 2}>
+              <SubmitButton action={addAct} className="btn" disabled={name.trim().length < 2}>
                 Add skill
-              </button>
+              </SubmitButton>
             </div>
           </form>
         </Card>

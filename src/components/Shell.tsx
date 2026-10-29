@@ -59,7 +59,8 @@ import { countWaitingOnMe } from "../pages/ApprovalsCenter.tsx";
 import { CopilotPopup } from "./CopilotPopup.tsx";
 import { NotesButton } from "./NotesPanel.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
-import { Banner, Dropdown, Field } from "./ui.tsx";
+import { ToastHost } from "./Toast.tsx";
+import { Banner, Dropdown, Field, SubmitButton, useAction } from "./ui.tsx";
 import { updatePreferences, useApplyPreferences } from "../data/preferences.ts";
 import { useApprovalReminders } from "../data/approvalReminders.ts";
 import { applyDueLifecycleActions } from "../features/lifecycle/lifecycleActionsStore.ts";
@@ -136,6 +137,7 @@ function WelcomeLoginDialog() {
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const passwordAction = useAction();
 
   if (!loginNotice) return null;
 
@@ -144,15 +146,16 @@ function WelcomeLoginDialog() {
     : null;
   const stale = loginNotice.requirePasswordChange;
 
-  async function submitPassword(event: FormEvent) {
-    event.preventDefault();
+  async function submitPassword() {
     const error = await changePasswordAfterStaleLogin(newPassword, confirm);
-    if (error) setMessage({ tone: "err", text: error });
-    else {
-      setNewPassword("");
-      setConfirm("");
-      setMessage({ tone: "ok", text: "Password updated. You can continue." });
+    if (error) {
+      setMessage({ tone: "err", text: error });
+      return false;
     }
+    setNewPassword("");
+    setConfirm("");
+    setMessage({ tone: "ok", text: "Password updated. You can continue." });
+    return true;
   }
 
   return (
@@ -185,7 +188,7 @@ function WelcomeLoginDialog() {
         {!stamp && !stale && <p className="note">No previous login recorded.</p>}
 
         {stale ? (
-          <form onSubmit={submitPassword}>
+          <form onSubmit={passwordAction.submit(submitPassword, { success: "Password updated." })}>
             <div className="stack" style={{ marginTop: 12 }}>
               <Field label="New password">
                 <input
@@ -206,9 +209,9 @@ function WelcomeLoginDialog() {
             </div>
             <Banner message={message} />
             <div className="form-actions">
-              <button className="btn" type="submit">
+              <SubmitButton action={passwordAction} className="btn">
                 Update password
-              </button>
+              </SubmitButton>
             </div>
           </form>
         ) : (
@@ -239,21 +242,23 @@ function usePasswordPolicyPrompt() {
   const visible = Boolean(signedIn && passwordPolicy.warn && !loginNotice?.requirePasswordChange);
   const due = passwordPolicy.due;
   const label = due ? "Change password" : `Change password (${passwordPolicy.daysRemaining}d left)`;
+  const changeAction = useAction();
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  async function submit() {
     const error = await changePassword(current, newPassword, confirm);
-    if (error) setMessage({ tone: "err", text: error });
-    else {
-      setCurrent("");
-      setNewPassword("");
-      setConfirm("");
-      setMessage({ tone: "ok", text: "Password updated." });
-      window.setTimeout(() => {
-        setOpen(false);
-        setMessage(null);
-      }, 1200);
+    if (error) {
+      setMessage({ tone: "err", text: error });
+      return false;
     }
+    setCurrent("");
+    setNewPassword("");
+    setConfirm("");
+    setMessage({ tone: "ok", text: "Password updated." });
+    window.setTimeout(() => {
+      setOpen(false);
+      setMessage(null);
+    }, 1200);
+    return true;
   }
 
   const modal = open ? (
@@ -262,7 +267,7 @@ function usePasswordPolicyPrompt() {
       <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="password-policy-title">
         <h2 id="password-policy-title">Change password</h2>
         <p className="modal-lede">Please set a new password every {PASSWORD_STALE_DAYS} days.</p>
-        <form onSubmit={submit}>
+        <form onSubmit={changeAction.submit(submit, { success: "Password updated." })}>
           <div className="stack" style={{ marginTop: 12 }}>
             <Field label="Current password">
               <input type="password" value={current} onChange={(event) => setCurrent(event.target.value)} autoComplete="current-password" />
@@ -279,9 +284,9 @@ function usePasswordPolicyPrompt() {
             <button className="btn-ghost" type="button" onClick={() => setOpen(false)}>
               Cancel
             </button>
-            <button className="btn" type="submit">
+            <SubmitButton action={changeAction} className="btn">
               Update password
-            </button>
+            </SubmitButton>
           </div>
         </form>
       </div>
@@ -690,6 +695,7 @@ export function Shell() {
       <WelcomeLoginDialog />
       {passwordPrompt.modal}
       <CopilotPopup />
+      <ToastHost />
     </div>
   );
 }

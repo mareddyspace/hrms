@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -10,6 +11,7 @@ import {
   MetricGrid,
   Page,
   StatusBadge,
+  notify,
 } from "../components/ui.tsx";
 import { appendAuditEntries } from "../data/auditTrail.ts";
 import { ADMIN_ROLES } from "../data/collabData.ts";
@@ -78,27 +80,38 @@ export function EmailOutboxPage() {
 
   async function markOne(row: EmailEvent) {
     const out = await markEmailsSentAnywhere([row.id]);
-    if ("error" in out) return setMessage({ tone: "err", text: out.error });
+    if ("error" in out) {
+      setMessage({ tone: "err", text: out.error });
+      return false;
+    }
     if (out.count > 0) {
       audit(1, "Marked sent");
       setMessage({ tone: "ok", text: `Marked sent to ${row.to}.` });
+      notify(`Email to ${row.recipientName || row.to} marked sent.`);
     }
+    return true;
   }
 
   async function sendAll() {
-    if (busy) return;
+    if (busy) return false;
     setBusy(true);
     const out = await markEmailsSentAnywhere("all");
     setBusy(false);
-    if ("error" in out) return setMessage({ tone: "err", text: out.error });
+    if ("error" in out) {
+      setMessage({ tone: "err", text: out.error });
+      return false;
+    }
     const count = out.count;
     if (count > 0) audit(count, "Sent queued");
     setMessage(count ? { tone: "ok", text: `${count} ${count === 1 ? "email" : "emails"} sent.` } : { tone: "info", text: "Nothing queued." });
+    if (count) notify(`${count} ${count === 1 ? "email" : "emails"} sent.`);
+    return true;
   }
 
   function clearSent() {
     const count = clearSentEmails();
     setMessage(count ? { tone: "ok", text: `Cleared ${count} sent ${count === 1 ? "email" : "emails"}.` } : { tone: "info", text: "No sent emails to clear." });
+    if (count) notify(`Cleared ${count} sent ${count === 1 ? "email" : "emails"}.`);
   }
 
   if (!isAdmin) {
@@ -113,9 +126,9 @@ export function EmailOutboxPage() {
     <Page
       title="Email outbox"
       action={
-        <button type="button" className="btn" disabled={queued === 0 || busy} onClick={() => void sendAll()}>
+        <ActionButton className="btn" disabled={queued === 0 || busy} onAction={sendAll}>
           Send all queued
-        </button>
+        </ActionButton>
       }
     >
       <MetricGrid>
@@ -146,9 +159,9 @@ export function EmailOutboxPage() {
           Search
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Recipient or subject" />
         </label>
-        <button type="button" className="btn-ghost" disabled={sent === 0} onClick={clearSent}>
+        <ActionButton className="btn-ghost" busyLabel="Clearing…" doneLabel="Cleared" disabled={sent === 0} onAction={clearSent}>
           Clear sent
-        </button>
+        </ActionButton>
       </FilterBar>
       <div className="collab-split">
         <Card title="Emails">
@@ -168,9 +181,9 @@ export function EmailOutboxPage() {
                   View
                 </button>
                 {r.status === "Queued" && (
-                  <button type="button" className="quiet-link" onClick={() => void markOne(r)}>
+                  <ActionButton className="quiet-link" doneLabel="Sent" onAction={() => markOne(r)}>
                     Mark sent
-                  </button>
+                  </ActionButton>
                 )}
               </span>,
             ])}

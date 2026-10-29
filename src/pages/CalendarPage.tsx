@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState } from "react";
 import { holidaysForPerson } from "../model.ts";
 import {
   Banner,
@@ -8,6 +8,10 @@ import {
   FilterBar,
   Page,
   StatusBadge,
+  SubmitButton,
+  ActionButton,
+  notify,
+  useAction,
 } from "../components/ui.tsx";
 import {
   CALENDAR_KIND_LABEL,
@@ -184,14 +188,15 @@ export function CalendarPage() {
     setCursor({ year: next.getFullYear(), month: next.getMonth() });
   }
 
-  function onAddReminder(event: FormEvent) {
-    event.preventDefault();
+  const reminderAction = useAction();
+
+  function onAddReminder(): boolean {
     const now = new Date();
     const nowHm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
     const invalid = reminderError({ title, date, time }, today, nowHm);
     if (invalid) {
       setError(invalid);
-      return;
+      return false;
     }
     setError("");
     saveLocalReminder({
@@ -206,13 +211,15 @@ export function CalendarPage() {
     setNote("");
     setSelected(date);
     setTick((n) => n + 1);
+    notify("Reminder saved.");
+    return true;
   }
 
   function onLocalAction(e: CalendarEvent, action: "remove" | "decline") {
     const err = action === "decline" ? declineLocalMeeting(e.id, employee.id) : removeLocalReminder(e.id, employee.id);
     if (err) {
       setNotice({ tone: "err", text: err });
-      return;
+      return false;
     }
     const done =
       action === "decline"
@@ -222,6 +229,8 @@ export function CalendarPage() {
           : "Reminder removed.";
     setNotice({ tone: "ok", text: done });
     setTick((n) => n + 1);
+    notify(done);
+    return true;
   }
 
   return (
@@ -359,18 +368,17 @@ export function CalendarPage() {
                     </p>
                     {e.description && <p className="note">{e.description}</p>}
                     {isLocalEvent(e) && e.kind === "meeting" && (
-                      <button
-                        type="button"
+                      <ActionButton
                         className="btn-ghost btn-tiny"
-                        onClick={() => onLocalAction(e, e.ownerId === employee.id ? "remove" : "decline")}
+                        onAction={() => onLocalAction(e, e.ownerId === employee.id ? "remove" : "decline")}
                       >
                         {e.ownerId === employee.id ? "Cancel meeting" : "Decline"}
-                      </button>
+                      </ActionButton>
                     )}
                     {isLocalEvent(e) && e.kind === "reminder" && e.ownerId === employee.id && (
-                      <button type="button" className="btn-ghost btn-tiny" onClick={() => onLocalAction(e, "remove")}>
+                      <ActionButton className="btn-ghost btn-tiny" onAction={() => onLocalAction(e, "remove")}>
                         Remove reminder
-                      </button>
+                      </ActionButton>
                     )}
                     {note && (
                       <span className="cal-note-actions">
@@ -399,7 +407,7 @@ export function CalendarPage() {
           </Card>
 
           <Card title="Add personal reminder">
-            <form className="stack" onSubmit={onAddReminder}>
+            <form className="stack" onSubmit={reminderAction.submit(onAddReminder)}>
               {error && <Banner message={{ tone: "err", text: error }} />}
               <Field label="Title">
                 <input value={title} onChange={(ev) => setTitle(ev.target.value)} placeholder="e.g. Prep for client call" />
@@ -415,9 +423,9 @@ export function CalendarPage() {
               <Field label="Note (optional)" wide>
                 <textarea rows={2} value={note} onChange={(ev) => setNote(ev.target.value)} placeholder="Short note…" />
               </Field>
-              <button className="btn" type="submit">
+              <SubmitButton action={reminderAction} className="btn">
                 Save reminder
-              </button>
+              </SubmitButton>
             </form>
           </Card>
         </div>

@@ -1,5 +1,5 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import type { PersonRecord } from "../../data/peopleData.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { DEMO_ACCOUNTS } from "../../demoAccounts.ts";
@@ -231,10 +231,14 @@ function BuilderPanel({
 
   function save(asNew: boolean) {
     const error = saveReport(actor, { id: asNew ? undefined : loaded?.id, name, definition });
-    if (error) return setMessage({ tone: "err", text: error });
+    if (error) {
+      setMessage({ tone: "err", text: error });
+      return false;
+    }
     const saved = getReportState().reports.find((r) => r.ownerId === actor.id && r.name.toLowerCase() === name.trim().replace(/\s+/g, " ").toLowerCase());
     setLoaded(saved ?? null);
     setMessage({ tone: "ok", text: `Saved "${saved?.name ?? name}".` });
+    return true;
   }
 
   const shownColumns = definition.columns;
@@ -382,13 +386,13 @@ function BuilderPanel({
           </div>
           <div className="dt-actions">
             {loaded && loaded.ownerId === actor.id && (
-              <button type="button" className="btn" disabled={!!invalid} onClick={() => save(false)}>
+              <ActionButton className="btn" disabled={!!invalid} success={`Report "${name.trim()}" updated.`} onAction={() => save(false)}>
                 Update report
-              </button>
+              </ActionButton>
             )}
-            <button type="button" className={loaded ? "btn-ghost" : "btn"} disabled={!!invalid} onClick={() => save(true)}>
+            <ActionButton className={loaded ? "btn-ghost" : "btn"} disabled={!!invalid} success={`Report "${name.trim()}" saved.`} onAction={() => save(true)}>
               Save as new report
-            </button>
+            </ActionButton>
             {loaded && (
               <button
                 type="button"
@@ -525,11 +529,15 @@ function SchedulesPanel({
   }
 
   function submit() {
-    if (!draft) return;
+    if (!draft) return false;
     const result = saveSchedule(actor, draft);
-    if (result) return setError(result);
+    if (result) {
+      setError(result);
+      return false;
+    }
     setDraft(null);
     setMessage({ tone: "ok", text: draft.id ? "Schedule updated." : "Schedule created." });
+    return true;
   }
 
   const reportName = (id: string) => allReports.find((r) => r.id === id)?.name ?? "Deleted report";
@@ -581,9 +589,13 @@ function SchedulesPanel({
             <button type="button" className="btn-ghost" onClick={() => setDraft(null)}>
               Cancel
             </button>
-            <button type="button" className="btn" onClick={submit}>
+            <ActionButton
+              className="btn"
+              success={() => (draft ? `Schedule for "${reportName(draft.reportId)}" saved.` : "Schedule saved.")}
+              onAction={submit}
+            >
               Save schedule
-            </button>
+            </ActionButton>
           </>
         }
       >

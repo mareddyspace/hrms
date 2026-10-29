@@ -1,11 +1,10 @@
 export { HelpPage } from "./CollabModules.tsx";
 import { useEffect, useState } from "react";
 import { DEMO_MODE } from "../demoMode.ts";
-import type { FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { COMPANY_NAME, PRODUCT_TAGLINE } from "../brand.ts";
-import { Banner, Card, Field, Page } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Field, Page, SubmitButton, useAction } from "../components/ui.tsx";
 import type { DemoAccount } from "../demoAccounts.ts";
 import { maskEmail, maskMobile } from "../model.ts";
 import { usePortal } from "../store.tsx";
@@ -48,6 +47,8 @@ export function LoginPage() {
   // Two-step sign-in: after the password, the code from the authenticator app (or a backup code).
   const [mfaStep, setMfaStep] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
+  const signInAction = useAction();
+  const resetAction = useAction();
 
   if (signedIn) return <Navigate to="/" replace />;
 
@@ -59,15 +60,14 @@ export function LoginPage() {
     return Object.keys(next).length === 0;
   }
 
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
+  async function onSubmit() {
     if (!validateLogin()) {
       setMessage({ tone: "err", text: "Fix the highlighted fields to continue." });
-      return;
+      return false;
     }
     if (mfaStep && !mfaCode.trim()) {
       setMessage({ tone: "err", text: "Enter the code from your app." });
-      return;
+      return false;
     }
     const error = await signIn(email, password, remember, mfaStep ? mfaCode : undefined);
     if (error === MFA_CODE_NEEDED) {
@@ -75,10 +75,14 @@ export function LoginPage() {
       setMfaCode("");
       setMessage({ tone: "info", text: error });
       window.setTimeout(() => document.querySelector<HTMLInputElement>(".login-card input[name=mfa-code]")?.focus(), 50);
-      return;
+      return false;
     }
-    if (error) setMessage({ tone: "err", text: error });
-    else navigate(apiMfaSetupRequired() ? "/settings/security" : "/");
+    if (error) {
+      setMessage({ tone: "err", text: error });
+      return false;
+    }
+    navigate(apiMfaSetupRequired() ? "/settings/security" : "/");
+    return true;
   }
 
   function leaveMfaStep() {
@@ -105,7 +109,7 @@ export function LoginPage() {
     const result = requestPasswordResetOtp(email, channel);
     if ("error" in result) {
       setMessage({ tone: "err", text: result.error });
-      return;
+      return false;
     }
     setOtpSent(true);
     setDemoOtp(result.code);
@@ -120,16 +124,15 @@ export function LoginPage() {
     });
   }
 
-  function onReset(event: FormEvent) {
-    event.preventDefault();
+  function onReset() {
     if (!otpSent) {
       setMessage({ tone: "err", text: "Send a verification code first." });
-      return;
+      return false;
     }
     const error = resetPasswordWithOtp(email, otp, newPassword, confirm);
     if (error) {
       setMessage({ tone: "err", text: error });
-      return;
+      return false;
     }
     setMode("login");
     setPassword("");
@@ -140,6 +143,7 @@ export function LoginPage() {
     setDemoOtp("");
     setSentTo("");
     setMessage({ tone: "ok", text: "Password updated. Sign in with your new password." });
+    return true;
   }
 
   function openForgot() {
@@ -172,7 +176,7 @@ export function LoginPage() {
     <div className="login-screen">
       {mode === "login" ? (
         <div className="login-layout">
-          <form className="login-card" onSubmit={onSubmit} noValidate>
+          <form className="login-card" onSubmit={signInAction.submit(onSubmit)} noValidate>
             <span className="mark" aria-hidden>
               TZ
             </span>
@@ -246,9 +250,14 @@ export function LoginPage() {
             </div>
             )}
             <div className="login-actions">
-              <button className="btn" type="submit">
+              <SubmitButton
+                action={signInAction}
+                className="btn"
+                busyLabel={mfaStep ? "Verifying…" : "Signing in…"}
+                doneLabel={mfaStep ? "Verified" : "Signed in"}
+              >
                 {mfaStep ? "Verify" : "Sign in"}
-              </button>
+              </SubmitButton>
               {mfaStep && (
                 <button className="btn-ghost" type="button" onClick={leaveMfaStep}>
                   Back
@@ -293,7 +302,7 @@ export function LoginPage() {
           )}
         </div>
       ) : (
-        <form className="login-card" onSubmit={onReset}>
+        <form className="login-card" onSubmit={resetAction.submit(onReset, { success: "Password updated." })}>
           <span className="mark" aria-hidden>
             TZ
           </span>
@@ -343,9 +352,9 @@ export function LoginPage() {
             </fieldset>
 
             <div className="form-actions" style={{ marginTop: 0 }}>
-              <button className="btn-ghost" type="button" onClick={sendResetOtp}>
+              <ActionButton className="btn-ghost" onAction={sendResetOtp} busyLabel="Sending…" doneLabel="OTP sent">
                 {otpSent ? "Resend OTP" : "Send OTP"}
-              </button>
+              </ActionButton>
             </div>
 
             {otpSent && (
@@ -391,9 +400,9 @@ export function LoginPage() {
             )}
           </div>
           <div className="login-actions">
-            <button className="btn" type="submit" disabled={!otpSent || otp.length !== 6}>
+            <SubmitButton action={resetAction} className="btn" disabled={!otpSent || otp.length !== 6} busyLabel="Resetting…" doneLabel="Password reset">
               Reset password
-            </button>
+            </SubmitButton>
           </div>
           <div className="login-forgot-row">
             <button className="login-forgot" type="button" onClick={backToLogin}>

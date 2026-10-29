@@ -1,7 +1,7 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState } from "react";
 import { API_ENABLED } from "../api/client.ts";
 import { apiUpdatePerson, type ApiHrProfileUpdate } from "../api/syncProfile.ts";
-import { Banner, Card, Dialog, Field } from "../components/ui.tsx";
+import { Banner, Card, Dialog, Field, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import {
   FILTER_OPTIONS,
   NATIONALITIES,
@@ -226,22 +226,23 @@ export function EmployeeFormDialog({
     if (current && !shown.includes(current)) shown.unshift(current);
     return shown;
   }, [people, managerQuery, draft.id, draft.managerId, isNew]);
+  const saveAction = useAction();
 
   if (!open) return null;
 
   const countryLocations = LOCATIONS[String(draft.countryCode)] ?? [];
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
+  function submit() {
     const nextErrors = validatePerson(draft, people, isNew, effectiveDate);
     setErrors(nextErrors);
-    if (nextErrors.length) return;
+    if (nextErrors.length) return false;
     const family = familyForDepartment(draft.department);
     const firstName = (draft.firstName ?? "").trim();
     const lastName = (draft.lastName ?? "").trim();
     const middleName = (draft.middleName ?? "").trim();
     // The display name is "First Last"; an existing name is kept when the name parts did not change.
     const namesChanged = !initial || initial.firstName !== firstName || initial.lastName !== lastName;
+    const savedName = namesChanged ? joinName(firstName, undefined, lastName) : draft.fullName.trim();
     onSave(
       {
         ...draft,
@@ -262,10 +263,12 @@ export function EmployeeFormDialog({
       },
       isNew ? draft.dateOfJoining : effectiveDate,
     );
+    notify(isNew ? `Employee added: ${savedName}.` : `Employee record saved for ${savedName}.`);
+    return true;
   }
 
   const form = (
-    <form className="stack" onSubmit={submit}>
+    <form className="stack" onSubmit={saveAction.submit(submit)}>
       {errors.length > 0 && <Banner message={{ tone: "err", text: errors.join(" ") }} />}
       <div className="form-grid-2">
         <Field label="First name">
@@ -442,9 +445,9 @@ export function EmployeeFormDialog({
         <button type="button" className="btn-ghost" onClick={onClose}>
           Cancel
         </button>
-        <button type="submit" className="btn">
+        <SubmitButton action={saveAction} className="btn">
           Save
-        </button>
+        </SubmitButton>
       </div>
     </form>
   );

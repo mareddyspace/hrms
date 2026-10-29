@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { API_ENABLED } from "../api/client.ts";
 import { countryConfigApi, type CountryConfig } from "../api/syncLeaveAdmin.ts";
-import { Banner, Card, Field } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Field, notify } from "../components/ui.tsx";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const LANGS = [
@@ -47,7 +47,10 @@ export function CountryServerConfigCard({ config, canEdit, onSaved }: { config: 
   const toggle = (list: string[], item: string, on: boolean) => (on ? [...list, item] : list.filter((x) => x !== item));
 
   const save = async () => {
-    if (!form.days.length) return setMsg({ tone: "err", text: "Pick at least one work day." });
+    if (!form.days.length) {
+      setMsg({ tone: "err", text: "Pick at least one work day." });
+      return false;
+    }
     try {
       const out = await countryConfigApi.update(config.code, {
         languages: form.languages.length ? form.languages : ["en"],
@@ -62,7 +65,10 @@ export function CountryServerConfigCard({ config, canEdit, onSaved }: { config: 
       setMsg({ tone: "ok", text: "Saved." });
     } catch (e) {
       setMsg({ tone: "err", text: e instanceof Error ? e.message : "Could not save." });
+      return false;
     }
+    notify(`Country rules saved for ${config.code}.`);
+    return true;
   };
 
   return (
@@ -118,7 +124,7 @@ export function CountryServerConfigCard({ config, canEdit, onSaved }: { config: 
           </Field>
           <div className="row-between" style={{ marginTop: 12 }}>
             <button className="btn-ghost" type="button" onClick={() => setEditing(false)}>Cancel</button>
-            <button className="btn" type="button" onClick={save}>Save</button>
+            <ActionButton className="btn" onAction={save}>Save</ActionButton>
           </div>
         </>
       )}

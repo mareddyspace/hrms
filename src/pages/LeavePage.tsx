@@ -1,7 +1,6 @@
 import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
-import { Banner, Card, Field, LeaveTable, Page, StatusBadge, StatusPill } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Field, LeaveTable, Page, StatusBadge, StatusPill, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { managementChain } from "../demoAccounts.ts";
 import type { BackdatedLeavePermission, LeaveCode, LeaveHalf } from "../model.ts";
 import {
@@ -145,11 +144,12 @@ export function LeavePage() {
     setHalfPart("first");
   }
 
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
+  const applyAction = useAction();
+
+  async function onSubmit(): Promise<boolean> {
     if (hasTemplateBlanks(reason)) {
       setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
-      return;
+      return false;
     }
     if (needsPermission) {
       const error = requestBackdatedPermission({ code, from, to, reason });
@@ -161,8 +161,10 @@ export function LeavePage() {
               text: `Permission request sent to ${approver?.fullName ?? "your manager"}. You can apply once it is approved.`,
             },
       );
-      if (!error) resetForm();
-      return;
+      if (error) return false;
+      notify(`Permission request sent to ${approver?.fullName ?? "your manager"}.`);
+      resetForm();
+      return true;
     }
     const error = await applyLeave({ code, from, to, reason, half });
     setMessage(
@@ -171,11 +173,14 @@ export function LeavePage() {
         : {
             tone: "ok",
             text: hasApprover
-              ? `Leave request submitted to ${approver?.fullName ?? "your manager"}.`
+              ? `Leave request sent to ${approver?.fullName ?? "your manager"} for approval.`
               : "Leave added to your calendar.",
           },
     );
-    if (!error) resetForm();
+    if (error) return false;
+    notify(hasApprover ? `Leave request sent to ${approver?.fullName ?? "your manager"} for approval.` : "Leave added to your calendar.");
+    resetForm();
+    return true;
   }
 
   function applyWithPermission(p: BackdatedLeavePermission) {
@@ -187,17 +192,21 @@ export function LeavePage() {
     setMessage({ tone: "ok", text: "Dates filled in. Review and submit." });
   }
 
-  function decide(id: string, decision: "approved" | "rejected", kind: "permission" | "leave") {
+  function decide(id: string, decision: "approved" | "rejected", kind: "permission" | "leave", who?: string) {
     const note = notes[id];
     const run =
       kind === "permission" ? Promise.resolve(decideBackdatedPermission(id, decision, note)) : setLeaveStatus(id, decision, note);
-    void run.then((error) => {
+    return run.then((error) => {
       setMessage(
         error
           ? { tone: "err", text: error }
           : { tone: "ok", text: decision === "approved" ? "Approved." : "Declined." },
       );
-      if (!error) setNotes((prev) => ({ ...prev, [id]: "" }));
+      if (!error) {
+        setNotes((prev) => ({ ...prev, [id]: "" }));
+        notify(`${kind === "permission" ? "Permission" : "Leave"} ${decision === "approved" ? "approved" : "declined"}${who ? ` for ${who}` : ""}.`);
+      }
+      return error;
     });
   }
 
@@ -251,12 +260,12 @@ export function LeavePage() {
                         placeholder="Note to employee (optional)"
                         aria-label={`Note for ${p.employeeName}`}
                       />
-                      <button type="button" className="btn btn-tiny" onClick={() => decide(p.id, "approved", "permission")}>
+                      <ActionButton className="btn btn-tiny" onAction={() => decide(p.id, "approved", "permission", p.employeeName)}>
                         Approve
-                      </button>
-                      <button type="button" className="btn-ghost btn-tiny" onClick={() => decide(p.id, "rejected", "permission")}>
+                      </ActionButton>
+                      <ActionButton className="btn-ghost btn-tiny" onAction={() => decide(p.id, "rejected", "permission", p.employeeName)}>
                         Decline
-                      </button>
+                      </ActionButton>
                     </div>
                   </li>
                 ))}
@@ -280,12 +289,12 @@ export function LeavePage() {
                         placeholder="Note to employee (optional)"
                         aria-label={`Note for ${nameOf(r.employeeId)}`}
                       />
-                      <button type="button" className="btn btn-tiny" onClick={() => decide(r.id, "approved", "leave")}>
+                      <ActionButton className="btn btn-tiny" onAction={() => decide(r.id, "approved", "leave", nameOf(r.employeeId))}>
                         Approve
-                      </button>
-                      <button type="button" className="btn-ghost btn-tiny" onClick={() => decide(r.id, "rejected", "leave")}>
+                      </ActionButton>
+                      <ActionButton className="btn-ghost btn-tiny" onAction={() => decide(r.id, "rejected", "leave", nameOf(r.employeeId))}>
                         Decline
-                      </button>
+                      </ActionButton>
                     </div>
                   </li>
                 ))}
@@ -318,16 +327,14 @@ export function LeavePage() {
                           </button>
                         )}
                         {p.status === "pending" && (
-                          <button
-                            type="button"
+                          <ActionButton
                             className="btn-ghost btn-tiny"
-                            onClick={() => {
-                              const error = withdrawBackdatedPermission(p.id);
-                              if (error) setMessage({ tone: "err", text: error });
-                            }}
+                            success="Permission request withdrawn."
+                            onError={(error) => setMessage({ tone: "err", text: error })}
+                            onAction={() => withdrawBackdatedPermission(p.id)}
                           >
                             Withdraw
-                          </button>
+                          </ActionButton>
                         )}
                       </div>
                     )}
@@ -393,16 +400,14 @@ export function LeavePage() {
                         </td>
                         <td>
                           {(request.status === "pending" || (request.status === "approved" && request.from > today)) && (
-                            <button
+                            <ActionButton
                               className="btn-ghost btn-tiny"
-                              type="button"
-                              onClick={async () => {
-                                const error = await setLeaveStatus(request.id, "withdrawn");
-                                if (error) setMessage({ tone: "err", text: error });
-                              }}
+                              success={request.status === "pending" ? "Leave request withdrawn." : "Leave cancelled."}
+                              onError={(error) => setMessage({ tone: "err", text: error })}
+                              onAction={() => setLeaveStatus(request.id, "withdrawn")}
                             >
                               {request.status === "pending" ? "Withdraw" : "Cancel leave"}
-                            </button>
+                            </ActionButton>
                           )}
                         </td>
                       </tr>
@@ -421,7 +426,7 @@ export function LeavePage() {
               </Link>
             </p>
           )}
-          <form onSubmit={onSubmit}>
+          <form onSubmit={applyAction.submit(onSubmit)}>
             <div className="form-grid">
               <Field label="Leave type" wide>
                 <select
@@ -493,9 +498,9 @@ export function LeavePage() {
               </p>
             )}
             <div className="form-actions">
-              <button className="btn" type="submit">
+              <SubmitButton action={applyAction}>
                 {needsPermission ? "Request permission" : hasApprover ? "Submit request" : "Record leave"}
-              </button>
+              </SubmitButton>
             </div>
             <Banner message={message} />
           </form>

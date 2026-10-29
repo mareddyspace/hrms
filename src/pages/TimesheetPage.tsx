@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import type { FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Field, Page, StatusPill, SubmitButton, notify, useAction } from "../components/ui.tsx";
+import { managementChain } from "../demoAccounts.ts";
 import {
   blockingLeave,
   holidaysForPerson,
@@ -277,16 +277,17 @@ export function TimesheetPage() {
     return "";
   }
 
-  async function onLog(event: FormEvent) {
-    event.preventDefault();
-    if (logKind === "leave") return;
+  const logAction = useAction();
+
+  async function onLog(): Promise<boolean> {
+    if (logKind === "leave") return false;
     if (logKind !== "project" && !workId) {
       setMessage({ tone: "err", text: `Pick a ${logKind}.` });
-      return;
+      return false;
     }
     if (offDays[date]) {
       setMessage({ tone: "err", text: `${formatShortDate(date)}: ${offDays[date]}. No hours on this day.` });
-      return;
+      return false;
     }
     const error = await addTimeEntry(projectId, weekStart, {
       date,
@@ -298,7 +299,10 @@ export function TimesheetPage() {
       ...(logKind === "project" ? {} : { workId, workLabel: workLabelFor(logKind, workId) }),
     });
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Time block added." });
-    if (!error) setLogOpen(false);
+    if (error) return false;
+    notify("Block added.");
+    setLogOpen(false);
+    return true;
   }
 
   // Week summary by what the time went on.
@@ -322,6 +326,9 @@ export function TimesheetPage() {
   async function onSubmitWeek() {
     const error = await submitWeekTimesheets(weekStart);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Week submitted for approval." });
+    if (error) return false;
+    notify(`Timesheet submitted to ${managementChain(employee.id)[0]?.fullName ?? "your manager"}.`);
+    return true;
   }
 
   const hourMarks = Array.from({ length: GRID_END - GRID_START + 1 }, (_, index) => GRID_START + index);
@@ -520,34 +527,36 @@ export function TimesheetPage() {
                         {/* Only the person's reporting line decides — never their own row. */}
                         {row.status === "submitted" && decides(row.personId) && (
                           <span className="form-actions">
-                            <button
+                            <ActionButton
                               className="btn btn-tiny"
-                              type="button"
-                              onClick={async () => {
+                              success={`${row.name}'s timesheet approved.`}
+                              onAction={async () => {
                                 const error = await setOrgTimesheetStatus(row.id, "approved");
                                 setMessage(
                                   error
                                     ? { tone: "err", text: error }
                                     : { tone: "ok", text: `${row.name}'s timesheet approved.` },
                                 );
+                                return error ? false : true;
                               }}
                             >
                               Approve
-                            </button>
-                            <button
+                            </ActionButton>
+                            <ActionButton
                               className="btn-ghost btn-tiny"
-                              type="button"
-                              onClick={async () => {
+                              success={`${row.name}'s timesheet sent back for changes.`}
+                              onAction={async () => {
                                 const error = await setOrgTimesheetStatus(row.id, "draft");
                                 setMessage(
                                   error
                                     ? { tone: "err", text: error }
                                     : { tone: "ok", text: `${row.name}'s timesheet sent back for changes.` },
                                 );
+                                return error ? false : true;
                               }}
                             >
                               Send back
-                            </button>
+                            </ActionButton>
                           </span>
                         )}
                         {row.status === "submitted" && !decides(row.personId) && (
@@ -583,9 +592,9 @@ export function TimesheetPage() {
           )}
         </span>
         {weekStatus !== "approved" && weekStatus !== "submitted" && (
-          <button className="btn btn-tiny" type="button" onClick={onSubmitWeek}>
+          <ActionButton className="btn btn-tiny" onAction={onSubmitWeek}>
             Submit for approval
-          </button>
+          </ActionButton>
         )}
       </div>
 
@@ -810,7 +819,7 @@ export function TimesheetPage() {
           <button className="modal-scrim" type="button" aria-label="Close" onClick={() => setLogOpen(false)} />
           <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="log-time-title">
             <h2 id="log-time-title">Log time</h2>
-            <form onSubmit={onLog}>
+            <form onSubmit={logAction.submit(onLog)}>
               <div className="stack" style={{ marginTop: 12 }}>
                 <div className="ts-worktype" role="radiogroup" aria-label="Log time against">
                   {(
@@ -946,9 +955,9 @@ export function TimesheetPage() {
                   {logKind === "leave" ? "Close" : "Cancel"}
                 </button>
                 {logKind !== "leave" && (
-                  <button className="btn" type="submit" disabled={logKind !== "project" && !workId}>
+                  <SubmitButton action={logAction} className="btn" disabled={logKind !== "project" && !workId}>
                     Add block
-                  </button>
+                  </SubmitButton>
                 )}
               </div>
             </form>

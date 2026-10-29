@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  ActionButton,
   Banner,
   Card,
   EmptyState,
@@ -10,6 +11,7 @@ import {
   Page,
   StatusBadge,
   StatusPill,
+  notify,
 } from "../components/ui.tsx";
 import {
   ensureTaskExtras,
@@ -391,11 +393,11 @@ export function TasksPage() {
     action: "accept" | "start" | "progress" | "block" | "unblock" | "help" | "review" | "complete",
     payload?: { progressPct?: number; blockedReason?: string; dependsOn?: string; comment?: string },
   ) {
-    if (!selected) return;
+    if (!selected) return false;
     const error = taskAction(selected.id, action, payload);
     if (error) {
       setMessage({ tone: "err", text: error });
-      return;
+      return false;
     }
     const labels: Record<typeof action, string> = {
       accept: "Task accepted.",
@@ -408,12 +410,14 @@ export function TasksPage() {
       complete: "Task marked complete.",
     };
     setMessage({ tone: "ok", text: labels[action] });
+    notify(labels[action]);
     setShowBlockForm(false);
     setShowHelpForm(false);
     setBlockReason("");
     setBlockDepends("");
     setHelpDraft("");
     if (action === "complete") setTab("closed");
+    return true;
   }
 
   const canActOnSelected =
@@ -674,23 +678,24 @@ export function TasksPage() {
             <button type="button" className="btn-ghost" onClick={() => { setShowCreate(false); setDraft(emptyDraft()); }}>
               Cancel
             </button>
-            <button
-              type="button"
+            <ActionButton
               className="btn"
-              onClick={() => {
+              onAction={() => {
                 const error = createTask({ ...draft, client: draft.client.trim() || "Internal" });
                 if (error) {
                   setMessage({ tone: "err", text: error });
-                  return;
+                  return false;
                 }
                 setMessage({ tone: "ok", text: "Task created. The owner and everyone on CC have been notified." });
+                notify("Task created. The owner and everyone on CC have been notified.");
                 setShowCreate(false);
                 setDraft(emptyDraft());
                 setTab("open");
+                return true;
               }}
             >
               Create task
-            </button>
+            </ActionButton>
           </div>
         </Card>
       )}
@@ -1143,19 +1148,20 @@ export function TasksPage() {
                               placeholder="Add a comment…"
                               style={{ flex: 1 }}
                             />
-                            <button
-                              type="button"
+                            <ActionButton
                               className="btn-ghost"
-                              onClick={() => {
+                              success="Comment added."
+                              onAction={() => {
                                 const error = addTaskComment(selected.id, commentDraft);
                                 setMessage(
                                   error ? { tone: "err", text: error } : { tone: "ok", text: "Comment added." },
                                 );
                                 if (!error) setCommentDraft("");
+                                return error;
                               }}
                             >
                               Post
-                            </button>
+                            </ActionButton>
                           </div>
                         )}
                       </div>
@@ -1191,21 +1197,22 @@ export function TasksPage() {
                               style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
                             >
                               {taskPersonLabel(pid)}
-                              <button
-                                type="button"
+                              <ActionButton
                                 className="btn-ghost"
                                 style={{ padding: "0 4px", minHeight: 0, fontSize: 12 }}
-                                onClick={() => {
+                                success={`${taskPersonLabel(pid)} removed from the task.`}
+                                onAction={() => {
                                   const error = removeTaskPerson(selected.id, pid);
                                   setMessage(
                                     error
                                       ? { tone: "err", text: error }
                                       : { tone: "ok", text: "Person removed." },
                                   );
+                                  return error;
                                 }}
                               >
                                 Remove
-                              </button>
+                              </ActionButton>
                             </span>
                           ))}
                         </div>
@@ -1246,20 +1253,21 @@ export function TasksPage() {
                                   </option>
                                 ))}
                               </select>
-                              <button
-                                type="button"
+                              <ActionButton
                                 className="btn-ghost"
                                 disabled={!addPersonId}
-                                onClick={() => {
+                                success={`${taskPersonLabel(addPersonId)} added to the task.`}
+                                onAction={() => {
                                   const error = addTaskPerson(selected.id, addPersonId);
                                   setMessage(
                                     error ? { tone: "err", text: error } : { tone: "ok", text: "Person added." },
                                   );
                                   if (!error) setAddPersonId("");
+                                  return error;
                                 }}
                               >
                                 Add
-                              </button>
+                              </ActionButton>
                             </div>
                           </label>
                         </div>
@@ -1280,17 +1288,17 @@ export function TasksPage() {
                           selected.status === "open" &&
                           !selected.accepted &&
                           !selectedBlocked && (
-                            <button type="button" className="btn" onClick={() => runAction("accept")}>
+                            <ActionButton className="btn" busyLabel="Accepting…" doneLabel="Accepted" onAction={() => runAction("accept")}>
                               Accept task
-                            </button>
+                            </ActionButton>
                           )}
                         {canActOnSelected &&
                           selected.status === "open" &&
                           selected.accepted &&
                           !selectedBlocked && (
-                            <button type="button" className="btn" onClick={() => runAction("start")}>
+                            <ActionButton className="btn" busyLabel="Starting…" doneLabel="Started" onAction={() => runAction("start")}>
                               Start task
-                            </button>
+                            </ActionButton>
                           )}
                         {canActOnSelected &&
                           selected.status === "progress" &&
@@ -1307,13 +1315,9 @@ export function TasksPage() {
                                   onChange={(e) => setProgressDraft(Number(e.target.value))}
                                 />
                               </label>
-                              <button
-                                type="button"
-                                className="btn-ghost"
-                                onClick={() => runAction("progress", { progressPct: progressDraft })}
-                              >
+                              <ActionButton className="btn-ghost" onAction={() => runAction("progress", { progressPct: progressDraft })}>
                                 Update progress
-                              </button>
+                              </ActionButton>
                               <button
                                 type="button"
                                 className="btn-ghost"
@@ -1335,13 +1339,13 @@ export function TasksPage() {
                                 Request help
                               </button>
                               {selectedIsOwn ? (
-                                <button type="button" className="btn-ghost" onClick={() => runAction("review")}>
+                                <ActionButton className="btn-ghost" onAction={() => runAction("review")}>
                                   Submit for review
-                                </button>
+                                </ActionButton>
                               ) : (
-                                <button type="button" className="btn" onClick={() => runAction("complete")}>
+                                <ActionButton className="btn" doneLabel="Completed" onAction={() => runAction("complete")}>
                                   Mark complete
-                                </button>
+                                </ActionButton>
                               )}
                             </>
                           )}
@@ -1349,24 +1353,20 @@ export function TasksPage() {
                           <>
                             {/* Only the reviewer completes; the owner waits for review. */}
                             {!selectedIsOwn && (
-                              <button type="button" className="btn" onClick={() => runAction("complete")}>
+                              <ActionButton className="btn" doneLabel="Completed" onAction={() => runAction("complete")}>
                                 Mark complete
-                              </button>
+                              </ActionButton>
                             )}
-                            <button
-                              type="button"
-                              className="btn-ghost"
-                              onClick={() => runAction("progress", { progressPct: Math.min(progressDraft, 89) })}
-                            >
+                            <ActionButton className="btn-ghost" doneLabel="Returned" onAction={() => runAction("progress", { progressPct: Math.min(progressDraft, 89) })}>
                               Return to in progress
-                            </button>
+                            </ActionButton>
                           </>
                         )}
                         {canActOnSelected && selectedBlocked && (
                           <>
-                            <button type="button" className="btn" onClick={() => runAction("unblock")}>
+                            <ActionButton className="btn" busyLabel="Clearing…" doneLabel="Cleared" onAction={() => runAction("unblock")}>
                               Clear blocker
-                            </button>
+                            </ActionButton>
                             <button
                               type="button"
                               className="btn-ghost"
@@ -1390,9 +1390,9 @@ export function TasksPage() {
                           </>
                         )}
                         {selected.status === "scheduled" && isManager && (
-                          <button type="button" className="btn" onClick={() => moveTask(selected.id, "open")}>
+                          <ActionButton className="btn" busyLabel="Releasing…" doneLabel="Released" onAction={() => { moveTask(selected.id, "open"); notify("Task released to open."); }}>
                             Release to open
-                          </button>
+                          </ActionButton>
                         )}
                         {selected.status === "scheduled" && !isManager && (
                           <p className="note">Scheduled. Your manager will release it.</p>
@@ -1417,15 +1417,9 @@ export function TasksPage() {
                               placeholder="e.g. TSK-1080 or IT env refresh"
                             />
                           </label>
-                          <button
-                            type="button"
-                            className="btn"
-                            onClick={() =>
-                              runAction("block", { blockedReason: blockReason, dependsOn: blockDepends })
-                            }
-                          >
+                          <ActionButton className="btn" onAction={() => runAction("block", { blockedReason: blockReason, dependsOn: blockDepends })}>
                             Save blocker & notify manager
-                          </button>
+                          </ActionButton>
                           <button type="button" className="btn-ghost" onClick={() => setShowBlockForm(false)}>
                             Cancel
                           </button>
@@ -1442,17 +1436,11 @@ export function TasksPage() {
                               placeholder="What do you need from your manager?"
                               style={{ flex: 1 }}
                             />
-                            <button
-                              type="button"
-                              className="btn"
-                              onClick={() =>
-                                runAction("help", {
+                            <ActionButton className="btn" onAction={() => runAction("help", {
                                   comment: helpDraft || "Need guidance to unblock this work.",
-                                })
-                              }
-                            >
+                                })}>
                               Send help request
-                            </button>
+                            </ActionButton>
                             <button type="button" className="btn-ghost" onClick={() => setShowHelpForm(false)}>
                               Cancel
                             </button>

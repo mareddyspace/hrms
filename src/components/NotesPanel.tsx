@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Bell, Check, Pencil, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
 import {
   addNote,
@@ -15,6 +15,7 @@ import {
   type Note,
   type NoteColor,
 } from "../data/notesStore.ts";
+import { SubmitButton, notify, useAction } from "./ui.tsx";
 import "./notes.css";
 
 const COLORS: NoteColor[] = ["yellow", "blue", "green", "pink"];
@@ -57,17 +58,19 @@ export function NoteEditor({
   const [color, setColor] = useState<NoteColor | undefined>(note.color);
   const uid = useId();
 
-  function save(event: FormEvent) {
-    event.preventDefault();
-    if (!text.trim()) return;
+  const saveAction = useAction();
+
+  function save() {
+    if (!text.trim()) return false;
     updateNote(userId, note.id, { text, date, time, remind: remind && Boolean(date && time), color });
     onClose();
+    return true;
   }
 
   return (
     <form
       className="note-editor"
-      onSubmit={save}
+      onSubmit={saveAction.submit(save, { success: "Note saved." })}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           e.stopPropagation();
@@ -117,9 +120,9 @@ export function NoteEditor({
         <button type="button" className="btn-ghost btn-tiny" onClick={onClose}>
           Cancel
         </button>
-        <button type="submit" className="btn btn-tiny" disabled={!text.trim()}>
+        <SubmitButton action={saveAction} className="btn btn-tiny" disabled={!text.trim()}>
           Save
-        </button>
+        </SubmitButton>
       </div>
     </form>
   );
@@ -187,15 +190,20 @@ export function NotesButton({ userId, timeZone }: { userId: string; timeZone?: s
     }
   }
 
-  function onAdd(event: FormEvent) {
-    event.preventDefault();
-    if (!text.trim()) return;
+  const addAction = useAction({ doneMs: 1200 });
+
+  function onAdd() {
+    if (!text.trim()) return false;
     addNote(userId, { text, date, time, remind, timeZone });
+    notify(date ? "Note added to your calendar." : "Note added.");
     setText("");
     setDate("");
     setTime("");
     setRemind(false);
+    return true;
   }
+
+  const submitAdd = addAction.submit(onAdd);
 
   function onDelete(note: Note) {
     deleteNote(userId, note.id);
@@ -233,7 +241,7 @@ export function NotesButton({ userId, timeZone }: { userId: string; timeZone?: s
               </button>
             </div>
 
-            <form className="notes-add" onSubmit={onAdd}>
+            <form className="notes-add" onSubmit={submitAdd}>
               <label className="sr-only" htmlFor={`${panelId}-new`}>
                 New note
               </label>
@@ -245,7 +253,7 @@ export function NotesButton({ userId, timeZone }: { userId: string; timeZone?: s
                 autoFocus
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) onAdd(e);
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submitAdd(e);
                 }}
               />
               <div className="note-when-row">
@@ -261,9 +269,9 @@ export function NotesButton({ userId, timeZone }: { userId: string; timeZone?: s
                   <input type="checkbox" checked={remind} disabled={!date || !time} onChange={(e) => setRemind(e.target.checked)} />
                   <Bell size={14} aria-hidden /> <span className="sr-only">Remind me</span>
                 </label>
-                <button type="submit" className="btn btn-tiny" disabled={!text.trim()}>
+                <SubmitButton action={addAction} className="btn btn-tiny" disabled={!text.trim()}>
                   Add
-                </button>
+                </SubmitButton>
               </div>
               {date && <p className="notes-hint">Shows on your calendar.</p>}
             </form>

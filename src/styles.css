@@ -6466,3 +6466,63 @@ html[data-theme="night"] .todo .ok { color: var(--ok); }
 }
 .dialog-close:hover { background: var(--line); color: inherit; }
 .dialog-panel h2 { padding-right: 32px; }
+
+/* Action buttons (SubmitButton / ActionButton in src/components/ui.tsx) */
+.action-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.action-btn.is-busy { cursor: progress; }
+.action-btn.is-busy:disabled { opacity: 0.8; }
+.btn-spinner {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: tz-spin 0.7s linear infinite;
+}
+.btn-check { font-weight: 700; line-height: 1; }
+.btn.action-btn.is-done, .btn.action-btn.is-done:hover { background: var(--ok); color: #fff; }
+.btn-ghost.action-btn.is-done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--card)); background: color-mix(in srgb, var(--ok) 10%, var(--card)); }
+html[data-theme="night"] .btn.action-btn.is-done { color: #04241a; }
+
+/* Global toasts (src/components/Toast.tsx) */
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 84px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(400px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--info);
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow-md);
+  font-size: 14px;
+  animation: tz-toast-in 0.18s ease-out;
+}
+.toast.ok { border-left-color: var(--ok); }
+.toast.err { border-left-color: var(--danger); }
+.toast-mark { font-weight: 700; line-height: 1.4; }
+.toast.ok .toast-mark { color: var(--ok); }
+.toast.err .toast-mark { color: var(--danger); }
+.toast.info .toast-mark { color: var(--info); }
+.toast-text { flex: 1; line-height: 1.4; }
+.toast-close { border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.toast-close:hover { color: var(--ink); }
+@keyframes tz-toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .btn-spinner { animation-duration: 2.4s; }
+  .toast { animation: none; }
+}

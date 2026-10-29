@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -20,7 +20,7 @@ import {
   Video,
 } from "lucide-react";
 import { COMPANY_NAME } from "../brand.ts";
-import { Banner, Card, Dialog, EmptyState, Field, Page } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Dialog, EmptyState, Field, Page, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { SelfProfileEditor } from "../components/SelfProfileEditor.tsx";
 import { MaskedValue } from "../components/MaskedValue.tsx";
 import { canRevealPersonal, personRevealer } from "../data/piiReveal.ts";
@@ -174,15 +174,22 @@ function OwnSkillsEditor({ actor, skills }: { actor: TalentActor; skills: Employ
   const show = (error: string | null, okText?: string) => setBanner(error ? { tone: "err", text: error } : okText ? { tone: "ok", text: okText } : null);
   const suggestions = SKILL_LIBRARY.filter((d) => !skills.some((k) => k.skillId === d.id));
 
-  function add(event: FormEvent) {
-    event.preventDefault();
+  const addAction = useAction();
+
+  function add() {
     const clean = name.trim();
-    talentAction(
-      () => addEmployeeSkill(actor, actor.id, clean, level),
-      (error) => {
-        show(error, `${clean} added.`);
-        if (!error) setName("");
-      },
+    return new Promise<string | null>((resolve) =>
+      talentAction(
+        () => addEmployeeSkill(actor, actor.id, clean, level),
+        (error) => {
+          show(error, `${clean} added.`);
+          if (!error) {
+            setName("");
+            notify(`Skill added: ${clean}.`);
+          }
+          resolve(error);
+        },
+      ),
     );
   }
 
@@ -209,14 +216,28 @@ function OwnSkillsEditor({ actor, skills }: { actor: TalentActor; skills: Employ
                   <option key={lv} value={lv}>{lv}</option>
                 ))}
               </select>
-              <button type="button" className="quiet-link" onClick={() => talentAction(() => removeEmployeeSkill(actor, actor.id, sk.skillId), (error) => show(error, `${sk.skillName} removed.`))}>
+              <ActionButton
+                className="quiet-link"
+                success={`Skill removed: ${sk.skillName}.`}
+                onAction={() =>
+                  new Promise<string | null>((resolve) =>
+                    talentAction(
+                      () => removeEmployeeSkill(actor, actor.id, sk.skillId),
+                      (error) => {
+                        show(error, `${sk.skillName} removed.`);
+                        resolve(error);
+                      },
+                    ),
+                  )
+                }
+              >
                 Remove
-              </button>
+              </ActionButton>
             </li>
           ))}
         </ul>
       )}
-      <form onSubmit={add} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <form onSubmit={addAction.submit(add)} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <input
           aria-label="Skill name"
           list="own-skill-suggestions"
@@ -236,9 +257,9 @@ function OwnSkillsEditor({ actor, skills }: { actor: TalentActor; skills: Employ
             <option key={lv} value={lv}>{lv}</option>
           ))}
         </select>
-        <button type="submit" className="btn btn-tiny" disabled={name.trim().length < 2}>
+        <SubmitButton action={addAction} className="btn btn-tiny" disabled={name.trim().length < 2}>
           Add
-        </button>
+        </SubmitButton>
       </form>
     </div>
   );
@@ -708,6 +729,7 @@ function LinkedInRow({ personId, url, editable }: { personId: string; url?: stri
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(url ?? "");
   const [error, setError] = useState("");
+  const saveAction = useAction();
 
   if (!url && !editable) return null;
 
@@ -716,12 +738,16 @@ function LinkedInRow({ personId, url, editable }: { personId: string; url?: stri
       <li className="profile-linkedin-edit">
         <LinkedInMark />
         <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            const problem = setLinkedIn(personId, value);
-            setError(problem ?? "");
-            if (!problem) setEditing(false);
-          }}
+          onSubmit={saveAction.submit(
+            () => {
+              const problem = setLinkedIn(personId, value);
+              setError(problem ?? "");
+              if (problem) return false;
+              setEditing(false);
+              return true;
+            },
+            { success: "LinkedIn profile saved." },
+          )}
         >
           <input
             value={value}
@@ -730,9 +756,9 @@ function LinkedInRow({ personId, url, editable }: { personId: string; url?: stri
             aria-label="LinkedIn profile address"
             autoFocus
           />
-          <button type="submit" className="btn btn-tiny">
+          <SubmitButton action={saveAction} className="btn btn-tiny">
             Save
-          </button>
+          </SubmitButton>
           <button type="button" className="btn-ghost btn-tiny" onClick={() => setEditing(false)}>
             Cancel
           </button>
@@ -810,11 +836,17 @@ function MeetDialog({
   const [mode, setMode] = useState<"Video call" | "In person">("Video call");
   const [agenda, setAgenda] = useState("");
   const [error, setError] = useState("");
+  const bookAction = useAction();
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!date || !time) return setError("Pick a date and time.");
-    if (date < todayISO()) return setError("Pick today or a future date.");
+  function submit() {
+    if (!date || !time) {
+      setError("Pick a date and time.");
+      return false;
+    }
+    if (date < todayISO()) {
+      setError("Pick today or a future date.");
+      return false;
+    }
     saveLocalMeeting({
       title,
       date,
@@ -825,11 +857,12 @@ function MeetDialog({
     });
     setError("");
     onBooked(`Meeting booked with ${person.fullName} on ${date} at ${time}. It's on both calendars.`);
+    return true;
   }
 
   return (
     <Dialog open={open} title={`Meet with ${person.fullName}`} onClose={onClose}>
-      <form className="stack" onSubmit={submit}>
+      <form className="stack" onSubmit={bookAction.submit(submit, { success: `Meeting booked with ${person.fullName}.` })}>
         <Field label="Title" wide>
           <input value={title} onChange={(e) => setTitle(e.target.value)} />
         </Field>
@@ -864,9 +897,9 @@ function MeetDialog({
           <button type="button" className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn">
+          <SubmitButton action={bookAction} className="btn" busyLabel="Booking…" doneLabel="Booked">
             Book meeting
-          </button>
+          </SubmitButton>
         </div>
       </form>
     </Dialog>

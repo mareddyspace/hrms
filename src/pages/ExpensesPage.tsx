@@ -1,6 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { FormEvent } from "react";
-import { Banner, Card, Field, Page, StatusBadge } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Field, Page, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { StepTimeline } from "../components/StepTimeline.tsx";
 import { claimLimitsFor, itemCurrency, money, moneyTotals, payRulesFor, receiptThresholdFor } from "../countryPay.ts";
 import { addDaysISO, EXPENSE_CATEGORIES, EXPENSE_CLAIM_WINDOW_DAYS, formatShortDate, todayISO } from "../model.ts";
@@ -101,17 +100,18 @@ export function ExpensesPage() {
     demoAccounts.find((a) => a.id === id)?.fullName ?? people.find((p) => p.id === id)?.fullName ?? id;
   const tripOf = (id?: string) => (id ? trips.find((t) => t.id === id) : undefined);
 
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (busy) return;
+  const claimAction = useAction();
+
+  async function onSubmit(): Promise<boolean> {
+    if (busy) return false;
     if (hasTemplateBlanks(description)) {
       showErr(TEMPLATE_BLANKS_ERROR);
-      return;
+      return false;
     }
     const value = Number(amount);
     if (value > receiptAbove && !receiptFile) {
       showErr(`Attach a receipt for claims over ${money(receiptAbove, currency)}.`);
-      return;
+      return false;
     }
     setBusy(true);
     let receipt: ExpenseReceipt | undefined;
@@ -120,7 +120,7 @@ export function ExpensesPage() {
     } catch (error) {
       setBusy(false);
       showErr(error instanceof Error ? error.message : "Couldn't save the receipt.");
-      return;
+      return false;
     }
     const error = await addExpense({
       date,
@@ -137,26 +137,33 @@ export function ExpensesPage() {
         ? { tone: "err", text: error }
         : { tone: "ok", text: hasApprover ? "Expense submitted for approval." : "Expense submitted." },
     );
-    if (!error) {
-      setAmount("");
-      resetDescription();
-      setDate("");
-      setTripId("");
-      setReceiptFile(null);
-      setFileKey((key) => key + 1);
-    }
+    if (error) return false;
+    notify(hasApprover ? "Expense claim submitted for approval." : "Expense claim submitted.");
+    setAmount("");
+    resetDescription();
+    setDate("");
+    setTripId("");
+    setReceiptFile(null);
+    setFileKey((key) => key + 1);
+    return true;
   }
 
   async function decide(expense: Expense, status: "approved" | "rejected") {
     const error = await portal.setExpenseStatus(expense.id, status, notes[expense.id]);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: status === "approved" ? "Claim approved." : "Claim declined." });
-    if (!error) setNotes((prev) => ({ ...prev, [expense.id]: "" }));
+    if (error) return false;
+    setNotes((prev) => ({ ...prev, [expense.id]: "" }));
+    notify(`Claim ${status === "approved" ? "approved" : "declined"} for ${nameOf(expense.employeeId)}.`);
+    return true;
   }
 
   async function pay(expense: Expense) {
     const entry = payment[expense.id] ?? { on: todayISO(), ref: "" };
     const error = await portal.markExpensePaid(expense.id, entry.on, entry.ref);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Claim marked paid." });
+    if (error) return false;
+    notify(`Claim marked paid for ${nameOf(expense.employeeId)}.`);
+    return true;
   }
 
   return (
@@ -211,12 +218,12 @@ export function ExpensesPage() {
                       placeholder="Note (optional)"
                       aria-label={`Note for ${nameOf(expense.employeeId)}`}
                     />
-                    <button type="button" className="btn btn-tiny" onClick={() => decide(expense, "approved")}>
+                    <ActionButton className="btn btn-tiny" onAction={() => decide(expense, "approved")}>
                       Approve
-                    </button>
-                    <button type="button" className="btn-ghost btn-tiny" onClick={() => decide(expense, "rejected")}>
+                    </ActionButton>
+                    <ActionButton className="btn-ghost btn-tiny" onAction={() => decide(expense, "rejected")}>
                       Decline
-                    </button>
+                    </ActionButton>
                   </div>
                 </li>
               );
@@ -252,9 +259,9 @@ export function ExpensesPage() {
                       aria-label="Payment date"
                     />
                     <input value={entry.ref} onChange={(e) => set({ ref: e.target.value })} placeholder="Payment reference" aria-label="Payment reference" />
-                    <button type="button" className="btn btn-tiny" onClick={() => pay(expense)}>
+                    <ActionButton className="btn btn-tiny" busyLabel="Saving…" doneLabel="Paid" onAction={() => pay(expense)}>
                       Mark paid
-                    </button>
+                    </ActionButton>
                   </div>
                 </li>
               );
@@ -265,7 +272,7 @@ export function ExpensesPage() {
 
       <div className="split">
         <Card title="New claim">
-          <form onSubmit={onSubmit}>
+          <form onSubmit={claimAction.submit(onSubmit)}>
             <div className="form-grid">
               <Field label="Date">
                 <input
@@ -343,9 +350,9 @@ export function ExpensesPage() {
               </Field>
             </div>
             <div className="form-actions">
-              <button className="btn" type="submit" disabled={busy}>
-                {busy ? "Submitting…" : "Submit claim"}
-              </button>
+              <SubmitButton action={claimAction} className="btn" disabled={busy}>
+                Submit claim
+              </SubmitButton>
             </div>
           </form>
         </Card>

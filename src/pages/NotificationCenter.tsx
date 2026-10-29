@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
-import { Card, EmptyState, Page } from "../components/ui.tsx";
+import { ActionButton, Card, EmptyState, Page, notify } from "../components/ui.tsx";
 import { NOTIF_CATEGORIES, notifPrefKey, type NotifCategory, type NotifPrefs } from "../data/collabData.ts";
 import {
   deleteNotifications,
@@ -129,7 +129,6 @@ export function NotificationCenterPage() {
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [prefs, setPrefs] = useState<NotifPrefs>(() => notifPrefsFor(userId, collab));
-  const [note, setNote] = useState("");
 
   useEffect(() => {
     setPrefs(notifPrefsFor(userId, collab));
@@ -176,8 +175,7 @@ export function NotificationCenterPage() {
   }, [category, unreadOnly, needle]);
 
   function flash(text: string) {
-    setNote(text);
-    window.setTimeout(() => setNote(""), 2500);
+    notify(text);
   }
 
   function markAllRead() {
@@ -215,21 +213,15 @@ export function NotificationCenterPage() {
           <button type="button" className="btn-ghost" onClick={() => setPrefsOpen((v) => !v)} aria-expanded={prefsOpen}>
             Preferences
           </button>
-          <button type="button" className="btn-ghost" onClick={clearRead} disabled={clearable.length === 0}>
+          <ActionButton className="btn-ghost" onAction={clearRead} disabled={clearable.length === 0} busyLabel="Clearing…" doneLabel="Cleared">
             Clear read
-          </button>
-          <button type="button" className="btn" onClick={markAllRead} disabled={unreadTotal === 0}>
+          </ActionButton>
+          <ActionButton className="btn" onAction={markAllRead} disabled={unreadTotal === 0}>
             Mark all read
-          </button>
+          </ActionButton>
         </div>
       }
     >
-      {note && (
-        <p className="note ok" role="status">
-          {note}
-        </p>
-      )}
-
       {prefsOpen && (
         <Card title="Notify me about">
           <div className="nc-prefs">
@@ -253,9 +245,9 @@ export function NotificationCenterPage() {
           </label>
           <p className="muted nc-hint">Turned-off categories are not delivered and are hidden here.</p>
           <div className="row-gap">
-            <button type="button" className="btn" onClick={savePrefs}>
+            <ActionButton className="btn" onAction={savePrefs}>
               Save
-            </button>
+            </ActionButton>
             <button
               type="button"
               className="btn-ghost"

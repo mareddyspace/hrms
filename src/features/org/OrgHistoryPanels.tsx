@@ -2,7 +2,7 @@
  * Effective-dated organization (backend migration 0013): version history of org units, job profiles and
  * positions, the org tree "as of" a past day, and the extra job profile details. API mode only.
  */
-import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   apiOrgHistory,
   apiOrgUnitsAsOf,
@@ -13,7 +13,7 @@ import {
   type OrgUnitOut,
   type OrgVersionOut,
 } from "../../api/syncOpsOrg.ts";
-import { Banner, DataTable, EmptyState, Field, StatusBadge } from "../../components/ui.tsx";
+import { Banner, DataTable, EmptyState, Field, StatusBadge, SubmitButton, useAction } from "../../components/ui.tsx";
 
 const todayIso = () => {
   const d = new Date();
@@ -200,32 +200,40 @@ export function UnitDatedChange({ unitId, canEdit, onDone }: { unitId: string; c
   const [parentId, setParentId] = useState(unit?.parent_id ?? "");
   const [reason, setReason] = useState("");
   const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const act = useAction();
   if (!unit) return null;
 
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    if (!unit) return;
+  async function save() {
+    if (!unit) return false;
     const patch: Parameters<typeof apiUpdateOrgUnit>[1] = { effective_from: effective || null, reason: reason.trim() || null };
     const hc = headcount.trim() === "" ? null : Number(headcount);
-    if (hc !== null && (!Number.isInteger(hc) || hc < 0)) return setNote({ tone: "err", text: "Headcount must be a whole number." });
+    if (hc !== null && (!Number.isInteger(hc) || hc < 0)) {
+      setNote({ tone: "err", text: "Headcount must be a whole number." });
+      return false;
+    }
     if (hc !== (unit.headcount ?? null)) patch.headcount = hc;
     if ((managerId.trim() || null) !== (unit.manager_id ?? null)) patch.manager_id = managerId.trim() || null;
     if ((parentId || null) !== (unit.parent_id ?? null)) patch.parent_id = parentId || null;
-    if (!("headcount" in patch) && !("manager_id" in patch) && !("parent_id" in patch)) return setNote({ tone: "err", text: "Nothing changed." });
-    const error = await apiUpdateOrgUnit(unit.id, patch);
-    if (error) setNote({ tone: "err", text: error });
-    else {
-      setNote({ tone: "ok", text: "Saved with history." });
-      setReason("");
-      onDone?.("Saved with history.");
+    if (!("headcount" in patch) && !("manager_id" in patch) && !("parent_id" in patch)) {
+      setNote({ tone: "err", text: "Nothing changed." });
+      return false;
     }
+    const error = await apiUpdateOrgUnit(unit.id, patch);
+    if (error) {
+      setNote({ tone: "err", text: error });
+      return false;
+    }
+    setNote({ tone: "ok", text: "Saved with history." });
+    setReason("");
+    onDone?.("Saved with history.");
+    return true;
   }
 
   const parents = org.units.filter((u) => u.active && u.id !== unit.id).sort((a, b) => a.name.localeCompare(b.name));
   return (
     <div className="stack">
       {canEdit && (
-        <form className="stack" onSubmit={save}>
+        <form className="stack" onSubmit={act.submit(save, { success: `${unit.name}: dated change saved.` })}>
           <div className="form-grid">
             <Field label="Parent unit">
               <select value={parentId} onChange={(e) => setParentId(e.target.value)}>
@@ -251,9 +259,9 @@ export function UnitDatedChange({ unitId, canEdit, onDone }: { unitId: string; c
             </Field>
           </div>
           <div className="form-actions">
-            <button type="submit" className="btn-ghost">
+            <SubmitButton action={act} className="btn-ghost">
               Save dated change
-            </button>
+            </SubmitButton>
           </div>
           <Banner message={note} />
         </form>
@@ -276,6 +284,7 @@ export function JobProfileDetails({ profileId, canEdit }: { profileId: string; c
   const [effective, setEffective] = useState(todayIso());
   const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const act = useAction();
   useEffect(() => {
     setLevel(row?.job_level ?? "");
     setMinYears(row?.experience_min_years == null ? "" : String(row.experience_min_years));
@@ -287,12 +296,12 @@ export function JobProfileDetails({ profileId, canEdit }: { profileId: string; c
 
   const years = (v: string) => (v.trim() === "" ? null : Number(v));
 
-  async function save(event: FormEvent) {
-    event.preventDefault();
+  async function save() {
     const lo = years(minYears);
     const hi = years(maxYears);
     if ([lo, hi].some((v) => v !== null && (!Number.isInteger(v) || v < 0 || v > 60))) {
-      return setNote({ tone: "err", text: "Experience must be 0 to 60 years." });
+      setNote({ tone: "err", text: "Experience must be 0 to 60 years." });
+      return false;
     }
     const error = await apiUpdateJobProfile(profileId, {
       job_level: level.trim() || null,
@@ -303,6 +312,7 @@ export function JobProfileDetails({ profileId, canEdit }: { profileId: string; c
       effective_from: effective || null,
     });
     setNote(error ? { tone: "err", text: error } : { tone: "ok", text: "Saved." });
+    return !error;
   }
 
   const experience =
@@ -321,7 +331,7 @@ export function JobProfileDetails({ profileId, canEdit }: { profileId: string; c
         </div>
       )}
       {canEdit && (
-        <form className="stack" onSubmit={save}>
+        <form className="stack" onSubmit={act.submit(save, { success: "Job profile details saved." })}>
           <div className="form-grid">
             <Field label="Job level">
               <input value={level} onChange={(e) => setLevel(e.target.value)} maxLength={32} placeholder="e.g. L4, Senior" />
@@ -343,9 +353,9 @@ export function JobProfileDetails({ profileId, canEdit }: { profileId: string; c
             </Field>
           </div>
           <div className="form-actions">
-            <button type="submit" className="btn-ghost">
+            <SubmitButton action={act} className="btn-ghost">
               Save details
-            </button>
+            </SubmitButton>
             <button type="button" className="btn-ghost" onClick={() => setShowHistory((v) => !v)}>
               {showHistory ? "Hide history" : "History"}
             </button>

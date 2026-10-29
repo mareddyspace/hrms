@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { Banner, Card, Field, StatusBadge } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Field, StatusBadge, notify } from "../components/ui.tsx";
 import { API_ENABLED } from "../api/client.ts";
 import {
   activeDelegationFor,
@@ -56,11 +56,21 @@ export function DelegationSettings({ myId }: { myId: string }) {
   async function submit() {
     const input = { delegatorId: myId, delegateId, from, to, note, scope: allTypes ? ("all" as const) : picked };
     const error = API_ENABLED ? await apiCreateDelegation(input) : createDelegation(input);
-    report(error, `Approvals delegated to ${personLabel(delegateId)} until ${formatShortDate(to)}.`);
-    if (!error) {
-      setNote("");
-      setDelegateId("");
-    }
+    const success = `Approvals delegated to ${personLabel(delegateId)} until ${formatShortDate(to)}.`;
+    report(error, success);
+    if (error) return error;
+    notify(success);
+    setNote("");
+    setDelegateId("");
+    return null;
+  }
+
+  async function endOne(d: Delegation) {
+    const error = API_ENABLED ? await apiEndDelegation(d.id) : endDelegation(d.id, myId);
+    report(error, "Delegation ended.");
+    if (error) return error;
+    notify(`Delegation to ${personLabel(d.delegateId)} ended.`);
+    return null;
   }
 
   const autoDefault = candidates.find((c) => c.relation === "Your manager");
@@ -117,9 +127,9 @@ export function DelegationSettings({ myId }: { myId: string }) {
         </Field>
       </div>
       <div className="approval-actions">
-        <button type="button" className="btn btn-tiny" onClick={() => void submit()}>
+        <ActionButton className="btn btn-tiny" busyLabel="Delegating…" doneLabel="Delegated" onAction={submit}>
           Delegate
-        </button>
+        </ActionButton>
       </div>
 
       {!API_ENABLED && (
@@ -171,9 +181,14 @@ export function DelegationSettings({ myId }: { myId: string }) {
                 {d.note && <span className="muted">{d.note}</span>}
                 {!d.endedOn && d.to >= today && (
                   <div className="approval-actions">
-                    <button type="button" className="btn-ghost btn-tiny" onClick={async () => report(API_ENABLED ? await apiEndDelegation(d.id) : endDelegation(d.id, myId), "Delegation ended.")}>
+                    <ActionButton
+                      className="btn-ghost btn-tiny"
+                      busyLabel={d.from > today ? "Cancelling…" : "Ending…"}
+                      doneLabel={d.from > today ? "Cancelled" : "Ended"}
+                      onAction={() => endOne(d)}
+                    >
                       {d.from > today ? "Cancel" : "End now"}
-                    </button>
+                    </ActionButton>
                   </div>
                 )}
               </li>

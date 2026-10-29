@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Banner, Card, EmptyState, Field, StatusBadge } from "../components/ui.tsx";
+import { useState } from "react";
+import { ActionButton, Banner, Card, EmptyState, Field, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import type { DemoAccount } from "../demoAccounts.ts";
 import {
   PRAISE_BADGES,
@@ -35,8 +35,19 @@ import {
   updateOneOnOne,
   talentAction,
   type TalentActor,
+  type TalentResult,
 } from "../data/talentLocal.ts";
 import { todayISO } from "../model.ts";
+
+/** talentAction as a promise, so action buttons stay busy until the change (or backend call) finishes. */
+function talentRun(change: () => TalentResult, done: (result: TalentResult) => void): Promise<TalentResult> {
+  return new Promise((resolve) =>
+    talentAction(change, (result) => {
+      done(result);
+      resolve(result);
+    }),
+  );
+}
 
 type Person = Pick<DemoAccount, "id" | "fullName">;
 type OrgPerson = Pick<DemoAccount, "id" | "fullName" | "reportsToId">;
@@ -66,17 +77,23 @@ export function FeedbackPanel({
   const [badge, setBadge] = useState<PraiseBadge>(PRAISE_BADGES[0]);
   const [message, setMessage] = useState("");
   const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const sendAction = useAction();
 
   const praise = feedback.filter((f) => f.kind === "Praise");
   const receivedPrivate = feedback.filter((f) => f.kind === "Feedback" && f.toId === me.id);
   const requestsForMe = feedback.filter((f) => f.kind === "Request" && f.toId === me.id && f.status === "Open");
   const myRequests = feedback.filter((f) => f.kind === "Request" && f.fromId === me.id);
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
+  function submit() {
     const to = others.find((p) => p.id === toId);
-    if (!to) return setBanner({ tone: "err", text: "Choose a colleague." });
-    if (message.trim().length < 10) return setBanner({ tone: "err", text: "Write at least 10 characters." });
+    if (!to) {
+      setBanner({ tone: "err", text: "Choose a colleague." });
+      return false;
+    }
+    if (message.trim().length < 10) {
+      setBanner({ tone: "err", text: "Write at least 10 characters." });
+      return false;
+    }
     const error = addFeedback({
       kind,
       fromId: me.id,
@@ -87,23 +104,26 @@ export function FeedbackPanel({
       ...(kind === "Praise" ? { badge } : null),
       ...(kind === "Request" ? { aboutName: me.fullName, status: "Open" as const } : null),
     });
-    if (error) return setBanner({ tone: "err", text: error });
+    if (error) {
+      setBanner({ tone: "err", text: error });
+      return false;
+    }
     setMessage("");
-    setBanner({
-      tone: "ok",
-      text:
-        kind === "Praise"
-          ? `Praise posted for ${to.fullName}.`
-          : kind === "Feedback"
-            ? `Private feedback sent to ${to.fullName}.`
-            : `Feedback request sent to ${to.fullName}.`,
-    });
+    const okText =
+      kind === "Praise"
+        ? `Praise posted for ${to.fullName}.`
+        : kind === "Feedback"
+          ? `Private feedback sent to ${to.fullName}.`
+          : `Feedback request sent to ${to.fullName}.`;
+    setBanner({ tone: "ok", text: okText });
+    notify(okText);
+    return true;
   }
 
   return (
     <div className="stack">
       <Card title="Give or request feedback">
-        <form className="stack" onSubmit={submit}>
+        <form className="stack" onSubmit={sendAction.submit(submit)}>
           <div className="soft-tabs" role="group" aria-label="Feedback type">
             {(["Praise", "Feedback", "Request"] as const).map((k) => (
               <button
@@ -152,9 +172,9 @@ export function FeedbackPanel({
             />
           </Field>
           <div>
-            <button className="btn" type="submit">
+            <SubmitButton action={sendAction} className="btn">
               {kind === "Praise" ? "Post praise" : kind === "Feedback" ? "Send feedback" : "Send request"}
-            </button>
+            </SubmitButton>
           </div>
           <Banner message={banner} />
         </form>
@@ -245,14 +265,14 @@ function RequestRow({ request, me }: { request: FeedbackItem; me: TalentActor })
           placeholder="Your feedback (sent privately)…"
           style={{ flex: 1 }}
         />
-        <button
-          type="button"
+        <ActionButton
           className="btn btn-tiny"
           disabled={reply.trim().length < 10}
-          onClick={() => talentAction(() => answerFeedbackRequest(me, request.id, reply), (res) => setError(res ?? ""))}
+          success={`Feedback sent to ${request.fromName}.`}
+          onAction={() => talentRun(() => answerFeedbackRequest(me, request.id, reply), (res) => setError(res ?? ""))}
         >
           Send
-        </button>
+        </ActionButton>
       </div>
       {error && <Banner message={{ tone: "err", text: error }} />}
     </li>
@@ -284,11 +304,14 @@ export function OneOnOnePanel({
   const [date, setDate] = useState(todayISO());
   const [time, setTime] = useState("10:00");
   const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const scheduleAction = useAction();
 
-  function schedule(event: FormEvent) {
-    event.preventDefault();
+  function schedule() {
     const other = others.find((p) => p.id === withId);
-    if (!other) return setBanner({ tone: "err", text: "Choose your manager or a direct report." });
+    if (!other) {
+      setBanner({ tone: "err", text: "Choose your manager or a direct report." });
+      return false;
+    }
     const [manager, report] = other.id === myManager?.id ? [other, me] : [me, other];
     const result = scheduleOneOnOne(me, {
       managerId: manager.id,
@@ -298,16 +321,21 @@ export function OneOnOnePanel({
       date,
       time,
     });
-    if ("error" in result) return setBanner({ tone: "err", text: result.error });
+    if ("error" in result) {
+      setBanner({ tone: "err", text: result.error });
+      return false;
+    }
     setBanner({ tone: "ok", text: `1:1 with ${other.fullName} scheduled.` });
+    notify(`1:1 with ${other.fullName} scheduled for ${date} at ${time}.`);
     setSelectedId(result.id);
+    return true;
   }
 
   return (
     <div className="checkin-layout">
       <div className="stack">
         <Card title="Schedule a 1:1">
-          <form className="stack" onSubmit={schedule}>
+          <form className="stack" onSubmit={scheduleAction.submit(schedule)}>
             <Field label="With">
               <select value={withId} onChange={(e) => setWithId(e.target.value)} disabled={others.length === 0}>
                 {others.length === 0 && <option value="">No manager or direct reports</option>}
@@ -328,9 +356,9 @@ export function OneOnOnePanel({
               </Field>
             </div>
             <div>
-              <button className="btn" type="submit" disabled={others.length === 0}>
+              <SubmitButton action={scheduleAction} className="btn" disabled={others.length === 0}>
                 Schedule
-              </button>
+              </SubmitButton>
             </div>
             <Banner message={banner} />
           </form>
@@ -390,13 +418,13 @@ function MeetingDetail({ meeting, me }: { meeting: OneOnOne; me: TalentActor }) 
           title="Agenda"
           hint="Either of you can add points."
           items={meeting.agenda}
-          onAdd={(text) => talentAction(() => addCheckInItem(me, meeting.id, "agenda", text), (res) => setError(res ?? ""))}
+          onAdd={(text) => talentRun(() => addCheckInItem(me, meeting.id, "agenda", text), (res) => setError(res ?? ""))}
           onToggle={(id) => talentAction(() => toggleCheckInItem(me, meeting.id, "agenda", id), (res) => setError(res ?? ""))}
         />
         <ChecklistSection
           title="Action items"
           items={meeting.actionItems}
-          onAdd={(text) => talentAction(() => addCheckInItem(me, meeting.id, "actionItems", text), (res) => setError(res ?? ""))}
+          onAdd={(text) => talentRun(() => addCheckInItem(me, meeting.id, "actionItems", text), (res) => setError(res ?? ""))}
           onToggle={(id) => talentAction(() => toggleCheckInItem(me, meeting.id, "actionItems", id), (res) => setError(res ?? ""))}
         />
         <Field label="Shared notes" wide>
@@ -410,23 +438,26 @@ function MeetingDetail({ meeting, me }: { meeting: OneOnOne; me: TalentActor }) 
         </Field>
         <div className="row-gap">
           {meeting.status === "Upcoming" ? (
-            <button
-              type="button"
+            <ActionButton
               className="btn"
               disabled={notStarted}
               title={notStarted ? "Available once the meeting has started" : undefined}
-              onClick={() => talentAction(() => setOneOnOneStatus(me, meeting.id, "Completed", notes), (res) => setError(res ?? ""))}
+              doneLabel="Completed"
+              success={`1:1 with ${other} marked as completed.`}
+              onAction={() => talentRun(() => setOneOnOneStatus(me, meeting.id, "Completed", notes), (res) => setError(res ?? ""))}
             >
               Mark as completed
-            </button>
+            </ActionButton>
           ) : (
-            <button
-              type="button"
+            <ActionButton
               className="btn-ghost"
-              onClick={() => talentAction(() => setOneOnOneStatus(me, meeting.id, "Upcoming"), (res) => setError(res ?? ""))}
+              busyLabel="Reopening…"
+              doneLabel="Reopened"
+              success={`1:1 with ${other} reopened.`}
+              onAction={() => talentRun(() => setOneOnOneStatus(me, meeting.id, "Upcoming"), (res) => setError(res ?? ""))}
             >
               Reopen
-            </button>
+            </ActionButton>
           )}
           {notStarted && meeting.status === "Upcoming" && <span className="muted">Can be completed once it has started.</span>}
         </div>
@@ -446,15 +477,17 @@ function ChecklistSection({
   title: string;
   hint?: string;
   items: CheckInItem[];
-  onAdd: (text: string) => void;
+  onAdd: (text: string) => Promise<TalentResult>;
   onToggle: (id: string) => void;
 }) {
   const [text, setText] = useState("");
-  function add(event: FormEvent) {
-    event.preventDefault();
-    if (!text.trim()) return;
-    onAdd(text.trim());
+  const addAction = useAction();
+  async function add() {
+    if (!text.trim()) return false;
+    const error = await onAdd(text.trim());
+    if (error) return false;
     setText("");
+    return true;
   }
   return (
     <section>
@@ -470,11 +503,11 @@ function ChecklistSection({
           </li>
         ))}
       </ul>
-      <form className="row-gap" onSubmit={add}>
+      <form className="row-gap" onSubmit={addAction.submit(add)}>
         <input aria-label={`Add ${title.toLowerCase()}`} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Add ${title.toLowerCase()}…`} style={{ flex: 1 }} />
-        <button type="submit" className="btn-ghost btn-tiny">
+        <SubmitButton action={addAction} className="btn-ghost btn-tiny">
           Add
-        </button>
+        </SubmitButton>
       </form>
     </section>
   );
@@ -503,16 +536,18 @@ export function Pending360Requests({ me, requests, onResult }: { me: TalentActor
 function Answer360Form({ me, review, onResult }: { me: TalentActor; review: PerfReview; onResult: Result }) {
   const [rating, setRating] = useState("4");
   const [comment, setComment] = useState("");
+  const sendAction = useAction();
   return (
     <form
       className="stack"
-      onSubmit={(e) => {
-        e.preventDefault();
-        talentAction(() => submit360Response(me, review.id, Number(rating), comment), (error) => {
-          onResult(error, `360 feedback sent for ${review.employeeName}.`);
-          if (!error) setComment("");
-        });
-      }}
+      onSubmit={sendAction.submit(
+        () =>
+          talentRun(() => submit360Response(me, review.id, Number(rating), comment), (error) => {
+            onResult(error, `360 feedback sent for ${review.employeeName}.`);
+            if (!error) setComment("");
+          }),
+        { success: `360 feedback sent for ${review.employeeName}.` },
+      )}
     >
       <strong>{review.employeeName}</strong>
       <div className="form-grid-2">
@@ -528,9 +563,9 @@ function Answer360Form({ me, review, onResult }: { me: TalentActor; review: Perf
         </Field>
       </div>
       <div>
-        <button className="btn btn-tiny" type="submit" disabled={comment.trim().length < 5}>
+        <SubmitButton action={sendAction} className="btn btn-tiny" disabled={comment.trim().length < 5}>
           Send
-        </button>
+        </SubmitButton>
       </div>
     </form>
   );
@@ -573,20 +608,24 @@ export function Reviewers360({ me, review, open, onResult }: { me: TalentActor; 
               <option key={a.id} value={a.id}>{a.fullName}</option>
             ))}
           </select>
-          <button
-            type="button"
+          <ActionButton
             className="btn btn-tiny"
             disabled={!pick}
-            onClick={() => {
+            busyLabel="Sending…"
+            doneLabel="Nominated"
+            onAction={() => {
               const name = options.find((a) => a.id === pick)?.fullName ?? "Reviewer";
-              talentAction(() => nominate360Reviewer(me, review.id, pick), (error) => {
+              return talentRun(() => nominate360Reviewer(me, review.id, pick), (error) => {
                 onResult(error, `${name} asked for 360 feedback.`);
-                if (!error) setPick("");
+                if (!error) {
+                  setPick("");
+                  notify(`360 feedback request sent to ${name}.`);
+                }
               });
             }}
           >
             Nominate
-          </button>
+          </ActionButton>
           <span className="muted">{list.length}/{MAX_360_REVIEWERS}</span>
         </div>
       )}
@@ -601,6 +640,7 @@ export function DevPlanEditor({ me, review, open, onResult }: { me: TalentActor;
   const editable = open && canEditDevPlan(me, review);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
+  const addAction = useAction();
   return (
     <div className="stack">
       {actions.length === 0 ? (
@@ -644,22 +684,23 @@ export function DevPlanEditor({ me, review, open, onResult }: { me: TalentActor;
       {editable && (
         <form
           className="row-gap"
-          onSubmit={(e) => {
-            e.preventDefault();
-            talentAction(() => addDevAction(me, review.id, { title, due }), (error) => {
-              onResult(error, "Action added.");
-              if (!error) {
-                setTitle("");
-                setDue("");
-              }
-            });
-          }}
+          onSubmit={addAction.submit(
+            () =>
+              talentRun(() => addDevAction(me, review.id, { title, due }), (error) => {
+                onResult(error, "Action added.");
+                if (!error) {
+                  setTitle("");
+                  setDue("");
+                }
+              }),
+            { success: `Development action added for ${review.employeeName}.` },
+          )}
         >
           <input aria-label="New action" value={title} maxLength={160} onChange={(e) => setTitle(e.target.value)} placeholder="New action" style={{ minWidth: 200 }} />
           <input type="date" aria-label="Due date" value={due} onChange={(e) => setDue(e.target.value)} />
-          <button type="submit" className="btn btn-tiny" disabled={title.trim().length < 3}>
+          <SubmitButton action={addAction} className="btn btn-tiny" disabled={title.trim().length < 3}>
             Add
-          </button>
+          </SubmitButton>
         </form>
       )}
     </div>

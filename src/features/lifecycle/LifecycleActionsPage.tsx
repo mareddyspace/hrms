@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -11,7 +12,9 @@ import {
   MetricGrid,
   Page,
   StatusBadge,
+  SubmitButton,
   Tabs,
+  useAction,
 } from "../../components/ui.tsx";
 import { GRADE_OPTIONS, listJobProfiles, locationOptions, subscribeOrgOverlay, getOrgOverlay, unitOptions } from "../../data/orgStructureLocal.ts";
 import { allReportIds, getPerson, listPeople, subscribePeople } from "../../data/peopleLocal.ts";
@@ -192,13 +195,11 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
     if (current && actionBlocker(current, next)) pickEmployee("");
   }
 
-  const [busy, setBusy] = useState(false);
+  const act = useAction();
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  async function submit() {
     const [countryCode, loc] = location.includes("|") ? [location.split("|")[0], location.split("|").slice(1).join("|")] : ["", location];
     const raise = API_ENABLED ? apiRaiseLifecycleAction : (input: Parameters<typeof raiseLifecycleAction>[1]) => Promise.resolve(raiseLifecycleAction(demoProfile, input));
-    setBusy(true);
     const result = await raise({
       employeeId,
       type,
@@ -215,13 +216,16 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
       leaveType,
       leaveEnd,
     });
-    setBusy(false);
-    if (result) setError(result);
-    else onDone({ tone: "ok", text: `${type} for ${person?.fullName ?? "the employee"} raised.` });
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onDone({ tone: "ok", text: `${type} for ${person?.fullName ?? "the employee"} raised.` });
+    return true;
   }
 
   return (
-    <form className="stack" onSubmit={submit}>
+    <form className="stack" onSubmit={act.submit(submit, { success: () => `${type} for ${person?.fullName ?? "the employee"} sent for approval.` })}>
       <Banner message={error ? { tone: "err", text: error } : null} />
       <div className="lc-grid">
         <Field label="Action">
@@ -330,9 +334,9 @@ function RaiseForm({ candidates, people, onDone }: { candidates: PersonRecord[];
         </Field>
       </div>
       <div>
-        <button className="btn" type="submit" disabled={!employeeId || busy}>
+        <SubmitButton action={act} className="btn" disabled={!employeeId}>
           Submit for approval
-        </button>
+        </SubmitButton>
       </div>
     </form>
   );
@@ -355,20 +359,26 @@ function ActionDetail({ action, onDone }: { action: LifecycleAction; onDone: (m:
       ? await apiDecideLifecycleAction(action.id, decision, note)
       : decideLifecycleAction(demoProfile, action.id, decision, note);
     setBusy(false);
-    if (result) setError(result);
-    else {
-      // An approved change may already be applied to the person's record.
-      if (API_ENABLED && decision === "approve") void loadApiPeople().catch(() => undefined);
-      onDone({ tone: "ok", text: decision === "approve" ? "Approved." : "Rejected." });
+    if (result) {
+      setError(result);
+      return false;
     }
+    // An approved change may already be applied to the person's record.
+    if (API_ENABLED && decision === "approve") void loadApiPeople().catch(() => undefined);
+    onDone({ tone: "ok", text: decision === "approve" ? "Approved." : "Rejected." });
+    return true;
   }
 
   async function withdraw() {
     setBusy(true);
     const result = API_ENABLED ? await apiWithdrawLifecycleAction(action.id) : withdrawLifecycleAction(demoProfile, action.id);
     setBusy(false);
-    if (result) setError(result);
-    else onDone({ tone: "ok", text: "Withdrawn." });
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onDone({ tone: "ok", text: "Withdrawn." });
+    return true;
   }
 
   return (
@@ -466,20 +476,30 @@ function ActionDetail({ action, onDone }: { action: LifecycleAction; onDone: (m:
             <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Required when rejecting" />
           </Field>
           <div className="row-gap">
-            <button className="btn" type="button" disabled={busy} onClick={() => decide("approve")}>
+            <ActionButton
+              className="btn"
+              disabled={busy}
+              success={`${action.type} for ${action.employeeName} approved.`}
+              onAction={() => decide("approve")}
+            >
               Approve
-            </button>
-            <button className="btn-ghost" type="button" disabled={busy} onClick={() => decide("reject")}>
+            </ActionButton>
+            <ActionButton
+              className="btn-ghost"
+              disabled={busy}
+              success={`${action.type} for ${action.employeeName} rejected.`}
+              onAction={() => decide("reject")}
+            >
               Reject
-            </button>
+            </ActionButton>
           </div>
         </>
       )}
       {withdrawable && !decidable && (
         <div>
-          <button className="btn-ghost" type="button" disabled={busy} onClick={withdraw}>
+          <ActionButton className="btn-ghost" disabled={busy} success={`${action.type} for ${action.employeeName} withdrawn.`} onAction={withdraw}>
             Withdraw
-          </button>
+          </ActionButton>
         </div>
       )}
     </div>

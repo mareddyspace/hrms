@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import type { FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { PRODUCT_NAME } from "../brand.ts";
 import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -14,7 +14,10 @@ import {
   MetricGrid,
   Page,
   StatusBadge,
+  SubmitButton,
   Tabs,
+  notify,
+  useAction,
 } from "../components/ui.tsx";
 import { OrgChart } from "../components/OrgChart.tsx";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
@@ -572,9 +575,11 @@ export function AiCopilotPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const sendAction = useAction({ doneMs: 1200 });
+
   async function ask(question: string) {
     const q = question.trim();
-    if (!q || busy) return;
+    if (!q || busy) return false;
     const stamp = Date.now();
     const botId = `a-${stamp}`;
     const earlier = history.filter((t) => !t.pending).map((t) => ({ role: t.role, content: t.text }));
@@ -590,12 +595,9 @@ export function AiCopilotPage() {
     } finally {
       setBusy(false);
     }
+    return true;
   }
 
-  function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    void ask(prompt);
-  }
 
   const [askParams, setAskParams] = useSearchParams();
   useEffect(() => {
@@ -668,7 +670,7 @@ export function AiCopilotPage() {
                 </div>
               ))}
             </div>
-            <form onSubmit={onSubmit} className="copilot-compose">
+            <form onSubmit={sendAction.submit(() => ask(prompt), { toastError: true })} className="copilot-compose">
               <Field label="Message" wide>
                 <textarea
                   value={prompt}
@@ -677,9 +679,9 @@ export function AiCopilotPage() {
                   placeholder="e.g. What is my leave balance?"
                 />
               </Field>
-              <button className="btn" type="submit" disabled={busy}>
+              <SubmitButton action={sendAction} className="btn" disabled={busy}>
                 Send
-              </button>
+              </SubmitButton>
             </form>
           </Card>
         </div>
@@ -839,22 +841,37 @@ export function IntegrationsPage() {
   }
 
   async function confirmRetry() {
-    if (!pendingRetry) return;
+    if (!pendingRetry) return false;
     const result = await retryIntegration(pendingRetry, employee.fullName);
     setReviewOpen(false);
     setPendingRetry(null);
     if (!result) setToast({ tone: "err", text: "This connector can't be retried." });
     else if (result.ok) setToast({ tone: "ok", text: `${result.item.name} synced.` });
     else setToast({ tone: "err", text: `${result.item.name} retry failed. Check the logs.` });
+    if (!result?.ok) return false;
+    notify(`${result.item.name} synced.`);
+    return true;
   }
 
   async function runSync(id: string) {
     const result = await runIntegrationSync(id, actor);
-    if (!result) setToast({ tone: "err", text: "This connector isn't set up." });
-    else if ("error" in result) setToast({ tone: "err", text: result.error });
-    else if (result.failed.length)
-      setToast({ tone: "warn", text: `${result.item.name}: ${result.passed} of ${result.processed} records synced, ${result.failed.length} moved to quarantine.` });
-    else setToast({ tone: "ok", text: `${result.item.name}: all ${result.processed} records synced.` });
+    if (!result) {
+      setToast({ tone: "err", text: "This connector isn't set up." });
+      return false;
+    }
+    if ("error" in result) {
+      setToast({ tone: "err", text: result.error });
+      return false;
+    }
+    if (result.failed.length) {
+      const text = `${result.item.name}: ${result.passed} of ${result.processed} records synced, ${result.failed.length} moved to quarantine.`;
+      setToast({ tone: "warn", text });
+      notify(text, "info");
+    } else {
+      setToast({ tone: "ok", text: `${result.item.name}: all ${result.processed} records synced.` });
+      notify(`${result.item.name}: all ${result.processed} records synced.`);
+    }
+    return true;
   }
 
   return (
@@ -913,9 +930,9 @@ export function IntegrationsPage() {
           title={`${active.name} · logs`}
           action={
             canAct && <span className="chip-row">
-              <button className="btn" type="button" onClick={() => void runSync(active.id)} disabled={active.status === "Not configured"}>
+              <ActionButton className="btn" busyLabel="Syncing…" doneLabel="Synced" onAction={() => runSync(active.id)} disabled={active.status === "Not configured"}>
                 Run sync
-              </button>
+              </ActionButton>
               <button className="btn-ghost" type="button" onClick={() => requestRetry(active.id)} disabled={active.status === "Not configured"}>
                 Retry sync
               </button>
@@ -984,9 +1001,9 @@ export function IntegrationsPage() {
             <button className="btn-ghost" type="button" onClick={() => { setReviewOpen(false); setPendingRetry(null); }}>
               Cancel
             </button>
-            <button className="btn" type="button" onClick={() => void confirmRetry()}>
+            <ActionButton className="btn" busyLabel="Retrying…" doneLabel="Synced" onAction={confirmRetry}>
               Retry now
-            </button>
+            </ActionButton>
           </>
         }
       >
@@ -1012,24 +1029,34 @@ function QuarantineCard({
 }) {
   const records = listQuarantine(connectorId);
   const [editing, setEditing] = useState<{ id: string; mode: "fix" | "dismiss"; value: string; error?: string } | null>(null);
+  const editAction = useAction();
 
   async function retry(r: QuarantineRecord) {
     const out = await retryQuarantined(connectorId, r.id, actor);
-    if (out.error) onResult({ tone: "err", text: out.error });
-    else onResult(out.ok ? { tone: "ok", text: `${r.record} synced.` } : { tone: "warn", text: `${r.record} failed again: ${r.reason}.` });
+    if (out.error) {
+      onResult({ tone: "err", text: out.error });
+      return false;
+    }
+    onResult(out.ok ? { tone: "ok", text: `${r.record} synced.` } : { tone: "warn", text: `${r.record} failed again: ${r.reason}.` });
+    if (!out.ok) return false;
+    notify(`${r.record} synced.`);
+    return true;
   }
 
   async function submitEdit(r: QuarantineRecord) {
-    if (!editing) return;
+    if (!editing) return false;
     const out = await (editing.mode === "fix"
       ? fixAndRetryQuarantined(connectorId, r.id, editing.value, actor)
       : dismissQuarantined(connectorId, r.id, editing.value, actor));
     if (!out.ok) {
       setEditing({ ...editing, error: out.error });
-      return;
+      return false;
     }
     setEditing(null);
-    onResult({ tone: "ok", text: editing.mode === "fix" ? `${r.record} fixed and synced.` : `${r.record} dismissed.` });
+    const text = editing.mode === "fix" ? `${r.record} fixed and synced.` : `${r.record} dismissed.`;
+    onResult({ tone: "ok", text });
+    notify(text);
+    return true;
   }
 
   async function retryAll() {
@@ -1039,6 +1066,7 @@ function QuarantineCard({
         ? { tone: "warn", text: `${out.passed} synced, ${out.failed} still in quarantine.` }
         : { tone: "ok", text: `All ${out.passed} records synced.` },
     );
+    notify(out.failed ? `${out.passed} synced, ${out.failed} still in quarantine.` : `All ${out.passed} records synced.`, out.failed ? "info" : "ok");
   }
 
   return (
@@ -1046,9 +1074,9 @@ function QuarantineCard({
       title={`Quarantine (${records.length})`}
       action={
         canAct && records.length > 0 && (
-          <button className="btn-ghost" type="button" onClick={() => void retryAll()}>
+          <ActionButton className="btn-ghost" busyLabel="Retrying…" doneLabel="Done" onAction={retryAll}>
             Retry all
-          </button>
+          </ActionButton>
         )
       }
     >
@@ -1077,10 +1105,7 @@ function QuarantineCard({
               <form
                 key="edit"
                 className="stack-tight"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void submitEdit(r);
-                }}
+                onSubmit={editAction.submit(() => submitEdit(r))}
               >
                 <input
                   aria-label={open.mode === "fix" ? QUARANTINE_FIELD_LABEL[r.field] : "Reason to dismiss"}
@@ -1091,9 +1116,14 @@ function QuarantineCard({
                 />
                 {open.error && <small className="note err">{open.error}</small>}
                 <span className="chip-row">
-                  <button className="btn btn-tiny" type="submit">
+                  <SubmitButton
+                    action={editAction}
+                    className="btn btn-tiny"
+                    busyLabel={open.mode === "fix" ? "Saving…" : "Dismissing…"}
+                    doneLabel={open.mode === "fix" ? "Saved" : "Dismissed"}
+                  >
                     {open.mode === "fix" ? "Save & retry" : "Dismiss"}
-                  </button>
+                  </SubmitButton>
                   <button className="btn-ghost btn-tiny" type="button" onClick={() => setEditing(null)}>
                     Cancel
                   </button>
@@ -1101,9 +1131,9 @@ function QuarantineCard({
               </form>
             ) : (
               <span key="actions" className="chip-row">
-                <button className="btn-ghost btn-tiny" type="button" onClick={() => void retry(r)}>
+                <ActionButton className="btn-ghost btn-tiny" busyLabel="Retrying…" doneLabel="Synced" onAction={() => retry(r)}>
                   Retry
-                </button>
+                </ActionButton>
                 <button className="btn-ghost btn-tiny" type="button" onClick={() => setEditing({ id: r.id, mode: "fix", value: r.value })}>
                   Fix & retry
                 </button>
@@ -1251,9 +1281,9 @@ export function AdminPage() {
   }
 
   function confirmSave() {
-    if (!editId) return;
+    if (!editId) return false;
     const target = DEMO_ACCOUNTS.find((a) => a.id === editId);
-    if (!target) return;
+    if (!target) return false;
     const error = saveRoleEdit(target, draftPerms, {
       id: employee.id,
       fullName: employee.fullName,
@@ -1263,10 +1293,12 @@ export function AdminPage() {
     setReviewOpen(false);
     if (error) {
       setSaveError(error);
-      return;
+      return false;
     }
     setSaveError("");
     setEditId(null);
+    notify(`Module access saved for ${target.fullName}.`);
+    return true;
   }
 
   return (
@@ -1456,9 +1488,9 @@ export function AdminPage() {
             <button className="btn-ghost" type="button" onClick={() => setReviewOpen(false)}>
               Cancel
             </button>
-            <button className="btn" type="button" onClick={confirmSave}>
+            <ActionButton className="btn" busyLabel="Saving…" doneLabel="Saved" onAction={confirmSave}>
               Confirm permission change
-            </button>
+            </ActionButton>
           </>
         }
       >
@@ -1472,24 +1504,24 @@ export function AdminPage() {
 
 /** Backend mode: runs approval reminders, SLA escalations and case retention once (no connector syncs). */
 function RunJobsButton() {
-  const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   async function run() {
-    setBusy(true);
     const out = await runScheduledJobsNow();
-    setBusy(false);
-    if ("error" in out) setNote({ tone: "err", text: out.error });
-    else {
-      const parts = Object.entries(out.results).map(([k, v]) => `${k.replace(/_/g, " ")}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
-      setNote({ tone: "ok", text: parts.length ? `Jobs ran — ${parts.join(" · ")}` : "Jobs ran." });
+    if ("error" in out) {
+      setNote({ tone: "err", text: out.error });
+      return false;
     }
+    const parts = Object.entries(out.results).map(([k, v]) => `${k.replace(/_/g, " ")}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
+    setNote({ tone: "ok", text: parts.length ? `Jobs ran — ${parts.join(" · ")}` : "Jobs ran." });
+    notify("Scheduled jobs ran.");
+    return true;
   }
   return (
     <span className="chip-row">
       {note && <small className={note.tone === "err" ? "note err" : "note"}>{note.text}</small>}
-      <button className="btn-ghost btn-tiny" type="button" disabled={busy} onClick={() => void run()}>
-        {busy ? "Running…" : "Run scheduled jobs now"}
-      </button>
+      <ActionButton className="btn-ghost btn-tiny" busyLabel="Running…" doneLabel="Done" onAction={run}>
+        Run scheduled jobs now
+      </ActionButton>
     </span>
   );
 }

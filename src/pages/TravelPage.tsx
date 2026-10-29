@@ -1,6 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
-import type { FormEvent } from "react";
-import { Banner, Card, Field, Page, StatusBadge } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Field, Page, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { StepTimeline } from "../components/StepTimeline.tsx";
 import { money, payRulesFor } from "../countryPay.ts";
 import { TIMEZ_COUNTRIES, formatShortDate, todayISO } from "../model.ts";
@@ -61,8 +60,9 @@ export function TravelPage() {
     demoAccounts.find((a) => a.id === id)?.fullName ?? people.find((p) => p.id === id)?.fullName ?? id;
   const claimsFor = (tripId: string) => state.expenses.filter((x) => x.tripId === tripId && x.status !== "withdrawn" && x.status !== "rejected");
 
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
+  const travelAction = useAction();
+
+  async function onSubmit(): Promise<boolean> {
     const error = await submitTravel(actor, {
       purpose,
       fromCity,
@@ -76,27 +76,34 @@ export function TravelPage() {
       advanceAmount: advanceNeeded ? Number(advance) : undefined,
     });
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Travel request submitted." });
-    if (!error) {
-      setPurpose("");
-      setFromCity("");
-      setToCity("");
-      setDepartOn("");
-      setReturnOn("");
-      setCost("");
-      setAdvanceNeeded(false);
-      setAdvance("");
-    }
+    if (error) return false;
+    notify("Travel request submitted for approval.");
+    setPurpose("");
+    setFromCity("");
+    setToCity("");
+    setDepartOn("");
+    setReturnOn("");
+    setCost("");
+    setAdvanceNeeded(false);
+    setAdvance("");
+    return true;
   }
 
   async function decide(t: TravelRequest, d: "approved" | "rejected") {
     const error = await decideTravel(actor, t.id, d, notes[t.id], canApprove);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: d === "approved" ? "Trip approved." : "Trip declined." });
-    if (!error) setNotes((prev) => ({ ...prev, [t.id]: "" }));
+    if (error) return false;
+    setNotes((prev) => ({ ...prev, [t.id]: "" }));
+    notify(`Trip ${d === "approved" ? "approved" : "declined"} for ${t.employeeName}.`);
+    return true;
   }
 
   async function withdraw(t: TravelRequest) {
     const error = await withdrawTravel(actor, t.id);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Request withdrawn." });
+    if (error) return false;
+    notify("Travel request withdrawn.");
+    return true;
   }
 
   return (
@@ -146,12 +153,12 @@ export function TravelPage() {
                     placeholder="Note (optional)"
                     aria-label={`Note for ${t.employeeName}`}
                   />
-                  <button type="button" className="btn btn-tiny" onClick={() => decide(t, "approved")}>
+                  <ActionButton className="btn btn-tiny" onAction={() => decide(t, "approved")}>
                     Approve
-                  </button>
-                  <button type="button" className="btn-ghost btn-tiny" onClick={() => decide(t, "rejected")}>
+                  </ActionButton>
+                  <ActionButton className="btn-ghost btn-tiny" onAction={() => decide(t, "rejected")}>
                     Decline
-                  </button>
+                  </ActionButton>
                 </div>
               </li>
             ))}
@@ -161,7 +168,7 @@ export function TravelPage() {
 
       <div className="split">
         <Card title="New travel request">
-          <form onSubmit={onSubmit}>
+          <form onSubmit={travelAction.submit(onSubmit)}>
             <div className="form-grid">
               <Field label="Purpose" wide>
                 <input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="Client visit, conference…" required />
@@ -208,9 +215,9 @@ export function TravelPage() {
               )}
             </div>
             <div className="form-actions">
-              <button className="btn" type="submit">
+              <SubmitButton action={travelAction} className="btn">
                 Submit request
-              </button>
+              </SubmitButton>
             </div>
           </form>
         </Card>
@@ -260,9 +267,9 @@ export function TravelPage() {
                         {open ? "Hide progress" : "Progress"}
                       </button>
                       {t.status === "pending" && (
-                        <button type="button" className="btn-ghost btn-tiny" onClick={() => withdraw(t)}>
+                        <ActionButton className="btn-ghost btn-tiny" onAction={() => withdraw(t)}>
                           Withdraw
-                        </button>
+                        </ActionButton>
                       )}
                     </div>
                   </li>

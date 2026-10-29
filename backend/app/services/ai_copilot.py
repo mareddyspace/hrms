@@ -202,7 +202,8 @@ def _ask_models(messages: list[dict[str, str]]) -> tuple[str | None, str | None]
     if not settings.ai_enabled:
         return None, None
     key = settings.openrouter_api_key.strip()
-    deadline = time.monotonic() + max(settings.ai_timeout_seconds * 2, 30.0)
+    # The portal stops waiting after ~15 s, so keep the whole attempt (all models) close to that.
+    deadline = time.monotonic() + settings.ai_timeout_seconds
     for model in settings.ai_models:
         remaining = deadline - time.monotonic()
         if remaining < 3:

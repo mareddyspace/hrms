@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="", validation_alias="OPENROUTER_API_KEY", repr=False)
     ai_model: str = Field(default="", validation_alias="AI_MODEL")
     ai_model_fallbacks: str = Field(default="", validation_alias="AI_MODEL_FALLBACKS")  # comma-separated
-    ai_timeout_seconds: float = Field(default=25.0, validation_alias="AI_TIMEOUT_SECONDS")
+    ai_timeout_seconds: float = Field(default=14.0, validation_alias="AI_TIMEOUT_SECONDS")
 
     @property
     def ai_models(self) -> list[str]:

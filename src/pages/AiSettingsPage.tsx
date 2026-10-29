@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { Banner, Card, DataTable, EmptyState, Page, StatusBadge } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, EmptyState, Page, StatusBadge } from "../components/ui.tsx";
 import { useAuditTrail } from "../data/auditTrail.ts";
 import {
   AI_FEATURES,
@@ -67,13 +67,16 @@ export function AiSettingsPage() {
             <div key={group}>
               <div className="row-between" style={{ marginTop: 12 }}>
                 <h3 className="profile-subhead">{group}</h3>
-                <button
-                  type="button"
+                <ActionButton
                   className="btn-ghost btn-tiny"
-                  onClick={() => setPoliciesEnabled(list.map((p) => p.id), !allOn, actor)}
+                  busyLabel="Saving…"
+                  doneLabel="Saved"
+                  success={`${group} policies turned ${allOn ? "off" : "on"}.`}
+                  toastError
+                  onAction={() => setPoliciesEnabled(list.map((p) => p.id), !allOn, actor)}
                 >
                   {allOn ? "Turn all off" : "Turn all on"}
-                </button>
+                </ActionButton>
               </div>
               <ul className="perm-grid">
                 {list.map((p) => (

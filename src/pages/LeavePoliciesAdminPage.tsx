@@ -9,7 +9,7 @@ import {
   type LeavePolicyEdit,
   type LeaveTypeAdmin,
 } from "../api/syncLeaveAdmin.ts";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, FilterBar, LoadingState, Page, StatusBadge, Tabs } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, FilterBar, LoadingState, Page, StatusBadge, Tabs, notify } from "../components/ui.tsx";
 import { formatShortDate, holidaysForCountry, localPolicy, TIMEZ_COUNTRIES, type CountryCode } from "../model.ts";
 import { usePortal } from "../store.tsx";
 
@@ -45,7 +45,6 @@ function PolicyDialog({ policy, onClose, onSaved }: { policy: LeavePolicyAdmin; 
     notice: policy.min_notice_days == null ? "" : String(policy.min_notice_days),
   });
   const [msg, setMsg] = useState<Msg>(null);
-  const [busy, setBusy] = useState(false);
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   const save = async () => {
@@ -61,16 +60,18 @@ function PolicyDialog({ policy, onClose, onSaved }: { policy: LeavePolicyAdmin; 
       max_per_request: numOrNull(form.max),
       min_notice_days: numOrNull(form.notice),
     };
-    if (!body.name || Number.isNaN(body.quota)) return setMsg({ tone: "err", text: "Enter a name and days a year." });
-    setBusy(true);
+    if (!body.name || Number.isNaN(body.quota)) {
+      setMsg({ tone: "err", text: "Enter a name and days a year." });
+      return false;
+    }
     try {
       await leaveAdminApi.updatePolicy(policy.id, body);
-      onSaved();
     } catch (e) {
       setMsg({ tone: "err", text: errText(e) });
-    } finally {
-      setBusy(false);
+      return false;
     }
+    onSaved();
+    return true;
   };
 
   return (
@@ -81,7 +82,7 @@ function PolicyDialog({ policy, onClose, onSaved }: { policy: LeavePolicyAdmin; 
       actions={
         <>
           <button className="btn-ghost" type="button" onClick={onClose}>Cancel</button>
-          <button className="btn" type="button" disabled={busy} onClick={save}>Save</button>
+          <ActionButton className="btn" onAction={save} success={`${form.name.trim() || policy.name} policy saved.`}>Save</ActionButton>
         </>
       }
     >
@@ -146,14 +147,19 @@ function HolidayDialog({
   const [calendar, setCalendar] = useState(holiday?.calendar ?? "");
   const [msg, setMsg] = useState<Msg>(null);
   const save = async () => {
-    if (!date || !name.trim()) return setMsg({ tone: "err", text: "Enter a date and a name." });
+    if (!date || !name.trim()) {
+      setMsg({ tone: "err", text: "Enter a date and a name." });
+      return false;
+    }
     try {
       if (holiday) await leaveAdminApi.updateHoliday(holiday.id, { date, name: name.trim(), calendar: calendar || null });
       else await leaveAdminApi.createHoliday({ country_code: country, date, name: name.trim(), calendar: calendar || null });
-      onSaved();
     } catch (e) {
       setMsg({ tone: "err", text: errText(e) });
+      return false;
     }
+    onSaved();
+    return true;
   };
   return (
     <Dialog
@@ -163,7 +169,7 @@ function HolidayDialog({
       actions={
         <>
           <button className="btn-ghost" type="button" onClick={onClose}>Cancel</button>
-          <button className="btn" type="button" onClick={save}>Save</button>
+          <ActionButton className="btn" onAction={save} success={`Holiday saved: ${name.trim()}.`}>Save</ActionButton>
         </>
       }
     >
@@ -219,11 +225,14 @@ function ServerLeaveAdmin({ country, tab }: { country: CountryCode; tab: string 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try {
       await fn();
-      setMsg({ tone: "ok", text: ok });
-      await load();
     } catch (e) {
       setMsg({ tone: "err", text: errText(e) });
+      return false;
     }
+    setMsg({ tone: "ok", text: ok });
+    notify(ok);
+    await load();
+    return true;
   };
 
   if (!policies) return <LoadingState />;
@@ -235,18 +244,27 @@ function ServerLeaveAdmin({ country, tab }: { country: CountryCode; tab: string 
         <Card
           title={`Leave policies · ${country}`}
           action={
-            <button
+            <ActionButton
               className="btn-ghost btn-tiny"
-              type="button"
-              onClick={() =>
+              busyLabel="Running…"
+              doneLabel="Done"
+              onAction={() =>
                 leaveAdminApi
                   .runCarryForward()
-                  .then((out) => setMsg({ tone: "ok", text: `Carry-forward into ${out.year}: ${out.created} added.` }))
-                  .catch((e: unknown) => setMsg({ tone: "err", text: errText(e) }))
+                  .then((out) => {
+                    const text = `Carry-forward into ${out.year}: ${out.created} added.`;
+                    setMsg({ tone: "ok", text });
+                    notify(text);
+                    return true;
+                  })
+                  .catch((e: unknown) => {
+                    setMsg({ tone: "err", text: errText(e) });
+                    return false;
+                  })
               }
             >
               Run carry-forward
-            </button>
+            </ActionButton>
           }
         >
           <DataTable
@@ -260,13 +278,13 @@ function ServerLeaveAdmin({ country, tab }: { country: CountryCode; tab: string 
               <span key="a">
                 <button className="btn-ghost btn-tiny" type="button" onClick={() => setEditing(p)}>Edit</button>
                 {p.active ? (
-                  <button className="btn-ghost btn-tiny" type="button" onClick={() => act(() => leaveAdminApi.deactivatePolicy(p.id), "Policy turned off.")}>
+                  <ActionButton className="btn-ghost btn-tiny" busyLabel="Saving…" doneLabel="Saved" onAction={() => act(() => leaveAdminApi.deactivatePolicy(p.id), `${p.name} policy turned off.`)}>
                     Turn off
-                  </button>
+                  </ActionButton>
                 ) : (
-                  <button className="btn-ghost btn-tiny" type="button" onClick={() => act(() => leaveAdminApi.updatePolicy(p.id, { active: true }), "Policy turned on.")}>
+                  <ActionButton className="btn-ghost btn-tiny" busyLabel="Saving…" doneLabel="Saved" onAction={() => act(() => leaveAdminApi.updatePolicy(p.id, { active: true }), `${p.name} policy turned on.`)}>
                     Turn on
-                  </button>
+                  </ActionButton>
                 )}
               </span>,
             ])}
@@ -293,9 +311,9 @@ function ServerLeaveAdmin({ country, tab }: { country: CountryCode; tab: string 
               <span key="a">
                 <button className="btn-ghost btn-tiny" type="button" onClick={() => setHolidayDialog({ holiday: h })}>Edit</button>
                 {h.active && (
-                  <button className="btn-ghost btn-tiny" type="button" onClick={() => act(() => leaveAdminApi.deactivateHoliday(h.id), "Holiday removed.")}>
+                  <ActionButton className="btn-ghost btn-tiny" onAction={() => act(() => leaveAdminApi.deactivateHoliday(h.id), `Holiday removed: ${h.name}.`)}>
                     Remove
-                  </button>
+                  </ActionButton>
                 )}
               </span>,
             ])}
@@ -313,14 +331,15 @@ function ServerLeaveAdmin({ country, tab }: { country: CountryCode; tab: string 
               t.name,
               t.half_day_allowed ? "Yes" : "No",
               <StatusBadge key="s" status={t.active ? "Active" : "Inactive"} tone={t.active ? "ok" : "neutral"} literal />,
-              <button
+              <ActionButton
                 key="a"
                 className="btn-ghost btn-tiny"
-                type="button"
-                onClick={() => act(() => leaveAdminApi.updateType(t.code, { active: !t.active }), t.active ? "Type turned off." : "Type turned on.")}
+                busyLabel="Saving…"
+                doneLabel="Saved"
+                onAction={() => act(() => leaveAdminApi.updateType(t.code, { active: !t.active }), t.active ? `${t.name} turned off.` : `${t.name} turned on.`)}
               >
                 {t.active ? "Turn off" : "Turn on"}
-              </button>,
+              </ActionButton>,
             ])}
           />
         </Card>

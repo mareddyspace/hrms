@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { Banner, Card, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { ActionButton, Banner, Card, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { formatShortDate, plural } from "../../model.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import {
@@ -161,10 +161,19 @@ function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (cod
   const [pickerKey, setPickerKey] = useState(0);
 
   async function submit() {
-    if (hasTemplateBlanks(description)) return setError(TEMPLATE_BLANKS_ERROR);
-    if (namePerson && !againstId) return setError("Choose the person from the list, or untick “Name a person”.");
+    if (hasTemplateBlanks(description)) {
+      setError(TEMPLATE_BLANKS_ERROR);
+      return false;
+    }
+    if (namePerson && !againstId) {
+      setError("Choose the person from the list, or untick “Name a person”.");
+      return false;
+    }
     const result = await raiseCase(actor, { category, description, againstId: namePerson ? againstId : undefined, anonymous });
-    if ("error" in result) return setError(result.error);
+    if ("error" in result) {
+      setError(result.error);
+      return false;
+    }
     setError("");
     resetDescription();
     setAgainstId("");
@@ -172,6 +181,7 @@ function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (cod
     setAnonymous(false);
     setPickerKey((k) => k + 1);
     onRaised(result.code);
+    return true;
   }
 
   return (
@@ -220,9 +230,13 @@ function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (cod
           {" "}Your manager cannot see cases.
         </p>
         <div>
-          <button className="btn" type="button" onClick={submit}>
+          <ActionButton
+            className="btn"
+            success={category === "Harassment/POSH" ? "Case sent to the Internal Committee." : "Case sent to HR."}
+            onAction={submit}
+          >
             Submit case
-          </button>
+          </ActionButton>
         </div>
       </div>
     </Card>
@@ -401,16 +415,20 @@ function CaseExtras({ c, staff, onMsg }: { c: CaseRecord; staff: boolean; onMsg:
             <input value={reason} maxLength={1000} onChange={(e) => setReason(e.target.value)} placeholder="Why this needs attention now" />
           </Field>
           <div>
-            <button
+            <ActionButton
               className="btn-ghost"
-              type="button"
               disabled={busy}
-              onClick={async () => {
-                if (await run(() => escalateCase(c.id, reason), "Case escalated.")) setReason("");
+              busyLabel="Escalating…"
+              doneLabel="Escalated"
+              success="Case escalated to every HR member."
+              onAction={async () => {
+                const ok = await run(() => escalateCase(c.id, reason), "Case escalated.");
+                if (ok) setReason("");
+                return ok;
               }}
             >
               Escalate
-            </button>
+            </ActionButton>
           </div>
         </div>
       )}
@@ -452,20 +470,22 @@ function CaseExtras({ c, staff, onMsg }: { c: CaseRecord; staff: boolean; onMsg:
             </label>
           )}
           <div>
-            <button
+            <ActionButton
               className="btn-ghost"
-              type="button"
               disabled={!file || busy}
-              onClick={async () => {
-                if (!file) return;
-                if (await run(() => uploadCaseFile(c.id, file, staff && confidentialFile), `${file.name} added.`)) {
+              success={file ? `${file.name} uploaded to the case.` : "File uploaded."}
+              onAction={async () => {
+                if (!file) return false;
+                const ok = await run(() => uploadCaseFile(c.id, file, staff && confidentialFile), `${file.name} added.`);
+                if (ok) {
                   setFile(null);
                   setInputKey((k) => k + 1);
                 }
+                return ok;
               }}
             >
               Upload
-            </button>
+            </ActionButton>
           </div>
         </div>
       )}
@@ -530,16 +550,20 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
               </select>
             </Field>
             <div>
-              <button
+              <ActionButton
                 className="btn-ghost"
-                type="button"
-                onClick={async () => {
+                success={() => {
+                  const who = caseAssignees(c).find((a) => a.id === assignee)?.name;
+                  return assignee ? `Case assigned to ${who ?? "the selected person"}.` : "Assignment cleared.";
+                }}
+                onAction={async () => {
                   const err = await assignCase(actor, c.id, assignee);
                   setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: assignee ? "Case assigned." : "Assignment cleared." });
+                  return err;
                 }}
               >
                 Assign
-              </button>
+              </ActionButton>
             </div>
           </div>
         )}
@@ -558,21 +582,25 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
               <textarea value={statusNote} onChange={(e) => setStatusNote(e.target.value)} />
             </Field>
             <div>
-              <button
+              <ActionButton
                 className="btn"
-                type="button"
-                onClick={async () => {
-                  if (!next) return setMsg({ tone: "err", text: "Choose the new status." });
+                success={next ? `Case moved to ${next}.` : undefined}
+                onAction={async () => {
+                  if (!next) {
+                    setMsg({ tone: "err", text: "Choose the new status." });
+                    return false;
+                  }
                   const err = await setCaseStatus(actor, c.id, next, statusNote);
                   setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: `Case moved to ${next}.` });
                   if (!err) {
                     setNext("");
                     setStatusNote("");
                   }
+                  return err;
                 }}
               >
                 Update status
-              </button>
+              </ActionButton>
             </div>
           </div>
         )}
@@ -587,17 +615,18 @@ function StaffCaseDialog({ c, actor, onClose }: { c: CaseRecord; actor: Complian
               Confidential (hidden from reporter)
             </label>
             <div>
-              <button
+              <ActionButton
                 className="btn-ghost"
-                type="button"
-                onClick={async () => {
+                success={confidential ? "Confidential note added." : "Note added and shared with the reporter."}
+                onAction={async () => {
                   const err = await addCaseNote(actor, c.id, note, confidential);
                   setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: "Note added." });
                   if (!err) setNote("");
+                  return err;
                 }}
               >
                 Add note
-              </button>
+              </ActionButton>
             </div>
           </div>
         )}
@@ -648,17 +677,18 @@ function ReporterCaseDialog({ c, actor, code, onClose }: { c: CaseRecord; actor:
               <textarea value={comment} onChange={(e) => setComment(e.target.value)} />
             </Field>
             <div>
-              <button
+              <ActionButton
                 className="btn"
-                type="button"
-                onClick={async () => {
+                success="Comment sent to the case handler."
+                onAction={async () => {
                   const err = await (code ? addCommentByCode(actor, code, comment) : addCaseNote(actor, c.id, comment, false));
                   setMsg(err ? { tone: "err", text: err } : { tone: "ok", text: "Comment added." });
                   if (!err) setComment("");
+                  return err;
                 }}
               >
                 Add comment
-              </button>
+              </ActionButton>
             </div>
           </div>
         )}

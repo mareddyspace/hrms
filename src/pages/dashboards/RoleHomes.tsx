@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } fr
 import { countUnreadNotificationsFor } from "../../data/notificationFeed.ts";
 import { Link } from "react-router-dom";
 import { COMPANY_NAME } from "../../brand.ts";
-import { Card, DataTable, LeaveTable, MetricCard, MetricGrid, StatusBadge, StatusPill } from "../../components/ui.tsx";
+import { ActionButton, Card, DataTable, LeaveTable, MetricCard, MetricGrid, StatusBadge, StatusPill } from "../../components/ui.tsx";
 import { DEMO_ACCOUNTS, accountHasNavAccess, type DemoAccount } from "../../demoAccounts.ts";
 import { COURSES } from "../../data/talentData.ts";
 import { getTalentState, requisitionApprovers, subscribeTalent } from "../../data/talentLocal.ts";
@@ -422,7 +422,10 @@ export function EmployeeHome() {
   const unread = countUnreadNotificationsFor(employee.id, state, demoProfile.role);
 
   function punch(action: "check_in" | "end_break" | "check_out") {
-    void attendanceActionAsync(employee.id, action, dayContext).then(setPunchError);
+    return attendanceActionAsync(employee.id, action, dayContext).then((error) => {
+      setPunchError(error);
+      return error;
+    });
   }
 
   // Today's summary — short lines from the same data as the cards below.
@@ -523,19 +526,19 @@ export function EmployeeHome() {
           )}
           <div className="row-gap" style={{ marginTop: 10 }}>
             {session.phase === "not_started" && !offToday && (
-              <button type="button" className="btn" onClick={() => punch("check_in")}>
+              <ActionButton className="btn" success="Checked in." onAction={() => punch("check_in")}>
                 Check in
-              </button>
+              </ActionButton>
             )}
             {session.phase === "on_break" && (
-              <button type="button" className="btn" onClick={() => punch("end_break")}>
+              <ActionButton className="btn" success="Break ended." busyLabel="Ending break…" doneLabel="Back to work" onAction={() => punch("end_break")}>
                 End break
-              </button>
+              </ActionButton>
             )}
             {session.phase === "checked_in" && (
-              <button type="button" className="btn" onClick={() => punch("check_out")}>
+              <ActionButton className="btn" success="Checked out." onAction={() => punch("check_out")}>
                 Check out
-              </button>
+              </ActionButton>
             )}
             <Link className="btn-ghost" to={R.attendance}>
               History

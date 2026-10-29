@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -11,7 +12,10 @@ import {
   MetricGrid,
   Page,
   StatusBadge,
+  SubmitButton,
   Tabs,
+  notify,
+  useAction,
 } from "../components/ui.tsx";
 import {
   CHAT_PEOPLE,
@@ -138,32 +142,46 @@ export function InboxApprovalsPage() {
   const selected = filtered.find((t) => t.id === selectedId) ?? filtered[0] ?? null;
 
   function onApprove() {
-    if (!selected) return;
+    if (!selected) return false;
     setError("");
-    decideInboxTask(selected.id, "Approved", employee.fullName, reason.trim() || undefined);
+    const result = decideInboxTask(selected.id, "Approved", employee.fullName, reason.trim() || undefined);
+    if (!result.ok) {
+      setError(result.error);
+      return false;
+    }
     setReason("");
+    notify(`Approved. ${selected.requester} has been notified.`);
+    return true;
   }
 
   function onReject() {
-    if (!selected) return;
+    if (!selected) return false;
     if (selected.requiresReasonOnReject && !reason.trim()) {
       setError("A reason is required to reject this request.");
-      return;
+      return false;
     }
     setError("");
-    decideInboxTask(selected.id, "Rejected", employee.fullName, reason.trim());
+    const result = decideInboxTask(selected.id, "Rejected", employee.fullName, reason.trim());
+    if (!result.ok) {
+      setError(result.error);
+      return false;
+    }
     setReason("");
+    notify(`Rejected. ${selected.requester} has been notified.`);
+    return true;
   }
 
   function onDelegate() {
-    if (!selected) return;
+    if (!selected) return false;
     if (!reason.trim()) {
       setError("Add a short note when delegating.");
-      return;
+      return false;
     }
     setError("");
     delegateInboxTask(selected.id, employee.fullName, "Farhan Ali", reason.trim());
     setReason("");
+    notify("Delegated to Farhan Ali.");
+    return true;
   }
 
   return (
@@ -276,15 +294,15 @@ export function InboxApprovalsPage() {
                     </Field>
                     {error && <Banner message={{ tone: "err", text: error }} />}
                     <div className="row-gap">
-                      <button type="button" className="btn" onClick={onApprove}>
+                      <ActionButton className="btn" onAction={onApprove}>
                         Approve
-                      </button>
-                      <button type="button" className="btn-ghost" onClick={onReject}>
+                      </ActionButton>
+                      <ActionButton className="btn-ghost" onAction={onReject}>
                         Reject
-                      </button>
-                      <button type="button" className="btn-ghost" onClick={onDelegate}>
+                      </ActionButton>
+                      <ActionButton className="btn-ghost" onAction={onDelegate} busyLabel="Delegating…" doneLabel="Delegated">
                         Delegate
-                      </button>
+                      </ActionButton>
                     </div>
                   </>
                 )}
@@ -311,7 +329,6 @@ export function MessagingPage() {
   const [text, setText] = useState("");
   const [attachName, setAttachName] = useState<string | undefined>();
   const [error, setError] = useState("");
-  const [sentOk, setSentOk] = useState("");
   const [showDetails, setShowDetails] = useState(false);
   const [composerMode, setComposerMode] = useState<"closed" | "direct" | "group">("closed");
   const [groupTitle, setGroupTitle] = useState("");
@@ -353,11 +370,8 @@ export function MessagingPage() {
     threadEndRef.current?.scrollIntoView({ block: "end" });
   }, [active?.id, active?.messages?.length]);
 
-  useEffect(() => {
-    if (!sentOk) return;
-    const t = window.setTimeout(() => setSentOk(""), 2800);
-    return () => window.clearTimeout(t);
-  }, [sentOk]);
+  const groupAction = useAction();
+  const sendAction = useAction({ doneMs: 1200 });
 
   const people = useMemo(
     () => CHAT_PEOPLE.filter((p) => p.id !== employee.id && matchesPeopleQuery(p, peopleQ.trim())),
@@ -376,18 +390,16 @@ export function MessagingPage() {
     setFilter("direct");
     setComposerMode("closed");
     setError("");
-    setSentOk(`Opened chat with ${person.name}.`);
   }
 
   function toggleGroupMember(id: string) {
     setGroupMemberIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
-  function createGroup(event: FormEvent) {
-    event.preventDefault();
+  function createGroup() {
     if (groupMemberIds.length === 0) {
       setError("Select at least one colleague.");
-      return;
+      return false;
     }
     const members = CHAT_PEOPLE.filter((p) => groupMemberIds.includes(p.id));
     const id = createGroupConversation({
@@ -404,18 +416,18 @@ export function MessagingPage() {
     setGroupTitle("");
     setGroupMemberIds([]);
     setError("");
-    setSentOk("Group created.");
+    notify(groupTitle.trim() ? `Group "${groupTitle.trim()}" created.` : "Group created.");
+    return true;
   }
 
-  function send(event: FormEvent) {
-    event.preventDefault();
+  function send() {
     if (!active) {
       setError("Select or start a conversation first.");
-      return;
+      return false;
     }
     if (!text.trim() && !attachName) {
       setError("Type a message or attach a file.");
-      return;
+      return false;
     }
     const failure = sendChatMessage(
       active.id,
@@ -426,12 +438,13 @@ export function MessagingPage() {
     );
     if (failure) {
       setError(failure);
-      return;
+      return false;
     }
     setError("");
     setText("");
     setAttachName(undefined);
-    setSentOk("Message sent.");
+    notify(`Message sent to ${active.title}.`);
+    return true;
   }
 
   return (
@@ -456,8 +469,6 @@ export function MessagingPage() {
         </div>
       }
     >
-      {sentOk && <Banner message={{ tone: "ok", text: sentOk }} />}
-
       {composerMode !== "closed" && (
         <Card title={composerMode === "direct" ? "New message" : "New group"}>
           {composerMode === "direct" ? (
@@ -491,7 +502,7 @@ export function MessagingPage() {
               )}
             </div>
           ) : (
-            <form className="stack" onSubmit={createGroup}>
+            <form className="stack" onSubmit={groupAction.submit(createGroup)}>
               <Field label="Group name">
                 <input
                   value={groupTitle}
@@ -521,9 +532,9 @@ export function MessagingPage() {
               </ul>
               {error && composerMode === "group" && <Banner message={{ tone: "err", text: error }} />}
               <div className="row-gap">
-                <button type="submit" className="btn">
+                <SubmitButton action={groupAction} className="btn">
                   Create group
-                </button>
+                </SubmitButton>
                 <button type="button" className="btn-ghost" onClick={() => setComposerMode("closed")}>
                   Cancel
                 </button>
@@ -580,7 +591,6 @@ export function MessagingPage() {
                         onClick={() => {
                           markedReadRef.current = null;
                           setActiveId(c.id);
-                          setSentOk("");
                           setError("");
                         }}
                       >
@@ -725,7 +735,7 @@ export function MessagingPage() {
                 <div ref={threadEndRef} />
               </div>
 
-              <form className="msg-composer" onSubmit={send}>
+              <form className="msg-composer" onSubmit={sendAction.submit(send)}>
                 {error && composerMode !== "group" && <Banner message={{ tone: "err", text: error }} />}
                 <textarea
                   rows={2}
@@ -750,9 +760,9 @@ export function MessagingPage() {
                     />
                   </label>
                   {attachName && <span className="note">File: {attachName}</span>}
-                  <button type="submit" className="btn">
+                  <SubmitButton action={sendAction} className="btn">
                     Send
-                  </button>
+                  </SubmitButton>
                 </div>
               </form>
             </Card>
@@ -879,9 +889,9 @@ export function AnnouncementsPage() {
               )}
               {publishError && <Banner message={{ tone: "err", text: publishError }} />}
               {selected.state === "Published" && !isReadByMe(selected) && (
-                <button type="button" className="btn" onClick={() => markAnnouncementRead(selected.id, employee.id)}>
+                <ActionButton className="btn" success="Marked as read." onAction={() => markAnnouncementRead(selected.id, employee.id)}>
                   Mark as read
-                </button>
+                </ActionButton>
               )}
             </div>
           )}
@@ -934,7 +944,6 @@ function HrDueCell({ request }: { request: HrRequest }) {
 function HrRequestExtras({ request, onError }: { request: HrRequest; onError: (text: string) => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [inputKey, setInputKey] = useState(0);
-  const [busy, setBusy] = useState(false);
   const files = request.files ?? [];
   const closed = request.status === "Closed";
   const canEscalate = !!request.overdue && !request.escalatedAt && !closed;
@@ -943,18 +952,19 @@ function HrRequestExtras({ request, onError }: { request: HrRequest; onError: (t
       {request.escalatedAt && <p className="note">Escalated {formatWhen(request.escalatedAt)}.</p>}
       {canEscalate && (
         <div>
-          <button
-            type="button"
+          <ActionButton
             className="btn-ghost"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              onError((await escalateHrRequestApi(request.id)) ?? "");
-              setBusy(false);
+            busyLabel="Escalating…"
+            doneLabel="Escalated"
+            success="Request escalated."
+            onAction={async () => {
+              const err = await escalateHrRequestApi(request.id);
+              onError(err ?? "");
+              return err;
             }}
           >
             Escalate (overdue)
-          </button>
+          </ActionButton>
         </div>
       )}
       <h4 className="collab-section-title">Files</h4>
@@ -984,24 +994,24 @@ function HrRequestExtras({ request, onError }: { request: HrRequest; onError: (t
       {!closed && (
         <div className="row-gap">
           <input key={inputKey} type="file" aria-label="Attach a file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-          <button
-            type="button"
+          <ActionButton
             className="btn-ghost"
-            disabled={!file || busy}
-            onClick={async () => {
-              if (!file) return;
-              setBusy(true);
+            disabled={!file}
+            busyLabel="Attaching…"
+            doneLabel="Attached"
+            onAction={async () => {
+              if (!file) return false;
               const err = await uploadHrRequestFileApi(request.id, file);
-              setBusy(false);
               onError(err ?? "");
-              if (!err) {
-                setFile(null);
-                setInputKey((k) => k + 1);
-              }
+              if (err) return err;
+              notify(`${file.name} attached.`);
+              setFile(null);
+              setInputKey((k) => k + 1);
+              return true;
             }}
           >
             Attach
-          </button>
+          </ActionButton>
         </div>
       )}
     </div>
@@ -1119,25 +1129,25 @@ export function HelpHrRequestsPage() {
     return `${f.question} ${f.answer} ${f.topic}`.toLowerCase().includes(faqQ.toLowerCase());
   });
 
-  async function submitRequest(event: FormEvent) {
-    event.preventDefault();
+  async function submitRequest(): Promise<boolean> {
     if (!subject.trim() || !description.trim()) {
       setFormError("Subject and description are required.");
       setFormOk("");
-      return;
+      return false;
     }
     if (hasTemplateBlanks(description)) {
       setFormError(TEMPLATE_BLANKS_ERROR);
       setFormOk("");
-      return;
+      return false;
     }
+    const owner = hrDeskOwnerName((HR_REQUEST_SLA[category] ?? HR_REQUEST_SLA.Other).ownerId);
     let id: string;
     if (API_ENABLED) {
       const result = await createHrRequestApi({ category, subject, description, priority });
       if ("error" in result) {
         setFormError(result.error);
         setFormOk("");
-        return;
+        return false;
       }
       id = result.id;
     } else {
@@ -1155,9 +1165,13 @@ export function HelpHrRequestsPage() {
     resetDescription();
     setFormError("");
     setFormOk("Request submitted.");
+    notify(`Request sent to ${owner}.`);
     setSelectedId(id);
     setTab("history");
+    return true;
   }
+
+  const requestAction = useAction();
 
   function openRequest(id: string) {
     setSelectedId(id);
@@ -1284,13 +1298,19 @@ export function HelpHrRequestsPage() {
                   ))}
                 </select>
               </Field>
-              <button
-                type="button"
+              <ActionButton
                 className="btn"
-                onClick={async () => setTicketError((await rateHrRequestApi(selected.id, rating)) ?? "")}
+                busyLabel="Sending…"
+                doneLabel="Rated"
+                success="Thanks, your rating was sent."
+                onAction={async () => {
+                  const err = await rateHrRequestApi(selected.id, rating);
+                  setTicketError(err ?? "");
+                  return err;
+                }}
               >
                 Rate
-              </button>
+              </ActionButton>
             </div>
           )}
           {API_ENABLED && <HrRequestExtras request={selected} onError={setTicketError} />}
@@ -1309,20 +1329,21 @@ export function HelpHrRequestsPage() {
           <Field label="Add comment" wide>
             <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
           </Field>
-          <button
-            type="button"
+          <ActionButton
             className="btn"
             disabled={!comment.trim()}
-            onClick={async () => {
+            success="Comment posted."
+            onAction={async () => {
               const failure = API_ENABLED
                 ? await addHrCommentApi(selected.id, comment)
                 : addHrComment(selected.id, employee.fullName, comment, actor);
               setTicketError(failure ?? "");
               if (!failure) setComment("");
+              return failure;
             }}
           >
             Post comment
-          </button>
+          </ActionButton>
         </div>
       )}
     </Card>
@@ -1346,7 +1367,7 @@ export function HelpHrRequestsPage() {
 
       {tab === "request" && !hrView && (
         <Card title="HR service request">
-          <form className="stack" onSubmit={submitRequest}>
+          <form className="stack" onSubmit={requestAction.submit(submitRequest)}>
             <Field label="Category">
               <select
                 value={category}
@@ -1386,9 +1407,9 @@ export function HelpHrRequestsPage() {
             </Field>
             {formError && <Banner message={{ tone: "err", text: formError }} />}
             {formOk && <Banner message={{ tone: "ok", text: formOk }} />}
-            <button type="submit" className="btn">
+            <SubmitButton action={requestAction} className="btn">
               Submit request
-            </button>
+            </SubmitButton>
           </form>
         </Card>
       )}

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { DataTable, EmptyState, Field, MetricCard, MetricGrid, StatusBadge } from "../../components/ui.tsx";
+import { ActionButton, DataTable, EmptyState, Field, MetricCard, MetricGrid, StatusBadge, SubmitButton, notify, useAction } from "../../components/ui.tsx";
 import { CLOSED_STAGES, PIPELINE_STAGES, type Candidate, type Interview, type PipelineStage, type Requisition, type StageStep } from "../../data/talentData.ts";
 import {
   addCandidate,
@@ -42,6 +42,16 @@ const EXIT: readonly PipelineStage[] = ["Rejected", "Withdrawn"];
 /** A candidate is overdue after this many days in one open stage. */
 export const STUCK_DAYS = 7;
 const DAY = 86_400_000;
+
+/** talentAction as a promise, so action buttons stay busy until the change (or backend call) finishes. */
+function talentRun(change: () => TalentResult, done: (result: TalentResult) => void): Promise<TalentResult> {
+  return new Promise((resolve) =>
+    talentAction(change, (result) => {
+      done(result);
+      resolve(result);
+    }),
+  );
+}
 
 /* ───────────── Date helpers ───────────── */
 
@@ -269,6 +279,7 @@ function CandidateCvFile({
               void apiUploadCv(candidate.id, file).then((error) => {
                 setBusy(false);
                 onResult(error, `CV saved for ${candidate.name}.`);
+                if (!error) notify(`CV uploaded for ${candidate.name}.`);
               });
             }}
           />
@@ -401,20 +412,22 @@ export function CandidatePipelineView({
           <Field label="Type">
             <input value={iv.type} onChange={(e) => setIv((f) => ({ ...f, type: e.target.value }))} />
           </Field>
-          <button
-            type="button"
+          <ActionButton
             className="btn btn-tiny"
             disabled={!iv.when || !iv.panel.trim()}
-            onClick={() => {
+            onAction={() => {
               const input = iv;
-              talentAction(() => scheduleInterview(actor, candidate.id, input), (error) => {
+              return talentRun(() => scheduleInterview(actor, candidate.id, input), (error) => {
                 onResult(error, `Interview booked for ${fmtDateTime(input.when)}.`);
-                if (!error) setIv((f) => ({ ...f, when: "" }));
+                if (!error) {
+                  setIv((f) => ({ ...f, when: "" }));
+                  notify(`Interview with ${candidate.name} scheduled for ${fmtDateTime(input.when)}.`);
+                }
               });
             }}
           >
             Schedule
-          </button>
+          </ActionButton>
         </div>
       )}
 
@@ -454,22 +467,23 @@ export function CandidatePipelineView({
             <Field label="Note">
               <input value={note} maxLength={160} onChange={(e) => setNote(e.target.value)} placeholder="Optional" />
             </Field>
-            <button
-              type="button"
+            <ActionButton
               className="btn btn-tiny"
               disabled={!target}
-              onClick={() => {
-                talentAction(() => setCandidateStage(actor, candidate.id, target as PipelineStage, note), (error) => {
-                  onResult(error, target === "Hired" ? `${candidate.name} hired. Onboarding started.` : `${candidate.name} → ${target}.`);
+              onAction={() => {
+                const moved = target;
+                return talentRun(() => setCandidateStage(actor, candidate.id, moved as PipelineStage, note), (error) => {
+                  onResult(error, moved === "Hired" ? `${candidate.name} hired. Onboarding started.` : `${candidate.name} → ${moved}.`);
                   if (!error) {
                     setTarget("");
                     setNote("");
+                    notify(moved === "Hired" ? `${candidate.name} hired. Onboarding started.` : `${candidate.name} moved to ${moved}.`);
                   }
                 });
               }}
             >
               Move
-            </button>
+            </ActionButton>
           </div>
         </>
       )}
@@ -614,6 +628,7 @@ export function AddCandidateForm({
   const [cv, setCv] = useState<CvFields | null>(null);
   const [cvFile, setCvFile] = useState<File | null>(null);
   const cvOn = useAiOn("cv");
+  const addAction = useAction();
   if (reqs.length === 0) return null;
   const req = reqs.find((r) => r.id === reqId) ?? reqs[0];
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
@@ -646,14 +661,15 @@ export function AddCandidateForm({
   return (
     <form
       className="cp-actions"
-      onSubmit={(e) => {
-        e.preventDefault();
+      onSubmit={addAction.submit(() => {
         // Backend mode: the confirmed CV details (and file) go with the new candidate.
         const input = API_ENABLED && cv ? { requisitionId: req.id, ...form, ...cvExtras(cv, actor), cvFile } : { requisitionId: req.id, ...form };
-        talentAction(() => addCandidate(actor, input), (error) => {
+        const name = form.name.trim();
+        return talentRun(() => addCandidate(actor, input), (error) => {
           if (!error && !API_ENABLED) applyCv(form.email);
-          onResult(error, `${form.name.trim()} added to ${req.id} at ${PIPELINE_STAGES[0]}.`);
+          onResult(error, `${name} added to ${req.id} at ${PIPELINE_STAGES[0]}.`);
           if (!error) {
+            notify(`${name} added to ${req.id}.`);
             setForm({ ...EMPTY_CANDIDATE, appliedOn: nowStamp().slice(0, 10) });
             setCv(null);
             setCvFile(null);
@@ -661,7 +677,7 @@ export function AddCandidateForm({
             setOpen(false);
           }
         });
-      }}
+      })}
     >
       {cvOn && !cvOpen && (
         <div className="row-gap" style={{ width: "100%" }}>
@@ -716,9 +732,9 @@ export function AddCandidateForm({
         <input type="date" value={form.appliedOn} max={nowStamp().slice(0, 10)} onChange={(e) => set({ appliedOn: e.target.value })} />
       </Field>
       <div className="row-gap">
-        <button type="submit" className="btn btn-tiny" disabled={!form.name.trim() || !form.email.trim() || !form.source.trim() || !form.appliedOn}>
+        <SubmitButton action={addAction} className="btn btn-tiny" disabled={!form.name.trim() || !form.email.trim() || !form.source.trim() || !form.appliedOn}>
           Add
-        </button>
+        </SubmitButton>
         <button
           type="button"
           className="btn-ghost btn-tiny"
@@ -852,7 +868,10 @@ export function CandidateCards({
                         onChange={(e) => {
                           const target = e.target.value as PipelineStage;
                           if (!target) return;
-                          talentAction(() => setCandidateStage(actor, c.id, target), (res) => onResult(res, target === "Hired" ? `${c.name} hired. Onboarding started.` : `${c.name} → ${target}.`));
+                          talentAction(() => setCandidateStage(actor, c.id, target), (res) => {
+                            onResult(res, target === "Hired" ? `${c.name} hired. Onboarding started.` : `${c.name} → ${target}.`);
+                            if (!res) notify(target === "Hired" ? `${c.name} hired. Onboarding started.` : `${c.name} moved to ${target}.`);
+                          });
                         }}
                       >
                         <option value="">Move to…</option>

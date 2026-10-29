@@ -1,6 +1,6 @@
-import { useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { Heart } from "lucide-react";
-import { Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, SubmitButton, Tabs, notify, useAction } from "../components/ui.tsx";
 import { usePortal } from "../store.tsx";
 import { formatShortDate } from "../model.ts";
 import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
@@ -35,6 +35,13 @@ function useRecognition() {
 
 function result(error: string | null, ok: string): Msg {
   return error ? { tone: "err", text: error } : { tone: "ok", text: ok };
+}
+
+/** Show the outcome in the page notice, toast on success, and hand the error back to the button. */
+function settle(setMsg: (msg: Msg) => void, error: string | null, ok: string): string | null {
+  setMsg(result(error, ok));
+  if (!error) notify(ok);
+  return error;
 }
 
 const STATUS_TONE: Record<RedemptionStatus, "ok" | "warn" | "danger" | "neutral"> = {
@@ -92,24 +99,20 @@ function Wall({ actor }: { actor: PlusActor }) {
     filter === "received" ? i.toId === actor.id : filter === "given" ? i.fromId === actor.id : true,
   );
 
-  const [busy, setBusy] = useState(false);
+  const sendAct = useAction();
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (busy) return;
+  async function submit() {
     const points = form.points === "" ? 0 : Number(form.points);
-    setBusy(true);
     const error = await giveKudos(actor, { ...form, points });
-    setBusy(false);
     const name = people.find((p) => p.id === form.toId)?.fullName ?? "them";
-    setMsg(result(error, `Kudos sent to ${name}.`));
     if (!error) setForm(BLANK);
+    return settle(setMsg, error, `Kudos sent to ${name}.`);
   }
 
   return (
     <>
       <Card title="Give kudos">
-        <form className="stack" onSubmit={submit}>
+        <form className="stack" onSubmit={sendAct.submit(submit)}>
           <Banner message={msg} />
           <div className="form-grid-2">
             <Field label="Colleague">
@@ -145,7 +148,7 @@ function Wall({ actor }: { actor: PlusActor }) {
             </Field>
           </div>
           <div className="row-gap">
-            <button className="btn" type="submit" disabled={busy}>Send kudos</button>
+            <SubmitButton action={sendAct} className="btn">Send kudos</SubmitButton>
           </div>
         </form>
       </Card>
@@ -230,18 +233,19 @@ function Rewards({ actor }: { actor: PlusActor }) {
                 maxLength={300}
                 onChange={(e) => setNotes({ ...notes, [r.id]: e.target.value })}
               />
-              <button
+              <ActionButton
                 className="btn btn-tiny"
-                type="button"
                 disabled={balance < r.points}
-                onClick={async () => {
+                busyLabel="Redeeming…"
+                doneLabel="Requested"
+                onAction={async () => {
                   const error = await redeemReward(actor, r.id, notes[r.id] ?? "");
-                  setMsg(result(error, `${r.name} requested — HR will fulfil it.`));
-                  if (!error) setNotes({ ...notes, [r.id]: "" });
+                  if (!error) setNotes((prev) => ({ ...prev, [r.id]: "" }));
+                  return settle(setMsg, error, `${r.name} requested — sent to HR to fulfil.`);
                 }}
               >
                 {balance < r.points ? `Need ${r.points - balance} more` : "Redeem"}
-              </button>
+              </ActionButton>
             </article>
           ))}
         </div>
@@ -258,9 +262,9 @@ function Rewards({ actor }: { actor: PlusActor }) {
             formatShortDate(r.requestedOn),
             <StatusBadge key="s" status={r.status} tone={STATUS_TONE[r.status]} literal />,
             r.status === "Requested" ? (
-              <button key="c" className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await cancelRedemption(actor, r.id), "Request cancelled — points returned."))}>
+              <ActionButton key="c" className="btn-ghost btn-tiny" onAction={async () => settle(setMsg, await cancelRedemption(actor, r.id), "Request cancelled — points returned.")}>
                 Cancel
-              </button>
+              </ActionButton>
             ) : (
               ""
             ),
@@ -306,12 +310,20 @@ function Fulfilment({ actor }: { actor: PlusActor }) {
                       value={notes[r.id] ?? ""}
                       onChange={(e) => setNotes({ ...notes, [r.id]: e.target.value })}
                     />
-                    <button className="btn btn-tiny" type="button" onClick={async () => setMsg(result(await decideRedemption(actor, r.id, true, notes[r.id] ?? ""), `Marked fulfilled for ${r.personName}.`))}>
+                    <ActionButton
+                      className="btn btn-tiny"
+                      busyLabel="Updating…"
+                      doneLabel="Fulfilled"
+                      onAction={async () => settle(setMsg, await decideRedemption(actor, r.id, true, notes[r.id] ?? ""), `Marked fulfilled for ${r.personName}.`)}
+                    >
                       Fulfil
-                    </button>
-                    <button className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await decideRedemption(actor, r.id, false, notes[r.id] ?? ""), "Request declined — points returned."))}>
+                    </ActionButton>
+                    <ActionButton
+                      className="btn-ghost btn-tiny"
+                      onAction={async () => settle(setMsg, await decideRedemption(actor, r.id, false, notes[r.id] ?? ""), `Request from ${r.personName} declined — points returned.`)}
+                    >
                       Decline
-                    </button>
+                    </ActionButton>
                   </div>
                 )}
               </li>
