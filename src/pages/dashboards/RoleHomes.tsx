@@ -851,7 +851,7 @@ export function ManagerHome() {
       .map(({ d, status }) => ({
         id: `visa-${d.id}`,
         text: `${personName(d.personId, data.people)} · ${d.type} ${status === "Expired" ? "expired" : "expires"} ${formatShortDate(d.expiryDate)}`,
-        to: "/team",
+        to: `/people/${d.personId}`,
         tone: status === "Expired" ? ("danger" as const) : ("warn" as const),
       })),
   ];
@@ -869,7 +869,7 @@ export function ManagerHome() {
     notCheckedIn: data.statuses.filter((s) => s.status === "Working" && !checkedIn.has(s.member.id)).length,
     waiting: data.waitingCount,
     overdueApprovals: overdue.length,
-    alerts: alerts.filter((a) => a.id !== "overdue").map((a) => a.text),
+    alerts: alerts.filter((a) => a.id !== "overdue").map((a) => ({ text: a.text, to: a.to })),
     coverage: teamCover.risks,
     upcomingLeave: upcomingLeave.filter((r) => r.from > today).map((r) => ({ name: personName(r.employeeId, data.people), from: r.from })),
   });

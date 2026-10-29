@@ -57,7 +57,7 @@ export function employeeSummary(input: {
   if (input.missingCheckOut.length) lines.push({ text: `Check-out is missing on ${names(input.missingCheckOut.map(day))} — request a correction.`, to: "/attendance" });
   else if (input.checkIn && input.checkOut) lines.push({ text: `You checked in at ${input.checkIn} and out at ${input.checkOut}.`, to: "/attendance" });
   else if (input.checkIn) lines.push({ text: `${input.attendanceLabel} since ${input.checkIn}. Shift ${input.shiftHours}.`, to: "/attendance" });
-  else if (input.offToday) lines.push({ text: input.offToday });
+  else if (input.offToday) lines.push({ text: input.offToday, to: "/leave" });
   else if (input.attendanceLabel === "Not checked in") lines.push({ text: `You haven't checked in yet. Shift ${input.shiftHours}.`, to: "/attendance" });
 
   // Interviews and deadlines first — they have a time on them.
@@ -114,7 +114,7 @@ export function managerSummary(input: {
   notCheckedIn: number;
   waiting: number;
   overdueApprovals: number;
-  alerts: string[];
+  alerts: { text: string; to: string }[];
   coverage: { severity: string; text: string }[];
   upcomingLeave: { name: string; from: string }[];
 }): SummaryLine[] {
@@ -132,9 +132,15 @@ export function managerSummary(input: {
       to: "/approvals",
     });
   } else lines.push({ text: "No approvals are waiting on you." });
-  if (input.alerts.length) lines.push({ text: `${plural(input.alerts.length, "item needs", "items need")} follow-up: ${input.alerts[0]}${input.alerts.length > 1 ? ` and ${input.alerts.length - 1} more` : ""}.` });
+  if (input.alerts.length) {
+    // One alert opens its own page; several open the team view where all of them are listed.
+    lines.push({
+      text: `${plural(input.alerts.length, "item needs", "items need")} follow-up: ${input.alerts[0].text}${input.alerts.length > 1 ? ` and ${input.alerts.length - 1} more` : ""}.`,
+      to: input.alerts.length === 1 ? input.alerts[0].to : "/team",
+    });
+  }
   const risk = input.coverage.find((c) => c.severity === "High") ?? input.coverage[0];
-  if (risk) lines.push({ text: `Coverage gap: ${risk.text}` });
+  if (risk) lines.push({ text: `Coverage gap: ${risk.text}`, to: "/workforce/shifts" });
   else if (input.upcomingLeave.length) lines.push({ text: `Next team leave: ${input.upcomingLeave[0].name} from ${day(input.upcomingLeave[0].from)}.`, to: "/leave" });
   if (input.notCheckedIn > 0 && lines.length < MAX_LINES) lines.push({ text: `${plural(input.notCheckedIn, "person hasn't", "people haven't")} checked in yet.`, to: "/attendance" });
   return lines.slice(0, MAX_LINES);
@@ -170,9 +176,9 @@ export function hrSummary(input: {
   } else if (input.resignationsOpen) lines.push({ text: `${plural(input.resignationsOpen, "resignation is", "resignations are")} in progress.`, to: "/people/exits" });
   if (input.overdueActions.length) {
     const kinds = [...input.overdueActions.reduce((m, a) => m.set(a.kind, (m.get(a.kind) ?? 0) + 1), new Map<string, number>())].map(([k, n]) => `${k.toLowerCase()} ${n}`);
-    lines.push({ text: `${plural(input.overdueActions.length, "HR action is", "HR actions are")} past due (${names(kinds)}).` });
-  } else if (input.openActions) lines.push({ text: `${plural(input.openActions, "HR action is", "HR actions are")} open, none past due.` });
+    lines.push({ text: `${plural(input.overdueActions.length, "HR action is", "HR actions are")} past due (${names(kinds)}).`, to: "/approvals" });
+  } else if (input.openActions) lines.push({ text: `${plural(input.openActions, "HR action is", "HR actions are")} open, none past due.`, to: "/approvals" });
   lines.push({ text: input.waiting ? `${plural(input.waiting, "approval waits", "approvals wait")} on you.` : "No approvals are waiting on you.", to: input.waiting ? "/approvals" : undefined });
-  if (input.highRisks) lines.push({ text: `${plural(input.highRisks, "team has", "teams have")} a high coverage risk this week.` });
+  if (input.highRisks) lines.push({ text: `${plural(input.highRisks, "team has", "teams have")} a high coverage risk this week.`, to: "/workforce/shifts" });
   return lines.slice(0, MAX_LINES);
 }
