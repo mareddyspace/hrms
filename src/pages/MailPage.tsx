@@ -27,6 +27,14 @@ const TEMPLATES: { label: string; subject: string; category: MailCategory }[] = 
   { label: "General", subject: "", category: "General" },
 ];
 
+/** People who lead others (managers, HR, executives, admin) write about the team, not to "my manager". */
+const LEAD_TEMPLATES: { label: string; subject: string; category: MailCategory }[] = [
+  { label: "Team update", subject: "Team update", category: "General" },
+  { label: "Leave decision", subject: "About your leave request", category: "Leave" },
+  { label: "Meeting request", subject: "Meeting request", category: "General" },
+  { label: "General", subject: "", category: "General" },
+];
+
 type View = "inbox" | "sent" | "compose";
 
 type Recipient = { id: string; name: string; email: string; group: string };
@@ -44,7 +52,7 @@ function replySubject(subject: string): string {
 }
 
 export function MailPage() {
-  const { employee, demoAccounts } = usePortal();
+  const { employee, demoAccounts, demoProfile } = usePortal();
   const messages = useMail();
   const [params, setParams] = useSearchParams();
   const me = employee.id;
@@ -55,6 +63,10 @@ export function MailPage() {
 
   const chain = useMemo(() => managementChain(me, demoAccounts), [me, demoAccounts]);
   const manager = chain[0];
+  // Only employees get the "Write to my manager" shortcut; anyone who leads others starts a plain new mail.
+  const leadsOthers =
+    demoProfile.role !== "employee" || allReportIds(me).length > 0 || demoAccounts.some((a) => a.reportsToId === me);
+  const templates = leadsOthers ? LEAD_TEMPLATES : TEMPLATES;
 
   /** Reporting line above, HR, and (for managers) the people below. Not the whole company. */
   const recipients = useMemo<Recipient[]>(() => {
@@ -121,6 +133,14 @@ export function MailPage() {
       setSubject(template.subject);
       setCategory(template.category);
     }
+  }
+
+  function newMail() {
+    setCcIds([]);
+    setSubject("");
+    setBody("");
+    setCategory("General");
+    startCompose("");
   }
 
   function writeToManager() {
@@ -192,7 +212,11 @@ export function MailPage() {
       title="Mail"
       subtitle={`Times in ${employee.timeZone}`}
       action={
-        manager ? (
+        leadsOthers ? (
+          <button className="btn" type="button" onClick={newMail}>
+            New mail
+          </button>
+        ) : manager ? (
           <button className="btn" type="button" onClick={writeToManager}>
             Write to my manager
           </button>
@@ -214,7 +238,7 @@ export function MailPage() {
         <Card title="New message">
           <form className="mail-compose" onSubmit={sendAction.submit(onSend)}>
             <div className="mail-templates" aria-label="Quick templates">
-              {TEMPLATES.map((t) => (
+              {templates.map((t) => (
                 <button key={t.label} type="button" className="btn-ghost mail-chip" onClick={() => startCompose(undefined, t)}>
                   {t.label}
                 </button>
@@ -324,7 +348,11 @@ export function MailPage() {
               <EmptyState
                 title={view === "sent" ? "Nothing sent yet" : "No mail yet"}
                 action={
-                  manager ? (
+                  leadsOthers ? (
+                    <button className="btn" type="button" onClick={newMail}>
+                      New mail
+                    </button>
+                  ) : manager ? (
                     <button className="btn" type="button" onClick={writeToManager}>
                       Write to my manager
                     </button>
