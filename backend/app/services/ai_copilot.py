@@ -161,7 +161,8 @@ def _call_model(model: str, messages: list[dict[str, str]], key: str, timeout: f
     }
     payload = {
         "model": model, "messages": messages, "temperature": 0.2, "max_tokens": MAX_ANSWER_TOKENS,
-        "reasoning": {"exclude": True},  # reasoning models: keep their thinking out of the reply
+        # Free "thinking" models are slow when they reason first; answers come from the given context anyway.
+        "reasoning": {"enabled": False, "exclude": True},
     }
     try:
         res = _post(OPENROUTER_URL, headers=headers, payload=payload, timeout=timeout)
