@@ -2,6 +2,7 @@ export { HelpPage } from "./CollabModules.tsx";
 import { useEffect, useState } from "react";
 import { DEMO_MODE } from "../demoMode.ts";
 import { Navigate, useNavigate } from "react-router-dom";
+import { SERVER_WAKING_EVENT } from "../api/client.ts";
 import { Eye, EyeOff } from "lucide-react";
 import { COMPANY_NAME, PRODUCT_TAGLINE } from "../brand.ts";
 import { ActionButton, Banner, Card, Field, Page, SubmitButton, useAction } from "../components/ui.tsx";
@@ -44,6 +45,12 @@ export function LoginPage() {
   const [sentTo, setSentTo] = useState("");
   const [sentChannel, setSentChannel] = useState<ResetChannel>("email");
   const [message, setMessage] = useState<{ tone: "ok" | "err" | "info"; text: string } | null>(null);
+  // A sleeping free server takes up to a minute to wake; say so instead of looking stuck.
+  useEffect(() => {
+    const onWaking = () => setMessage({ tone: "ok", text: "Waking up the server… this can take up to a minute." });
+    window.addEventListener(SERVER_WAKING_EVENT, onWaking);
+    return () => window.removeEventListener(SERVER_WAKING_EVENT, onWaking);
+  }, []);
   // Two-step sign-in: after the password, the code from the authenticator app (or a backup code).
   const [mfaStep, setMfaStep] = useState(false);
   const [mfaCode, setMfaCode] = useState("");

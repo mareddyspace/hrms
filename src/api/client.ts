@@ -165,7 +165,7 @@ function messageFrom(body: unknown, status: number): string {
     const msg = (first.msg ?? "Check the details and try again.").replace(/^Value error, /, "");
     return field && typeof field === "string" ? `${field}: ${msg}` : msg;
   }
-  if (status === 0) return "The server is starting up. Try again in about 30 seconds.";
+  if (status === 0) return "Can't reach the server right now. Check your connection and try again.";
   if (status >= 500) return "Something went wrong on the server. Try again.";
   return "That didn't work. Try again.";
 }
@@ -190,18 +190,38 @@ function urlFor(path: string, query?: Query): string {
   return url.toString();
 }
 
+/** Waits between retries while a sleeping free server wakes up (about a minute in total). */
+const WAKE_RETRY_MS = [2000, 3000, 5000, 5000, 8000, 10000, 10000, 12000];
+
+/** Fired once per wait so pages can say "Waking up the server…". */
+export const SERVER_WAKING_EVENT = "timez:server-waking";
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
 async function send(path: string, options: RequestOptions): Promise<Response> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (!options.anonymous && tokens) headers.Authorization = `Bearer ${tokens.access}`;
-  try {
-    return await fetch(urlFor(path, options.query), {
-      method: options.method ?? "GET",
-      headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    });
-  } catch {
-    throw new ApiError(0, messageFrom(null, 0));
+  // The free server sleeps when idle; while it wakes, requests fail or get 502/503/504. Retry instead of giving up.
+  for (let attempt = 0; ; attempt++) {
+    let res: Response | null = null;
+    try {
+      res = await fetch(urlFor(path, options.query), {
+        method: options.method ?? "GET",
+        headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      });
+    } catch {
+      res = null;
+    }
+    const waking = res === null || res.status === 502 || res.status === 503 || res.status === 504;
+    if (!waking) return res!;
+    if (attempt >= WAKE_RETRY_MS.length) {
+      if (res) return res;
+      throw new ApiError(0, messageFrom(null, 0));
+    }
+    if (attempt === 0) window.dispatchEvent(new Event(SERVER_WAKING_EVENT));
+    await sleep(WAKE_RETRY_MS[attempt]);
   }
 }
 
