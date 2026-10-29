@@ -1,5 +1,6 @@
-import { useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -10,7 +11,9 @@ import {
   MetricGrid,
   Page,
   StatusBadge,
+  SubmitButton,
   Tabs,
+  useAction,
 } from "../../components/ui.tsx";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { formatShortDate, todayISO, type AssetAssignment } from "../../model.ts";
@@ -182,6 +185,7 @@ function DecisionBlock({
         : { tone: "ok", text: decision === "accept" ? `Resignation accepted for ${row.employeeName}.` : "Conversation requested." },
     );
     if (!error) setNote("");
+    return error ? false : true;
   }
 
   return (
@@ -197,12 +201,22 @@ function DecisionBlock({
           <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Shared with the employee" />
         </Field>
         <div className="row-gap">
-          <button className="btn" type="button" onClick={() => decide("accept")}>
+          <ActionButton
+            className="btn"
+            busyLabel="Accepting…"
+            doneLabel="Accepted"
+            success={`Resignation accepted for ${row.employeeName}.`}
+            onAction={() => decide("accept")}
+          >
             Accept
-          </button>
-          <button className="btn-ghost" type="button" onClick={() => decide("conversation")}>
+          </ActionButton>
+          <ActionButton
+            className="btn-ghost"
+            success={`Conversation requested with ${row.employeeName}.`}
+            onAction={() => decide("conversation")}
+          >
             Request a conversation
-          </button>
+          </ActionButton>
         </div>
       </div>
     </Card>
@@ -279,15 +293,16 @@ function InterviewForm({ row, actor, onMessage }: { row: ExitCase; actor: Lifecy
   const [reasons, setReasons] = useState<string[]>([]);
   const [wouldReturn, setWouldReturn] = useState<ExitInterview["wouldReturn"]>("Maybe");
   const [comments, setComments] = useState("");
+  const act = useAction();
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
+  function submit() {
     const error = submitExitInterview(actor, row.id, { rating, reasons, wouldReturn, comments });
     onMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Thank you — your exit interview was submitted." });
+    return error ? false : true;
   }
 
   return (
-    <form className="stack" onSubmit={submit}>
+    <form className="stack" onSubmit={act.submit(submit, { success: "Exit interview submitted to HR." })}>
       <p className="muted">Confidential to HR. Not shared with your manager.</p>
       <div>
         <p className="muted">Overall experience</p>
@@ -329,9 +344,9 @@ function InterviewForm({ row, actor, onMessage }: { row: ExitCase; actor: Lifecy
         </Field>
       </div>
       <div>
-        <button className="btn" type="submit">
+        <SubmitButton action={act} className="btn">
           Submit exit interview
-        </button>
+        </SubmitButton>
       </div>
     </form>
   );
@@ -353,16 +368,19 @@ function SettlementBlock({ row, actor, onMessage }: { row: ExitCase; actor: Life
         )}
       </span>
       {canEdit && next && (
-        <button
+        <ActionButton
           className="btn-ghost btn-tiny"
-          type="button"
-          onClick={() => {
+          busyLabel="Updating…"
+          doneLabel="Updated"
+          success={`Settlement for ${row.employeeName} marked ${next.toLowerCase()}.`}
+          onAction={() => {
             const error = setSettlement(actor, row.id, next);
             onMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `Settlement marked ${next.toLowerCase()}.` });
+            return error ? false : true;
           }}
         >
           Mark {next.toLowerCase()}
-        </button>
+        </ActionButton>
       )}
     </div>
   );
@@ -379,8 +397,12 @@ function ExitDetail({ row, onMessage }: { row: ExitCase; onMessage: (m: Message)
     const error = completeExit(actor, row.id, (text) => {
       warning = text;
     });
-    if (error) onMessage({ tone: "err", text: error });
-    else onMessage(warning ? { tone: "warn", text: warning } : { tone: "ok", text: `${row.employeeName}'s exit is complete. Letter request raised.` });
+    if (error) {
+      onMessage({ tone: "err", text: error });
+      return false;
+    }
+    onMessage(warning ? { tone: "warn", text: warning } : { tone: "ok", text: `${row.employeeName}'s exit is complete. Letter request raised.` });
+    return true;
   }
 
   return (
@@ -413,9 +435,9 @@ function ExitDetail({ row, onMessage }: { row: ExitCase; onMessage: (m: Message)
                   {blocker ?? "Terminates the record and issues relieving and experience letters."}
                 </p>
                 <div>
-                  <button className="btn" type="button" disabled={Boolean(blocker)} onClick={complete}>
+                  <ActionButton className="btn" disabled={Boolean(blocker)} success={`Exit completed for ${row.employeeName}.`} onAction={complete}>
                     Complete exit
-                  </button>
+                  </ActionButton>
                 </div>
               </div>
             </Card>
@@ -437,12 +459,13 @@ function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessag
   const { value: note, setValue: setNote, ref: noteRef, fill: fillNote } = useTemplatedText();
   const [early, setEarly] = useState(false);
   const insideNotice = Boolean(lastDay) && lastDay < earliest;
+  const act = useAction();
+  const sentTo = lineManagerId(actor.id) ? `Resignation sent to ${personName(lineManagerId(actor.id)!)}.` : "Resignation recorded for the Board.";
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
+  function submit() {
     if (hasTemplateBlanks(note)) {
       onMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
-      return;
+      return false;
     }
     const error = submitResignation(actor, { proposedLastDay: lastDay, reason, note, earlyRelease: early && insideNotice });
     const toBoard = !lineManagerId(actor.id);
@@ -451,11 +474,12 @@ function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessag
         ? { tone: "err", text: error }
         : { tone: "ok", text: toBoard ? "Resignation recorded for the Board." : `Resignation sent to ${personName(lineManagerId(actor.id)!)}.` },
     );
+    return error ? false : true;
   }
 
   return (
     <Card title="Submit resignation">
-      <form className="stack" onSubmit={submit}>
+      <form className="stack" onSubmit={act.submit(submit, { success: sentTo })}>
         <p className="muted">
           Your notice period is {noticeDays} days, so the earliest standard last day is {formatShortDate(earliest)}.
         </p>
@@ -489,9 +513,9 @@ function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessag
           </label>
         )}
         <div>
-          <button className="btn" type="submit">
+          <SubmitButton action={act} className="btn">
             Submit resignation
-          </button>
+          </SubmitButton>
         </div>
       </form>
     </Card>
@@ -516,16 +540,17 @@ export function MyExitPage() {
           title="Resignation"
           action={
             current.status === "Submitted" ? (
-              <button
+              <ActionButton
                 className="btn-ghost btn-tiny"
-                type="button"
-                onClick={() => {
+                success="Resignation withdrawn."
+                onAction={() => {
                   const error = withdrawResignation(actor, current.id);
                   setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Resignation withdrawn." });
+                  return error ? false : true;
                 }}
               >
                 Withdraw
-              </button>
+              </ActionButton>
             ) : undefined
           }
         >

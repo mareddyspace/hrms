@@ -1,5 +1,5 @@
-import { useState, useSyncExternalStore, type FormEvent } from "react";
-import { Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { useState, useSyncExternalStore } from "react";
+import { ActionButton, Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, SubmitButton, Tabs, notify, useAction } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
 import { todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
 import { taskTeamFor } from "../../data/taskTeam.ts";
@@ -49,6 +49,11 @@ export function OptionalHolidaysCard({ title = "Optional holidays" }: { title?: 
   const list = holidaysFor(country, year, data);
   const picks = picksFor(actor.id, year, data);
   const left = Math.max(0, limit - picks.length);
+  /** Shows the result in the card banner; false tells the button it failed. */
+  const show = (error: string | null, ok: string) => {
+    setMsg(result(error, ok));
+    return error ? false : true;
+  };
 
   return (
     <Card title={title} action={<span className="muted">{`${picks.length} of ${limit} picked`}</span>}>
@@ -77,25 +82,27 @@ export function OptionalHolidaysCard({ title = "Optional holidays" }: { title?: 
                     <div className="approval-actions">
                       {pick ? (
                         canCancel ? (
-                          <button
+                          <ActionButton
                             className="btn-ghost btn-tiny"
-                            type="button"
-                            onClick={() => setMsg(result(cancelOptionalPick(actor, pick.id), `${h.name} cancelled.`))}
+                            success={`${h.name} pick cancelled.`}
+                            onAction={() => show(cancelOptionalPick(actor, pick.id), `${h.name} cancelled.`)}
                           >
                             Cancel pick
-                          </button>
+                          </ActionButton>
                         ) : (
                           <span className="muted">Can't cancel within {CANCEL_CUTOFF_DAYS} days</span>
                         )
                       ) : (
-                        <button
+                        <ActionButton
                           className="btn btn-tiny"
-                          type="button"
                           disabled={left === 0}
-                          onClick={() => setMsg(result(pickOptionalHoliday(actor, h.id), `${h.name} added to your holidays.`))}
+                          busyLabel="Picking…"
+                          doneLabel="Picked"
+                          success={`${h.name} added to your holidays.`}
+                          onAction={() => show(pickOptionalHoliday(actor, h.id), `${h.name} added to your holidays.`)}
                         >
                           Pick
-                        </button>
+                        </ActionButton>
                       )}
                     </div>
                   )}
@@ -169,23 +176,28 @@ function Setup({ actor }: { actor: WorkforceActor }) {
   const list = holidaysFor(country, year, data).concat(holidaysFor(country, year + 1, data));
   const pickCount = (id: string) => data.picks.filter((p) => p.holidayId === id && p.status === "picked").length;
 
-  function saveLimit(e: FormEvent) {
-    e.preventDefault();
+  const limitAction = useAction();
+  const addAction = useAction();
+
+  function saveLimit(): boolean {
     const raw = limitInput.trim();
     const value = raw === "" ? NaN : Number(raw);
     const error = setYearlyLimit(actor, country, value);
     setMsg(result(error, `Yearly limit for ${countryName(country)} set to ${value}.`));
-    if (!error) setLimitInput("");
+    if (error) return false;
+    setLimitInput("");
+    notify(`Yearly limit for ${countryName(country)} set to ${value}.`);
+    return true;
   }
 
-  function add(e: FormEvent) {
-    e.preventDefault();
+  function add(): boolean {
     const error = addOptionalHoliday(actor, { countryCode: country, date, name }, state.holidays);
     setMsg(result(error, `${name.trim()} added.`));
-    if (!error) {
-      setDate("");
-      setName("");
-    }
+    if (error) return false;
+    notify(`${name.trim()} added as an optional holiday.`);
+    setDate("");
+    setName("");
+    return true;
   }
 
   return (
@@ -202,11 +214,11 @@ function Setup({ actor }: { actor: WorkforceActor }) {
               ))}
             </select>
           </Field>
-          <form className="wf-inline-form" onSubmit={saveLimit}>
+          <form className="wf-inline-form" onSubmit={limitAction.submit(saveLimit)}>
             <Field label={`Picks per year (now ${limit})`}>
               <input type="number" min={0} max={MAX_LIMIT} step={1} placeholder={String(limit)} value={limitInput} onChange={(e) => setLimitInput(e.target.value)} />
             </Field>
-            <button className="btn-ghost" type="submit">Save limit</button>
+            <SubmitButton action={limitAction} className="btn-ghost">Save limit</SubmitButton>
           </form>
         </div>
       </Card>
@@ -217,20 +229,24 @@ function Setup({ actor }: { actor: WorkforceActor }) {
             h.name,
             shortDay(h.date),
             pickCount(h.id),
-            <button
+            <ActionButton
               key="r"
               className="btn-ghost btn-tiny"
-              type="button"
-              onClick={() => setMsg(result(removeOptionalHoliday(actor, h.id), `${h.name} removed.`))}
+              success={`${h.name} removed.`}
+              onAction={() => {
+                const error = removeOptionalHoliday(actor, h.id);
+                setMsg(result(error, `${h.name} removed.`));
+                return error ? false : true;
+              }}
             >
               Remove
-            </button>,
+            </ActionButton>,
           ])}
           empty={<EmptyState title="No optional holidays yet" />}
         />
       </Card>
       <Card title="Add an optional holiday">
-        <form className="stack" onSubmit={add}>
+        <form className="stack" onSubmit={addAction.submit(add)}>
           <div className="form-grid-2">
             <Field label="Name">
               <input value={name} maxLength={60} onChange={(e) => setName(e.target.value)} />
@@ -240,7 +256,7 @@ function Setup({ actor }: { actor: WorkforceActor }) {
             </Field>
           </div>
           <div className="row-gap">
-            <button className="btn" type="submit">Add holiday</button>
+            <SubmitButton action={addAction} className="btn">Add holiday</SubmitButton>
           </div>
         </form>
       </Card>

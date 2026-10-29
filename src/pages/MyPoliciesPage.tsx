@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Card, Page } from "../components/ui.tsx";
+import { ActionButton, Card, Page } from "../components/ui.tsx";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import { getPerson, subscribePeople } from "../data/peopleLocal.ts";
 import {
@@ -197,7 +197,6 @@ function MyPoliciesView({
 function PolicyDetail({ policy, userId, acks, query }: { policy: Policy; userId: string; acks: ReturnType<typeof getPolicyAcks>; query: string }) {
   const ack = latestAck(acks, userId, policy.id);
   const current = ack?.version === policy.version;
-  const [saving, setSaving] = useState(false);
   const [ackError, setAckError] = useState<string | null>(null);
   useEffect(() => setAckError(null), [policy.id]);
   return (
@@ -227,18 +226,19 @@ function PolicyDetail({ policy, userId, acks, query }: { policy: Policy; userId:
         ) : (
           <>
             {ack && <span className="muted">You acknowledged v{ack.version}. This version changed.</span>}
-            <button
-              type="button"
+            <ActionButton
               className="btn"
-              disabled={saving}
-              onClick={async () => {
-                setSaving(true);
-                setAckError(await acknowledgePolicyAsync(userId, policy.id, policy.version));
-                setSaving(false);
+              busyLabel="Saving…"
+              doneLabel="Acknowledged"
+              success={`Policy acknowledged: ${policy.title}.`}
+              onAction={async () => {
+                const error = await acknowledgePolicyAsync(userId, policy.id, policy.version);
+                setAckError(error);
+                return error;
               }}
             >
-              {saving ? "Saving…" : `Acknowledge v${policy.version}`}
-            </button>
+              {`Acknowledge v${policy.version}`}
+            </ActionButton>
           </>
         )}
         {ackError && <span className="pol-badge pol-badge-due">{ackError}</span>}

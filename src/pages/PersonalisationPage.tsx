@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, Eye, EyeOff, Star, StarOff } from "lucide-react";
-import { Card, Page } from "../components/ui.tsx";
+import { ActionButton, Card, Page } from "../components/ui.tsx";
 import {
   DEFAULT_PREFERENCES,
   resetPreferences,
@@ -252,14 +252,16 @@ export function PersonalisationPage() {
       </div>
 
       <div className="form-actions">
-        <button
-          type="button"
+        <ActionButton
           className="btn-ghost"
-          onClick={() => resetPreferences(employee.id)}
+          busyLabel="Resetting…"
+          doneLabel="Reset"
+          success="Preferences reset to default."
+          onAction={() => resetPreferences(employee.id)}
           disabled={JSON.stringify({ ...prefs, knownHomeSections: [] }) === JSON.stringify(DEFAULT_PREFERENCES)}
         >
           Reset to default
-        </button>
+        </ActionButton>
       </div>
     </Page>
   );

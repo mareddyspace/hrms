@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge } from "../../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge } from "../../components/ui.tsx";
 import { formatShortDate, todayISO } from "../../model.ts";
 import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
 import {
@@ -115,9 +115,19 @@ export function BackgroundChecksPage() {
                         {j.role} · starts {formatShortDate(j.startDate)}
                       </small>
                     </span>
-                    <button className="btn-ghost btn-tiny" type="button" onClick={() => report(startVerification(actor, "joiner", j.id), `Verification started for ${j.name}.`)}>
+                    <ActionButton
+                      className="btn-ghost btn-tiny"
+                      busyLabel="Starting…"
+                      doneLabel="Started"
+                      success={`Verification started for ${j.name}.`}
+                      onAction={() => {
+                        const error = startVerification(actor, "joiner", j.id);
+                        report(error, `Verification started for ${j.name}.`);
+                        return error;
+                      }}
+                    >
                       Start
-                    </button>
+                    </ActionButton>
                   </li>
                 ))}
               </ul>
@@ -129,21 +139,27 @@ export function BackgroundChecksPage() {
                 <PersonPicker key={pickerKey} value={employeeId} onChange={setEmployeeId} excludeId={actor.id} />
               </Field>
               <div>
-                <button
+                <ActionButton
                   className="btn"
-                  type="button"
-                  onClick={() => {
-                    if (!employeeId) return report("Choose an employee from the list.", "");
+                  busyLabel="Starting…"
+                  doneLabel="Started"
+                  success={employeeId ? `Verification started for ${personName(employeeId)}.` : undefined}
+                  onAction={() => {
+                    if (!employeeId) {
+                      report("Choose an employee from the list.", "");
+                      return false;
+                    }
                     const error = startVerification(actor, "employee", employeeId);
                     report(error, `Verification started for ${personName(employeeId)}.`);
                     if (!error) {
                       setEmployeeId("");
                       setPickerKey((k) => k + 1);
                     }
+                    return error;
                   }}
                 >
                   Start verification
-                </button>
+                </ActionButton>
               </div>
             </div>
           </Card>
@@ -185,16 +201,19 @@ function ConsentForm({ actor, record, onResult }: { actor: ComplianceActor; reco
   return (
     <div className="cmp-form">
       <div style={{ alignSelf: "end" }}>
-        <button
+        <ActionButton
           className="btn"
-          type="button"
-          onClick={() => {
+          busyLabel="Recording…"
+          doneLabel="Recorded"
+          success="Consent recorded and sent to HR."
+          onAction={() => {
             const err = recordConsent(actor, record.id, todayISO());
             onResult(err ? { tone: "err", text: err } : { tone: "ok", text: "Consent recorded." });
+            return err;
           }}
         >
           I consent to background verification
-        </button>
+        </ActionButton>
       </div>
     </div>
   );
@@ -215,17 +234,18 @@ function RecordDialog({ record, actor, onClose, onRemoved }: { record: BgvRecord
       actions={
         <>
           {editable && untouched && (
-            <button
+            <ActionButton
               className="btn-ghost"
-              type="button"
-              onClick={() => {
+              success={`Verification for ${record.subjectName} removed.`}
+              onAction={() => {
                 const err = removeVerification(actor, record.id);
                 if (err) setMsg({ tone: "err", text: err });
                 else onRemoved("Verification removed.");
+                return err;
               }}
             >
               Remove
-            </button>
+            </ActionButton>
           )}
           <button className="btn-ghost" type="button" onClick={onClose}>
             Close
@@ -357,17 +377,18 @@ function CheckCard({
         <textarea value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
       </Field>
       <div className="cmp-actions">
-        <button
+        <ActionButton
           className="btn btn-tiny"
-          type="button"
-          onClick={() => {
+          success={`${item.type} check for ${record.subjectName} saved.`}
+          onAction={() => {
             const err = updateCheck(actor, record.id, item.type, form);
             onResult(err ? { tone: "err", text: err } : { tone: "ok", text: `${item.type} check updated.` });
             if (!err) setEditing(false);
+            return err;
           }}
         >
           Save
-        </button>
+        </ActionButton>
         <button className="btn-ghost btn-tiny" type="button" onClick={() => setEditing(false)}>
           Cancel
         </button>

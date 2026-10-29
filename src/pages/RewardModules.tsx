@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { API_ENABLED } from "../api/client.ts";
 import {
   apiSetDocumentExpiry,
@@ -19,6 +19,7 @@ import {
   type RepoDocument,
 } from "../api/syncRewards.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -30,8 +31,11 @@ import { listPeople, subscribePeople } from "../data/peopleLocal.ts";import {
   MetricGrid,
   Page,
   StatusBadge,
+  SubmitButton,
   Tabs,
   downloadText,
+  notify,
+  useAction,
 } from "../components/ui.tsx";
 import {
   canManageLetters,
@@ -158,6 +162,8 @@ export function CompensationPage() {
   const report = async (outcome: RewardOutcome, ok: string) => {
     const error = await outcome;
     setReviewMsg(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
+    if (!error) notify(ok);
+    return error;
   };
   const done = (text: string) => {
     setDialog(null);
@@ -288,13 +294,13 @@ export function CompensationPage() {
               action={
                 payHr ? (
                   cycle.status === "Planning" || cycle.status === "Closed" ? (
-                    <button type="button" className="btn-ghost" onClick={() => report(setCompCycleStatus(me, cycle.id, "Open"), `${cycle.name} is open.`)}>
+                    <ActionButton className="btn-ghost" busyLabel="Opening…" doneLabel="Opened" onAction={() => report(setCompCycleStatus(me, cycle.id, "Open"), `${cycle.name} is open.`)}>
                       {cycle.status === "Closed" ? "Reopen" : "Open now"}
-                    </button>
+                    </ActionButton>
                   ) : (
-                    <button type="button" className="btn-ghost" onClick={() => report(setCompCycleStatus(me, cycle.id, "Closed"), `${cycle.name} is closed.`)}>
+                    <ActionButton className="btn-ghost" busyLabel="Closing…" doneLabel="Closed" onAction={() => report(setCompCycleStatus(me, cycle.id, "Closed"), `${cycle.name} is closed.`)}>
                       Close cycle
-                    </button>
+                    </ActionButton>
                   )
                 ) : undefined
               }
@@ -342,29 +348,28 @@ export function CompensationPage() {
                 if (canDecideCompReview(me, r)) {
                   action = (
                     <span className="reward-actions">
-                      <button type="button" className="btn" onClick={() => report(decideCompReview(me, r.id, "Approved"), `${r.employeeName}: approved.`)}>
+                      <ActionButton className="btn" onAction={() => report(decideCompReview(me, r.id, "Approved"), `${r.employeeName}: approved.`)}>
                         Approve
-                      </button>
-                      <button type="button" className="btn-ghost" onClick={() => report(decideCompReview(me, r.id, "Rejected"), `${r.employeeName}: rejected.`)}>
+                      </ActionButton>
+                      <ActionButton className="btn-ghost" onAction={() => report(decideCompReview(me, r.id, "Rejected"), `${r.employeeName}: rejected.`)}>
                         Reject
-                      </button>
+                      </ActionButton>
                     </span>
                   );
                 } else if (r.status === "Draft" && r.managerId === me.id && cycleTakesProposals(cycle)) {
                   action = (
-                    <button type="button" className="btn" onClick={() => report(submitCompReview(me, r.id), `${r.employeeName}: submitted.`)}>
+                    <ActionButton className="btn" onAction={() => report(submitCompReview(me, r.id), `${r.employeeName}: submitted.`)}>
                       Submit
-                    </button>
+                    </ActionButton>
                   );
                 } else if (API_ENABLED && r.managerId === me.id && r.status === "Pending approval" && !r.statusLabel) {
                   action = (
-                    <button
-                      type="button"
+                    <ActionButton
                       className="btn-ghost"
-                      onClick={() => report(runRewardApi(apiWithdrawProposal(r.id), ["comp"]), `${r.employeeName}: proposal withdrawn.`)}
+                      onAction={() => report(runRewardApi(apiWithdrawProposal(r.id), ["comp"]), `${r.employeeName}: proposal withdrawn.`)}
                     >
                       Withdraw
-                    </button>
+                    </ActionButton>
                   );
                 }
                 return [
@@ -410,12 +415,12 @@ export function CompensationPage() {
                 ? [
                     b.status === "Accrued" && b.employeeId !== me.id ? (
                       <span key={`${b.id}-a`} className="reward-actions">
-                        <button type="button" className="btn-ghost" onClick={() => report(setBonusStatus(me, b.id, "Paid"), `${b.employeeName}: bonus marked paid.`)}>
+                        <ActionButton className="btn-ghost" doneLabel="Paid" onAction={() => report(setBonusStatus(me, b.id, "Paid"), `${b.employeeName}: bonus marked paid.`)}>
                           Mark paid
-                        </button>
-                        <button type="button" className="btn-ghost" onClick={() => report(setBonusStatus(me, b.id, "Forfeited"), `${b.employeeName}: bonus forfeited.`)}>
+                        </ActionButton>
+                        <ActionButton className="btn-ghost" busyLabel="Updating…" doneLabel="Forfeited" onAction={() => report(setBonusStatus(me, b.id, "Forfeited"), `${b.employeeName}: bonus forfeited.`)}>
                           Forfeit
-                        </button>
+                        </ActionButton>
                       </span>
                     ) : (
                       "—"
@@ -527,7 +532,7 @@ function NomineesCard({ nominees, onSaved }: { nominees: Nominee[]; onSaved: (te
   const [editing, setEditing] = useState<string | null>(null);
   const [rows, setRows] = useState<Nominee[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const saveAct = useAction();
 
   function start(purpose: string) {
     setEditing(purpose);
@@ -537,16 +542,22 @@ function NomineesCard({ nominees, onSaved }: { nominees: Nominee[]; onSaved: (te
   }
 
   async function save() {
-    if (!editing) return;
+    if (!editing) return false;
     const filled = rows.filter((r) => r.name.trim());
     const total = filled.reduce((sum, r) => sum + (Number(r.sharePct) || 0), 0);
-    if (filled.length && Math.round(total) !== 100) return setError(`Shares add up to ${total}%. They must total 100%.`);
-    setBusy(true);
+    if (filled.length && Math.round(total) !== 100) {
+      setError(`Shares add up to ${total}%. They must total 100%.`);
+      return false;
+    }
     const err = await runRewardApi(apiSetNominees(editing, filled), ["benefits"]);
-    setBusy(false);
-    if (err) return setError(err);
+    if (err) {
+      setError(err);
+      return false;
+    }
     setEditing(null);
+    notify(`Nominees for ${editing} saved.`);
     onSaved(`Nominees for ${editing} saved.`);
+    return true;
   }
 
   const update = (i: number, patch: Partial<Nominee>) => setRows((list) => list.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -585,13 +596,7 @@ function NomineesCard({ nominees, onSaved }: { nominees: Nominee[]; onSaved: (te
         empty={<EmptyState title="No beneficiaries" description="Name who receives benefits such as provident fund or life cover." />}
       />
       <Dialog open={editing !== null} title={editing ? `Nominees · ${editing}` : "New nomination"} onClose={() => setEditing(null)}>
-        <form
-          className="stack"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void save();
-          }}
-        >
+        <form className="stack" onSubmit={saveAct.submit(save)}>
           {!purposes.includes(editing ?? "") && (
             <Field label="Nomination for">
               <input value={editing ?? ""} maxLength={64} onChange={(e) => setEditing(e.target.value)} placeholder="e.g. Provident Fund" required />
@@ -622,9 +627,9 @@ function NomineesCard({ nominees, onSaved }: { nominees: Nominee[]; onSaved: (te
             <button type="button" className="btn-ghost" onClick={() => setEditing(null)}>
               Cancel
             </button>
-            <button type="submit" className="btn" disabled={busy || !editing?.trim()}>
-              {busy ? "Saving…" : "Save"}
-            </button>
+            <SubmitButton action={saveAct} className="btn" disabled={!editing?.trim()}>
+              Save
+            </SubmitButton>
           </div>
         </form>
       </Dialog>
@@ -645,9 +650,17 @@ function ChangeRequestButton({ onSend }: { onSend: (note: string) => RewardOutco
   return (
     <span className="row-gap">
       <input aria-label="What should change" value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="What should change?" />
-      <button type="button" className="btn btn-tiny" disabled={note.trim().length < 5} onClick={async () => !(await onSend(note)) && setOpen(false)}>
+      <ActionButton
+        className="btn btn-tiny"
+        disabled={note.trim().length < 5}
+        onAction={async () => {
+          const error = await onSend(note);
+          if (!error) setOpen(false);
+          return error;
+        }}
+      >
         Send
-      </button>
+      </ActionButton>
     </span>
   );
 }
@@ -669,6 +682,8 @@ export function BenefitsPage() {
     setWinStart(reward.openEnrollment.start);
     setWinEnd(reward.openEnrollment.end);
   }, [reward.openEnrollment.start, reward.openEnrollment.end]);
+  const datesAct = useAction();
+  const eventAct = useAction();
 
   const isBenefitsAdmin = canAdminBenefits(demoProfile);
   const canSeeOthers = isBenefitsAdmin;
@@ -722,6 +737,7 @@ export function BenefitsPage() {
   async function run(outcome: RewardOutcome, okText: string): Promise<string | null> {
     const error = await outcome;
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: okText });
+    if (!error) notify(okText);
     return error;
   }
 
@@ -734,13 +750,16 @@ export function BenefitsPage() {
     action();
   }
 
-  function join(planIdToJoin: string) {
+  async function join(planIdToJoin: string) {
     const plan = allPlans.find((p) => p.id === planIdToJoin);
-    if (!plan) return;
-    inWindow(async () => {
-      const err = await run(requestEnrollment(demoProfile, plan.id), "Enrollment request sent to HR.");
-      if (!err && plan.coversDependents && myDependents.length) setCover({ planId: plan.id, planName: plan.name });
-    });
+    if (!plan) return false;
+    if (!changeWin.open) {
+      setMsg({ tone: "err", text: changeWin.text });
+      return false;
+    }
+    const err = await run(requestEnrollment(demoProfile, plan.id), "Enrollment request sent to HR.");
+    if (!err && plan.coversDependents && myDependents.length) setCover({ planId: plan.id, planName: plan.name });
+    return err;
   }
 
   function eligibilityCell(planIdToCheck: string): ReactNode {
@@ -780,21 +799,21 @@ export function BenefitsPage() {
         return <span className="reward-actions">{main}{coverBtn}</span>;
       }
       return (
-        <button type="button" className="quiet-link" onClick={() => join(e.planId)}>
+        <ActionButton className="quiet-link" onAction={() => join(e.planId)}>
           Request enrollment
-        </button>
+        </ActionButton>
       );
     }
     if (canDecideEnrollmentRow(demoProfile, e)) {
       return (
         <span className="reward-actions">
-          <button type="button" className="btn" onClick={() => run(decideEnrollment(demoProfile, e.id, "Enrolled"), `${e.employeeName} enrolled in ${e.planName}.`)}>
+          <ActionButton className="btn" onAction={() => run(decideEnrollment(demoProfile, e.id, "Enrolled"), `${e.employeeName} enrolled in ${e.planName}.`)}>
             Enroll
-          </button>
+          </ActionButton>
           {!mandatory && (
-            <button type="button" className="btn-ghost" onClick={() => run(decideEnrollment(demoProfile, e.id, "Waived"), `${e.employeeName} waived ${e.planName}.`)}>
+            <ActionButton className="btn-ghost" busyLabel="Updating…" doneLabel="Waived" onAction={() => run(decideEnrollment(demoProfile, e.id, "Waived"), `${e.employeeName} waived ${e.planName}.`)}>
               Waive
-            </button>
+            </ActionButton>
           )}
         </span>
       );
@@ -809,22 +828,22 @@ export function BenefitsPage() {
           <button type="button" className="quiet-link" onClick={() => setDepDialog(d)}>
             Edit
           </button>
-          <button type="button" className="quiet-link" onClick={() => run(removeDependent(demoProfile, d.id), `${d.name} removed.`)}>
+          <ActionButton className="quiet-link" onAction={() => run(removeDependent(demoProfile, d.id), `${d.name} removed.`)}>
             Remove
-          </button>
+          </ActionButton>
         </span>
       );
     }
     if (canVerifyDependentRow(demoProfile, d)) {
       return (
         <span className="reward-actions">
-          <button type="button" className="btn" onClick={() => run(verifyDependent(demoProfile, d.id, "Verified"), `${d.name} verified.`)}>
+          <ActionButton className="btn" busyLabel="Verifying…" doneLabel="Verified" onAction={() => run(verifyDependent(demoProfile, d.id, "Verified"), `${d.name} verified.`)}>
             Verify
-          </button>
+          </ActionButton>
           {d.verification !== "Rejected" && (
-            <button type="button" className="btn-ghost" onClick={() => run(verifyDependent(demoProfile, d.id, "Rejected"), `${d.name} rejected.`)}>
+            <ActionButton className="btn-ghost" onAction={() => run(verifyDependent(demoProfile, d.id, "Rejected"), `${d.name} rejected.`)}>
               Reject
-            </button>
+            </ActionButton>
           )}
         </span>
       );
@@ -939,18 +958,18 @@ export function BenefitsPage() {
               isBenefitsAdmin ? (
                 <span className="reward-actions">
                   {oeOpen ? (
-                    <button type="button" className="btn-ghost" onClick={() => run(setOpenEnrollmentOverride(demoProfile, "closed"), "Open enrollment closed.")}>
+                    <ActionButton className="btn-ghost" busyLabel="Closing…" doneLabel="Closed" onAction={() => run(setOpenEnrollmentOverride(demoProfile, "closed"), "Open enrollment closed.")}>
                       Close now
-                    </button>
+                    </ActionButton>
                   ) : (
-                    <button type="button" className="btn-ghost" onClick={() => run(setOpenEnrollmentOverride(demoProfile, "open"), "Open enrollment opened.")}>
+                    <ActionButton className="btn-ghost" busyLabel="Opening…" doneLabel="Opened" onAction={() => run(setOpenEnrollmentOverride(demoProfile, "open"), "Open enrollment opened.")}>
                       Open now
-                    </button>
+                    </ActionButton>
                   )}
                   {oe.override && (
-                    <button type="button" className="btn-ghost" onClick={() => run(setOpenEnrollmentOverride(demoProfile, null), "Window follows its dates again.")}>
+                    <ActionButton className="btn-ghost" busyLabel="Updating…" onAction={() => run(setOpenEnrollmentOverride(demoProfile, null), "Window follows its dates again.")}>
                       Use dates
-                    </button>
+                    </ActionButton>
                   )}
                 </span>
               ) : undefined
@@ -971,10 +990,7 @@ export function BenefitsPage() {
             {isBenefitsAdmin && (
               <form
                 className="form-actions"
-                onSubmit={(ev) => {
-                  ev.preventDefault();
-                  run(setOpenEnrollmentDates(demoProfile, winStart, winEnd), "Enrollment dates saved.");
-                }}
+                onSubmit={datesAct.submit(() => run(setOpenEnrollmentDates(demoProfile, winStart, winEnd), "Enrollment dates saved."))}
               >
                 <label className="filter-label">
                   Start
@@ -984,9 +1000,9 @@ export function BenefitsPage() {
                   End
                   <input type="date" value={winEnd} onChange={(ev) => setWinEnd(ev.target.value)} />
                 </label>
-                <button type="submit" className="btn-ghost">
+                <SubmitButton action={datesAct} className="btn-ghost">
                   Save dates
-                </button>
+                </SubmitButton>
               </form>
             )}
           </Card>
@@ -998,10 +1014,7 @@ export function BenefitsPage() {
             ) : (
               <form
                 className="form-actions"
-                onSubmit={(ev) => {
-                  ev.preventDefault();
-                  run(raiseLifeEvent(demoProfile, eventType, eventDate), `${eventType} reported. You can change benefits for 30 days.`);
-                }}
+                onSubmit={eventAct.submit(() => run(raiseLifeEvent(demoProfile, eventType, eventDate), `${eventType} reported. You can change benefits for 30 days.`))}
               >
                 <label className="filter-label">
                   Event
@@ -1015,9 +1028,9 @@ export function BenefitsPage() {
                   Date
                   <input type="date" value={eventDate} max={todayISO()} onChange={(ev) => setEventDate(ev.target.value)} />
                 </label>
-                <button type="submit" className="btn">
+                <SubmitButton action={eventAct} className="btn" busyLabel="Reporting…" doneLabel="Reported">
                   Report event
-                </button>
+                </SubmitButton>
               </form>
             )}
             {lifeEvents.length > 0 && (
@@ -1032,9 +1045,9 @@ export function BenefitsPage() {
                     formatShortDate(le.windowEnds),
                     <StatusBadge key={le.id} status={live ? "Open" : "Closed"} tone={live ? "ok" : "neutral"} literal />,
                     live && canCloseLifeEventRow(demoProfile, le) ? (
-                      <button key={`${le.id}-a`} type="button" className="btn-ghost" onClick={() => run(closeLifeEvent(demoProfile, le.id), "Life event window closed.")}>
+                      <ActionButton key={`${le.id}-a`} className="btn-ghost" busyLabel="Closing…" doneLabel="Closed" onAction={() => run(closeLifeEvent(demoProfile, le.id), "Life event window closed.")}>
                         Close window
-                      </button>
+                      </ActionButton>
                     ) : (
                       le.closedBy ? `Closed by ${le.closedBy}` : "—"
                     ),
@@ -1072,12 +1085,12 @@ export function BenefitsPage() {
                   <StatusBadge key={c.id} status={c.status} literal />,
                   c.status === "Pending" && canDecideBenefitFor(demoProfile, c.employeeId) ? (
                     <span key={`${c.id}-a`} className="reward-actions">
-                      <button type="button" className="btn" onClick={() => run(decideChangeRequest(demoProfile, c.id, "Done"), "Change marked done.")}>
+                      <ActionButton className="btn" busyLabel="Updating…" doneLabel="Done" onAction={() => run(decideChangeRequest(demoProfile, c.id, "Done"), "Change marked done.")}>
                         Done
-                      </button>
-                      <button type="button" className="btn-ghost" onClick={() => run(decideChangeRequest(demoProfile, c.id, "Declined"), "Change declined.")}>
+                      </ActionButton>
+                      <ActionButton className="btn-ghost" onAction={() => run(decideChangeRequest(demoProfile, c.id, "Declined"), "Change declined.")}>
                         Decline
-                      </button>
+                      </ActionButton>
                     </span>
                   ) : (
                     c.decidedBy ? `${c.decidedBy} · ${c.decidedOn ?? ""}` : "—"
@@ -1098,9 +1111,9 @@ export function BenefitsPage() {
                     p.employeeCost,
                     eligibilityCell(p.id),
                     ok ? (
-                      <button key={p.id} type="button" className="quiet-link" onClick={() => join(p.id)}>
+                      <ActionButton key={p.id} className="quiet-link" onAction={() => join(p.id)}>
                         Request enrollment
-                      </button>
+                      </ActionButton>
                     ) : (
                       "—"
                     ),
@@ -1392,6 +1405,19 @@ function ApiDocumentDetail({
 }) {
   const [expiry, setExpiry] = useState(doc.expiryDate ?? "");
   useEffect(() => setExpiry(doc.expiryDate ?? ""), [doc.id, doc.expiryDate]);
+  const expiryAct = useAction();
+
+  async function saveExpiry() {
+    const err = await apiSetDocumentExpiry(doc.id, expiry || null);
+    if (err) {
+      onError(err);
+      return false;
+    }
+    const text = expiry ? `Expiry set to ${formatShortDate(expiry)}.` : "Expiry removed.";
+    notify(text);
+    onChanged(text);
+    return true;
+  }
   return (
     <div className="stack">
       <dl className="info-grid">
@@ -1415,20 +1441,15 @@ function ApiDocumentDetail({
       {canEdit && (
         <form
           className="form-actions"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            const err = await apiSetDocumentExpiry(doc.id, expiry || null);
-            if (err) onError(err);
-            else onChanged(expiry ? `Expiry set to ${formatShortDate(expiry)}.` : "Expiry removed.");
-          }}
+          onSubmit={expiryAct.submit(saveExpiry)}
         >
           <label className="filter-label">
             Expiry date
             <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
           </label>
-          <button type="submit" className="btn-ghost">
+          <SubmitButton action={expiryAct} className="btn-ghost">
             Save expiry
-          </button>
+          </SubmitButton>
           <button type="button" className="btn" onClick={onNewVersion}>
             Upload new version
           </button>
@@ -1459,7 +1480,7 @@ function ApiUploadDialog({
   const [category, setCategory] = useState(categories[0] ?? "Other");
   const [expiry, setExpiry] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const uploadAct = useAction();
 
   function pick(next: File | null) {
     setError(null);
@@ -1474,21 +1495,24 @@ function ApiUploadDialog({
     if (!documentId && !title.trim()) setTitle(next.name.replace(/\.[^.]+$/, ""));
   }
 
-  async function save(e: FormEvent) {
-    e.preventDefault();
-    if (!file || busy) return;
-    setBusy(true);
+  async function save() {
+    if (!file) return false;
     const err = documentId
       ? await apiUploadVersion(documentId, file, expiry || undefined)
       : await apiUploadDocument(file, { category, title, employeeId, expiryDate: expiry || undefined });
-    setBusy(false);
-    if (err) return setError(err);
-    onDone(documentId ? `New version of ${existingTitle ?? "the document"} uploaded.` : `${title.trim()} uploaded.`);
+    if (err) {
+      setError(err);
+      return false;
+    }
+    const text = documentId ? `New version of ${existingTitle ?? "the document"} uploaded.` : `${title.trim()} uploaded.`;
+    notify(text);
+    onDone(text);
+    return true;
   }
 
   return (
     <Dialog open title={documentId ? `New version · ${existingTitle ?? ""}` : "Upload document"} onClose={onClose}>
-      <form className="stack" onSubmit={save}>
+      <form className="stack" onSubmit={uploadAct.submit(save)}>
         <Field label="File">
           <input type="file" accept={rules.contentTypes.join(",")} onChange={(e) => pick(e.target.files?.[0] ?? null)} />
         </Field>
@@ -1517,9 +1541,9 @@ function ApiUploadDialog({
           <button type="button" className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn" disabled={!file || busy || (!documentId && !title.trim())}>
-            {busy ? "Uploading…" : "Upload"}
-          </button>
+          <SubmitButton action={uploadAct} className="btn" disabled={!file || (!documentId && !title.trim())}>
+            Upload
+          </SubmitButton>
         </div>
       </form>
     </Dialog>
@@ -1548,6 +1572,7 @@ export function DocumentsLettersPage() {
   const [uploadPreview, setUploadPreview] = useState("");
   const [uploadFileLabel, setUploadFileLabel] = useState("");
   const [uploadError, setUploadError] = useState("");
+  const uploadAct = useAction();
 
   const canLetters = canManageLetters(demoProfile);
   const portalDocs = state.documents.filter((d) => d.employeeId === employee.id);
@@ -1594,9 +1619,8 @@ export function DocumentsLettersPage() {
     }
   }
 
-  function saveUpload(event: FormEvent) {
-    event.preventDefault();
-    if (!uploadName.trim() || uploadError) return;
+  function saveUpload() {
+    if (!uploadName.trim() || uploadError) return false;
     const error = addLibraryDoc({
       employeeId: employee.id,
       employeeName: employee.fullName,
@@ -1610,7 +1634,7 @@ export function DocumentsLettersPage() {
     });
     if (error) {
       setUploadError(error);
-      return;
+      return false;
     }
     // Mirror a short metadata line into portal documents (never the binary data URL)
     const mirrorError = addDocument({
@@ -1622,10 +1646,12 @@ export function DocumentsLettersPage() {
     });
     if (mirrorError) {
       setUploadError(`Saved to the library, but not to My ESS documents: ${mirrorError}`);
-      return;
+      return false;
     }
+    notify(`${uploadName.trim()} saved to the document library.`);
     setUploadOpen(false);
     resetUpload();
+    return true;
   }
 
   return (
@@ -1754,7 +1780,7 @@ export function DocumentsLettersPage() {
       <LetterViewerDialog actor={demoProfile} open={openLetter} onClose={() => setOpenLetter(null)} />
 
       <Dialog open={uploadOpen} title="Upload document" onClose={() => setUploadOpen(false)}>
-        <form className="stack" onSubmit={saveUpload}>
+        <form className="stack" onSubmit={uploadAct.submit(saveUpload)}>
           <Field label="File">
             <input
               type="file"
@@ -1779,9 +1805,9 @@ export function DocumentsLettersPage() {
             <button type="button" className="btn-ghost" onClick={() => setUploadOpen(false)}>
               Cancel
             </button>
-            <button type="submit" className="btn" disabled={!uploadName.trim() || !!uploadError}>
+            <SubmitButton action={uploadAct} className="btn" disabled={!uploadName.trim() || !!uploadError}>
               Save to library
-            </button>
+            </SubmitButton>
           </div>
         </form>
       </Dialog>

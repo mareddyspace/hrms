@@ -5,9 +5,9 @@ services:
     name: timez-hrms-api
     runtime: python
     plan: free
-    # Singapore is the closest Render region to India. Create the Neon project in AWS Asia Pacific (Singapore)
-    # too, so every database query stays in the same region.
-    region: singapore
+    # Same region as the Neon database (AWS us-east-2, Ohio): each request makes several database queries,
+    # so the server must sit next to the database. Render can't move a service between regions.
+    region: ohio
     rootDir: backend
     branch: main
     buildCommand: pip install -r requirements.txt

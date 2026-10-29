@@ -49,6 +49,9 @@ export function useAskCopilot(): (question: string) => CopilotAnswer {
 
 /* ───────── AI answers (backend POST /ai/ask, OpenRouter) ───────── */
 
+/** Longest wait for the AI before the built-in answer is shown. */
+const AI_WAIT_MS = 15000;
+
 /** Where an answer came from: the AI model ("AI") or the portal's own rules ("Built-in"). */
 export type CopilotOrigin = "ai" | "builtin";
 
@@ -134,13 +137,19 @@ export function useAskCopilotAi(): (question: string, history?: CopilotHistoryTu
       };
       if (!API_ENABLED || !hasTokens() || keepBuiltIn(question, ctx, builtIn)) return builtInReply(false);
       try {
-        const out = await api.post<AiAnswerOut>("/ai/ask", {
+        const request = api.post<AiAnswerOut>("/ai/ask", {
           question: question.trim().slice(0, 1000),
           history: history
             .filter((t) => t.content.trim())
             .slice(-HISTORY_TURNS)
             .map((t) => ({ role: t.role, content: t.content.slice(0, 1000) })),
         });
+        // A busy free model can take long; after a short wait show the built-in answer instead.
+        const out = await Promise.race([
+          request,
+          new Promise<null>((resolve) => window.setTimeout(() => resolve(null), AI_WAIT_MS)),
+        ]);
+        if (!out) return builtInReply(false);
         if (out.answer && (out.used_ai || out.denied)) {
           return { answer: fromAi(out), origin: out.used_ai ? "ai" : "builtin", model: out.model ?? undefined };
         }

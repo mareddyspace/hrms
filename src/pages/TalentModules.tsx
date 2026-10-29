@@ -5,6 +5,7 @@ import { API_ENABLED } from "../api/client.ts";
 import { apiMyRecruitingActivity, type ActivityOut } from "../api/syncTalent.ts";
 import { Link } from "react-router-dom";
 import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -17,6 +18,7 @@ import {
   Page,
   StatusBadge,
   Tabs,
+  notify,
 } from "../components/ui.tsx";
 import {
   LEARNING_PATHS,
@@ -90,6 +92,7 @@ import {
   type GoalInput,
   courseCatalog,
   talentAction,
+  type TalentResult,
   talentApiNotice,
   clearTalentApiNotice,
   type TalentActor,
@@ -207,6 +210,16 @@ type Notice = { tone: "ok" | "err"; text: string } | null;
 function noticeFor(error: string | null, okText?: string): Notice {
   if (error) return { tone: "err", text: error };
   return okText ? { tone: "ok", text: okText } : null;
+}
+
+/** talentAction as a promise, so action buttons stay busy until the change (or backend call) finishes. */
+function talentRun(change: () => TalentResult, done: (result: TalentResult) => void): Promise<TalentResult> {
+  return new Promise((resolve) =>
+    talentAction(change, (result) => {
+      done(result);
+      resolve(result);
+    }),
+  );
 }
 
 /** Backend mode: a change made on another page (e.g. Approvals) that the server refused. */
@@ -396,7 +409,7 @@ export function RecruitingPage() {
 
   function submitFeedback() {
     const score = Number(fbScore);
-    talentAction(() => submitInterviewFeedback(actor, fbInterview, score, fbText), (error) => {
+    return talentRun(() => submitInterviewFeedback(actor, fbInterview, score, fbText), (error) => {
       setNotice(noticeFor(error, "Interview feedback submitted."));
       if (!error) {
         setFbInterview("");
@@ -413,7 +426,7 @@ export function RecruitingPage() {
       startDate: offerForm.startDate,
       packageNote: offerForm.packageNote,
     };
-    talentAction(() => createOffer(actor, input), (error) => {
+    return talentRun(() => createOffer(actor, input), (error) => {
       setNotice(noticeFor(error, "Offer created."));
       if (!error) setOfferForm({ candidateId: "", grade: "", baseSalary: "", startDate: "", packageNote: "" });
     });
@@ -540,12 +553,12 @@ export function RecruitingPage() {
                       <input type="number" min={1} max={50} value={raiseForm.openings} onChange={(e) => setRaiseForm((f) => ({ ...f, openings: e.target.value }))} />
                     </Field>
                     <div className="row-gap">
-                      <button
-                        type="button"
+                      <ActionButton
                         className="btn btn-tiny"
-                        onClick={() => {
+                        success="Requisition raised and sent for approval."
+                        onAction={() => {
                           const input = { ...raiseForm, openings: Number(raiseForm.openings) };
-                          talentAction(() => raiseRequisition(actor, input), (error) => {
+                          return talentRun(() => raiseRequisition(actor, input), (error) => {
                             setNotice(noticeFor(error, "Requisition raised. Sent for approval."));
                             if (!error) {
                               setRaiseOpen(false);
@@ -555,7 +568,7 @@ export function RecruitingPage() {
                         }}
                       >
                         Send for approval
-                      </button>
+                      </ActionButton>
                       <button type="button" className="btn-ghost btn-tiny" onClick={() => setRaiseOpen(false)}>
                         Cancel
                       </button>
@@ -610,13 +623,13 @@ export function RecruitingPage() {
                   )}
                   <div className="row-gap">
                     {reqMoves.map((next) => (
-                      <button
+                      <ActionButton
                         key={next}
-                        type="button"
                         className={next === "Approved" || next === "Pending approval" ? "btn btn-tiny" : "btn-ghost btn-tiny"}
-                        onClick={() => {
+                        doneLabel={next === "Pending approval" ? "Sent" : next === "On hold" ? "On hold" : next === "Approved" ? "Approved" : "Rejected"}
+                        onAction={() => {
                           const before = requisitionWaitingFor(requisition);
-                          talentAction(() => setRequisitionApproval(actor, requisition.id, next, reqNote, assignTo), (error) => {
+                          return talentRun(() => setRequisitionApproval(actor, requisition.id, next, reqNote, assignTo), (error) => {
                             const after = getTalentState().requisitions.find((r) => r.id === requisition.id);
                             const okText =
                               next === "Approved" && after?.approvalStatus === "Pending approval"
@@ -625,12 +638,15 @@ export function RecruitingPage() {
                                   ? `${requisition.id}: sent for approval.`
                                   : `${requisition.id}: ${next}.`;
                             setNotice(noticeFor(error, okText));
-                            if (!error) setReqNote("");
+                            if (!error) {
+                              setReqNote("");
+                              notify(okText);
+                            }
                           });
                         }}
                       >
                         {next === "Pending approval" ? "Send for approval" : next === "On hold" ? "Put on hold" : next === "Approved" ? (requisition.recruiterId || !requisitionApprovalCompletes(actor, requisition) ? "Approve" : "Approve & assign") : "Reject"}
-                      </button>
+                      </ActionButton>
                     ))}
                   </div>
                 </div>
@@ -790,9 +806,14 @@ export function RecruitingPage() {
                 <Field label="Feedback notes" wide>
                   <textarea rows={3} value={fbText} onChange={(e) => setFbText(e.target.value)} placeholder="Observations for the hiring panel…" />
                 </Field>
-                <button type="button" className="btn" disabled={!fbInterview || !fbText.trim()} onClick={submitFeedback}>
+                <ActionButton
+                  className="btn"
+                  disabled={!fbInterview || !fbText.trim()}
+                  success={`Interview feedback for ${feedbackInterviews.find((i) => i.id === fbInterview)?.candidateName ?? "the candidate"} submitted.`}
+                  onAction={submitFeedback}
+                >
                   Submit feedback
-                </button>
+                </ActionButton>
               </>
             )}
           </Card>
@@ -869,14 +890,14 @@ export function RecruitingPage() {
                     </p>
                   )}
                   <div>
-                    <button
-                      type="button"
+                    <ActionButton
                       className="btn"
                       disabled={!offerForm.candidateId || !offerForm.grade || !offerForm.baseSalary || !offerForm.startDate}
-                      onClick={prepareOffer}
+                      success={`Offer created for ${offerCandidate?.name ?? "the candidate"}.`}
+                      onAction={prepareOffer}
                     >
                       Create offer
-                    </button>
+                    </ActionButton>
                   </div>
                 </div>
               )}
@@ -940,19 +961,19 @@ function OfferActions({
       <span className="stack">
         <input aria-label="Answer note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="How was the answer received?" />
         <span className="row-gap">
-          <button
-            type="button"
+          <ActionButton
             className="btn btn-tiny"
             disabled={note.trim().length < 5}
-            onClick={() => {
-              talentAction(() => setOfferStatus(actor, offer.id, answer, note), (error) => {
+            success={`${offer.candidateName}'s answer recorded.`}
+            onAction={() =>
+              talentRun(() => setOfferStatus(actor, offer.id, answer, note), (error) => {
                 onResult(noticeFor(error, `${offer.candidateName}'s answer recorded.`));
                 if (!error) setAnswer(null);
-              });
-            }}
+              })
+            }
           >
             Save
-          </button>
+          </ActionButton>
           <button type="button" className="btn-ghost btn-tiny" onClick={() => setAnswer(null)}>
             Cancel
           </button>
@@ -969,19 +990,24 @@ function OfferActions({
   return (
     <span className="row-gap">
       {canApprove && (
-        <button type="button" className="btn btn-tiny" onClick={() => talentAction(() => approveOffer(actor, offer.id), (res) => onResult(noticeFor(res, `Offer for ${offer.candidateName} approved.`)))}>
+        <ActionButton
+          className="btn btn-tiny"
+          doneLabel={step === "Hiring manager" ? "Agreed" : "Approved"}
+          success={`Offer for ${offer.candidateName} approved.`}
+          onAction={() => talentRun(() => approveOffer(actor, offer.id), (res) => onResult(noticeFor(res, `Offer for ${offer.candidateName} approved.`)))}
+        >
           {step === "Hiring manager" ? "Agree" : "Approve"}
-        </button>
+        </ActionButton>
       )}
       {buttons.map((m) => (
-        <button
+        <ActionButton
           key={m}
-          type="button"
           className={m === "Withdrawn" || m === "Preparing" ? "btn-ghost btn-tiny" : "btn btn-tiny"}
-          onClick={() => talentAction(() => setOfferStatus(actor, offer.id, m), (res) => onResult(noticeFor(res, `${offer.candidateName}'s offer: ${m}.`)))}
+          success={`${offer.candidateName}'s offer: ${m}.`}
+          onAction={() => talentRun(() => setOfferStatus(actor, offer.id, m), (res) => onResult(noticeFor(res, `${offer.candidateName}'s offer: ${m}.`)))}
         >
           {OFFER_ACTION_LABEL[m] ?? m}
-        </button>
+        </ActionButton>
       ))}
       {canRecord && (
         <>
@@ -1078,7 +1104,7 @@ function PreboardingCard({ joiner, actor, onResult }: { joiner: OnboardingJoiner
   }
 
   function save() {
-    talentAction(() => submitPreboarding(actor, joiner.id, form), (error) => onResult(noticeFor(error, "Pre-boarding form saved. IT tasks added.")));
+    return talentRun(() => submitPreboarding(actor, joiner.id, form), (error) => onResult(noticeFor(error, "Pre-boarding form saved. IT tasks added.")));
   }
 
   return (
@@ -1145,9 +1171,9 @@ function PreboardingCard({ joiner, actor, onResult }: { joiner: OnboardingJoiner
         My personal details are correct
       </label>
       <div className="row-gap" style={{ marginTop: 8 }}>
-        <button type="button" className="btn" onClick={save}>
+        <ActionButton className="btn" onAction={save} success={`Pre-boarding form for ${joiner.name} sent to HR and IT.`}>
           {joiner.preboarding ? "Update form" : "Send form"}
-        </button>
+        </ActionButton>
       </div>
     </Card>
   );
@@ -1229,19 +1255,21 @@ export function OnboardingPage() {
             <Progress value={joiner.preboardingPct} label="Checklist complete" />
             <div className="row-gap" style={{ marginTop: 8 }}>
               {canAck && (
-                <button
-                  type="button"
+                <ActionButton
                   className="btn"
                   disabled={joiner.policyAck === "Complete"}
-                  onClick={() =>
-                    talentAction(() => setJoinerPolicyAck(actor, joiner.id, "Complete"), (res) => setNotice(noticeFor(res,
+                  doneLabel={ackForJoiner ? "Recorded" : "Acknowledged"}
+                  busyLabel={ackForJoiner ? "Recording…" : "Saving…"}
+                  success={ackForJoiner ? `Policy acknowledgment recorded for ${joiner.name}.` : "Policies acknowledged."}
+                  onAction={() =>
+                    talentRun(() => setJoinerPolicyAck(actor, joiner.id, "Complete"), (res) => setNotice(noticeFor(res,
                         ackForJoiner ? `Recorded for ${joiner.name}.` : "Policies acknowledged.",
                       ),
                     ))
                   }
                 >
                   {ackForJoiner ? "Record acknowledgment" : "Acknowledge policies"}
-                </button>
+                </ActionButton>
               )}
               <Link to="/policies" className="btn-ghost">
                 View policies
@@ -1305,7 +1333,7 @@ function AssessmentEditor({
   text?: string;
   status: PerfReview["selfStatus"];
   editable: boolean;
-  onSave: (text: string, submit: boolean) => void;
+  onSave: (text: string, submit: boolean) => Promise<TalentResult>;
 }) {
   const [draft, setDraft] = useState(text ?? "");
   if (!editable) return <p className="muted">{text || "—"}</p>;
@@ -1313,12 +1341,12 @@ function AssessmentEditor({
     <div className="stack">
       <textarea aria-label="Summary" rows={3} maxLength={1000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Summary…" />
       <div className="row-gap">
-        <button type="button" className="btn-ghost btn-tiny" onClick={() => onSave(draft, false)}>
+        <ActionButton className="btn-ghost btn-tiny" success="Draft saved." onAction={() => onSave(draft, false)}>
           Save draft
-        </button>
-        <button type="button" className="btn btn-tiny" disabled={draft.trim().length < 10} onClick={() => onSave(draft, true)}>
+        </ActionButton>
+        <ActionButton className="btn btn-tiny" disabled={draft.trim().length < 10} onAction={() => onSave(draft, true)}>
           Submit
-        </button>
+        </ActionButton>
         {status === "Draft" && <span className="muted">Draft saved</span>}
       </div>
     </div>
@@ -1331,7 +1359,7 @@ function CycleDialog({ actor, onClose }: { actor: TalentActor; onClose: (message
   const set = (patch: Partial<CycleInput>) => setForm((f) => ({ ...f, ...patch }));
 
   function save() {
-    talentAction(() => createReviewCycle(actor, form), (err) => {
+    return talentRun(() => createReviewCycle(actor, form), (err) => {
       if (err) setError(err);
       else onClose(`${form.name.trim()} created. Move it to Active to open reviews.`);
     });
@@ -1361,9 +1389,9 @@ function CycleDialog({ actor, onClose }: { actor: TalentActor; onClose: (message
         <button type="button" className="btn-ghost" onClick={() => onClose()}>
           Cancel
         </button>
-        <button type="button" className="btn" onClick={save}>
+        <ActionButton className="btn" onAction={save} success={`Review cycle ${form.name.trim()} created.`}>
           Create
-        </button>
+        </ActionButton>
       </div>
     </Dialog>
   );
@@ -1386,7 +1414,7 @@ function GoalDialog({
   const others = goalWeightTotal(talent.goals, form.ownerId, form.cycleId, form.id);
 
   function save() {
-    talentAction(() => saveGoal(actor, form), (err) => {
+    return talentRun(() => saveGoal(actor, form), (err) => {
       if (err) setError(err);
       else onClose(form.id ? "Goal updated." : "Goal added.");
     });
@@ -1427,9 +1455,13 @@ function GoalDialog({
         <button type="button" className="btn-ghost" onClick={() => onClose()}>
           Cancel
         </button>
-        <button type="button" className="btn" onClick={save}>
+        <ActionButton
+          className="btn"
+          onAction={save}
+          success={form.id ? "Goal updated." : `Goal added for ${owners.find((o) => o.id === form.ownerId)?.name ?? "you"}.`}
+        >
           Save
-        </button>
+        </ActionButton>
       </div>
     </Dialog>
   );
@@ -1491,9 +1523,13 @@ export function PerformancePage() {
           </select>
         </label>
         {hr && next && (
-          <button type="button" className="btn-ghost" onClick={() => talentAction(() => advanceCycle(actor, cycleId), (res) => run(res, `Cycle moved to ${next}.`))}>
+          <ActionButton
+            className="btn-ghost"
+            success={`Cycle moved to ${next}.`}
+            onAction={() => talentRun(() => advanceCycle(actor, cycleId), (res) => run(res, `Cycle moved to ${next}.`))}
+          >
             Move to {next}
-          </button>
+          </ActionButton>
         )}
         {hr && (
           <button type="button" className="btn-ghost" onClick={() => setCycleOpen(true)}>
@@ -1655,7 +1691,10 @@ export function PerformancePage() {
                     status={r.selfStatus}
                     editable={r.employeeId === actor.id && r.selfStatus !== "Submitted" && status === "Active"}
                     onSave={(text, submit) =>
-                      talentAction(() => saveSelfAssessment(actor, r.id, text, submit), (res) => run(res, submit ? "Self-assessment submitted." : "Draft saved."))
+                      talentRun(() => saveSelfAssessment(actor, r.id, text, submit), (res) => {
+                        run(res, submit ? "Self-assessment submitted." : "Draft saved.");
+                        if (!res && submit) notify("Self-assessment submitted to your manager.");
+                      })
                     }
                   />
                 </li>
@@ -1689,7 +1728,10 @@ export function PerformancePage() {
                         status={r.managerStatus}
                         editable={writer && r.managerStatus !== "Submitted" && status === "Active"}
                         onSave={(text, submit) =>
-                          talentAction(() => saveManagerAssessment(actor, r.id, text, submit), (res) => run(res, submit ? "Manager assessment submitted." : "Draft saved."))
+                          talentRun(() => saveManagerAssessment(actor, r.id, text, submit), (res) => {
+                            run(res, submit ? "Manager assessment submitted." : "Draft saved.");
+                            if (!res && submit) notify(`Manager assessment for ${r.employeeName} submitted.`);
+                          })
                         }
                       />
                     )}
@@ -1768,9 +1810,16 @@ export function PerformancePage() {
                 r.released ? (
                   `${r.releasedOn ?? ""}`
                 ) : canRelease ? (
-                  <button key={`${r.id}-rel`} type="button" className="btn btn-tiny" onClick={() => talentAction(() => releaseRating(actor, r.id), (res) => run(res, `Rating released to ${r.employeeName}.`))}>
+                  <ActionButton
+                    key={`${r.id}-rel`}
+                    className="btn btn-tiny"
+                    busyLabel="Releasing…"
+                    doneLabel="Released"
+                    success={`Rating released to ${r.employeeName}.`}
+                    onAction={() => talentRun(() => releaseRating(actor, r.id), (res) => run(res, `Rating released to ${r.employeeName}.`))}
+                  >
                     Release
-                  </button>
+                  </ActionButton>
                 ) : (
                   "No"
                 ),
@@ -1825,14 +1874,14 @@ function certStatus(c: Certification, today: string): { label: string; tone: "ok
   return { label: "Valid", tone: "ok" };
 }
 
-function ScoreCompletion({ onSubmit }: { onSubmit: (score: number) => void }) {
+function ScoreCompletion({ onSubmit, success }: { onSubmit: (score: number) => Promise<TalentResult>; success?: string }) {
   const [score, setScore] = useState("");
   return (
     <span className="row-gap">
       <input type="number" min={0} max={100} value={score} onChange={(e) => setScore(e.target.value)} placeholder="Score" aria-label="Assessment score" style={{ width: 72 }} />
-      <button type="button" className="btn btn-tiny" disabled={score === ""} onClick={() => onSubmit(Number(score))}>
+      <ActionButton className="btn btn-tiny" disabled={score === ""} success={success} onAction={() => onSubmit(Number(score))}>
         Record score
-      </button>
+      </ActionButton>
     </span>
   );
 }
@@ -1970,14 +2019,16 @@ export function LearningPage() {
                 ) : !open ? (
                   <span key={c.id} className="muted">Not for your role</span>
                 ) : (
-                  <button
+                  <ActionButton
                     key={c.id}
-                    type="button"
                     className="btn-ghost"
-                    onClick={() => talentAction(() => enrollInCourse(demoProfile, c.id), (res) => setNotice(noticeFor(res, `Enrolled in ${c.title}.`)))}
+                    busyLabel="Enrolling…"
+                    doneLabel="Enrolled"
+                    success={`Enrolled in ${c.title}.`}
+                    onAction={() => talentRun(() => enrollInCourse(demoProfile, c.id), (res) => setNotice(noticeFor(res, `Enrolled in ${c.title}.`)))}
                   >
                     Enroll
-                  </button>
+                  </ActionButton>
                 ),
               ];
             })}
@@ -2134,29 +2185,31 @@ export function LearningPage() {
                               onChange={(e) => setRenewExpiry((prev) => ({ ...prev, [c.id]: e.target.value }))}
                             />
                           )}
-                          <button
-                            type="button"
+                          <ActionButton
                             className="btn btn-tiny"
                             disabled={!c.validityYears && !renewExpiry[c.id]}
-                            onClick={() =>
-                              talentAction(() => requestCertificationRenewal(demoProfile, c.id, renewExpiry[c.id]), (res) => setNotice(noticeFor(res,
+                            success={`${c.name} renewal sent to HR for verification.`}
+                            onAction={() =>
+                              talentRun(() => requestCertificationRenewal(demoProfile, c.id, renewExpiry[c.id]), (res) => setNotice(noticeFor(res,
                                   "Renewal recorded. HR will verify it.",
                                 ),
                               ))
                             }
                           >
                             Record renewal
-                          </button>
+                          </ActionButton>
                         </>
                       )}
                       {hr && c.employeeId !== employee.id && c.renewalStatus === "Pending verification" && (
-                        <button
-                          type="button"
+                        <ActionButton
                           className="btn btn-tiny"
-                          onClick={() => talentAction(() => verifyCertificationRenewal(demoProfile, c.id), (res) => setNotice(noticeFor(res, `Renewal verified for ${c.employeeName}.`)))}
+                          busyLabel="Verifying…"
+                          doneLabel="Verified"
+                          success={`Renewal verified for ${c.employeeName}.`}
+                          onAction={() => talentRun(() => verifyCertificationRenewal(demoProfile, c.id), (res) => setNotice(noticeFor(res, `Renewal verified for ${c.employeeName}.`)))}
                         >
                           Verify renewal
-                        </button>
+                        </ActionButton>
                       )}
                       {hr && c.employeeId !== employee.id && !c.verifiedBy && !expired && !c.renewalStatus && (
                         <>
@@ -2167,15 +2220,17 @@ export function LearningPage() {
                             aria-label="Credential ID"
                             style={{ width: 120 }}
                           />
-                          <button
-                            type="button"
+                          <ActionButton
                             className="btn btn-tiny"
-                            onClick={() =>
-                              talentAction(() => verifyCertification(demoProfile, c.id, credIds[c.id] ?? ""), (res) => setNotice(noticeFor(res, `${c.name} verified.`)))
+                            busyLabel="Verifying…"
+                            doneLabel="Verified"
+                            success={`${c.name} verified for ${c.employeeName}.`}
+                            onAction={() =>
+                              talentRun(() => verifyCertification(demoProfile, c.id, credIds[c.id] ?? ""), (res) => setNotice(noticeFor(res, `${c.name} verified.`)))
                             }
                           >
                             Verify
-                          </button>
+                          </ActionButton>
                         </>
                       )}
                     </span>,
@@ -2204,19 +2259,21 @@ export function LearningPage() {
               ) : !hr ? (
                 ""
               ) : e.progress >= SELF_PROGRESS_CAP ? (
-                <button
+                <ActionButton
                   key={`${e.id}-a`}
-                  type="button"
                   className="btn btn-tiny"
-                  onClick={() => talentAction(() => completeEnrollment(demoProfile, e.id), (res) => setNotice(noticeFor(res, `Course marked complete for ${e.employeeName}.`)))}
+                  doneLabel="Completed"
+                  success={`Course marked complete for ${e.employeeName}.`}
+                  onAction={() => talentRun(() => completeEnrollment(demoProfile, e.id), (res) => setNotice(noticeFor(res, `Course marked complete for ${e.employeeName}.`)))}
                 >
                   Mark complete
-                </button>
+                </ActionButton>
               ) : (
                 <ScoreCompletion
                   key={`${e.id}-a`}
+                  success={`Score recorded for ${e.employeeName}.`}
                   onSubmit={(score) =>
-                    talentAction(() => completeEnrollment(demoProfile, e.id, score), (res) => setNotice(noticeFor(res, `Passed. Course complete for ${e.employeeName}.`)))
+                    talentRun(() => completeEnrollment(demoProfile, e.id, score), (res) => setNotice(noticeFor(res, `Passed. Course complete for ${e.employeeName}.`)))
                   }
                 />
               ),

@@ -1,7 +1,7 @@
 /** Personal, employment and background sections of a profile, with own-profile editing and HR correction requests. */
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, StatusBadge } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import {
   NATIONALITIES,
   PROFILE_LANGUAGES,
@@ -246,6 +246,8 @@ function CorrectionsCard({ record, isMe, viewer, rows }: { record: PersonRecord;
   async function decide(row: ProfileCorrection, decision: "approve" | "reject") {
     const error = await decideProfileCorrection(viewer, row.id, decision, notes[row.id] ?? "");
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: decision === "approve" ? "Correction approved and applied." : "Correction rejected." });
+    if (!error) notify(decision === "approve" ? `Correction approved for ${row.personName}.` : `Correction rejected for ${row.personName}.`);
+    return error;
   }
 
   return (
@@ -272,12 +274,12 @@ function CorrectionsCard({ record, isMe, viewer, rows }: { record: PersonRecord;
                 onChange={(e) => setNotes({ ...notes, [c.id]: e.target.value })}
               />,
               <span key={`a-${c.id}`} className="row-gap">
-                <button type="button" className="btn btn-tiny" onClick={() => decide(c, "approve")}>
+                <ActionButton className="btn btn-tiny" onAction={() => decide(c, "approve")}>
                   Approve
-                </button>
-                <button type="button" className="btn-ghost btn-tiny" onClick={() => decide(c, "reject")}>
+                </ActionButton>
+                <ActionButton className="btn-ghost btn-tiny" onAction={() => decide(c, "reject")}>
                   Reject
-                </button>
+                </ActionButton>
               </span>,
             ])}
           />
@@ -292,17 +294,18 @@ function CorrectionsCard({ record, isMe, viewer, rows }: { record: PersonRecord;
               <StatusBadge key={`s-${c.id}`} status={c.status} tone={statusTone(c.status)} literal />,
               c.decisionNote || "—",
               c.status === "Pending" ? (
-                <button
+                <ActionButton
                   key={`w-${c.id}`}
-                  type="button"
                   className="quiet-link"
-                  onClick={async () => {
+                  success="Correction request withdrawn."
+                  onAction={async () => {
                     const error = await withdrawProfileCorrection(viewer, c.id);
                     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: "Request withdrawn." });
+                    return error;
                   }}
                 >
                   Withdraw
-                </button>
+                </ActionButton>
               ) : (
                 ""
               ),
@@ -336,9 +339,9 @@ function CorrectionDialog({
     [record.id],
   );
   const label = CORRECTION_FIELD_LABEL[field];
+  const sendAction = useAction();
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  async function submit() {
     const manager = field === "managerId" ? managers.find((p) => p.id === value) : undefined;
     const result = await requestProfileCorrection(viewer, {
       field,
@@ -346,8 +349,12 @@ function CorrectionDialog({
       requestedId: manager?.id,
       reason,
     });
-    if (result) setError(result);
-    else onSent();
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onSent();
+    return true;
   }
 
   let input: ReactNode;
@@ -384,7 +391,7 @@ function CorrectionDialog({
 
   return (
     <Dialog open title={`Request correction: ${label}`} onClose={onClose}>
-      <form className="stack" onSubmit={submit}>
+      <form className="stack" onSubmit={sendAction.submit(submit, { success: "Correction request sent to HR." })}>
         <p className="muted" style={{ margin: 0 }}>
           On record: <strong>{currentFieldValue(record, field) || "—"}</strong>
         </p>
@@ -399,9 +406,9 @@ function CorrectionDialog({
           <button type="button" className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn">
+          <SubmitButton action={sendAction} className="btn">
             Send to HR
-          </button>
+          </SubmitButton>
         </div>
       </form>
     </Dialog>
@@ -427,11 +434,16 @@ function BackgroundEditor({ record, viewer, onClose, onSaved }: { record: Person
     setNewLanguage("");
   }
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  const saveAction = useAction();
+
+  async function submit() {
     const result = await saveOwnBackground(viewer, { preferredName, preferredLanguage, spokenLanguages: languages, education, experience, careerGoals });
-    if (result) setError(result);
-    else onSaved();
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onSaved();
+    return true;
   }
 
   const setEdu = (i: number, patch: Partial<EducationRecord>) => setEducation(education.map((e, j) => (j === i ? { ...e, ...patch } : e)));
@@ -439,7 +451,7 @@ function BackgroundEditor({ record, viewer, onClose, onSaved }: { record: Person
 
   return (
     <Dialog open wide title="Edit profile details" onClose={onClose}>
-      <form className="stack" onSubmit={submit}>
+      <form className="stack" onSubmit={saveAction.submit(submit, { success: "Profile saved." })}>
         <div className="form-grid-2">
           <Field label="Preferred name">
             <input value={preferredName} maxLength={40} onChange={(e) => setPreferredName(e.target.value)} />
@@ -542,9 +554,9 @@ function BackgroundEditor({ record, viewer, onClose, onSaved }: { record: Person
           <button type="button" className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn">
+          <SubmitButton action={saveAction} className="btn">
             Save
-          </button>
+          </SubmitButton>
         </div>
       </form>
     </Dialog>

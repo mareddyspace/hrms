@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { FILTER_OPTIONS, type EmploymentStatus, type PersonRecord } from "../../data/peopleData.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { todayISO } from "../../model.ts";
@@ -145,11 +145,12 @@ function ImportPanel({ actor, onDone }: { actor: DataToolsActor; onDone: () => v
     setConfirming(false);
     if (error) {
       setMessage({ tone: "err", text: error });
-      return;
+      return false;
     }
     reset();
     setMessage({ tone: "ok", text: `Import finished: ${plural(counts.create, "employee")} created, ${counts.update} updated.` });
     onDone();
+    return true;
   }
 
   return (
@@ -293,9 +294,16 @@ function ImportPanel({ actor, onDone }: { actor: DataToolsActor; onDone: () => v
             <button type="button" className="btn-ghost" onClick={() => setConfirming(false)}>
               Cancel
             </button>
-            <button type="button" className="btn" disabled={busy} onClick={confirmImport}>
+            <ActionButton
+              className="btn"
+              disabled={busy}
+              busyLabel="Importing…"
+              doneLabel="Imported"
+              success={`Import finished: ${plural(counts.create, "employee")} created, ${counts.update} updated.`}
+              onAction={confirmImport}
+            >
               Import now
-            </button>
+            </ActionButton>
           </>
         }
       >
@@ -400,16 +408,17 @@ function MassUpdatePanel({ actor, onDone }: { actor: DataToolsActor; onDone: () 
   }
 
   function apply() {
-    if (!change) return;
+    if (!change) return false;
     const error = commitMassUpdate(actor, selectedIds, change);
     setConfirming(false);
     if (error) {
       setMessage({ tone: "err", text: error });
-      return;
+      return false;
     }
     setMessage({ tone: "ok", text: `Updated ${peopleLabel(plan?.changes.length ?? 0)}.` });
     setSelected(new Set());
     onDone();
+    return true;
   }
 
   return (
@@ -602,9 +611,9 @@ function MassUpdatePanel({ actor, onDone }: { actor: DataToolsActor; onDone: () 
             <button type="button" className="btn-ghost" onClick={() => setConfirming(false)}>
               Cancel
             </button>
-            <button type="button" className="btn" onClick={apply}>
+            <ActionButton className="btn" success={`Change applied to ${peopleLabel(plan?.changes.length ?? 0)}.`} onAction={apply}>
               Apply change
-            </button>
+            </ActionButton>
           </>
         }
       >
@@ -629,6 +638,7 @@ function HistoryPanel({ actor }: { actor: DataToolsActor }) {
     const error = undoLast(actor);
     setConfirming(false);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "The last bulk change was undone." });
+    return error;
   }
 
   return (
@@ -674,9 +684,9 @@ function HistoryPanel({ actor }: { actor: DataToolsActor }) {
             <button type="button" className="btn-ghost" onClick={() => setConfirming(false)}>
               Cancel
             </button>
-            <button type="button" className="btn" onClick={undo}>
+            <ActionButton className="btn" busyLabel="Undoing…" doneLabel="Undone" success="The last bulk change was undone." onAction={undo}>
               Undo
-            </button>
+            </ActionButton>
           </>
         }
       >

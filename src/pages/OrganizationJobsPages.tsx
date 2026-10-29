@@ -1,6 +1,7 @@
-import { useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -12,7 +13,9 @@ import {
   MetricGrid,
   Page,
   StatusBadge,
+  SubmitButton,
   Tabs,
+  useAction,
 } from "../components/ui.tsx";
 import {
   buildOrgTree,
@@ -188,29 +191,34 @@ function UnitForm({
   const parents = API_ENABLED
     ? units.filter((u) => u.active && u.type !== "location" && (!u.countryCode || !countryCode || u.countryCode === countryCode))
     : units.filter((u) => u.type === parentType && u.countryCode === countryCode && u.active);
-  const [busy, setBusy] = useState(false);
+  const act = useAction();
+  const okText = unit ? `${name.trim()} saved.` : `${unitTypeLabel(type)} ${name.trim()} added.`;
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (busy) return;
-    setBusy(true);
+  async function submit() {
     const result = await (unit
       ? updateOrgUnit(demoProfile, people, unit.key, { name, code })
       : addOrgUnit(demoProfile, people, { type, countryCode, name, code, parentKey }));
-    setBusy(false);
-    if (result) setError(result);
-    else onDone({ tone: "ok", text: unit ? `${name.trim()} saved.` : `${unitTypeLabel(type)} ${name.trim()} added.` });
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onDone({ tone: "ok", text: okText });
+    return true;
   }
 
   async function toggleActive() {
-    if (!unit) return;
+    if (!unit) return false;
     const result = await updateOrgUnit(demoProfile, people, unit.key, { active: !unit.active });
-    if (result) setError(result);
-    else onDone({ tone: "ok", text: `${unit.name} ${unit.active ? "deactivated" : "reactivated"}.` });
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onDone({ tone: "ok", text: `${unit.name} ${unit.active ? "deactivated" : "reactivated"}.` });
+    return true;
   }
 
   return (
-    <form className="stack" onSubmit={submit}>
+    <form className="stack" onSubmit={act.submit(submit, { success: okText })}>
       <Banner message={error ? { tone: "err", text: error } : null} />
       {unit && unit.headcount > 0 && unit.active && (
         <p className="muted">
@@ -270,13 +278,19 @@ function UnitForm({
         </Field>
       </div>
       <div className="row-gap">
-        <button className="btn" type="submit" disabled={busy}>
+        <SubmitButton action={act} className="btn">
           {unit ? "Save" : "Add unit"}
-        </button>
+        </SubmitButton>
         {unit && (
-          <button className="btn-ghost" type="button" onClick={toggleActive}>
+          <ActionButton
+            className="btn-ghost"
+            busyLabel="Updating…"
+            doneLabel="Done"
+            success={`${unit.name} ${unit.active ? "deactivated" : "reactivated"}.`}
+            onAction={toggleActive}
+          >
             {unit.active ? "Deactivate" : "Reactivate"}
-          </button>
+          </ActionButton>
         )}
       </div>
     </form>
@@ -527,22 +541,31 @@ function ProfileForm({
   const [description, setDescription] = useState(profile?.description ?? "");
   const [error, setError] = useState<string | null>(null);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  const act = useAction();
+
+  async function submit() {
     const result = await saveJobProfileAsync(demoProfile, profile?.id ?? null, { title, familyName, gradeBand, description });
-    if (result) setError(result);
-    else onDone({ tone: "ok", text: `${title.trim()} saved.` });
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onDone({ tone: "ok", text: `${title.trim()} saved.` });
+    return true;
   }
 
   async function toggleActive() {
-    if (!profile) return;
+    if (!profile) return false;
     const result = await setJobProfileActive(demoProfile, profile.id, Boolean(profile.inactive));
-    if (result) setError(result);
-    else onDone({ tone: "ok", text: `${profile.title} ${profile.inactive ? "reactivated" : "deactivated"}.` });
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onDone({ tone: "ok", text: `${profile.title} ${profile.inactive ? "reactivated" : "deactivated"}.` });
+    return true;
   }
 
   return (
-    <form className="stack" onSubmit={submit}>
+    <form className="stack" onSubmit={act.submit(submit, { success: profile ? `Job profile ${title.trim()} saved.` : `Job profile ${title.trim()} added.` })}>
       <Banner message={error ? { tone: "err", text: error } : null} />
       <div className="lc-grid">
         <Field label="Title">
@@ -588,13 +611,19 @@ function ProfileForm({
           </div>
         ))}
       <div className="row-gap">
-        <button className="btn" type="submit">
+        <SubmitButton action={act} className="btn">
           {profile ? "Save" : "Add profile"}
-        </button>
+        </SubmitButton>
         {profile && (
-          <button className="btn-ghost" type="button" onClick={toggleActive}>
+          <ActionButton
+            className="btn-ghost"
+            busyLabel="Updating…"
+            doneLabel="Done"
+            success={`${profile.title} ${profile.inactive ? "reactivated" : "deactivated"}.`}
+            onAction={toggleActive}
+          >
             {profile.inactive ? "Reactivate" : "Deactivate"}
-          </button>
+          </ActionButton>
         )}
       </div>
     </form>
@@ -629,8 +658,9 @@ function PositionForm({
   const locations = useMemo(() => locationOptions(people), [people]);
   const familyProfiles = profiles.filter((p) => p.familyName === jobFamily && (!p.inactive || p.id === jobProfileId));
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  const act = useAction();
+
+  async function submit() {
     const [countryCode, ...rest] = location.split("|");
     const result = await savePosition(demoProfile, position, {
       title,
@@ -644,19 +674,27 @@ function PositionForm({
       status,
       requirements: requirements.split("\n"),
     });
-    if (result) setError(result);
-    else onDone({ tone: "ok", text: `${title.trim()} saved.` });
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onDone({ tone: "ok", text: `${title.trim()} saved.` });
+    return true;
   }
 
   async function toggleActive() {
-    if (!position) return;
+    if (!position) return false;
     const result = await setPositionActive(demoProfile, position, Boolean(position.inactive));
-    if (result) setError(result);
-    else onDone({ tone: "ok", text: `${position.title} ${position.inactive ? "reactivated" : "deactivated"}.` });
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onDone({ tone: "ok", text: `${position.title} ${position.inactive ? "reactivated" : "deactivated"}.` });
+    return true;
   }
 
   return (
-    <form className="stack" onSubmit={submit}>
+    <form className="stack" onSubmit={act.submit(submit, { success: position ? `Position ${title.trim()} saved.` : `Position ${title.trim()} added.` })}>
       <Banner message={error ? { tone: "err", text: error } : null} />
       <div className="lc-grid">
         <Field label="Title" wide>
@@ -730,13 +768,19 @@ function PositionForm({
         </Field>
       </div>
       <div className="row-gap">
-        <button className="btn" type="submit">
+        <SubmitButton action={act} className="btn">
           {position ? "Save" : "Add position"}
-        </button>
+        </SubmitButton>
         {position && (
-          <button className="btn-ghost" type="button" onClick={toggleActive}>
+          <ActionButton
+            className="btn-ghost"
+            busyLabel="Updating…"
+            doneLabel="Done"
+            success={`${position.title} ${position.inactive ? "reactivated" : "deactivated"}.`}
+            onAction={toggleActive}
+          >
             {position.inactive ? "Reactivate" : "Deactivate"}
-          </button>
+          </ActionButton>
         )}
       </div>
     </form>

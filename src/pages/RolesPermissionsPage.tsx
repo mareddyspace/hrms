@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Banner, Card, DataTable, EmptyState, Page, StatusBadge } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, EmptyState, Page, StatusBadge, notify } from "../components/ui.tsx";
 import { DEMO_ACCOUNTS, type DemoAccount } from "../demoAccounts.ts";
 import {
   DATA_SCOPES,
@@ -108,7 +108,10 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
     const error = await savePageAccess(account, pages, actor);
     setBusy(false);
     onResult(error ? { tone: "err", text: error } : { tone: "ok", text: `Pages saved for ${account.fullName}.` });
-    if (!error) setPages(effectivePageIds(account));
+    if (error) return false;
+    setPages(effectivePageIds(account));
+    notify(`Pages saved for ${account.fullName}.`);
+    return true;
   }
 
   async function saveScope() {
@@ -116,6 +119,9 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
     const error = await saveDataScope(account.id, { scope, countries }, actorRef);
     setBusy(false);
     onResult(error ? { tone: "err", text: error } : { tone: "ok", text: `Data scope saved for ${account.fullName}.` });
+    if (error) return false;
+    notify(`Data scope saved for ${account.fullName}.`);
+    return true;
   }
 
   async function resetAll() {
@@ -124,7 +130,7 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
     if (error) {
       setBusy(false);
       onResult({ tone: "err", text: error });
-      return;
+      return false;
     }
     const def = defaultDataScope(account);
     // Your own data scope can't change (the API refuses it too).
@@ -132,12 +138,14 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
     setBusy(false);
     if (scopeError) {
       onResult({ tone: "err", text: scopeError });
-      return;
+      return false;
     }
     setPages(effectivePageIds(account));
     setScope(def.scope);
     setCountries(def.countries);
     onResult({ tone: "ok", text: `${account.fullName} is back to the ${roleLabel(account.role)} defaults.` });
+    notify(`${account.fullName} is back to the ${roleLabel(account.role)} defaults.`);
+    return true;
   }
 
   return (
@@ -146,12 +154,12 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
         title={`${account.fullName} · pages`}
         action={
           <span className="chip-row">
-            <button className="btn-ghost" type="button" onClick={() => void resetAll()} disabled={busy}>
+            <ActionButton className="btn-ghost" busyLabel="Resetting…" doneLabel="Reset" onAction={resetAll} disabled={busy}>
               Reset to default
-            </button>
-            <button className="btn" type="button" onClick={() => void savePages()} disabled={self || busy}>
+            </ActionButton>
+            <ActionButton className="btn" onAction={savePages} disabled={self || busy}>
               Save pages
-            </button>
+            </ActionButton>
           </span>
         }
       >
@@ -190,9 +198,9 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
       <Card
         title={`${account.fullName} · data scope`}
         action={
-          <button className="btn" type="button" onClick={() => void saveScope()} disabled={busy || (API_ENABLED && self)}>
+          <ActionButton className="btn" onAction={saveScope} disabled={busy || (API_ENABLED && self)}>
             Save scope
-          </button>
+          </ActionButton>
         }
       >
         <p className="note">Whose records they see in lists and search. Default for {roleLabel(account.role)}: {dataScopeLabel(defaultDataScope(account))}.</p>

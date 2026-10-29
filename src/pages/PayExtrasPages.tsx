@@ -1,6 +1,5 @@
 import { useState } from "react";
-import type { FormEvent } from "react";
-import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
+import { Banner, Card, Field, Page, StatusPill, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { claimLimitsFor, declarableTaxYears, itemCurrency, money, payRulesFor, receiptThresholdFor } from "../countryPay.ts";
 import { addDaysISO, EXPENSE_CLAIM_WINDOW_DAYS, todayISO } from "../model.ts";
 
@@ -30,16 +29,17 @@ export function ReimbursementPage() {
   } = useTemplatedText();
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
-  function onSubmit(event: FormEvent) {
-    event.preventDefault();
+  const reimburseAction = useAction();
+
+  function onSubmit(): boolean {
     if (hasTemplateBlanks(description)) {
       setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
-      return;
+      return false;
     }
     const value = Number(amount);
     if (value > receiptAbove && !receipt) {
       setMessage({ tone: "err", text: `Attach a receipt for claims over ${money(receiptAbove, currency)}.` });
-      return;
+      return false;
     }
     const text = receipt && description.trim() ? `${description.trim()}\nReceipt: ${receipt}` : description;
     const error = addReimbursement({
@@ -53,20 +53,21 @@ export function ReimbursementPage() {
         ? { tone: "err", text: error }
         : { tone: "ok", text: hasApprover ? "Reimbursement submitted for approval." : "Reimbursement approved automatically." },
     );
-    if (!error) {
-      setDate("");
-      setAmount("");
-      resetDescription();
-      setReceipt("");
-      setFileKey((key) => key + 1);
-    }
+    if (error) return false;
+    notify(hasApprover ? "Reimbursement submitted for approval." : "Reimbursement approved automatically.");
+    setDate("");
+    setAmount("");
+    resetDescription();
+    setReceipt("");
+    setFileKey((key) => key + 1);
+    return true;
   }
 
   return (
     <Page title="Other reimbursements">
       <div className="split">
         <Card title="New reimbursement">
-          <form onSubmit={onSubmit}>
+          <form onSubmit={reimburseAction.submit(onSubmit)}>
             <div className="form-grid">
               <Field label="Date">
                 <input
@@ -112,9 +113,9 @@ export function ReimbursementPage() {
               </Field>
             </div>
             <div className="form-actions">
-              <button className="btn" type="submit">
+              <SubmitButton action={reimburseAction} className="btn">
                 Submit
-              </button>
+              </SubmitButton>
             </div>
             <Banner message={message} />
           </form>
@@ -167,9 +168,9 @@ export function InvestmentProofPage() {
   const cap = rules.declarations.find((item) => item.code === section)?.cap;
   const hasRegimes = rules.code === "IN";
   const newRegime = hasRegimes && regime === "new";
+  const declareAction = useAction();
 
-  function onSubmit(event: FormEvent) {
-    event.preventDefault();
+  function onSubmit(): boolean {
     const error = addInvestmentProof({
       section,
       title,
@@ -177,10 +178,11 @@ export function InvestmentProofPage() {
       financialYear,
     });
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Declaration submitted." });
-    if (!error) {
-      setTitle("");
-      setAmount("");
-    }
+    if (error) return false;
+    notify("Tax declaration submitted.");
+    setTitle("");
+    setAmount("");
+    return true;
   }
 
   if (rules.declarations.length === 0) {
@@ -214,7 +216,7 @@ export function InvestmentProofPage() {
               </p>
             </div>
           ) : (
-          <form onSubmit={onSubmit}>
+          <form onSubmit={declareAction.submit(onSubmit)}>
             <div className="form-grid">
               {regimeField}
               <Field label="Section">
@@ -243,9 +245,9 @@ export function InvestmentProofPage() {
               </Field>
             </div>
             <div className="form-actions">
-              <button className="btn" type="submit">
+              <SubmitButton action={declareAction} className="btn">
                 Submit
-              </button>
+              </SubmitButton>
             </div>
             <Banner message={message} />
           </form>

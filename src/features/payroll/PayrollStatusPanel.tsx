@@ -1,7 +1,7 @@
 /** Payroll tab, backend mode: integration status per country and legal entity (no payroll processing). */
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Banner, Card, DataTable, EmptyState, MetricCard, MetricGrid, StatusBadge } from "../../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, EmptyState, MetricCard, MetricGrid, StatusBadge, notify } from "../../components/ui.tsx";
 import { apiPayrollProviders, apiPayrollStatus, apiSavePayrollProviders, type PayrollStatusOut } from "../../api/syncPayroll.ts";
 import { usePortal } from "../../store.tsx";
 
@@ -44,9 +44,12 @@ function ProvidersCard({ onSaved }: { onSaved: () => void }) {
       onSaved();
     } catch (e) {
       setMessage({ tone: "err", text: e instanceof Error ? e.message : "Could not save." });
+      return false;
     } finally {
       setSaving(false);
     }
+    notify("Payroll providers saved.");
+    return true;
   }
 
   return (
@@ -65,9 +68,9 @@ function ProvidersCard({ onSaved }: { onSaved: () => void }) {
         ))}
       </div>
       <div className="form-actions">
-        <button type="button" className="btn" onClick={() => void save()} disabled={saving}>
+        <ActionButton className="btn" onAction={save} disabled={saving}>
           Save providers
-        </button>
+        </ActionButton>
       </div>
       <Banner message={message} />
     </Card>

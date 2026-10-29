@@ -5,6 +5,8 @@ import { COMPANY_NAME } from "../brand.ts";
 import type { LeaveRow, Project } from "../model.ts";
 import { formatShortDate, partyName } from "../model.ts";
 import { breadcrumbsFor } from "../nav.ts";
+import { notify } from "./Toast.tsx";
+export { notify, notifyError } from "./Toast.tsx";
 
 export function Card({
   title,
@@ -500,4 +502,235 @@ export function Empty({ children }: { children: ReactNode }) {
 
 export function IconButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button {...props} className={`top-icon-btn ${props.className ?? ""}`.trim()} />;
+}
+
+/* ------------------------------------------------------------------ */
+/* Action buttons: busy → done feedback for anything that sends data. */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What an action handler returns:
+ * - a non-empty string: the error message (action failed)
+ * - false: failed or stopped (e.g. a validation message is already shown)
+ * - anything else (void, null, true, ""): success
+ * Throwing also counts as a failure.
+ */
+export type ActionResult = string | null | undefined | void | boolean;
+export type ActionHandler = () => ActionResult | Promise<ActionResult>;
+export type ActionPhase = "idle" | "busy" | "done";
+
+export type ActionOptions = {
+  /** Toast shown on success, e.g. "Leave request sent to Ram Krishnan for approval." */
+  success?: string | (() => string | undefined);
+  /** Also toast the error message (default false: pages show errors in their own notice). */
+  toastError?: boolean;
+  /** Called after a successful run (reset the form here). */
+  onSuccess?: () => void;
+  /** Called with the error message after a failed run. */
+  onError?: (message: string) => void;
+};
+
+export type Action = {
+  phase: ActionPhase;
+  busy: boolean;
+  /** Runs the handler once (ignored while already busy). Resolves true on success. */
+  run: (handler: ActionHandler, options?: ActionOptions) => Promise<boolean>;
+  /** Form onSubmit helper: prevents default, then runs the handler. */
+  submit: (handler: ActionHandler, options?: ActionOptions) => (event?: { preventDefault: () => void }) => void;
+};
+
+export function useAction({ doneMs = 2000, minBusyMs = 450 }: { doneMs?: number; minBusyMs?: number } = {}): Action {
+  const [phase, setPhase] = useState<ActionPhase>("idle");
+  const running = useRef(false);
+  const mounted = useRef(true);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      window.clearTimeout(timer.current);
+    };
+  }, []);
+
+  async function run(handler: ActionHandler, options: ActionOptions = {}): Promise<boolean> {
+    if (running.current) return false;
+    running.current = true;
+    window.clearTimeout(timer.current);
+    setPhase("busy");
+    const started = Date.now();
+    let error: string | null = null;
+    let ok = true;
+    try {
+      // Let the busy state paint before a synchronous handler runs.
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      const result = await handler();
+      if (result === false) ok = false;
+      else if (typeof result === "string" && result.trim()) {
+        ok = false;
+        error = result;
+      }
+    } catch (caught) {
+      ok = false;
+      error = caught instanceof Error ? caught.message : "Something went wrong. Please try again.";
+    }
+    // Instant (local) actions still show "Saving…" briefly so the click visibly registers.
+    const left = minBusyMs - (Date.now() - started);
+    if (left > 0) await new Promise((resolve) => window.setTimeout(resolve, left));
+    running.current = false;
+    if (ok) {
+      const text = typeof options.success === "function" ? options.success() : options.success;
+      if (text) notify(text, "ok");
+      options.onSuccess?.();
+      if (mounted.current) {
+        setPhase("done");
+        timer.current = window.setTimeout(() => {
+          if (mounted.current) setPhase("idle");
+        }, doneMs);
+      }
+    } else {
+      if (error) {
+        if (options.toastError) notify(error, "err");
+        options.onError?.(error);
+      }
+      if (mounted.current) setPhase("idle");
+    }
+    return ok;
+  }
+
+  return {
+    phase,
+    busy: phase === "busy",
+    run,
+    submit: (handler, options) => (event) => {
+      event?.preventDefault();
+      void run(handler, options);
+    },
+  };
+}
+
+const ACTION_VERBS: [RegExp, string, string][] = [
+  [/^re-?submit/i, "Resubmitting…", "Resubmitted"],
+  [/^submit/i, "Submitting…", "Submitted"],
+  [/^save/i, "Saving…", "Saved"],
+  [/^approve/i, "Approving…", "Approved"],
+  [/^reject/i, "Rejecting…", "Rejected"],
+  [/^decline/i, "Declining…", "Declined"],
+  [/^send back/i, "Sending back…", "Sent back"],
+  [/^send/i, "Sending…", "Sent"],
+  [/^add/i, "Adding…", "Added"],
+  [/^create/i, "Creating…", "Created"],
+  [/^apply/i, "Applying…", "Applied"],
+  [/^request/i, "Sending…", "Requested"],
+  [/^raise/i, "Raising…", "Raised"],
+  [/^upload/i, "Uploading…", "Uploaded"],
+  [/^withdraw/i, "Withdrawing…", "Withdrawn"],
+  [/^cancel/i, "Cancelling…", "Cancelled"],
+  [/^delete|^remove/i, "Removing…", "Removed"],
+  [/^publish/i, "Publishing…", "Published"],
+  [/^confirm/i, "Confirming…", "Done"],
+  [/^record/i, "Recording…", "Recorded"],
+  [/^enrol/i, "Enrolling…", "Enrolled"],
+  [/^update/i, "Updating…", "Updated"],
+  [/^check in/i, "Checking in…", "Checked in"],
+  [/^check out/i, "Checking out…", "Checked out"],
+  [/^post/i, "Posting…", "Posted"],
+  [/^assign/i, "Assigning…", "Assigned"],
+  [/^invite/i, "Sending…", "Invited"],
+  [/^schedule/i, "Scheduling…", "Scheduled"],
+  [/^complete/i, "Completing…", "Completed"],
+  [/^redeem/i, "Redeeming…", "Redeemed"],
+  [/^give|^recogni/i, "Sending…", "Sent"],
+  [/^move/i, "Moving…", "Moved"],
+  [/^mark|^decide|^close|^resolve/i, "Updating…", "Done"],
+];
+
+function labelText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(labelText).join("");
+  return "";
+}
+
+/** "Submit request" → { busy: "Submitting…", done: "Submitted" }. */
+export function actionLabels(label: ReactNode): { busy: string; done: string } {
+  const text = labelText(label).trim();
+  const hit = ACTION_VERBS.find(([pattern]) => pattern.test(text));
+  return hit ? { busy: hit[1], done: hit[2] } : { busy: "Working…", done: "Done" };
+}
+
+type ButtonBase = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick" | "type" | "onError"> & {
+  /** Label while running; default derived from the label ("Save" → "Saving…"). */
+  busyLabel?: string;
+  /** Label for ~2 s after success; default derived ("Save" → "Saved"), shown with a ✓. */
+  doneLabel?: string;
+};
+
+function ActionButtonView({
+  phase,
+  busyLabel,
+  doneLabel,
+  children,
+  className = "btn",
+  disabled,
+  ...rest
+}: ButtonBase & { phase: ActionPhase; type: "button" | "submit"; onClick?: () => void }) {
+  const derived = actionLabels(children);
+  const busy = phase === "busy";
+  const busyText = busyLabel ?? derived.busy;
+  const doneText = doneLabel ?? derived.done;
+  return (
+    <button
+      {...rest}
+      className={`${className} action-btn${busy ? " is-busy" : ""}${phase === "done" ? " is-done" : ""}`}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
+    >
+      {busy ? (
+        <>
+          <span className="btn-spinner" aria-hidden />
+          <span>{busyText}</span>
+        </>
+      ) : phase === "done" ? (
+        <>
+          <span className="btn-check" aria-hidden>
+            ✓
+          </span>
+          <span>{doneText}</span>
+        </>
+      ) : (
+        children
+      )}
+    </button>
+  );
+}
+
+/** Form submit button driven by useAction(): <form onSubmit={act.submit(save, { success: "Saved." })}> … <SubmitButton action={act}>Save</SubmitButton>. */
+export function SubmitButton({ action, ...props }: ButtonBase & { action: Action }) {
+  return <ActionButtonView {...props} type="submit" phase={action.phase} />;
+}
+
+/** Stand-alone button with its own busy/done state: <ActionButton onAction={() => approve(id)} success="Approved.">Approve</ActionButton>. */
+export function ActionButton({
+  onAction,
+  success,
+  toastError,
+  onSuccess,
+  onError,
+  action: shared,
+  ...props
+}: ButtonBase &
+  ActionOptions & {
+    onAction: ActionHandler;
+    /** Optional shared state (otherwise each button keeps its own). */
+    action?: Action;
+  }) {
+  const own = useAction();
+  const action = shared ?? own;
+  return (
+    <ActionButtonView
+      {...props}
+      type="button"
+      phase={action.phase}
+      onClick={() => void action.run(onAction, { success, toastError, onSuccess, onError })}
+    />
+  );
 }

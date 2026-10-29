@@ -1,5 +1,5 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs, notify } from "../../components/ui.tsx";
 import { formatShortDate } from "../../model.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
@@ -208,8 +208,13 @@ function PlacementForm({
 
   function save() {
     const error = savePlacementSafe();
+    const name = personName(personId);
     if (error) setMsg({ tone: "err", text: error });
-    else onClose(`${personName(personId)} saved on the grid.`);
+    else {
+      notify(`${name} saved on the grid.`);
+      onClose(`${name} saved on the grid.`);
+    }
+    return error;
   }
 
   function savePlacementSafe() {
@@ -222,10 +227,14 @@ function PlacementForm({
   }
 
   function remove() {
-    if (!employeeId) return;
+    if (!employeeId) return false;
     const error = removePlacement(actor, employeeId);
     if (error) setMsg({ tone: "err", text: error });
-    else onClose(`${personName(employeeId)} removed from the grid.`);
+    else {
+      notify(`${personName(employeeId)} removed from the grid.`);
+      onClose(`${personName(employeeId)} removed from the grid.`);
+    }
+    return error;
   }
 
   return (
@@ -299,17 +308,17 @@ function PlacementForm({
           {prefill && <p className="note info">Latest review rating: {prefill.rating} (suggests {prefill.level.toLowerCase()} performance).</p>}
           <Banner message={msg} />
           <div className="row-gap" style={{ marginTop: 12 }}>
-            <button type="button" className="btn" onClick={save}>
+            <ActionButton className="btn" onAction={save}>
               Save
-            </button>
+            </ActionButton>
             {employeeId && (
               <>
                 <button type="button" className="btn btn-ghost" onClick={() => onClose()}>
                   Cancel
                 </button>
-                <button type="button" className="btn btn-ghost" onClick={remove}>
+                <ActionButton className="btn btn-ghost" onAction={remove}>
                   Remove from grid
-                </button>
+                </ActionButton>
               </>
             )}
           </div>
@@ -339,7 +348,11 @@ function KeyRoles({ visible }: { visible: Set<string> }) {
   const [incumbent, setIncumbent] = useState("");
 
   const nominees = people.filter((p) => visible.has(p.id) && p.id !== actor.id && canAssess(actor, p.id));
-  const report = (e: string | null, ok: string) => setMsg(e ? { tone: "err", text: e } : { tone: "ok", text: ok });
+  const report = (e: string | null, ok: string) => {
+    setMsg(e ? { tone: "err", text: e } : { tone: "ok", text: ok });
+    if (!e) notify(ok);
+    return e;
+  };
 
   return (
     <div className="stack">
@@ -360,9 +373,9 @@ function KeyRoles({ visible }: { visible: Set<string> }) {
                 <StatusBadge key="r" status={s.readiness} tone={s.readiness === "Ready now" ? "ok" : s.readiness === "Ready in 1–2 years" ? "info" : "neutral"} literal />,
                 `${formatShortDate(s.nominatedOn)} by ${personName(s.nominatedBy)}`,
                 canRemoveSuccessor(actor, role, s) ? (
-                  <button key="x" type="button" className="btn btn-ghost btn-tiny" onClick={() => report(removeSuccessor(actor, role.id, s.employeeId), "Nomination removed.")}>
+                  <ActionButton key="x" className="btn btn-ghost btn-tiny" onAction={() => report(removeSuccessor(actor, role.id, s.employeeId), `${personName(s.employeeId)} removed as successor for ${role.title}.`)}>
                     Remove
-                  </button>
+                  </ActionButton>
                 ) : (
                   ""
                 ),
@@ -397,17 +410,19 @@ function KeyRoles({ visible }: { visible: Set<string> }) {
                     </option>
                   ))}
                 </select>
-                <button
-                  type="button"
+                <ActionButton
                   className="btn btn-tiny"
-                  onClick={() => {
+                  busyLabel="Saving…"
+                  doneLabel="Nominated"
+                  onAction={() => {
                     const e = nominateSuccessor(actor, role.id, pick.id, pick.readiness);
-                    report(e, "Successor nominated.");
+                    report(e, pick.id ? `${personName(pick.id)} nominated as successor for ${role.title}.` : "Successor nominated.");
                     if (!e) setPicks((p) => ({ ...p, [role.id]: { id: "", readiness: "" } }));
+                    return e;
                   }}
                 >
                   Nominate
-                </button>
+                </ActionButton>
               </div>
             )}
           </Card>
@@ -433,20 +448,20 @@ function KeyRoles({ visible }: { visible: Set<string> }) {
             </Field>
           </div>
           <div className="row-gap" style={{ marginTop: 12 }}>
-            <button
-              type="button"
+            <ActionButton
               className="btn"
-              onClick={() => {
+              onAction={() => {
                 const e = addKeyRole(actor, newTitle, incumbent);
-                report(e, "Key role added.");
+                report(e, `Key role ${newTitle.trim()} added.`);
                 if (!e) {
                   setNewTitle("");
                   setIncumbent("");
                 }
+                return e;
               }}
             >
               Add key role
-            </button>
+            </ActionButton>
           </div>
         </Card>
       )}

@@ -1,5 +1,6 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -10,6 +11,7 @@ import {
   Page,
   StatusBadge,
   Tabs,
+  useAction,
 } from "../../components/ui.tsx";
 import { TIMEZ_COUNTRIES, formatShortDate, todayISO } from "../../model.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
@@ -160,15 +162,11 @@ function AnswerForm({ survey, onCancel, onDone }: { survey: Survey; onCancel: ()
   const [msg, setMsg] = useState<Msg>(null);
   const set = (id: string, v: number | string) => setAnswers((a) => ({ ...a, [id]: v }));
 
-  const [busy, setBusy] = useState(false);
-
   async function submit() {
-    if (busy) return;
-    setBusy(true);
     const error = API_ENABLED ? await submitResponseApi(survey.id, answers) : submitResponse(actor, survey.id, answers);
-    setBusy(false);
     if (error) setMsg({ tone: "err", text: error });
     else onDone();
+    return error;
   }
 
   return (
@@ -210,9 +208,9 @@ function AnswerForm({ survey, onCancel, onDone }: { survey: Survey; onCancel: ()
       ))}
       <Banner message={msg} />
       <div className="row-gap" style={{ marginTop: 12 }}>
-        <button type="button" className="btn" disabled={busy} onClick={() => void submit()}>
+        <ActionButton className="btn" onAction={submit} success={`Your answers to ${survey.title} were submitted anonymously.`}>
           Submit answers
-        </button>
+        </ActionButton>
         <button type="button" className="btn btn-ghost" onClick={onCancel}>
           Cancel
         </button>
@@ -550,23 +548,22 @@ function Manage({ surveys }: { surveys: Survey[] }) {
   const [msg, setMsg] = useState<Msg>(null);
   const [listMsg, setListMsg] = useState<Msg>(null);
 
-  const [busy, setBusy] = useState(false);
+  const publishAction = useAction();
+  const draftAction = useAction();
 
   async function save(publish: boolean) {
-    if (busy) return;
     const audience: SurveyAudience = audType === "all" ? { type: "all" } : { type: audType, value: audValue };
     const input = { title, questions, audience, openDate, closeDate };
-    setBusy(true);
     const error = API_ENABLED ? await createSurveyApi(input, publish) : createSurvey(actor, input, publish);
-    setBusy(false);
     if (error) {
       setMsg({ tone: "err", text: error });
-      return;
+      return false;
     }
     setMsg({ tone: "ok", text: publish ? "Survey published." : "Draft saved." });
     setTitle("");
     setQuestions([{ kind: "rating", prompt: "" }, { kind: "enps", prompt: ENPS_PROMPT }, { kind: "text", prompt: "" }]);
     setCloseDate("");
+    return true;
   }
 
   const updateQ = (i: number, patch: Partial<DraftQuestion>) =>
@@ -575,6 +572,7 @@ function Manage({ surveys }: { surveys: Survey[] }) {
   async function listAction(run: () => string | null | Promise<string | null>, ok: string) {
     const e = await run();
     setListMsg(e ? { tone: "err", text: e } : { tone: "ok", text: ok });
+    return e;
   }
 
   const rows = surveys.map((s) => {
@@ -589,23 +587,23 @@ function Manage({ surveys }: { surveys: Survey[] }) {
       String(count),
       !s.published ? (
         <div key="a" className="row-gap">
-          <button
-            type="button"
+          <ActionButton
             className="btn btn-tiny"
-            onClick={() => void listAction(() => (API_ENABLED ? publishSurveyApi(s.id) : publishSurvey(actor, s.id)), "Survey published.")}
+            success={`${s.title} published to ${audienceLabel(s.audience)}.`}
+            onAction={() => listAction(() => (API_ENABLED ? publishSurveyApi(s.id) : publishSurvey(actor, s.id)), "Survey published.")}
           >
             Publish
-          </button>
+          </ActionButton>
           {!API_ENABLED && (
-            <button type="button" className="btn btn-ghost btn-tiny" onClick={() => void listAction(() => deleteDraftSurvey(actor, s.id), "Draft deleted.")}>
+            <ActionButton className="btn btn-ghost btn-tiny" doneLabel="Deleted" success="Draft deleted." onAction={() => listAction(() => deleteDraftSurvey(actor, s.id), "Draft deleted.")}>
               Delete
-            </button>
+            </ActionButton>
           )}
         </div>
       ) : API_ENABLED && (phase === "Open" || phase === "Scheduled") ? (
-        <button key="a" type="button" className="btn btn-ghost btn-tiny" onClick={() => void listAction(() => closeSurveyApi(s.id), "Survey closed.")}>
+        <ActionButton key="a" className="btn btn-ghost btn-tiny" busyLabel="Closing…" doneLabel="Closed" success={`${s.title} closed.`} onAction={() => listAction(() => closeSurveyApi(s.id), "Survey closed.")}>
           Close now
-        </button>
+        </ActionButton>
       ) : (
         <span key="a" className="muted">—</span>
       ),
@@ -681,12 +679,18 @@ function Manage({ surveys }: { surveys: Survey[] }) {
         </div>
         <Banner message={msg} />
         <div className="row-gap" style={{ marginTop: 12 }}>
-          <button type="button" className="btn" disabled={busy} onClick={() => void save(true)}>
+          <ActionButton
+            className="btn"
+            action={publishAction}
+            disabled={draftAction.busy}
+            success={() => `Survey published to ${audType === "all" ? "everyone" : audValue || "the audience"}.`}
+            onAction={() => save(true)}
+          >
             Publish survey
-          </button>
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void save(false)}>
+          </ActionButton>
+          <ActionButton className="btn btn-ghost" action={draftAction} disabled={publishAction.busy} success="Survey draft saved." onAction={() => save(false)}>
             Save draft
-          </button>
+          </ActionButton>
         </div>
       </Card>
     </div>

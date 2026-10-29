@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import type { FormEvent } from "react";
 import { API_ENABLED, apiSessionMe, isApiAdmin } from "../api/client.ts";
 import {
   deviceLabel,
@@ -21,7 +20,7 @@ import {
   type MfaStatus,
   type SignedInDevice,
 } from "../api/securitySettings.ts";
-import { Banner, Card, Field, Page, downloadText } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Field, Page, SubmitButton, downloadText, notify, useAction, type ActionResult } from "../components/ui.tsx";
 
 type Note = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -97,16 +96,21 @@ function MfaCard() {
   }, []);
   useEffect(load, [load]);
 
-  async function run(fn: () => Promise<void>) {
+  const confirmAction = useAction();
+
+  async function run(fn: () => Promise<void>, success?: string): Promise<boolean> {
     setBusy(true);
     setNote(null);
     try {
       await fn();
     } catch (e) {
       setNote({ tone: "err", text: errText(e) });
+      return false;
     } finally {
       setBusy(false);
     }
+    if (success) notify(success);
+    return true;
   }
 
   const begin = () =>
@@ -115,17 +119,15 @@ function MfaCard() {
       setCode("");
     });
 
-  const confirm = (event: FormEvent) => {
-    event.preventDefault();
-    void run(async () => {
+  const confirm = () =>
+    run(async () => {
       const out = await enableMfa(code);
       setCodes(out.backup_codes);
       setSetup(null);
       setCode("");
       setNote({ tone: "ok", text: "Two-step sign-in is on." });
       load();
-    });
-  };
+    }, "Two-step sign-in is on.");
 
   const turnOff = () =>
     run(async () => {
@@ -133,7 +135,7 @@ function MfaCard() {
       setStatus(await disableMfa(password));
       setPassword("");
       setNote({ tone: "ok", text: "Two-step sign-in is off." });
-    });
+    }, "Two-step sign-in is off.");
 
   const newCodes = () =>
     run(async () => {
@@ -142,7 +144,7 @@ function MfaCard() {
       setCodes(out.backup_codes);
       setPassword("");
       load();
-    });
+    }, "New backup codes created.");
 
   return (
     <Card title="Authenticator app">
@@ -162,17 +164,17 @@ function MfaCard() {
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
           </Field>
           <div className="form-actions">
-            <button type="button" className="btn-ghost" disabled={busy} onClick={() => void newCodes()}>
+            <ActionButton className="btn-ghost" busyLabel="Creating…" doneLabel="Created" disabled={busy} onAction={newCodes}>
               New backup codes
-            </button>
-            <button type="button" className="btn-ghost" disabled={busy || status.required_by_policy} onClick={() => void turnOff()}>
+            </ActionButton>
+            <ActionButton className="btn-ghost" busyLabel="Turning off…" doneLabel="Turned off" disabled={busy || status.required_by_policy} onAction={turnOff}>
               Turn off
-            </button>
+            </ActionButton>
           </div>
           {status.required_by_policy && <p className="muted">Your role must use two-step sign-in.</p>}
         </div>
       ) : setup ? (
-        <form className="stack" onSubmit={confirm}>
+        <form className="stack" onSubmit={confirmAction.submit(confirm)}>
           <p>1. In your authenticator app (Google Authenticator, Microsoft Authenticator, 1Password…), add an account with this setup key:</p>
           <p style={{ fontFamily: "monospace", fontSize: 18, letterSpacing: 1 }}>{groupKey(setup.secret)}</p>
           <p className="muted">
@@ -186,9 +188,9 @@ function MfaCard() {
             <input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" maxLength={8} />
           </Field>
           <div className="form-actions">
-            <button type="submit" className="btn" disabled={busy || code.trim().length < 6}>
+            <SubmitButton action={confirmAction} className="btn" busyLabel="Turning on…" doneLabel="Turned on" disabled={busy || code.trim().length < 6}>
               Turn on
-            </button>
+            </SubmitButton>
             <button type="button" className="btn-ghost" onClick={() => setSetup(null)}>
               Cancel
             </button>
@@ -200,9 +202,9 @@ function MfaCard() {
             <strong>Off.</strong> Add a code from your phone when you sign in, so a stolen password isn't enough.
           </p>
           <div className="form-actions">
-            <button type="button" className="btn" disabled={busy} onClick={() => void begin()}>
+            <ActionButton className="btn" busyLabel="Starting…" doneLabel="Ready" disabled={busy} onAction={begin}>
               Set up
-            </button>
+            </ActionButton>
           </div>
         </div>
       )}
@@ -211,7 +213,7 @@ function MfaCard() {
   );
 }
 
-function DeviceTable({ rows, onEnd }: { rows: SignedInDevice[]; onEnd?: (row: SignedInDevice) => void }) {
+function DeviceTable({ rows, onEnd }: { rows: SignedInDevice[]; onEnd?: (row: SignedInDevice) => ActionResult | Promise<ActionResult> }) {
   if (!rows.length) return <p className="muted">No signed-in devices.</p>;
   return (
     <div style={{ overflowX: "auto" }}>
@@ -238,9 +240,9 @@ function DeviceTable({ rows, onEnd }: { rows: SignedInDevice[]; onEnd?: (row: Si
               {onEnd && (
                 <td>
                   {!row.current && (
-                    <button type="button" className="btn-ghost btn-tiny" onClick={() => onEnd(row)}>
+                    <ActionButton className="btn-ghost btn-tiny" busyLabel="Signing out…" doneLabel="Signed out" onAction={() => onEnd(row)}>
                       Sign out
-                    </button>
+                    </ActionButton>
                   )}
                 </td>
               )}
@@ -260,14 +262,18 @@ function DevicesCard() {
   }, []);
   useEffect(load, [load]);
 
-  async function act(fn: () => Promise<{ revoked: number }>, done: string) {
+  async function act(fn: () => Promise<{ revoked: number }>, done: string): Promise<boolean> {
+    let ok = true;
     try {
       await fn();
       setNote({ tone: "ok", text: done });
+      notify(done);
     } catch (e) {
       setNote({ tone: "err", text: errText(e) });
+      ok = false;
     }
     load();
+    return ok;
   }
 
   return (
@@ -275,13 +281,18 @@ function DevicesCard() {
       title="Signed-in devices"
       action={
         rows.length > 1 ? (
-          <button type="button" className="btn-ghost btn-tiny" onClick={() => void act(revokeOtherSessions, "Signed out of all other devices.")}>
+          <ActionButton
+            className="btn-ghost btn-tiny"
+            busyLabel="Signing out…"
+            doneLabel="Signed out"
+            onAction={() => act(revokeOtherSessions, "Signed out of all other devices.")}
+          >
             Sign out all other devices
-          </button>
+          </ActionButton>
         ) : undefined
       }
     >
-      <DeviceTable rows={rows} onEnd={(row) => void act(() => revokeSession(row.session_id), "That device is signed out.")} />
+      <DeviceTable rows={rows} onEnd={(row) => act(() => revokeSession(row.session_id), `${deviceLabel(row.user_agent)} is signed out.`)} />
       <Banner message={note} />
     </Card>
   );
@@ -313,14 +324,20 @@ function AdminSecurityCard() {
     }
   }
 
-  async function endAll() {
+  async function endAll(): Promise<boolean> {
+    let ok = true;
     try {
       const out = await revokeAccountSessions(accountId);
-      setNote({ tone: "ok", text: `Ended ${out.revoked} session${out.revoked === 1 ? "" : "s"}.` });
+      const who = accounts.find((a) => a.account_id === accountId);
+      const text = `Ended ${out.revoked} session${out.revoked === 1 ? "" : "s"}${who ? ` for ${who.full_name ?? who.email}` : ""}.`;
+      setNote({ tone: "ok", text });
+      notify(text);
     } catch (e) {
       setNote({ tone: "err", text: errText(e) });
+      ok = false;
     }
     loadSessions(accountId);
+    return ok;
   }
 
   return (
@@ -351,9 +368,9 @@ function AdminSecurityCard() {
           <>
             <DeviceTable rows={rows} />
             <div className="form-actions">
-              <button type="button" className="btn-ghost" disabled={!rows.length} onClick={() => void endAll()}>
+              <ActionButton className="btn-ghost" busyLabel="Ending…" doneLabel="Ended" disabled={!rows.length} onAction={endAll}>
                 End all sessions
-              </button>
+              </ActionButton>
             </div>
           </>
         )}

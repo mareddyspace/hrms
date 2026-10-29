@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { Banner, Card, DataTable, EmptyState, Field, Page, Tabs } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, EmptyState, Field, Page, Tabs, notify } from "../components/ui.tsx";
 import { usePortal } from "../store.tsx";
 import { formatShortDate } from "../model.ts";
 import {
@@ -159,26 +159,30 @@ export function ApprovalWorkflowsPage() {
     setDraft((steps) => steps.map((s, i) => (i === index ? next : s)));
   }
 
-  async function save() {
+  async function save(): Promise<boolean> {
     if (draft.some((step) => !step.label.trim())) {
       setMessage({ tone: "err", text: "Every step needs a name." });
-      return;
+      return false;
     }
     if (draft.some((step) => (step.minAmount !== undefined && !(step.minAmount > 0)) || (step.minPercent !== undefined && !(step.minPercent > 0)))) {
       setMessage({ tone: "err", text: "Minimum amounts and percents must be above zero." });
-      return;
+      return false;
     }
     if (draft.some((step) => step.slaHours !== undefined && !(step.slaHours > 0))) {
       setMessage({ tone: "err", text: "Time limits must be above zero hours." });
-      return;
+      return false;
     }
     if (API_ENABLED) {
       const error = await saveApiWorkflow(type, draft);
       setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `Saved as version ${record.version + 1}. New requests use it.` });
-      return;
+      if (error) return false;
+      notify(`Approval steps saved as version ${record.version + 1}.`);
+      return true;
     }
     saveApprovalSteps(type as WorkflowType, draft, { id: demoProfile.id, fullName: demoProfile.fullName });
     setMessage({ tone: "ok", text: `Saved as version ${record.version + 1}. New requests use it.` });
+    notify(`Approval steps saved as version ${record.version + 1}.`);
+    return true;
   }
 
   const showAmount = AMOUNT_TYPES.includes(type as WorkflowType);
@@ -363,9 +367,9 @@ export function ApprovalWorkflowsPage() {
             <button type="button" className="btn-ghost" onClick={() => setDraft(defaults)}>
               Reset to default
             </button>
-            <button type="button" className="btn" disabled={!dirty} onClick={() => void save()}>
+            <ActionButton className="btn" disabled={!dirty} onAction={save}>
               Save
-            </button>
+            </ActionButton>
           </div>
           <p className="muted">
             Open requests keep their current steps.

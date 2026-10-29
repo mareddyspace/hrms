@@ -1,6 +1,6 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { API_ENABLED } from "../api/client.ts";
-import { Banner, Dialog, Field } from "../components/ui.tsx";
+import { ActionButton, Banner, Dialog, Field, SubmitButton, notify, useAction, type ActionResult } from "../components/ui.tsx";
 import { DEMO_ACCOUNTS, type DemoAccount } from "../demoAccounts.ts";
 import { todayISO } from "../model.ts";
 import { DEPENDENT_RELATIONSHIPS, type CompCycle, type Dependent, type GradeBand } from "../data/rewardData.ts";
@@ -22,6 +22,12 @@ import {
 
 type Done = (text: string) => void;
 
+/** Success: toast the message, then let the parent show its notice and close the dialog. */
+function finish(onDone: Done, text: string) {
+  notify(text);
+  onDone(text);
+}
+
 /** Shared shell: a form inside a dialog with an error line and Cancel / submit buttons. */
 function FormDialog({
   open,
@@ -37,20 +43,16 @@ function FormDialog({
   title: string;
   submitLabel: string;
   onClose: () => void;
-  onSubmit: () => void;
+  /** Return the error text (or false) on failure; anything else counts as success. */
+  onSubmit: () => ActionResult | Promise<ActionResult>;
   error: string | null;
   children: ReactNode;
   extra?: ReactNode;
 }) {
+  const act = useAction();
   return (
     <Dialog open={open} title={title} onClose={onClose}>
-      <form
-        className="stack"
-        onSubmit={(e: FormEvent) => {
-          e.preventDefault();
-          onSubmit();
-        }}
-      >
+      <form className="stack" onSubmit={act.submit(onSubmit)}>
         <div className="form-grid">{children}</div>
         {error && <Banner message={{ tone: "err", text: error }} />}
         <div className="dialog-actions">
@@ -58,9 +60,9 @@ function FormDialog({
             Cancel
           </button>
           {extra}
-          <button type="submit" className="btn">
+          <SubmitButton action={act} className="btn">
             {submitLabel}
-          </button>
+          </SubmitButton>
         </div>
       </form>
     </Dialog>
@@ -84,7 +86,8 @@ export function NewCycleDialog({ actor, countries, onClose, onDone }: { actor: D
   async function save() {
     const err = await createCompCycle(actor, { name, opensOn, closesOn, effectiveDate, budgetPct: Number(budget), countries: picked });
     setError(err);
-    if (!err) onDone(`${name.trim()} created.`);
+    if (!err) finish(onDone, `${name.trim()} created.`);
+    return err;
   }
 
   return (
@@ -151,7 +154,7 @@ export function ProposeDialog({ actor, cycle, grades, onClose, onDone }: { actor
   const increasePct = increase.trim() === "" ? Number.NaN : Number(increase);
 
   async function save(submit: boolean) {
-    if (busy) return;
+    if (busy) return false;
     setBusy(true);
     const err = await createCompProposal(actor, {
       cycleId: cycle.id,
@@ -166,12 +169,13 @@ export function ProposeDialog({ actor, cycle, grades, onClose, onDone }: { actor
     });
     setBusy(false);
     setError(err);
-    if (!err) onDone(`${person?.fullName ?? "Proposal"}: ${submit || API_ENABLED ? "submitted" : "saved as draft"}.`);
+    if (!err) finish(onDone, `${person?.fullName ?? "Proposal"}: ${submit || API_ENABLED ? "submitted" : "saved as draft"}.`);
+    return err;
   }
 
   if (API_ENABLED && people.length) {
     return (
-      <FormDialog open title={`Propose · ${cycle.name}`} submitLabel={busy ? "Submitting…" : "Submit"} onClose={onClose} onSubmit={() => save(true)} error={error}>
+      <FormDialog open title={`Propose · ${cycle.name}`} submitLabel="Submit" onClose={onClose} onSubmit={() => save(true)} error={error}>
         <Field label="Employee" wide>
           <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
             {people.map((p) => (
@@ -225,9 +229,9 @@ export function ProposeDialog({ actor, cycle, grades, onClose, onDone }: { actor
       onSubmit={() => save(true)}
       error={error}
       extra={
-        <button type="button" className="btn-ghost" onClick={() => save(false)}>
+        <ActionButton className="btn-ghost" disabled={busy} onAction={() => save(false)}>
           Save draft
-        </button>
+        </ActionButton>
       }
     >
       <Field label="Employee" wide>
@@ -287,7 +291,8 @@ export function BandDialog({ actor, band, onClose, onDone }: { actor: DemoAccoun
   async function save() {
     const err = await updateGradeBand(actor, band.id, { min: num(min), mid: num(mid), max: num(max) });
     setError(err);
-    if (!err) onDone(`${band.grade} ${band.family} (${band.country}) range updated.`);
+    if (!err) finish(onDone, `${band.grade} ${band.family} (${band.country}) range updated.`);
+    return err;
   }
   return (
     <FormDialog open title={`${band.grade} · ${band.family} · ${band.country}`} submitLabel="Save range" onClose={onClose} onSubmit={save} error={error}>
@@ -317,7 +322,8 @@ export function BonusDialog({ actor, onClose, onDone }: { actor: DemoAccount; on
   async function save() {
     const err: RewardResult = await addBonus(actor, { employeeId, type, period, amount: num(amount) });
     setError(err);
-    if (!err) onDone(`${type} recorded for ${person?.fullName ?? "employee"}.`);
+    if (!err) finish(onDone, `${type} recorded for ${person?.fullName ?? "employee"}.`);
+    return err;
   }
   return (
     <FormDialog open title="Record a bonus" submitLabel="Save bonus" onClose={onClose} onSubmit={save} error={error}>
@@ -357,7 +363,8 @@ export function DependentDialog({ actor, row, onClose, onDone }: { actor: DemoAc
     const input = { name, relationship, dateOfBirth: dob, gender };
     const err = await (row ? updateDependent(actor, row.id, input) : addDependent(actor, input));
     setError(err);
-    if (!err) onDone(row ? `${name.trim()} updated. HR will verify the change.` : `${name.trim()} added. HR will verify.`);
+    if (!err) finish(onDone, row ? `${name.trim()} updated. HR will verify the change.` : `${name.trim()} added. HR will verify.`);
+    return err;
   }
   return (
     <FormDialog open title={row ? "Edit dependent" : "Add dependent"} submitLabel="Save" onClose={onClose} onSubmit={save} error={error}>
@@ -407,7 +414,8 @@ export function CoverDialog({
   async function save() {
     const err = await setPlanDependents(actor, planId, picked);
     setError(err);
-    if (!err) onDone(`${planName}: cover updated.`);
+    if (!err) finish(onDone, `${planName}: cover updated.`);
+    return err;
   }
   return (
     <FormDialog open title={`Who ${planName} covers`} submitLabel="Save" onClose={onClose} onSubmit={save} error={error}>

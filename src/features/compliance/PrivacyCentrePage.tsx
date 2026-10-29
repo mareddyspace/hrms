@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore, type ReactNode } from "react";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { formatShortDate } from "../../model.ts";
 import { getPerson, listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import {
@@ -215,17 +215,18 @@ function MyRequestsTab({ actor, requests, onResult }: { actor: ComplianceActor; 
           </div>
           <p className="muted">HR responds within {REQUEST_DUE_DAYS} days.</p>
           <div>
-            <button
+            <ActionButton
               className="btn"
-              type="button"
-              onClick={() => {
+              success={`${type} request sent to HR.`}
+              onAction={() => {
                 const error = raiseRequest(actor, type, details);
                 onResult(error, `${type} request submitted.`);
                 if (!error) setDetails("");
+                return error;
               }}
             >
               Submit request
-            </button>
+            </ActionButton>
           </div>
         </div>
       </Card>
@@ -238,9 +239,17 @@ function MyRequestsTab({ actor, requests, onResult }: { actor: ComplianceActor; 
               <RequestRow key={r.id} req={r}>
                 {isRequestOpen(r) && (
                   <div className="cmp-actions">
-                    <button className="btn-ghost btn-tiny" type="button" onClick={() => onResult(withdrawRequest(actor, r.id), "Request withdrawn.")}>
+                    <ActionButton
+                      className="btn-ghost btn-tiny"
+                      success={`${r.type} request withdrawn.`}
+                      onAction={() => {
+                        const error = withdrawRequest(actor, r.id);
+                        onResult(error, "Request withdrawn.");
+                        return error;
+                      }}
+                    >
                       Withdraw
-                    </button>
+                    </ActionButton>
                   </div>
                 )}
               </RequestRow>
@@ -290,9 +299,19 @@ function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; r
                 {isRequestOpen(r) && (
                   <div className="cmp-actions">
                     {r.status === "Open" && (
-                      <button className="btn btn-tiny" type="button" onClick={() => onResult(moveRequest(actor, r.id, "In progress"), "Request started.")}>
+                      <ActionButton
+                        className="btn btn-tiny"
+                        busyLabel="Starting…"
+                        doneLabel="Started"
+                        success={`${r.type} request for ${getPerson(r.personId)?.fullName ?? "the employee"} started.`}
+                        onAction={() => {
+                          const error = moveRequest(actor, r.id, "In progress");
+                          onResult(error, "Request started.");
+                          return error;
+                        }}
+                      >
                         Start
-                      </button>
+                      </ActionButton>
                     )}
                     {r.status === "In progress" && (
                       <>
@@ -336,22 +355,28 @@ function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; r
             <button className="btn-ghost" type="button" onClick={() => setClosing(null)}>
               Cancel
             </button>
-            <button
+            <ActionButton
               className="btn"
-              type="button"
-              onClick={() => {
-                if (!closing) return;
+              success={() =>
+                closing?.next === "Rejected" ? "Request rejected." : closing && closesManually(closing.req.type) ? "Request closed." : "Request completed."
+              }
+              onAction={() => {
+                if (!closing) return false;
                 const err = moveRequest(actor, closing.req.id, closing.next, outcome);
-                if (err) return setError(err);
+                if (err) {
+                  setError(err);
+                  return false;
+                }
                 onResult(
                   null,
                   closing.next === "Rejected" ? "Request rejected." : closesManually(closing.req.type) ? "Request closed (manual)." : "Request completed.",
                 );
                 setClosing(null);
+                return true;
               }}
             >
               {closing?.next === "Rejected" ? "Reject" : closing && closesManually(closing.req.type) ? "Close" : "Complete"}
-            </button>
+            </ActionButton>
           </>
         }
       >
@@ -390,6 +415,7 @@ function RetentionTab({ actor, rules, onResult }: { actor: ComplianceActor; rule
       setForm(blank);
       setEditingId(null);
     }
+    return error;
   }
 
   return (
@@ -419,9 +445,13 @@ function RetentionTab({ actor, rules, onResult }: { actor: ComplianceActor; rule
             </Field>
           </div>
           <div className="row-gap">
-            <button className="btn" type="button" onClick={save}>
+            <ActionButton
+              className="btn"
+              success={editingId ? `Retention rule for ${form.category.trim()} updated.` : `Retention rule for ${form.category.trim()} added.`}
+              onAction={save}
+            >
               {editingId ? "Save changes" : "Add rule"}
-            </button>
+            </ActionButton>
             {editingId && (
               <button
                 className="btn-ghost"
@@ -457,9 +487,17 @@ function RetentionTab({ actor, rules, onResult }: { actor: ComplianceActor; rule
               >
                 Edit
               </button>
-              <button className="btn-ghost btn-tiny" type="button" onClick={() => onResult(removeRetentionRule(actor, r.id), "Retention rule removed.")}>
+              <ActionButton
+                className="btn-ghost btn-tiny"
+                success={`Retention rule for ${r.category} removed.`}
+                onAction={() => {
+                  const error = removeRetentionRule(actor, r.id);
+                  onResult(error, "Retention rule removed.");
+                  return error;
+                }}
+              >
                 Remove
-              </button>
+              </ActionButton>
             </span>,
           ])}
         />

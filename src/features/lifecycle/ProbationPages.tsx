@@ -1,5 +1,6 @@
-import { useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import {
+  ActionButton,
   Banner,
   Card,
   DataTable,
@@ -10,7 +11,9 @@ import {
   MetricGrid,
   Page,
   StatusBadge,
+  SubmitButton,
   Tabs,
+  useAction,
 } from "../../components/ui.tsx";
 import { getPerson, listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { formatShortDate, plural } from "../../model.ts";
@@ -145,9 +148,9 @@ function ReviewForm({ view, onDone }: { view: ProbationView; onDone: (m: Message
   const [comments, setComments] = useState("");
   const [error, setError] = useState<string | null>(null);
   const extensionsUsed = view.record?.extensions.length ?? 0;
+  const act = useAction();
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
+  function submit() {
     const result = submitProbationReview(demoProfile, view.person.id, {
       recommendation,
       extendMonths: recommendation === "Extend" ? months : undefined,
@@ -155,12 +158,16 @@ function ReviewForm({ view, onDone }: { view: ProbationView; onDone: (m: Message
       rating,
       comments,
     });
-    if (result) setError(result);
-    else onDone({ tone: "ok", text: `Review for ${view.person.fullName} sent for a decision.` });
+    if (result) {
+      setError(result);
+      return false;
+    }
+    onDone({ tone: "ok", text: `Review for ${view.person.fullName} sent for a decision.` });
+    return true;
   }
 
   return (
-    <form className="stack" onSubmit={submit}>
+    <form className="stack" onSubmit={act.submit(submit, { success: `Probation review for ${view.person.fullName} sent for a decision.` })}>
       <Banner message={error ? { tone: "err", text: error } : null} />
       <p className="muted">
         Probation ends {formatShortDate(view.endDate)} · extensions used {extensionsUsed} of {MAX_EXTENSIONS}
@@ -202,9 +209,9 @@ function ReviewForm({ view, onDone }: { view: ProbationView; onDone: (m: Message
         </Field>
       </div>
       <div>
-        <button className="btn" type="submit">
+        <SubmitButton action={act} className="btn">
           Submit review
-        </button>
+        </SubmitButton>
       </div>
     </form>
   );
@@ -224,13 +231,14 @@ function FinaliseForm({ view, onDone }: { view: ProbationView; onDone: (m: Messa
     });
     if (result) {
       setError(result);
-      return;
+      return false;
     }
     if (warning) onDone({ tone: "warn", text: warning });
     else if (decision === "return") onDone({ tone: "ok", text: "Review returned to the manager." });
     else if (review!.recommendation === "Confirm") onDone({ tone: "ok", text: `${view.person.fullName} confirmed. Confirmation letter requested.` });
     else if (review!.recommendation === "Extend") onDone({ tone: "ok", text: `Probation extended by ${plural(review!.extendMonths ?? 0, "month")}.` });
     else onDone({ tone: "ok", text: `${view.person.fullName} marked not confirmed. Exit started.` });
+    return true;
   }
 
   return (
@@ -269,12 +277,22 @@ function FinaliseForm({ view, onDone }: { view: ProbationView; onDone: (m: Messa
         <input value={note} maxLength={300} onChange={(e) => setNote(e.target.value)} placeholder="Required when returning" />
       </Field>
       <div className="row-gap">
-        <button className="btn" type="button" onClick={() => decide("approve")}>
+        <ActionButton
+          className="btn"
+          success={`Probation decision for ${view.person.fullName} approved.`}
+          onAction={() => decide("approve")}
+        >
           Approve {review.recommendation.toLowerCase()}
-        </button>
-        <button className="btn-ghost" type="button" onClick={() => decide("return")}>
+        </ActionButton>
+        <ActionButton
+          className="btn-ghost"
+          busyLabel="Returning…"
+          doneLabel="Returned"
+          success="Review returned to the manager."
+          onAction={() => decide("return")}
+        >
           Return to reviewer
-        </button>
+        </ActionButton>
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
-import { useState, useSyncExternalStore, type FormEvent } from "react";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { useState, useSyncExternalStore } from "react";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, SubmitButton, Tabs, notify, useAction } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
 import { plural, todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
 import { findDemoById } from "../../demoAccounts.ts";
@@ -130,27 +130,37 @@ function ContractorList({ actor }: { actor: WorkforceActor }) {
     setFormError(null);
   }
 
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    if (!form) return;
+  const saveAction = useAction();
+  const extendAction = useAction();
+
+  function submit() {
+    if (!form) return false;
     const rate = rateText.trim() === "" ? NaN : Number(rateText);
     const error = saveContractor(actor, { ...form, dailyRate: rate });
-    if (error) return setFormError(error);
-    setMsg({ tone: "ok", text: form.id ? `${form.name.trim()} updated.` : `${form.name.trim()} added.` });
+    if (error) {
+      setFormError(error);
+      return false;
+    }
+    const text = form.id ? `${form.name.trim()} updated.` : `${form.name.trim()} added.`;
+    setMsg({ tone: "ok", text });
+    notify(form.id ? `Contractor ${form.name.trim()} updated.` : `Contractor ${form.name.trim()} added.`);
     setForm(null);
+    return true;
   }
 
-  function submitExtension(e: FormEvent) {
-    e.preventDefault();
-    if (!extendFor) return;
+  function submitExtension() {
+    if (!extendFor) return false;
     const error = requestExtension(actor, extendFor.id, newEnd, reason);
-    if (error) return setFormError(error);
+    if (error) {
+      setFormError(error);
+      return false;
+    }
     const approver = extensionApproverId(actor.id);
-    setMsg({
-      tone: "ok",
-      text: approver ? `Extension for ${extendFor.name} sent to ${managerName(approver)}.` : `${extendFor.name} extended.`,
-    });
+    const text = approver ? `Extension for ${extendFor.name} sent to ${managerName(approver)}.` : `${extendFor.name} extended.`;
+    setMsg({ tone: "ok", text });
+    notify(approver ? `Extension for ${extendFor.name} sent to ${managerName(approver)} for approval.` : text);
     setExtendFor(null);
+    return true;
   }
 
   const vendor = form ? vendorById(form.vendorId, data) : undefined;
@@ -205,15 +215,18 @@ function ContractorList({ actor }: { actor: WorkforceActor }) {
                     <button className="btn-ghost btn-tiny" type="button" onClick={() => openForm(c)}>
                       Edit
                     </button>
-                    <button
+                    <ActionButton
                       className="btn-ghost btn-tiny"
-                      type="button"
-                      onClick={() => {
-                        if (window.confirm(`Remove ${c.name}?`)) setMsg(result(removeContractor(actor, c.id), `${c.name} removed.`));
+                      success={`Contractor ${c.name} removed.`}
+                      onAction={() => {
+                        if (!window.confirm(`Remove ${c.name}?`)) return false;
+                        const error = removeContractor(actor, c.id);
+                        setMsg(result(error, `${c.name} removed.`));
+                        return error;
                       }}
                     >
                       Remove
-                    </button>
+                    </ActionButton>
                   </>
                 )}
               </div>,
@@ -232,14 +245,14 @@ function ContractorList({ actor }: { actor: WorkforceActor }) {
             <button className="btn-ghost" type="button" onClick={() => setForm(null)}>
               Cancel
             </button>
-            <button className="btn" type="submit" form="wf-contractor-form">
+            <SubmitButton action={saveAction} className="btn" form="wf-contractor-form">
               Save
-            </button>
+            </SubmitButton>
           </>
         }
       >
         {form && (
-          <form id="wf-contractor-form" className="stack" onSubmit={submit}>
+          <form id="wf-contractor-form" className="stack" onSubmit={saveAction.submit(submit)}>
             <Banner message={formError ? { tone: "err", text: formError } : null} />
             <div className="form-grid-2">
               <Field label="Name">
@@ -292,14 +305,14 @@ function ContractorList({ actor }: { actor: WorkforceActor }) {
             <button className="btn-ghost" type="button" onClick={() => setExtendFor(null)}>
               Cancel
             </button>
-            <button className="btn" type="submit" form="wf-extension-form">
+            <SubmitButton action={extendAction} className="btn" form="wf-extension-form">
               Submit for approval
-            </button>
+            </SubmitButton>
           </>
         }
       >
         {extendFor && (
-          <form id="wf-extension-form" className="stack" onSubmit={submitExtension}>
+          <form id="wf-extension-form" className="stack" onSubmit={extendAction.submit(submitExtension)}>
             <Banner message={formError ? { tone: "err", text: formError } : null} />
             <p className="muted">
               Ends {fmt(extendFor.endDate)} · vendor contract ends {fmt(vendorById(extendFor.vendorId, data)?.contractEnd ?? extendFor.endDate)}
@@ -327,13 +340,19 @@ function VendorList({ actor }: { actor: WorkforceActor }) {
   const [form, setForm] = useState<VendorInput | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    if (!form) return;
+  const saveAction = useAction();
+
+  function submit() {
+    if (!form) return false;
     const error = saveVendor(actor, form);
-    if (error) return setFormError(error);
+    if (error) {
+      setFormError(error);
+      return false;
+    }
     setMsg({ tone: "ok", text: form.id ? `${form.name.trim()} updated.` : `${form.name.trim()} added.` });
+    notify(form.id ? `Vendor ${form.name.trim()} updated.` : `Vendor ${form.name.trim()} added.`);
     setForm(null);
+    return true;
   }
 
   return (
@@ -363,15 +382,18 @@ function VendorList({ actor }: { actor: WorkforceActor }) {
               <button className="btn-ghost btn-tiny" type="button" onClick={() => { setForm({ ...v }); setFormError(null); }}>
                 Edit
               </button>
-              <button
+              <ActionButton
                 className="btn-ghost btn-tiny"
-                type="button"
-                onClick={() => {
-                  if (window.confirm(`Remove ${v.name}?`)) setMsg(result(removeVendor(actor, v.id), `${v.name} removed.`));
+                success={`Vendor ${v.name} removed.`}
+                onAction={() => {
+                  if (!window.confirm(`Remove ${v.name}?`)) return false;
+                  const error = removeVendor(actor, v.id);
+                  setMsg(result(error, `${v.name} removed.`));
+                  return error;
                 }}
               >
                 Remove
-              </button>
+              </ActionButton>
             </div>,
           ])}
           empty={<EmptyState title="No vendors yet" />}
@@ -386,14 +408,14 @@ function VendorList({ actor }: { actor: WorkforceActor }) {
             <button className="btn-ghost" type="button" onClick={() => setForm(null)}>
               Cancel
             </button>
-            <button className="btn" type="submit" form="wf-vendor-form">
+            <SubmitButton action={saveAction} className="btn" form="wf-vendor-form">
               Save
-            </button>
+            </SubmitButton>
           </>
         }
       >
         {form && (
-          <form id="wf-vendor-form" className="stack" onSubmit={submit}>
+          <form id="wf-vendor-form" className="stack" onSubmit={saveAction.submit(submit)}>
             <Banner message={formError ? { tone: "err", text: formError } : null} />
             <div className="form-grid-2">
               <Field label="Vendor name">
@@ -467,12 +489,28 @@ function Extensions({ actor }: { actor: WorkforceActor }) {
                     <p className="muted">{e.reason}</p>
                     <div className="approval-actions">
                       <input aria-label="Decision note" placeholder="Note (needed to reject)" value={notes[e.id] ?? ""} onChange={(ev) => setNotes({ ...notes, [e.id]: ev.target.value })} />
-                      <button className="btn btn-tiny" type="button" onClick={() => setMsg(result(decideExtension(actor, e.id, true, notes[e.id]), `${name(e)} extended to ${fmt(e.newEnd)}.`))}>
+                      <ActionButton
+                        className="btn btn-tiny"
+                        success={`Extension approved. ${name(e)} extended to ${fmt(e.newEnd)}.`}
+                        onAction={() => {
+                          const error = decideExtension(actor, e.id, true, notes[e.id]);
+                          setMsg(result(error, `${name(e)} extended to ${fmt(e.newEnd)}.`));
+                          return error;
+                        }}
+                      >
                         Approve
-                      </button>
-                      <button className="btn-ghost btn-tiny" type="button" onClick={() => setMsg(result(decideExtension(actor, e.id, false, notes[e.id]), "Extension rejected."))}>
+                      </ActionButton>
+                      <ActionButton
+                        className="btn-ghost btn-tiny"
+                        success={`Extension for ${name(e)} rejected.`}
+                        onAction={() => {
+                          const error = decideExtension(actor, e.id, false, notes[e.id]);
+                          setMsg(result(error, "Extension rejected."));
+                          return error;
+                        }}
+                      >
                         Reject
-                      </button>
+                      </ActionButton>
                     </div>
                   </li>
                 );
@@ -494,9 +532,18 @@ function Extensions({ actor }: { actor: WorkforceActor }) {
               {e.decisionNote && <span className="muted wf-block">{e.decisionNote}</span>}
             </span>,
             e.status === "pending" && e.requestedById === actor.id ? (
-              <button key="c" className="btn-ghost btn-tiny" type="button" onClick={() => setMsg(result(cancelExtension(actor, e.id), "Request cancelled."))}>
+              <ActionButton
+                key="c"
+                className="btn-ghost btn-tiny"
+                success="Extension request cancelled."
+                onAction={() => {
+                  const error = cancelExtension(actor, e.id);
+                  setMsg(result(error, "Request cancelled."));
+                  return error;
+                }}
+              >
                 Cancel
-              </button>
+              </ActionButton>
             ) : (
               ""
             ),

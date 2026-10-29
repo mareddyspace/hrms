@@ -1,11 +1,10 @@
 import { useState } from "react";
-import type { FormEvent } from "react";
 import type { Employee } from "../model.ts";
 import { maskMobile } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { profileExtrasFor, saveProfileExtras } from "../data/profileExtras.ts";
 import type { ProfileExtras } from "../data/profileExtras.ts";
-import { Banner, Field } from "./ui.tsx";
+import { ActionButton, Banner, Field, SubmitButton, useAction } from "./ui.tsx";
 import { API_ENABLED } from "../api/client.ts";
 import { apiRequestProfileOtp, apiUpdateOwnProfile, type ApiOtpField, type ApiSelfProfileUpdate } from "../api/syncProfile.ts";
 import { getPerson } from "../data/peopleLocal.ts";
@@ -105,16 +104,16 @@ export function ProfileEditForm({
   const needsCode = !API_ENABLED || apiNeed !== null;
 
   /** Backend mode: save on the server (only fields that changed or were typed); the server checks the code. */
-  async function saveToServer() {
+  async function saveToServer(): Promise<boolean> {
     if (apiNeed === "both") {
       setMessage({ tone: "err", text: "Change your mobile and personal email one at a time." });
-      return;
+      return false;
     }
     if (apiNeed) {
       const error = verifyProfileOtp(otp);
       if (error) {
         setMessage({ tone: "err", text: error });
-        return;
+        return false;
       }
     }
     const start = apiStart(employee.id);
@@ -136,42 +135,41 @@ export function ProfileEditForm({
     setSaving(false);
     if (failed) {
       setMessage({ tone: "err", text: failed });
-      return;
+      return false;
     }
     setMessage({ tone: "ok", text: "Profile updated." });
     setOtp("");
     setOtpSent(false);
     setDemoHint("");
     onSaved();
+    return true;
   }
 
-  async function sendServerOtp() {
+  async function sendServerOtp(): Promise<boolean> {
     if (apiNeed === "both") {
       setMessage({ tone: "err", text: "Change your mobile and personal email one at a time." });
-      return;
+      return false;
     }
-    if (!apiNeed) return;
+    if (!apiNeed) return false;
     const invalid = validateDraft(draft, extras);
     if (invalid) {
       setMessage({ tone: "err", text: invalid });
-      return;
+      return false;
     }
     const sent = await apiRequestProfileOtp(apiNeed.field, apiNeed.value);
     if (sent.error) {
       setMessage({ tone: "err", text: sent.error });
-      return;
+      return false;
     }
     setOtp("");
     setOtpSent(true);
     setDemoHint(sent.devCode ?? "");
     setMessage({ tone: "ok", text: `Code sent to ${sent.sentTo || "your email"}. Enter it below to save.` });
+    return true;
   }
 
   function sendOtp() {
-    if (API_ENABLED) {
-      void sendServerOtp();
-      return;
-    }
+    if (API_ENABLED) return sendServerOtp();
     const code = requestProfileOtp();
     setOtp("");
     setOtpSent(true);
@@ -180,23 +178,22 @@ export function ProfileEditForm({
       tone: "ok",
       text: `Verification code sent to ${maskMobile(employee.mobile)}. Enter it below to save.`,
     });
+    return true;
   }
 
-  function saveProfile(event: FormEvent) {
-    event.preventDefault();
+  const saveAction = useAction();
+
+  function saveProfile(): boolean | Promise<boolean> {
     if (needsCode && !otpSent) {
       setMessage({ tone: "err", text: "Send a verification code before saving." });
-      return;
+      return false;
     }
     const invalid = validateDraft(draft, extras);
     if (invalid) {
       setMessage({ tone: "err", text: invalid });
-      return;
+      return false;
     }
-    if (API_ENABLED) {
-      void saveToServer();
-      return;
-    }
+    if (API_ENABLED) return saveToServer();
     // Legal name, work email, designation and shift are HR-owned: always send the current values, never the draft's.
     const error = updateProfileWithOtp(
       {
@@ -212,7 +209,7 @@ export function ProfileEditForm({
     );
     if (error) {
       setMessage({ tone: "err", text: error });
-      return;
+      return false;
     }
     // Preferred name is edited under Personal; keep the latest saved value rather than the one loaded with this form.
     saveProfileExtras(employee.id, { ...extras, preferredName: profileExtrasFor(employee.id).preferredName });
@@ -221,10 +218,11 @@ export function ProfileEditForm({
     setOtpSent(false);
     setDemoHint("");
     onSaved();
+    return true;
   }
 
   return (
-    <form className="identity-edit" onSubmit={saveProfile}>
+    <form className="identity-edit" onSubmit={saveAction.submit(saveProfile, { success: "Profile saved." })}>
       <div className="form-grid">
         <Field label="Photo">
           <input
@@ -331,9 +329,9 @@ export function ProfileEditForm({
       <div className="otp-box">
         <p className="otp-title">{API_ENABLED ? "Verify the new mobile or personal email" : "Verify before save"}</p>
         <div className="form-actions" style={{ marginTop: 10 }}>
-          <button className="btn-ghost" type="button" onClick={sendOtp}>
+          <ActionButton className="btn-ghost" onAction={sendOtp} busyLabel="Sending…" doneLabel="Code sent">
             {otpSent ? "Resend code" : "Send OTP"}
-          </button>
+          </ActionButton>
         </div>
         {otpSent && (
           <div className="form-grid" style={{ marginTop: 10 }}>
@@ -353,9 +351,9 @@ export function ProfileEditForm({
       )}
 
       <div className="form-actions">
-        <button className="btn" type="submit" disabled={saving || (needsCode && (!otpSent || otp.length !== 6))}>
+        <SubmitButton action={saveAction} className="btn" disabled={saving || (needsCode && (!otpSent || otp.length !== 6))}>
           Save profile
-        </button>
+        </SubmitButton>
         <button className="btn-ghost" type="button" onClick={onCancel}>
           Cancel
         </button>

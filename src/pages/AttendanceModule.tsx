@@ -8,8 +8,10 @@ import {
   MetricGrid,
   Page,
   StatusBadge,
+  ActionButton,
   Tabs,
   downloadText,
+  notify,
 } from "../components/ui.tsx";
 import {
   SAMPLE_SHIFT,
@@ -325,13 +327,13 @@ export function AttendancePage() {
   }
 
   async function runPunch(action: "check_in" | "start_break" | "end_break" | "check_out") {
-    if (busy) return;
+    if (busy) return false;
     setBusy(true);
     const error = await attendanceActionAsync(employee.id, action, dayContext);
     setBusy(false);
     if (error) {
       setMessage({ tone: "err", text: error });
-      return;
+      return false;
     }
     const labels = {
       check_in: "Checked in.",
@@ -340,10 +342,12 @@ export function AttendancePage() {
       check_out: "Checked out.",
     } as const;
     setMessage({ tone: "ok", text: labels[action] });
+    notify(labels[action]);
+    return true;
   }
 
   async function submitCorr() {
-    if (busy) return;
+    if (busy) return false;
     setBusy(true);
     const error = await submitCorrectionAsync({
       employeeId: employee.id,
@@ -359,18 +363,23 @@ export function AttendancePage() {
     });
     setBusy(false);
     setCorrError(error);
-    if (error) return;
+    if (error) return false;
     setMessage({ tone: "ok", text: `Correction request submitted — ${approver?.fullName ?? "your manager"} will review it.` });
+    notify(`Correction request sent to ${approver?.fullName ?? "your manager"}.`);
     setCorrReason("");
     setCorrIn("");
     setCorrOut("");
     setTab("corrections");
+    return true;
   }
 
   async function decide(row: AttendanceCorrection, status: "Approved" | "Rejected") {
     const error = await decideCorrectionAsync(row.id, { id: employee.id, role: demoProfile.role, fullName: employee.fullName }, status, decideNotes[row.id]);
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `Correction ${status.toLowerCase()}.` });
-    if (!error) setDecideNotes((prev) => ({ ...prev, [row.id]: "" }));
+    if (error) return false;
+    setDecideNotes((prev) => ({ ...prev, [row.id]: "" }));
+    notify(`Correction ${status.toLowerCase()} for ${row.employeeName}.`);
+    return true;
   }
 
   function openCorrection(date: string, kind: CorrectionKind) {
@@ -479,24 +488,24 @@ export function AttendancePage() {
                     (todayOff ? (
                       <p className="note">{todayOff} No check-in needed.</p>
                     ) : (
-                      <button type="button" className="btn" onClick={() => runPunch("check_in")}>
+                      <ActionButton className="btn" onAction={() => runPunch("check_in")}>
                         Check in
-                      </button>
+                      </ActionButton>
                     ))}
                   {session.phase === "checked_in" && (
                     <>
-                      <button type="button" className="btn-ghost" onClick={() => runPunch("start_break")}>
+                      <ActionButton className="btn-ghost" busyLabel="Starting…" doneLabel="Break started" onAction={() => runPunch("start_break")}>
                         Start break
-                      </button>
-                      <button type="button" className="btn" onClick={() => runPunch("check_out")}>
+                      </ActionButton>
+                      <ActionButton className="btn" onAction={() => runPunch("check_out")}>
                         Check out
-                      </button>
+                      </ActionButton>
                     </>
                   )}
                   {session.phase === "on_break" && (
-                    <button type="button" className="btn" onClick={() => runPunch("end_break")}>
+                    <ActionButton className="btn" busyLabel="Ending…" doneLabel="Break ended" onAction={() => runPunch("end_break")}>
                       End break
-                    </button>
+                    </ActionButton>
                   )}
                   {session.phase === "checked_out" && (
                     <p className="note">Day closed.</p>
@@ -852,9 +861,9 @@ export function AttendancePage() {
                   </p>
                 )}
                 <div className="form-actions">
-                  <button type="button" className="btn" onClick={submitCorr} disabled={busy || (!approver && !API_ENABLED)}>
+                  <ActionButton className="btn" onAction={submitCorr} disabled={busy || (!approver && !API_ENABLED)}>
                     Submit request
-                  </button>
+                  </ActionButton>
                 </div>
               </Card>
 
@@ -888,12 +897,12 @@ export function AttendancePage() {
                                 aria-label={`Decision note for ${c.employeeName}, ${c.date}`}
                                 style={{ flex: 1 }}
                               />
-                              <button type="button" className="btn" onClick={() => decide(c, "Approved")}>
+                              <ActionButton className="btn" onAction={() => decide(c, "Approved")}>
                                 Approve
-                              </button>
-                              <button type="button" className="btn-ghost" onClick={() => decide(c, "Rejected")}>
+                              </ActionButton>
+                              <ActionButton className="btn-ghost" onAction={() => decide(c, "Rejected")}>
                                 Reject
-                              </button>
+                              </ActionButton>
                             </div>
                           )}
                         </li>

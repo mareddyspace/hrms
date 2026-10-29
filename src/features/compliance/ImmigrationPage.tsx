@@ -1,5 +1,5 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs, notify } from "../../components/ui.tsx";
 import { formatShortDate, plural, todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
 import { getPerson, listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import {
@@ -62,6 +62,7 @@ export function ImmigrationPage() {
 
   function report(error: string | null, ok: string) {
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
+    return error;
   }
 
   function openEdit(doc: IdDocument) {
@@ -139,6 +140,7 @@ export function ImmigrationPage() {
             if (error) return error;
             const verified = hr && input.personId !== actor.id;
             setMsg({ tone: "ok", text: verified ? "Document saved and verified." : "Document saved — waiting for HR verification." });
+            notify(verified ? "Document saved and verified." : "Document saved and sent to HR for verification.");
             setEditing(null);
             return null;
           }}
@@ -158,8 +160,8 @@ function DocItem({
   doc: IdDocument;
   actor: ComplianceActor;
   onEdit: () => void;
-  onRenewal: (value: boolean) => void;
-  onRemove: () => void;
+  onRenewal: (value: boolean) => string | null;
+  onRemove: () => string | null;
 }) {
   const status = docStatus(doc);
   const canRemove = doc.verification !== "Verified";
@@ -187,13 +189,19 @@ function DocItem({
         <button className="btn-ghost btn-tiny" type="button" onClick={onEdit}>
           Update
         </button>
-        <button className="btn-ghost btn-tiny" type="button" onClick={() => onRenewal(!doc.renewalInProgress)}>
+        <ActionButton
+          className="btn-ghost btn-tiny"
+          busyLabel="Updating…"
+          doneLabel="Updated"
+          success={doc.renewalInProgress ? "Renewal flag cleared." : "Marked as renewal in progress."}
+          onAction={() => onRenewal(!doc.renewalInProgress)}
+        >
           {doc.renewalInProgress ? "Clear renewal flag" : "Renewal in progress"}
-        </button>
+        </ActionButton>
         {canRemove && (
-          <button className="btn-ghost btn-tiny" type="button" onClick={onRemove}>
+          <ActionButton className="btn-ghost btn-tiny" success={`${doc.type} removed.`} onAction={onRemove}>
             Remove
-          </button>
+          </ActionButton>
         )}
       </div>
     </li>
@@ -218,7 +226,7 @@ function AllDocuments({
   actor: ComplianceActor;
   onEdit: (doc: IdDocument) => void;
   onAdd: () => void;
-  onRenewal: (doc: IdDocument, value: boolean) => void;
+  onRenewal: (doc: IdDocument, value: boolean) => string | null;
 }) {
   const [query, setQuery] = useState("");
   const [country, setCountry] = useState("all");
@@ -346,9 +354,15 @@ function AllDocuments({
                 <button className="btn-ghost btn-tiny" type="button" onClick={() => onEdit(d)}>
                   Edit
                 </button>
-                <button className="btn-ghost btn-tiny" type="button" onClick={() => onRenewal(d, !d.renewalInProgress)}>
+                <ActionButton
+                  className="btn-ghost btn-tiny"
+                  busyLabel="Updating…"
+                  doneLabel="Updated"
+                  success={d.renewalInProgress ? "Renewal flag cleared." : "Marked as renewal in progress."}
+                  onAction={() => onRenewal(d, !d.renewalInProgress)}
+                >
                   {d.renewalInProgress ? "Clear renewal" : "Mark renewal"}
-                </button>
+                </ActionButton>
               </span>,
             ])}
           />
@@ -388,9 +402,19 @@ function VerificationQueue({ docs, actor, onResult }: { docs: IdDocument[]; acto
                 {d.sponsor ? ` · Sponsor: ${d.sponsor}` : ""}
               </p>
               <div className="approval-actions cmp-actions">
-                <button className="btn btn-tiny" type="button" onClick={() => onResult(verifyDocument(actor, d.id, "Verified"), "Document verified.")}>
+                <ActionButton
+                  className="btn btn-tiny"
+                  busyLabel="Verifying…"
+                  doneLabel="Verified"
+                  success={`${d.type} for ${person?.fullName ?? "the employee"} verified.`}
+                  onAction={() => {
+                    const error = verifyDocument(actor, d.id, "Verified");
+                    onResult(error, "Document verified.");
+                    return error;
+                  }}
+                >
                   Verify
-                </button>
+                </ActionButton>
                 <button
                   className="btn-ghost btn-tiny"
                   type="button"
@@ -416,19 +440,25 @@ function VerificationQueue({ docs, actor, onResult }: { docs: IdDocument[]; acto
             <button className="btn-ghost" type="button" onClick={() => setReturning(null)}>
               Cancel
             </button>
-            <button
+            <ActionButton
               className="btn"
-              type="button"
-              onClick={() => {
-                if (!returning) return;
+              busyLabel="Returning…"
+              doneLabel="Returned"
+              success="Document returned to the employee."
+              onAction={() => {
+                if (!returning) return false;
                 const err = verifyDocument(actor, returning.id, "Rejected", reason);
-                if (err) return setError(err);
+                if (err) {
+                  setError(err);
+                  return false;
+                }
                 onResult(null, "Document returned to the employee.");
                 setReturning(null);
+                return true;
               }}
             >
               Return
-            </button>
+            </ActionButton>
           </>
         }
       >
@@ -474,18 +504,24 @@ function DocDialog({
           <button className="btn-ghost" type="button" onClick={onClose}>
             Cancel
           </button>
-          <button
+          <ActionButton
             className="btn"
-            type="button"
-            onClick={() => {
-              if (forOther && !form.personId) return setError("Choose the employee.");
-              if (forOther && form.personId === actorId) return setError("Use My documents for your own records.");
+            onAction={() => {
+              if (forOther && !form.personId) {
+                setError("Choose the employee.");
+                return false;
+              }
+              if (forOther && form.personId === actorId) {
+                setError("Use My documents for your own records.");
+                return false;
+              }
               const err = onSave(form);
               if (err) setError(err);
+              return err;
             }}
           >
             Save
-          </button>
+          </ActionButton>
         </>
       }
     >

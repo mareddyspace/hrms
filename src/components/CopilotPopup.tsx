@@ -195,8 +195,8 @@ export function CopilotPopup() {
                 }
               }}
             />
-            <button className="btn" type="submit" disabled={!prompt.trim() || busy}>
-              Send
+            <button className="btn" type="submit" disabled={!prompt.trim() || busy} aria-busy={busy || undefined}>
+              {busy ? "Thinking…" : "Send"}
             </button>
           </form>
         </div>

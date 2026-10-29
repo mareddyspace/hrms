@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
-import { Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { ActionButton, Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, SubmitButton, Tabs, notify, useAction } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
 import { addDaysISO, holidaysForPerson, todayISO } from "../../model.ts";
 import {
@@ -216,15 +216,17 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
   const toApprove = data.swaps.filter((s) => s.status === "awaiting_manager" && canApproveSwap(actor, s));
   const mine = data.swaps.filter((s) => s.requesterId === actor.id || (s.teammateId === actor.id && s.status !== "awaiting_teammate"));
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  const swapAction = useAction();
+
+  async function submit() {
     const error = await requestSwap(actor, ctx, { teammateId, date, reason });
     setMsg(result(error, `Swap request sent to ${personName(teammateId)}.`));
-    if (!error) {
-      setDate("");
-      setTeammateId("");
-      setReason("");
-    }
+    if (error) return false;
+    notify(`Swap request sent to ${personName(teammateId)}.`);
+    setDate("");
+    setTeammateId("");
+    setReason("");
+    return true;
   }
 
   return (
@@ -239,12 +241,30 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
                 <span>{swapLine(s, data)}</span>
                 <p className="muted">{s.reason}</p>
                 <div className="approval-actions">
-                  <button className="btn btn-tiny" type="button" onClick={async () => setMsg(result(await respondSwap(actor, s.id, true), "Accepted — sent to your manager."))}>
+                  <ActionButton
+                    className="btn btn-tiny"
+                    busyLabel="Accepting…"
+                    doneLabel="Accepted"
+                    success="Swap accepted and sent to your manager."
+                    onAction={async () => {
+                      const error = await respondSwap(actor, s.id, true);
+                      setMsg(result(error, "Accepted — sent to your manager."));
+                      return error;
+                    }}
+                  >
                     Accept
-                  </button>
-                  <button className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await respondSwap(actor, s.id, false), "Swap declined."))}>
+                  </ActionButton>
+                  <ActionButton
+                    className="btn-ghost btn-tiny"
+                    success="Swap declined."
+                    onAction={async () => {
+                      const error = await respondSwap(actor, s.id, false);
+                      setMsg(result(error, "Swap declined."));
+                      return error;
+                    }}
+                  >
                     Decline
-                  </button>
+                  </ActionButton>
                 </div>
               </li>
             ))}
@@ -268,16 +288,28 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
                     value={notes[s.id] ?? ""}
                     onChange={(e) => setNotes({ ...notes, [s.id]: e.target.value })}
                   />
-                  <button
+                  <ActionButton
                     className="btn btn-tiny"
-                    type="button"
-                    onClick={async () => setMsg(result(await decideSwap(actor, ctx, s.id, true, notes[s.id], impact.length > 0), "Swap approved — roster updated."))}
+                    success="Swap approved. Roster updated."
+                    onAction={async () => {
+                      const error = await decideSwap(actor, ctx, s.id, true, notes[s.id], impact.length > 0);
+                      setMsg(result(error, "Swap approved — roster updated."));
+                      return error;
+                    }}
                   >
                     {impact.length ? "Approve anyway" : "Approve"}
-                  </button>
-                  <button className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await decideSwap(actor, ctx, s.id, false, notes[s.id]), "Swap rejected."))}>
+                  </ActionButton>
+                  <ActionButton
+                    className="btn-ghost btn-tiny"
+                    success="Swap rejected."
+                    onAction={async () => {
+                      const error = await decideSwap(actor, ctx, s.id, false, notes[s.id]);
+                      setMsg(result(error, "Swap rejected."));
+                      return error;
+                    }}
+                  >
                     Reject
-                  </button>
+                  </ActionButton>
                 </div>
               </li>
               );
@@ -289,7 +321,7 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
         {myUpcoming.length === 0 ? (
           <EmptyState title="No upcoming shifts to swap" />
         ) : (
-          <form className="stack" onSubmit={submit}>
+          <form className="stack" onSubmit={swapAction.submit(submit)}>
             <div className="form-grid-2">
               <Field label="Date">
                 <select value={date} onChange={(e) => { setDate(e.target.value); setTeammateId(""); }}>
@@ -317,7 +349,7 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
               </Field>
             </div>
             <div className="row-gap">
-              <button className="btn" type="submit">Submit request</button>
+              <SubmitButton action={swapAction} className="btn">Submit request</SubmitButton>
             </div>
           </form>
         )}
@@ -333,9 +365,18 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
             </span>,
             <SwapBadge key="b" status={s.status} />,
             s.requesterId === actor.id && (s.status === "awaiting_teammate" || s.status === "awaiting_manager") ? (
-              <button key="c" className="btn-ghost btn-tiny" type="button" onClick={async () => setMsg(result(await cancelSwap(actor, s.id), "Swap request cancelled."))}>
+              <ActionButton
+                key="c"
+                className="btn-ghost btn-tiny"
+                success="Swap request cancelled."
+                onAction={async () => {
+                  const error = await cancelSwap(actor, s.id);
+                  setMsg(result(error, "Swap request cancelled."));
+                  return error;
+                }}
+              >
                 Cancel
-              </button>
+              </ActionButton>
             ) : (
               ""
             ),
@@ -378,14 +419,20 @@ function CompOff({ actor }: { actor: WorkforceActor }) {
               shortDay(a.date),
               shiftById(a.shiftId, data)?.name ?? "—",
               reason,
-              <button
+              <ActionButton
                 key="g"
                 className="btn btn-tiny"
-                type="button"
-                onClick={() => setMsg(result(grantCompOff(actor, ctx, a.personId, a.date), `1 comp-off day credited to ${personName(a.personId)}.`))}
+                busyLabel="Granting…"
+                doneLabel="Granted"
+                success={`1 comp-off day credited to ${personName(a.personId)}.`}
+                onAction={() => {
+                  const error = grantCompOff(actor, ctx, a.personId, a.date);
+                  setMsg(result(error, `1 comp-off day credited to ${personName(a.personId)}.`));
+                  return error;
+                }}
               >
                 Grant 1 day
-              </button>,
+              </ActionButton>,
             ])}
           />
         </Card>
@@ -440,7 +487,8 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
   const gaps = useMemo(() => coverageGaps(data, ctx, actor.id, weekStart), [data, ctx, actor.id, weekStart]);
   const [confirmGaps, setConfirmGaps] = useState(false);
   const weekOver = dates[6] < today;
-  const [busy, setBusy] = useState(false);
+  const publishAction = useAction();
+  const busy = publishAction.busy;
 
   useEffect(() => {
     ensureRosterWeek(actor.id, weekStart);
@@ -450,21 +498,23 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
     const error = await assignShift(actor, ctx, personId, date, shiftId || null);
     setMsg(error ? { tone: "err", text: error } : null);
     setConfirmGaps(false);
+    if (!error) {
+      const shiftName = shiftId ? shiftById(shiftId, data)?.name : undefined;
+      notify(shiftName ? `${personName(personId)} assigned to ${shiftName} on ${shortDay(date)}.` : `Shift cleared for ${personName(personId)} on ${shortDay(date)}.`);
+    }
   }
 
   async function publish(allowGaps: boolean) {
     if (gaps.length && !allowGaps) {
       setConfirmGaps(true);
       setMsg({ tone: "warn", text: `Under-covered: ${describeGaps(gaps, data)}. Fill these shifts or publish anyway.` });
-      return;
+      return false;
     }
-    if (busy) return;
     setConfirmGaps(false);
-    setBusy(true);
     const error = await publishWeek(actor, ctx, weekStart, allowGaps);
-    setBusy(false);
     if (error && /under-covered/i.test(error)) setConfirmGaps(true);
     setMsg(result(error, "Roster published — your team can see their shifts."));
+    return error ? false : true;
   }
 
   const coverageShifts = data.shifts.filter((s) => coverage.some((c) => c.shiftId === s.id));
@@ -540,13 +590,24 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
             </div>
             {!published && !weekOver && (
               <div className="row-gap">
-                <button className="btn" type="button" disabled={busy} onClick={() => void publish(false)}>
+                <ActionButton
+                  className="btn"
+                  disabled={busy}
+                  action={publishAction}
+                  success="Roster published. Your team can see their shifts."
+                  onAction={() => publish(false)}
+                >
                   Publish roster
-                </button>
+                </ActionButton>
                 {confirmGaps && gaps.length > 0 && (
-                  <button className="btn-ghost" type="button" disabled={busy} onClick={() => void publish(true)}>
+                  <ActionButton
+                    className="btn-ghost"
+                    disabled={busy}
+                    success="Roster published with gaps. Your team can see their shifts."
+                    onAction={() => publish(true)}
+                  >
                     Publish anyway
-                  </button>
+                  </ActionButton>
                 )}
               </div>
             )}
@@ -699,13 +760,19 @@ function CoverageSettings({ actor }: { actor: WorkforceActor }) {
           </div>
           {editable && ownCount > 0 && CAN_RESET_COVERAGE && (
             <div className="row-gap">
-              <button
+              <ActionButton
                 className="btn-ghost btn-tiny"
-                type="button"
-                onClick={() => setMsg(result(resetCoverage(actor, scope), scope === COMPANY_SCOPE ? "Company minimums reset to the defaults." : "Your team now follows the company minimums."))}
+                busyLabel="Resetting…"
+                doneLabel="Done"
+                success={scope === COMPANY_SCOPE ? "Company minimums reset to the defaults." : "Your team now follows the company minimums."}
+                onAction={() => {
+                  const error = resetCoverage(actor, scope);
+                  setMsg(result(error, scope === COMPANY_SCOPE ? "Company minimums reset to the defaults." : "Your team now follows the company minimums."));
+                  return error;
+                }}
               >
                 {scope === COMPANY_SCOPE ? "Reset to defaults" : "Use company minimums"}
-              </button>
+              </ActionButton>
             </div>
           )}
         </div>
@@ -730,14 +797,16 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
     setMsg(null);
   }
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  const saveAction = useAction();
+
+  async function submit() {
     const error = await saveShift(actor, { ...form, id: editing ?? undefined });
     setMsg(result(error, editing ? "Shift updated." : "Shift added."));
-    if (!error) {
-      setEditing(null);
-      setForm(BLANK);
-    }
+    if (error) return false;
+    notify(editing ? `Shift ${form.name.trim()} updated.` : `Shift ${form.name.trim()} added.`);
+    setEditing(null);
+    setForm(BLANK);
+    return true;
   }
 
   return (
@@ -755,19 +824,25 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
               <button className="btn-ghost btn-tiny" type="button" onClick={() => edit(s)}>
                 Edit
               </button>
-              <button
+              <ActionButton
                 className="btn-ghost btn-tiny"
-                type="button"
-                onClick={async () => setMsg(result(await setShiftActive(actor, s.id, !s.active), s.active ? `${s.name} turned off.` : `${s.name} turned on.`))}
+                busyLabel="Updating…"
+                doneLabel="Done"
+                success={s.active ? `${s.name} turned off.` : `${s.name} turned on.`}
+                onAction={async () => {
+                  const error = await setShiftActive(actor, s.id, !s.active);
+                  setMsg(result(error, s.active ? `${s.name} turned off.` : `${s.name} turned on.`));
+                  return error;
+                }}
               >
                 {s.active ? "Turn off" : "Turn on"}
-              </button>
+              </ActionButton>
             </div>,
           ])}
         />
       </Card>
       <Card title={editing ? "Edit shift" : "Add a shift"}>
-        <form className="stack" onSubmit={submit}>
+        <form className="stack" onSubmit={saveAction.submit(submit)}>
           <div className="form-grid-2">
             <Field label="Name" wide>
               <input value={form.name} maxLength={40} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -784,7 +859,7 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
             <span>Weekends only</span>
           </label>
           <div className="row-gap">
-            <button className="btn" type="submit">{editing ? "Save shift" : "Add shift"}</button>
+            <SubmitButton action={saveAction} className="btn">{editing ? "Save shift" : "Add shift"}</SubmitButton>
             {editing && (
               <button className="btn-ghost" type="button" onClick={() => { setEditing(null); setForm(BLANK); }}>
                 Cancel

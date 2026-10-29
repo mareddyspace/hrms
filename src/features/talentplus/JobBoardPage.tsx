@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
+import { ActionButton, notify, Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { formatShortDate } from "../../model.ts";
 import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
 import type { Requisition } from "../../data/talentData.ts";
@@ -141,6 +141,7 @@ function ApplyDialog({ req, onClose }: { req: Requisition; onClose: (message?: s
     const error = applyInternally(actor, req.id, note);
     if (error) setMsg({ tone: "err", text: error });
     else onClose(`Applied for ${req.title}. Your manager has been notified.`);
+    return error;
   }
   return (
     <Dialog
@@ -152,9 +153,9 @@ function ApplyDialog({ req, onClose }: { req: Requisition; onClose: (message?: s
           <button type="button" className="btn btn-ghost" onClick={() => onClose()}>
             Cancel
           </button>
-          <button type="button" className="btn" onClick={submit}>
+          <ActionButton className="btn" onAction={submit} success={`Application for ${req.title} sent. Your manager has been notified.`}>
             Submit application
-          </button>
+          </ActionButton>
         </>
       }
     >
@@ -176,6 +177,7 @@ function ReferDialog({ req, onClose }: { req: Requisition; onClose: (message?: s
     const error = submitReferral(actor, { postingId: req.id, ...form });
     if (error) setMsg({ tone: "err", text: error });
     else onClose(`Referral for ${form.name.trim()} submitted.`);
+    return error;
   }
   return (
     <Dialog
@@ -187,9 +189,9 @@ function ReferDialog({ req, onClose }: { req: Requisition; onClose: (message?: s
           <button type="button" className="btn btn-ghost" onClick={() => onClose()}>
             Cancel
           </button>
-          <button type="button" className="btn" onClick={submit}>
+          <ActionButton className="btn" onAction={submit} success={`Referral for ${form.name.trim() || "your contact"} sent to the recruiting team.`}>
             Submit referral
-          </button>
+          </ActionButton>
         </>
       }
     >
@@ -263,17 +265,18 @@ function MyActivity() {
             formatShortDate(a.submittedOn),
             <StageBadge key="s" stage={a.status} />,
             a.status === "Submitted" ? (
-              <button
+              <ActionButton
                 key="w"
-                type="button"
                 className="btn btn-ghost btn-tiny"
-                onClick={() => {
+                success={`Application for ${postingTitle(a.postingId)} withdrawn.`}
+                onAction={() => {
                   const e = withdrawApplication(actor, a.id);
                   setMsg(e ? { tone: "err", text: e } : { tone: "ok", text: "Application withdrawn." });
+                  return e;
                 }}
               >
                 Withdraw
-              </button>
+              </ActionButton>
             ) : (
               ""
             ),
@@ -300,16 +303,22 @@ function MyActivity() {
 
 /* ───────────── Review (recruiter / HR) ───────────── */
 
-function MoveButtons({ current, disabled, onMove }: { current: Stage; disabled?: string; onMove: (s: Stage) => void }) {
+function MoveButtons({ current, disabled, onMove }: { current: Stage; disabled?: string; onMove: (s: Stage) => string | null }) {
   const options = nextStages(current);
   if (disabled) return <span className="muted">{disabled}</span>;
   if (!options.length) return <span className="muted">Closed</span>;
   return (
     <span className="row-gap">
       {options.map((s) => (
-        <button key={s} type="button" className={s === "Not selected" ? "btn btn-ghost btn-tiny" : "btn btn-tiny"} onClick={() => onMove(s)}>
+        <ActionButton
+          key={s}
+          className={s === "Not selected" ? "btn btn-ghost btn-tiny" : "btn btn-tiny"}
+          busyLabel={s === "Not selected" ? "Updating…" : undefined}
+          doneLabel={s === "Not selected" ? "Updated" : undefined}
+          onAction={() => onMove(s)}
+        >
           {s === "Not selected" ? "Not selected" : `Move to ${s.toLowerCase()}`}
-        </button>
+        </ActionButton>
       ))}
     </span>
   );
@@ -320,7 +329,11 @@ function Review() {
   const state = useSyncExternalStore(subscribeJobBoard, getJobBoardState);
   useSyncExternalStore(subscribeTalent, getTalentState);
   const [msg, setMsg] = useState<Msg>(null);
-  const report = (e: string | null, ok: string) => setMsg(e ? { tone: "err", text: e } : { tone: "ok", text: ok });
+  const report = (e: string | null, ok: string) => {
+    setMsg(e ? { tone: "err", text: e } : { tone: "ok", text: ok });
+    if (!e) notify(ok);
+    return e;
+  };
   const hr = isHr(actor.role);
 
   return (
@@ -378,9 +391,9 @@ function Review() {
               <span key="b" className="row-gap">
                 <BonusCell referral={r} />
                 {hr && bonus?.label === "Bonus payable" && r.referrerId !== actor.id && (
-                  <button type="button" className="btn btn-tiny" onClick={() => report(markBonusPaid(actor, r.id), "Bonus marked as paid.")}>
+                  <ActionButton className="btn btn-tiny" doneLabel="Paid" onAction={() => report(markBonusPaid(actor, r.id), `Referral bonus for ${r.referrerName} marked as paid.`)}>
                     Mark paid
-                  </button>
+                  </ActionButton>
                 )}
               </span>,
               <MoveButtons

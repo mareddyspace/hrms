@@ -11,7 +11,7 @@ import {
   type LetterPreviewOut,
 } from "../api/syncRewards.ts";
 import { LetterDownloadButtons, LetterFrame, printLetter } from "../components/LetterDocument.tsx";
-import { Banner, Card, DataTable, Dialog, EmptyState, Field, StatusBadge } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import {
   approveLetter,
   canApproveLetterRow,
@@ -69,11 +69,13 @@ function ApiLetterActions({ row, onOpen, onResult }: { row: LetterRequest; onOpe
   const info = row.api!;
   const [busy, setBusy] = useState(false);
   async function go(call: () => Promise<string | null>, ok: string) {
-    if (busy) return;
+    if (busy) return false;
     setBusy(true);
     const error = await runRewardApi(call(), ["letters"]);
     setBusy(false);
     onResult(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
+    if (!error) notify(ok);
+    return error;
   }
   async function pdf() {
     const error = await downloadLetterPdf(row.id, pdfName(row));
@@ -88,28 +90,29 @@ function ApiLetterActions({ row, onOpen, onResult }: { row: LetterRequest; onOpe
       )}
       {info.canDecide && (
         <>
-          <button type="button" className="btn" disabled={busy} onClick={() => go(() => apiDecideLetter(row.id, "approve"), `${label(row.type)} approved.`)}>
+          <ActionButton className="btn" disabled={busy} onAction={() => go(() => apiDecideLetter(row.id, "approve"), `${label(row.type)} approved for ${row.employeeName}.`)}>
             Approve
-          </button>
-          <button type="button" className="btn-ghost" disabled={busy} onClick={() => go(() => apiDecideLetter(row.id, "reject"), "Request rejected.")}>
+          </ActionButton>
+          <ActionButton className="btn-ghost" disabled={busy} onAction={() => go(() => apiDecideLetter(row.id, "reject"), `${label(row.type)} request rejected for ${row.employeeName}.`)}>
             Reject
-          </button>
+          </ActionButton>
         </>
       )}
       {info.canCancel && (
-        <button type="button" className="btn-ghost" disabled={busy} onClick={() => go(() => apiCancelLetter(row.id), "Request cancelled.")}>
+        <ActionButton className="btn-ghost" disabled={busy} onAction={() => go(() => apiCancelLetter(row.id), "Letter request cancelled.")}>
           Cancel
-        </button>
+        </ActionButton>
       )}
       {info.canIssue && (
-        <button
-          type="button"
+        <ActionButton
           className="btn-ghost"
           disabled={busy}
-          onClick={() => go(() => apiIssueLetter(row.id), info.issues.length ? `Regenerated as v${info.issues.length + 1}.` : "Letter generated.")}
+          busyLabel="Generating…"
+          doneLabel="Generated"
+          onAction={() => go(() => apiIssueLetter(row.id), info.issues.length ? `Regenerated as v${info.issues.length + 1}.` : "Letter generated.")}
         >
           {info.issues.length ? "Regenerate" : "Generate PDF"}
-        </button>
+        </ActionButton>
       )}
       {row.status === "Issued" && info.issues.length > 0 && (
         <button type="button" className="btn-ghost" onClick={() => void pdf()}>
@@ -174,39 +177,50 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
   function act(fn: () => string | null, ok: string) {
     const error = fn();
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
+    if (!error) notify(ok);
+    return error;
+  }
+
+  const requestAction = useAction();
+
+  async function submitRequest() {
+    if (API_ENABLED) {
+      const error = await runRewardApi(apiRequestLetter({ employeeId: subjectId, type, note, details, effectiveDate }), ["letters"]);
+      if (error) {
+        setMsg({ tone: "err", text: error });
+        return false;
+      }
+      setMsg({
+        tone: "ok",
+        text: template.secondApproval ? `${template.label} raised. It needs a second approver.` : `${template.label} requested — awaiting approval.`,
+      });
+      notify(template.secondApproval ? `${template.label} raised and sent for second approval.` : `${template.label} request sent for approval.`);
+      setNote("");
+      setDetails("");
+      setEffectiveDate("");
+      return true;
+    }
+    const error = requestLetter(actor, { employeeId: subjectId, type, note, details, effectiveDate });
+    if (error) {
+      setMsg({ tone: "err", text: error });
+      return false;
+    }
+    const checker = needsChecker({ employeeId: subjectId, type, requestedById: actor.id });
+    setMsg({
+      tone: "ok",
+      text: checker ? `${template.label} raised. It needs a second approver.` : `${template.label} requested — awaiting approval.`,
+    });
+    notify(checker ? `${template.label} raised and sent for second approval.` : `${template.label} request sent for approval.`);
+    setNote("");
+    setDetails("");
+    setEffectiveDate("");
+    return true;
   }
 
   return (
     <div className="mgr-home-grid">
       <Card title="Request a letter">
-        <form
-          className="stack"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (API_ENABLED) {
-              void runRewardApi(apiRequestLetter({ employeeId: subjectId, type, note, details, effectiveDate }), ["letters"]).then((error) => {
-                if (error) return setMsg({ tone: "err", text: error });
-                setMsg({
-                  tone: "ok",
-                  text: template.secondApproval ? `${template.label} raised. It needs a second approver.` : `${template.label} requested — awaiting approval.`,
-                });
-                setNote("");
-                setDetails("");
-                setEffectiveDate("");
-              });
-              return;
-            }
-            const error = requestLetter(actor, { employeeId: subjectId, type, note, details, effectiveDate });
-            if (error) return setMsg({ tone: "err", text: error });
-            setMsg({
-              tone: "ok",
-              text: needsChecker({ employeeId: subjectId, type, requestedById: actor.id }) ? `${template.label} raised. It needs a second approver.` : `${template.label} requested — awaiting approval.`,
-            });
-            setNote("");
-            setDetails("");
-            setEffectiveDate("");
-          }}
-        >
+        <form className="stack" onSubmit={requestAction.submit(submitRequest)}>
           {hr && (
             <Field label="Employee">
               <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
@@ -243,9 +257,9 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
             <input value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="e.g. bank loan, visa appointment" />
           </Field>
           {blocked ? <Banner message={{ tone: "warn", text: blocked }} /> : hr && !API_ENABLED && <MissingList missing={missing} />}
-          <button type="submit" className="btn" disabled={!!blocked}>
+          <SubmitButton action={requestAction} className="btn" disabled={!!blocked}>
             Request letter
-          </button>
+          </SubmitButton>
         </form>
         <h3 style={{ fontSize: 14, marginTop: 16 }}>Templates</h3>
         <DataTable
@@ -286,28 +300,29 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
                   {issue ? "Open" : "Preview"}
                 </button>
                 {submit && (
-                  <button type="button" className="btn" onClick={() => act(() => setLetterStatus(actor, l.id, "Pending approval"), "Submitted for approval.")}>
+                  <ActionButton className="btn" onAction={() => act(() => setLetterStatus(actor, l.id, "Pending approval"), `${label(l.type)} submitted for approval.`)}>
                     Submit
-                  </button>
+                  </ActionButton>
                 )}
                 {canDecide && (
                   <>
-                    <button type="button" className="btn" onClick={() => act(() => approveLetter(actor, l.id), `${label(l.type)} approved and generated.`)}>
+                    <ActionButton className="btn" onAction={() => act(() => approveLetter(actor, l.id), `${label(l.type)} approved and generated for ${l.employeeName}.`)}>
                       Approve &amp; generate
-                    </button>
-                    <button type="button" className="btn-ghost" onClick={() => act(() => rejectLetter(actor, l.id), "Request rejected.")}>
+                    </ActionButton>
+                    <ActionButton className="btn-ghost" onAction={() => act(() => rejectLetter(actor, l.id), `${label(l.type)} request rejected for ${l.employeeName}.`)}>
                       Reject
-                    </button>
+                    </ActionButton>
                   </>
                 )}
                 {l.status === "Issued" && canApproveLetterRow(actor, l) && (
-                  <button
-                    type="button"
+                  <ActionButton
                     className="btn-ghost"
-                    onClick={() => act(() => regenerateLetter(actor, l.id), `Regenerated as v${(l.issued?.length ?? 0) + 1}.`)}
+                    busyLabel="Generating…"
+                    doneLabel="Regenerated"
+                    onAction={() => act(() => regenerateLetter(actor, l.id), `Regenerated as v${(l.issued?.length ?? 0) + 1}.`)}
                   >
                     Regenerate
-                  </button>
+                  </ActionButton>
                 )}
                 {issue && (
                   <button type="button" className="btn-ghost" onClick={() => printLetter(issuedLetterHtml(l, issue))}>
@@ -431,6 +446,7 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
   const [editKey, setEditKey] = useState("");
   const [details, setDetails] = useState("");
   const [effectiveDate, setEffectiveDate] = useState("");
+  const detailsAction = useAction();
 
   if (!open) return null;
   if (row?.api) return <ApiLetterViewer row={row} onClose={onClose} />;
@@ -499,27 +515,29 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
       actions={
         canDecide ? (
           <>
-            <button
-              type="button"
+            <ActionButton
               className="btn-ghost"
-              onClick={() => {
+              success={`${template.label} request rejected for ${row.employeeName}.`}
+              onAction={() => {
                 const error = rejectLetter(actor, row.id);
                 setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: "Request rejected." });
+                return error;
               }}
             >
               Reject
-            </button>
-            <button
-              type="button"
+            </ActionButton>
+            <ActionButton
               className="btn"
               disabled={preview.missing.length > 0}
-              onClick={() => {
+              success={`${template.label} approved and generated for ${row.employeeName}.`}
+              onAction={() => {
                 const error = approveLetter(actor, row.id);
                 setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: "Approved — final letter generated." });
+                return error;
               }}
             >
               Approve &amp; generate
-            </button>
+            </ActionButton>
           </>
         ) : undefined
       }
@@ -534,14 +552,17 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
       {canEdit && (template.detailsLabel || (hr && template.effectiveInput) || preview.missing.includes("Effective date")) && (
         <form
           className="letter-inputs"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const error = updateLetterInputs(actor, row.id, {
-              details: template.detailsLabel ? details : undefined,
-              effectiveDate: hr ? effectiveDate : undefined,
-            });
-            setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: "Details saved." });
-          }}
+          onSubmit={detailsAction.submit(
+            () => {
+              const error = updateLetterInputs(actor, row.id, {
+                details: template.detailsLabel ? details : undefined,
+                effectiveDate: hr ? effectiveDate : undefined,
+              });
+              setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: "Details saved." });
+              return error;
+            },
+            { success: "Letter details saved." },
+          )}
         >
           {template.detailsLabel && (
             <Field label={template.detailsLabel}>
@@ -553,9 +574,9 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
               <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} />
             </Field>
           )}
-          <button type="submit" className="btn-ghost">
+          <SubmitButton action={detailsAction} className="btn-ghost">
             Save details
-          </button>
+          </SubmitButton>
         </form>
       )}
       <LetterFrame html={preview.html} title={`${template.label} draft`} />

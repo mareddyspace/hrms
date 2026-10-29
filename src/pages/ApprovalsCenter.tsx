@@ -15,7 +15,7 @@ import {
   subscribeShifts,
 } from "../features/workforce/shiftsStore.ts";
 import { money } from "../countryPay.ts";
-import { Banner, Card, EmptyState, Page, StatusBadge, Tabs } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, EmptyState, Page, StatusBadge, Tabs, notify } from "../components/ui.tsx";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
 import { addDaysISO, formatShortDate, plural, holidaySet, holidaysForPerson, parseISODate, todayISO, workingDays } from "../model.ts";
@@ -550,7 +550,10 @@ export function ApprovalsCenterPage() {
   async function run(action: () => string | null | Promise<string | null>, success: string, key?: string) {
     const error = await action();
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: success });
-    if (!error && key) setNotes((prev) => ({ ...prev, [key]: "" }));
+    if (error) return error;
+    if (key) setNotes((prev) => ({ ...prev, [key]: "" }));
+    notify(success);
+    return null;
   }
 
   return (
@@ -610,20 +613,36 @@ export function ApprovalsCenterPage() {
                         aria-label={`Note for ${nameOf(item.employeeId)}`}
                       />
                     )}
-                    <button
-                      type="button"
+                    <ActionButton
                       className="btn btn-tiny"
-                      onClick={() => run(() => item.decide!("approved", noteFor(notes[item.key])), API_ENABLED ? `${item.kind}: approval recorded.` : `${item.kind} approved.`, item.key)}
+                      doneLabel={item.approveLabel === "Verify" ? "Verified" : item.approveLabel === "Accept" ? "Accepted" : item.approveLabel ? "Done" : "Approved"}
+                      onAction={() =>
+                        run(
+                          () => item.decide!("approved", noteFor(notes[item.key])),
+                          API_ENABLED
+                            ? `${item.kind}: approval recorded for ${nameOf(item.employeeId)}.`
+                            : `${item.kind} approved for ${nameOf(item.employeeId)}.`,
+                          item.key,
+                        )
+                      }
                     >
                       {item.approveLabel ?? "Approve"}
-                    </button>
-                    <button
-                      type="button"
+                    </ActionButton>
+                    <ActionButton
                       className="btn-ghost btn-tiny"
-                      onClick={() => run(() => item.decide!("rejected", noteFor(notes[item.key])), item.declineLabel === "Send back" ? `${item.kind} sent back.` : `${item.kind} declined.`, item.key)}
+                      doneLabel={item.declineLabel === "Send back" ? "Sent back" : item.declineLabel ? "Done" : "Declined"}
+                      onAction={() =>
+                        run(
+                          () => item.decide!("rejected", noteFor(notes[item.key])),
+                          item.declineLabel === "Send back"
+                            ? `${item.kind} sent back to ${nameOf(item.employeeId)}.`
+                            : `${item.kind} declined for ${nameOf(item.employeeId)}.`,
+                          item.key,
+                        )
+                      }
                     >
                       {item.declineLabel ?? "Decline"}
-                    </button>
+                    </ActionButton>
                   </div>
                 </li>
                 );
@@ -676,9 +695,9 @@ export function ApprovalsCenterPage() {
                   </span>
                   {item.open && item.withdraw && (
                     <div className="approval-actions">
-                      <button type="button" className="btn-ghost btn-tiny" onClick={() => run(item.withdraw!, "Request withdrawn.")}>
+                      <ActionButton className="btn-ghost btn-tiny" onAction={() => run(item.withdraw!, "Request withdrawn.")}>
                         Withdraw
-                      </button>
+                      </ActionButton>
                     </div>
                   )}
                 </li>

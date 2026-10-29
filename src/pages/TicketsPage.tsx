@@ -1,7 +1,18 @@
 import { useMemo, useState } from "react";
-import type { FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Banner, Card, EmptyState, Field, FilterBar, Page, StatusBadge } from "../components/ui.tsx";
+import {
+  ActionButton,
+  Banner,
+  Card,
+  EmptyState,
+  Field,
+  FilterBar,
+  Page,
+  StatusBadge,
+  SubmitButton,
+  notify,
+  useAction,
+} from "../components/ui.tsx";
 import { formatShortDate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { taskTeamFor } from "../data/taskTeam.ts";
@@ -97,6 +108,8 @@ export function TicketsPage() {
 
   function done(error: string | null, ok: string) {
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
+    if (!error) notify(ok);
+    return error;
   }
 
   return (
@@ -234,7 +247,7 @@ function TicketDetail({
   actor: TicketActor;
   team: { id: string; fullName: string }[];
   onClose: () => void;
-  onResult: (error: string | null, ok: string) => void;
+  onResult: (error: string | null, ok: string) => string | null;
 }) {
   const [note, setNote] = useState("");
   const [assignee, setAssignee] = useState("");
@@ -310,18 +323,18 @@ function TicketDetail({
                 </option>
               ))}
           </select>
-          <button
+          <ActionButton
             className="btn-ghost btn-tiny"
-            type="button"
             disabled={!assignee}
-            onClick={() => {
+            onAction={() => {
               const error = assignTicket(t.id, assignee, actor);
               onResult(error, `Assigned to ${personName(assignee)}.`);
               if (!error) setAssignee("");
+              return error;
             }}
           >
             Assign
-          </button>
+          </ActionButton>
         </div>
       )}
 
@@ -329,31 +342,35 @@ function TicketDetail({
         <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add an update" />
       </Field>
       <div className="form-actions tk-actions">
-        <button
+        <ActionButton
           className="btn-ghost btn-tiny"
-          type="button"
           disabled={!note.trim()}
-          onClick={() => {
+          busyLabel="Posting…"
+          doneLabel="Posted"
+          onAction={() => {
             const error = commentOnTicket(t.id, note, actor);
             onResult(error, "Comment added.");
             if (!error) setNote("");
+            return error;
           }}
         >
           Comment
-        </button>
+        </ActionButton>
         {moves.map((s) => (
-          <button
+          <ActionButton
             key={s}
             className={s === "Resolved" || s === "Closed" ? "btn btn-tiny" : "btn-ghost btn-tiny"}
-            type="button"
-            onClick={() => {
+            busyLabel="Updating…"
+            doneLabel="Updated"
+            onAction={() => {
               const error = setTicketStatus(t.id, s, actor, note);
               onResult(error, `${t.id} → ${s}.`);
               if (!error) setNote("");
+              return error;
             }}
           >
             {s === "In progress" && t.status === "Resolved" ? "Reopen" : s === "Closed" ? "Close" : s === "Resolved" ? "Resolve" : s}
-          </button>
+          </ActionButton>
         ))}
       </div>
       {t.requesterId === actor.id && t.status === "Resolved" && <p className="muted">Resolved. Close it, or reopen if not fixed.</p>}
@@ -395,8 +412,9 @@ function CreateTicketDialog({
   const [due, setDue] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
+  const raiseAction = useAction();
+
+  function submit() {
     const result = createTicket(
       {
         title,
@@ -410,8 +428,12 @@ function CreateTicketDialog({
       },
       actor,
     );
-    if (!result.ok) setError(result.error);
-    else onCreated(result.id);
+    if (!result.ok) {
+      setError(result.error);
+      return false;
+    }
+    onCreated(result.id);
+    return true;
   }
 
   const routed = type === "IT support" || type === "Access request" ? "IT desk" : type === "HR query" ? "HR" : null;
@@ -421,7 +443,7 @@ function CreateTicketDialog({
       <button className="modal-scrim" type="button" aria-label="Close" onClick={onClose} />
       <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="new-ticket-title">
         <h2 id="new-ticket-title">Raise ticket</h2>
-        <form onSubmit={submit}>
+        <form onSubmit={raiseAction.submit(submit)}>
           <div className="stack" style={{ marginTop: 12 }}>
             <Field label="Title">
               <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What's wrong?" />
@@ -477,9 +499,9 @@ function CreateTicketDialog({
             <button className="btn-ghost" type="button" onClick={onClose}>
               Cancel
             </button>
-            <button className="btn" type="submit">
+            <SubmitButton action={raiseAction} className="btn">
               Raise
-            </button>
+            </SubmitButton>
           </div>
         </form>
       </div>

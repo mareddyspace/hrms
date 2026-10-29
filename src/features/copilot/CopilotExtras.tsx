@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { API_ENABLED } from "../../api/client.ts";
 import { apiRequestProfileOtp, apiUpdateOwnProfile, type ApiSelfProfileUpdate } from "../../api/syncProfile.ts";
-import { Banner, Field } from "../../components/ui.tsx";
+import { ActionButton, Banner, Field, notify } from "../../components/ui.tsx";
 import type { CopilotAction, CopilotAnswer, CopilotChart as Chart, CopilotLetterDraft } from "../../data/platformData.ts";
 import { requestLetter } from "../../data/letterService.ts";
 import { maskAddress, maskMobile, type LeaveCode, type LeaveHalf } from "../../model.ts";
@@ -80,7 +80,7 @@ function LetterDraftPanel({ draft }: { draft: CopilotLetterDraft }) {
   function send() {
     if (draft.detailsLabel && !details.trim()) {
       setMessage({ tone: "err", text: `Add ${draft.detailsLabel.toLowerCase()}.` });
-      return;
+      return false;
     }
     const error = requestLetter(demoProfile, {
       employeeId: draft.employeeId,
@@ -91,11 +91,13 @@ function LetterDraftPanel({ draft }: { draft: CopilotLetterDraft }) {
     });
     if (error) {
       setMessage({ tone: "err", text: error });
-      return;
+      return false;
     }
     logCopilotAction("Confirmed", { id: employee.id, name: employee.fullName }, { letter: { ...draft, details } }, "Sent for approval");
     setState("sent");
     setMessage({ tone: "ok", text: "Draft created and sent for approval. Track it in Documents." });
+    notify(`${draft.label} for ${draft.employeeName} sent for approval.`);
+    return true;
   }
 
   return (
@@ -132,9 +134,9 @@ function LetterDraftPanel({ draft }: { draft: CopilotLetterDraft }) {
       )}
       {state === "open" && (
         <div className="row-gap" style={{ marginTop: 8 }}>
-          <button type="button" className="btn" onClick={send}>
+          <ActionButton className="btn" onAction={send} busyLabel="Sending…" doneLabel="Sent">
             Create draft and send for approval
-          </button>
+          </ActionButton>
           <button
             type="button"
             className="btn-ghost"
@@ -173,7 +175,6 @@ function splitAddress(text: string): ApiSelfProfileUpdate {
 
 function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "profile" }> }) {
   const { employee, requestProfileOtp, updateProfileWithOtp, verifyProfileOtp } = usePortal();
-  const [saving, setSaving] = useState(false);
   const [value, setValue] = useState(action.proposed);
   const [otp, setOtp] = useState("");
   const [code, setCode] = useState("");
@@ -185,44 +186,49 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
   // Backend mode: only a new mobile needs a code (sent by the server); an address change is confirmed directly.
   const needsCode = !API_ENABLED || isMobile;
 
-  function sendCode() {
+  function fail(text: string) {
+    setMessage({ tone: "err", text });
+    return false;
+  }
+
+  async function sendCode() {
     if (API_ENABLED) {
       const next = value.trim();
-      if (!validPhone(next)) return setMessage({ tone: "err", text: "Enter a valid mobile number: 8–15 digits, optionally starting with +." });
-      void apiRequestProfileOtp("mobile", next).then((sent) => {
-        if (sent.error) return setMessage({ tone: "err", text: sent.error });
-        // "sent" marks the code step as open; the code itself is shown only when the server echoes it (dev).
-        setCode(sent.devCode ?? "sent");
-        setOtp("");
-        setMessage({ tone: "ok", text: `Code sent to ${sent.sentTo || "your email"}.` });
-      });
-      return;
+      if (!validPhone(next)) return fail("Enter a valid mobile number: 8–15 digits, optionally starting with +.");
+      const sent = await apiRequestProfileOtp("mobile", next);
+      if (sent.error) return fail(sent.error);
+      // "sent" marks the code step as open; the code itself is shown only when the server echoes it (dev).
+      setCode(sent.devCode ?? "sent");
+      setOtp("");
+      setMessage({ tone: "ok", text: `Code sent to ${sent.sentTo || "your email"}.` });
+      notify(`Code sent to ${sent.sentTo || "your email"}.`);
+      return true;
     }
     setCode(requestProfileOtp());
     setOtp("");
     setMessage({ tone: "ok", text: `Code sent to ${maskMobile(employee.mobile)}.` });
+    notify(`Code sent to ${maskMobile(employee.mobile)}.`);
+    return true;
   }
 
-  function confirm() {
+  async function confirm() {
     const next = value.trim();
-    if (!next) return setMessage({ tone: "err", text: `Enter the ${isMobile ? "new number" : "new address"}.` });
-    if (isMobile && !validPhone(next)) return setMessage({ tone: "err", text: "Enter a valid mobile number: 8–15 digits, optionally starting with +." });
+    if (!next) return fail(`Enter the ${isMobile ? "new number" : "new address"}.`);
+    if (isMobile && !validPhone(next)) return fail("Enter a valid mobile number: 8–15 digits, optionally starting with +.");
     if (API_ENABLED) {
       // Backend mode: the server checks the code, saves (PATCH /people/me) and audits the change.
       if (needsCode) {
         const otpError = verifyProfileOtp(otp);
-        if (otpError) return setMessage({ tone: "err", text: otpError });
+        if (otpError) return fail(otpError);
       }
-      setSaving(true);
-      void apiUpdateOwnProfile(isMobile ? { mobile: next, otp_code: otp } : splitAddress(next)).then((failed) => {
-        setSaving(false);
-        if (failed) return setMessage({ tone: "err", text: failed });
-        logCopilotAction("Confirmed", { id: employee.id, name: employee.fullName }, { action: { ...action, proposed: next } }, "Profile updated");
-        setState("done");
-        setCode("");
-        setMessage({ tone: "ok", text: `${isMobile ? "Mobile number" : "Address"} updated.` });
-      });
-      return;
+      const failed = await apiUpdateOwnProfile(isMobile ? { mobile: next, otp_code: otp } : splitAddress(next));
+      if (failed) return fail(failed);
+      logCopilotAction("Confirmed", { id: employee.id, name: employee.fullName }, { action: { ...action, proposed: next } }, "Profile updated");
+      setState("done");
+      setCode("");
+      setMessage({ tone: "ok", text: `${isMobile ? "Mobile number" : "Address"} updated.` });
+      notify(`${isMobile ? "Mobile number" : "Address"} updated.`);
+      return true;
     }
     const error = updateProfileWithOtp(
       {
@@ -236,11 +242,13 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
       },
       otp,
     );
-    if (error) return setMessage({ tone: "err", text: error });
+    if (error) return fail(error);
     logCopilotAction("Confirmed", { id: employee.id, name: employee.fullName }, { action: { ...action, proposed: next } }, "Profile updated");
     setState("done");
     setCode("");
     setMessage({ tone: "ok", text: `${isMobile ? "Mobile number" : "Address"} updated.` });
+    notify(`${isMobile ? "Mobile number" : "Address"} updated.`);
+    return true;
   }
 
   return (
@@ -272,21 +280,21 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
           {code && code !== "sent" && <p className="note">Code: <strong>{code}</strong></p>}
           <div className="row-gap" style={{ marginTop: 8 }}>
             {!needsCode ? (
-              <button type="button" className="btn" onClick={confirm} disabled={!value.trim() || saving}>
+              <ActionButton className="btn" onAction={confirm} disabled={!value.trim()} busyLabel="Saving…" doneLabel="Saved">
                 Confirm change
-              </button>
+              </ActionButton>
             ) : !code ? (
-              <button type="button" className="btn" onClick={sendCode} disabled={!value.trim()}>
+              <ActionButton className="btn" onAction={sendCode} disabled={!value.trim()}>
                 Send code to confirm
-              </button>
+              </ActionButton>
             ) : (
               <>
-                <button type="button" className="btn" onClick={confirm} disabled={otp.length !== 6 || saving}>
+                <ActionButton className="btn" onAction={confirm} disabled={otp.length !== 6} busyLabel="Saving…" doneLabel="Saved">
                   Confirm change
-                </button>
-                <button type="button" className="btn-ghost" onClick={sendCode}>
+                </ActionButton>
+                <ActionButton className="btn-ghost" onAction={sendCode} busyLabel="Sending…" doneLabel="Sent">
                   Resend code
-                </button>
+                </ActionButton>
               </>
             )}
             <button
@@ -324,13 +332,20 @@ function LeaveChange({ action }: { action: Extract<CopilotAction, { kind: "leave
   const name = action.options.find((o) => o.code === code)?.name ?? action.codeName;
 
   async function confirm() {
-    if (!from || !to) return setMessage({ tone: "err", text: "Choose the from and to dates." });
-    if (!reason.trim()) return setMessage({ tone: "err", text: "Add a reason." });
+    if (!from || !to) {
+      setMessage({ tone: "err", text: "Choose the from and to dates." });
+      return false;
+    }
+    if (!reason.trim()) {
+      setMessage({ tone: "err", text: "Add a reason." });
+      return false;
+    }
     setState("busy");
     const error = await applyLeave({ code, from, to, reason, half: canHalf && half ? half : undefined });
     if (error) {
       setState("open");
-      return setMessage({ tone: "err", text: error });
+      setMessage({ tone: "err", text: error });
+      return false;
     }
     logCopilotAction(
       "Confirmed",
@@ -340,6 +355,8 @@ function LeaveChange({ action }: { action: Extract<CopilotAction, { kind: "leave
     );
     setState("done");
     setMessage({ tone: "ok", text: hasApprover ? "Leave applied and sent to your manager." : "Leave applied. With nobody above you, it's approved automatically." });
+    notify(hasApprover ? "Leave request sent to your manager for approval." : "Leave added to your calendar.");
+    return true;
   }
 
   return (
@@ -384,9 +401,9 @@ function LeaveChange({ action }: { action: Extract<CopilotAction, { kind: "leave
             </Field>
           </div>
           <div className="row-gap" style={{ marginTop: 8 }}>
-            <button type="button" className="btn" onClick={confirm} disabled={state === "busy"}>
+            <ActionButton className="btn" onAction={confirm} disabled={state === "busy"} busyLabel="Applying…" doneLabel="Applied">
               Confirm and apply
-            </button>
+            </ActionButton>
             <button
               type="button"
               className="btn-ghost"

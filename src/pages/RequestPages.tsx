@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { FormEvent, ReactNode } from "react";
-import { Banner, Card, Field, Page, StatusPill } from "../components/ui.tsx";
+import type { ReactNode } from "react";
+import { Banner, Card, Field, Page, StatusPill, SubmitButton, useAction } from "../components/ui.tsx";
 import { claimLimitsFor, itemCurrency, money, moneyTotals, payRulesFor } from "../countryPay.ts";
 import { formatShortDate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
@@ -12,6 +12,7 @@ export function EncashmentPage() {
   const [days, setDays] = useState("1");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const mine = state.encashments.filter((item) => item.employeeId === employee.id);
+  const encashAction = useAction();
 
   return (
     <Page
@@ -35,19 +36,22 @@ export function EncashmentPage() {
       <div className="split">
         <Card title="Request encashment">
           <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              const error = applyEncashment("pto", Number(days));
-              setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Encashment submitted for manager approval." : "Encashment approved automatically." });
-            }}
+            onSubmit={encashAction.submit(
+              () => {
+                const error = applyEncashment("pto", Number(days));
+                setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Encashment submitted for manager approval." : "Encashment approved automatically." });
+                return error ? false : true;
+              },
+              { success: hasApprover ? "Encashment request sent to your manager for approval." : "Encashment approved." },
+            )}
           >
             <Field label="Privilege leave days">
               <input type="number" min={1} value={days} onChange={(event) => setDays(event.target.value)} />
             </Field>
             <div className="form-actions">
-              <button className="btn" type="submit">
+              <SubmitButton action={encashAction} className="btn">
                 Submit
-              </button>
+              </SubmitButton>
             </div>
             <Banner message={message} />
           </form>
@@ -99,6 +103,7 @@ export function CashPage() {
   const rows = state.cashAdvances.filter((item) => item.employeeId === employee.id);
   const totalRequested = moneyTotals(rows.map((item) => ({ amount: item.amount, currency: itemCurrency(item) })));
   const pendingCount = rows.filter((item) => item.status === "pending").length;
+  const cashAction = useAction();
 
   return (
     <Page title="Cash advance">
@@ -116,11 +121,10 @@ export function CashPage() {
       <Card title="New advance request">
         <form
           className="cash-form"
-          onSubmit={(event: FormEvent) => {
-            event.preventDefault();
+          onSubmit={cashAction.submit(() => {
             if (hasTemplateBlanks(purpose)) {
               setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
-              return;
+              return false;
             }
             const error = addCash({
               amount: Number(amount),
@@ -135,7 +139,8 @@ export function CashPage() {
               resetPurpose();
               setRequiredBy("");
             }
-          }}
+            return error ? false : true;
+          }, { success: hasApprover ? "Cash advance request submitted for approval." : "Cash advance approved." })}
         >
           <Field label={`Amount (${currency}, up to ${money(maxCashAdvance, currency)})`}>
             <input
@@ -174,9 +179,9 @@ export function CashPage() {
           <Field label="Required by date">
             <input type="date" min={todayISO()} value={requiredBy} onChange={(event) => setRequiredBy(event.target.value)} />
           </Field>
-          <button className="btn cash-submit" type="submit">
+          <SubmitButton action={cashAction} className="btn cash-submit">
             Submit request
-          </button>
+          </SubmitButton>
           <Banner message={message} />
         </form>
       </Card>
@@ -212,6 +217,7 @@ export function AssetsPage() {
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const assigned = state.assets.filter((asset) => asset.employeeId === employee.id);
   const requests = state.assetRequests.filter((request) => request.employeeId === employee.id);
+  const assetAction = useAction();
   return (
     <Page title="Asset requests">
       <Card title="Assigned to me">
@@ -245,11 +251,10 @@ export function AssetsPage() {
       <RequestSplit
         form={
           <form
-            onSubmit={(event) => {
-              event.preventDefault();
+            onSubmit={assetAction.submit(() => {
               if (hasTemplateBlanks(reason)) {
                 setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
-                return;
+                return false;
               }
               const error = addAssetRequest(item, reason);
               setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Asset request submitted." : "Asset request approved automatically." });
@@ -257,7 +262,8 @@ export function AssetsPage() {
                 setItem("");
                 resetReason();
               }
-            }}
+              return error ? false : true;
+            }, { success: hasApprover ? "Asset request submitted for approval." : "Asset request approved." })}
           >
             <div className="form-grid">
               <Field label="Asset">
@@ -286,9 +292,9 @@ export function AssetsPage() {
               </Field>
             </div>
             <div className="form-actions">
-              <button className="btn" type="submit">
+              <SubmitButton action={assetAction} className="btn">
                 Request asset
-              </button>
+              </SubmitButton>
             </div>
             <Banner message={message} />
           </form>
@@ -332,16 +338,16 @@ export function SoftwarePage() {
   } = useTemplatedText();
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const rows = state.softwareRequests.filter((item) => item.employeeId === employee.id);
+  const softwareAction = useAction();
   return (
     <Page title="Software requests">
       <RequestSplit
         form={
           <form
-            onSubmit={(event) => {
-              event.preventDefault();
+            onSubmit={softwareAction.submit(() => {
               if (hasTemplateBlanks(justification)) {
                 setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
-                return;
+                return false;
               }
               const error = addSoftware(software, justification);
               setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: hasApprover ? "Software request submitted." : "Software request approved automatically." });
@@ -349,7 +355,8 @@ export function SoftwarePage() {
                 setSoftware("");
                 resetJustification();
               }
-            }}
+              return error ? false : true;
+            }, { success: hasApprover ? "Software request submitted for approval." : "Software request approved." })}
           >
             <div className="form-grid">
               <Field label="Software">
@@ -366,9 +373,9 @@ export function SoftwarePage() {
               </Field>
             </div>
             <div className="form-actions">
-              <button className="btn" type="submit">
+              <SubmitButton action={softwareAction} className="btn">
                 Submit request
-              </button>
+              </SubmitButton>
             </div>
             <Banner message={message} />
           </form>
