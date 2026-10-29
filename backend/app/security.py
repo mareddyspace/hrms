@@ -13,7 +13,8 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 from app.config import get_settings
 from app.db import utcnow
 
-_hasher = PasswordHasher()
+# OWASP-recommended argon2id settings (19 MiB, 2 passes, 1 lane): strong, and fast enough on a small server.
+_hasher = PasswordHasher(time_cost=2, memory_cost=19 * 1024, parallelism=1)
 ALGORITHM = "HS256"
 # Used to spend the same time on unknown emails as on wrong passwords.
 _DUMMY_HASH = _hasher.hash("timez-dummy-password")
@@ -21,6 +22,14 @@ _DUMMY_HASH = _hasher.hash("timez-dummy-password")
 
 def hash_password(password: str) -> str:
     return _hasher.hash(password)
+
+
+def password_needs_rehash(password_hash: str | None) -> bool:
+    """True when a stored hash was made with older (heavier or weaker) settings."""
+    try:
+        return bool(password_hash) and _hasher.check_needs_rehash(password_hash)
+    except InvalidHashError:
+        return False
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
