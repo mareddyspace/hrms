@@ -96,7 +96,7 @@ export async function authorizedFetch(path: string, init: RequestInit = {}): Pro
       res = await go();
     }
   } catch {
-    throw new ApiError(0, "Can't reach the server. Try again.");
+    throw new ApiError(0, "The server is starting up. Try again in about 30 seconds.");
   }
   if (!res.ok) throw await errorFrom(res);
   return res;
