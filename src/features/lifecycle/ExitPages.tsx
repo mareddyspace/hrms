@@ -303,7 +303,7 @@ function InterviewForm({ row, actor, onMessage }: { row: ExitCase; actor: Lifecy
 
   return (
     <form className="stack" onSubmit={act.submit(submit, { success: "Exit interview submitted to HR." })}>
-      <p className="muted">Confidential to HR. Not shared with your manager.</p>
+      <p className="muted">{lineManagerId(actor.id) ? "Confidential to HR. Not shared with your manager." : "Confidential to HR."}</p>
       <div>
         <p className="muted">Overall experience</p>
         <div className="lc-rating" role="group" aria-label="Overall rating">
@@ -509,7 +509,7 @@ function ResignationForm({ actor, onMessage }: { actor: LifecycleActor; onMessag
         {insideNotice && (
           <label className="lc-inline-check">
             <input type="checkbox" checked={early} onChange={(e) => setEarly(e.target.checked)} />
-            Request early release — your manager must approve this date
+            {lineManagerId(actor.id) ? "Request early release — your manager must approve this date" : "Request early release — the Board must approve this date"}
           </label>
         )}
         <div>

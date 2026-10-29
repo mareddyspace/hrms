@@ -179,7 +179,7 @@ function leavePolicyAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer {
     if (!p) return { kind: "text", summary: "That leave type isn't in your leave policy.", links, sources: leaveSources(ctx, ["Your yearly entitlement"]) };
     const extra =
       code === "sick"
-        ? " It can't be booked in advance, and you can apply up to 7 days after being ill; older dates need your manager's permission first."
+        ? ` It can't be booked in advance, and you can apply up to 7 days after being ill${ctx.managerName ? "; older dates need your manager's permission first" : ""}.`
         : code === "comp_off"
           ? " It's earned by working a holiday or weekly off."
           : code === "wfh" || code === "emergency_wfh"
@@ -197,7 +197,9 @@ function leavePolicyAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer {
   }
   return {
     kind: "table",
-    summary: `Leave policy for ${ctx.countryName}. Past dates need your manager's permission first (sick leave: within 7 days is fine).`,
+    summary: ctx.managerName
+      ? `Leave policy for ${ctx.countryName}. Past dates need your manager's permission first (sick leave: within 7 days is fine).`
+      : `Leave policy for ${ctx.countryName}.`,
     table: { headers: ["Type", "Rule"], rows: policies.map((p) => [p.name, describe(p).split(": ")[1]]) },
     links,
     sources: leaveSources(ctx, ["Your yearly entitlement", "Applying"]),
@@ -395,7 +397,7 @@ function timesheetAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer {
       : `your timesheet ${when} (week of ${fmtDate(w.weekStart)}) is ${w.status} with ${w.hours} h logged.`;
   return {
     kind: "text",
-    summary: `${cap(what)}${w.status === "draft" || w.status === "not started" ? " Submit it in Timesheet so your manager can review it." : ""}`,
+    summary: `${cap(what)}${w.status === "draft" || w.status === "not started" ? (ctx.managerName ? " Submit it in Timesheet so your manager can review it." : " Submit it in Timesheet.") : ""}`,
     links,
   };
 }
@@ -576,7 +578,7 @@ function correctionAnswer(ctx: CopilotContext): RawCopilotAnswer {
   const who = ctx.managerName ?? "your manager";
   return {
     kind: "text",
-    summary: `Open Attendance, pick the day and choose Request correction with the right times and a reason; ${ctx.managerName ? who : "someone above you"} approves it.${
+    summary: `Open Attendance, pick the day and choose Request correction with the right times and a reason; ${ctx.managerName ? `${who} approves it` : "it's approved automatically"}.${
       pending.length ? ` You already have ${pending.length} pending (${pending.map((c) => `${fmtDate(c.date)}, ${c.kind}`).join("; ")}).` : ""
     }`,
     links: [{ label: "Attendance", to: "/attendance" }],
@@ -759,7 +761,9 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
     const sick = leaveCodeIn(q) === "sick";
     return {
       kind: "text",
-      summary: sick
+      summary: !ctx.managerName
+        ? "Yes — with nobody above you, past dates are recorded and approved automatically."
+        : sick
         ? "Yes — sick leave can be applied up to 7 days after the date. Older dates need your manager's permission first."
         : `Not directly — past dates need ${ctx.managerName ?? "your manager"}'s permission first. In Leave, choose Request permission for those dates; once approved you have 30 days to apply. Sick leave within the last 7 days needs no permission.`,
       links: [{ label: "Leave", to: "/leave" }],
@@ -896,7 +900,7 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
     return correctionAnswer(ctx);
   }
   if (hasWord(q, ["attendance", "overtime", "check in", "check out", "present", "punch", "clock in", "clock out"])) {
-    return { kind: "text", summary: "Check in and out from Home or Attendance. Mistakes can be fixed with a correction request to your manager.", links: [{ label: "Attendance", to: "/attendance" }] };
+    return { kind: "text", summary: ctx.managerName ? "Check in and out from Home or Attendance. Mistakes can be fixed with a correction request to your manager." : "Check in and out from Home or Attendance. Fix mistakes with a correction request.", links: [{ label: "Attendance", to: "/attendance" }] };
   }
 
   // Performance.

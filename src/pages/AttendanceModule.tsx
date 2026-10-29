@@ -360,12 +360,18 @@ export function AttendancePage() {
       requestedCheckOut: corrOut || undefined,
       context: dayContext,
       dayHasCheckIn: corrHasCheckIn,
+      autoApprove: !approver,
     });
     setBusy(false);
     setCorrError(error);
     if (error) return false;
-    setMessage({ tone: "ok", text: `Correction request submitted — ${approver?.fullName ?? "your manager"} will review it.` });
-    notify(`Correction request sent to ${approver?.fullName ?? "your manager"}.`);
+    if (!approver && !API_ENABLED) {
+      setMessage({ tone: "ok", text: "Correction approved automatically." });
+      notify("Correction approved automatically.");
+    } else {
+      setMessage({ tone: "ok", text: `Correction request submitted — ${approver?.fullName ?? "your manager"} will review it.` });
+      notify(`Correction request sent to ${approver?.fullName ?? "your manager"}.`);
+    }
     setCorrReason("");
     setCorrIn("");
     setCorrOut("");
@@ -822,7 +828,7 @@ export function AttendancePage() {
               <Card title="Request a correction">
                 <p className="note">
                   Own punches only, within the last 30 days.{" "}
-                  {approver ? `Reviewed by ${approver.fullName}.` : "No manager in your reporting line — contact HR."}
+                  {approver ? `Reviewed by ${approver.fullName}.` : API_ENABLED ? "Sent for review." : "Approved automatically."}
                 </p>
                 <div className="form-grid-2">
                   <label className="field">
@@ -861,7 +867,7 @@ export function AttendancePage() {
                   </p>
                 )}
                 <div className="form-actions">
-                  <ActionButton className="btn" onAction={submitCorr} disabled={busy || (!approver && !API_ENABLED)}>
+                  <ActionButton className="btn" onAction={submitCorr} disabled={busy}>
                     Submit request
                   </ActionButton>
                 </div>

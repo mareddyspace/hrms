@@ -10,6 +10,7 @@ import {
   TRAVEL_MODES,
   canDecideTravel,
   decideTravel,
+  getTravelRequests,
   submitTravel,
   useTravelRequests,
   withdrawTravel,
@@ -75,9 +76,15 @@ export function TravelPage() {
       advanceNeeded,
       advanceAmount: advanceNeeded ? Number(advance) : undefined,
     });
-    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Travel request submitted." });
-    if (error) return false;
-    notify("Travel request submitted for approval.");
+    if (error) {
+      setMessage({ tone: "err", text: error });
+      return false;
+    }
+    // With nobody to approve it (the CEO), the trip is approved straight away.
+    const latest = getTravelRequests().find((t) => t.employeeId === actor.id);
+    const auto = latest?.status === "approved" && latest.decidedById === actor.id && latest.submittedOn === todayISO();
+    setMessage({ tone: "ok", text: auto ? "Trip approved automatically." : "Travel request submitted." });
+    notify(auto ? "Trip approved automatically." : "Travel request submitted for approval.");
     setPurpose("");
     setFromCity("");
     setToCity("");

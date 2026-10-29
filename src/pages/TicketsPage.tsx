@@ -55,10 +55,12 @@ function stampLabel(iso: string): string {
 }
 
 export function TicketsPage() {
-  const { employee, isManager, currentProjects } = usePortal();
+  const { employee, isManager: isManagerRole, currentProjects } = usePortal();
   const tickets = useTickets();
   const actor: TicketActor = { id: employee.id, fullName: employee.fullName, role: employee.role };
   const team = useMemo(() => taskTeamFor(employee.id), [employee.id]);
+  // No "Team" view for someone with nobody below them.
+  const isManager = isManagerRole && team.length > 0;
   const teamIds = useMemo(() => new Set(team.map((p) => p.id)), [team]);
   const [params, setParams] = useSearchParams();
   const selectedId = params.get("id") ?? "";

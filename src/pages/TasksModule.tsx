@@ -38,6 +38,7 @@ import {
   type TaskType,
 } from "../model.ts";
 import { DEMO_ACCOUNTS } from "../seed.ts";
+import { managementChain } from "../demoAccounts.ts";
 import { usePortal } from "../store.tsx";
 import { useTaskAutoMode } from "../data/taskAutoMode.ts";
 import { useTaskAutoReminders } from "../data/taskAutoReminders.ts";
@@ -79,7 +80,7 @@ export function TasksPage() {
   const {
     state,
     employee,
-    isManager,
+    isManager: isManagerRole,
     moveTask,
     reassignTask,
     addTaskPerson,
@@ -91,7 +92,11 @@ export function TasksPage() {
     canApproveLeaveFor,
     canDecideFor,
   } = usePortal();
+  // Team task tools only for people who actually have someone below them (not an admin with no reports).
+  const isManager = isManagerRole && taskTeamFor(employee.id).length > 0;
   const today = todayISO();
+  // The CEO has nobody above him, so task wording doesn't mention "your manager".
+  const hasManager = managementChain(employee.id).length > 0;
   const [autoMode, setAutoMode] = useTaskAutoMode(employee.id);
   useTaskAutoReminders();
   // Own tasks plus tasks of people below you in the reporting line (or anyone, for HR).
@@ -403,10 +408,10 @@ export function TasksPage() {
       accept: "Task accepted.",
       start: "Task started.",
       progress: "Progress updated.",
-      block: "Task marked blocked — manager notified.",
+      block: hasManager ? "Task marked blocked — manager notified." : "Task marked blocked.",
       unblock: "Blocker cleared.",
-      help: "Help request sent to your manager.",
-      review: "Submitted for review — manager notified.",
+      help: hasManager ? "Help request sent to your manager." : "Help request sent.",
+      review: hasManager ? "Submitted for review — manager notified." : "Submitted for review.",
       complete: "Task marked complete.",
     };
     setMessage({ tone: "ok", text: labels[action] });
@@ -1418,7 +1423,7 @@ export function TasksPage() {
                             />
                           </label>
                           <ActionButton className="btn" onAction={() => runAction("block", { blockedReason: blockReason, dependsOn: blockDepends })}>
-                            Save blocker & notify manager
+                            {hasManager ? "Save blocker & notify manager" : "Save blocker"}
                           </ActionButton>
                           <button type="button" className="btn-ghost" onClick={() => setShowBlockForm(false)}>
                             Cancel
@@ -1433,7 +1438,7 @@ export function TasksPage() {
                             <input
                               value={helpDraft}
                               onChange={(e) => setHelpDraft(e.target.value)}
-                              placeholder="What do you need from your manager?"
+                              placeholder={hasManager ? "What do you need from your manager?" : "What do you need?"}
                               style={{ flex: 1 }}
                             />
                             <ActionButton className="btn" onAction={() => runAction("help", {

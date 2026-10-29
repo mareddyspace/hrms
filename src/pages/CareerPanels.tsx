@@ -37,7 +37,7 @@ import {
 } from "../data/talentLocal.ts";
 import { rankRoles, type RoleMatch } from "../data/careerMatch.ts";
 import { openPostings } from "../features/talentplus/jobBoardStore.ts";
-import { accountHasNavAccess, type DemoAccount } from "../demoAccounts.ts";
+import { accountHasNavAccess, managementChain, type DemoAccount } from "../demoAccounts.ts";
 import { getPerson } from "../data/peopleLocal.ts";
 import { taskPersonById, taskTeamFor } from "../data/taskTeam.ts";
 import { todayISO } from "../model.ts";
@@ -98,13 +98,15 @@ function InterestsForm({ me, saved, mentor }: { me: TalentActor; saved: ReturnTy
   const toggle = (value: string, current: string[], set: (v: string[]) => void) =>
     set(current.includes(value) ? current.filter((v) => v !== value) : [...current, value]);
 
-  const ok = { tone: "ok" as const, text: "Career interests saved. Your manager and HR can see them." };
+  // The CEO has no manager: his interests are shared with HR only.
+  const sharedWith = managementChain(me.id).length > 0 ? "your manager and HR" : "HR";
+  const ok = { tone: "ok" as const, text: `Career interests saved. ${sharedWith === "HR" ? "HR" : "Your manager and HR"} can see them.` };
   const saveAct = useAction();
   async function submit() {
     const input = { targetRoleIds: roles, functions, openToRelocation: relocate, timeframe, note };
     const error = API_ENABLED ? await apiSaveCareerProfile(input) : saveCareerInterests(me, input, TARGET_ROLES.map((r) => r.id));
     setNotice(error ? { tone: "err", text: error } : ok);
-    if (!error) notify("Career interests saved and shared with your manager and HR.");
+    if (!error) notify(`Career interests saved and shared with ${sharedWith}.`);
     return error;
   }
 
@@ -113,7 +115,7 @@ function InterestsForm({ me, saved, mentor }: { me: TalentActor; saved: ReturnTy
       <form className="stack" onSubmit={saveAct.submit(submit)}>
         <Banner message={notice} />
         <p className="muted">
-          Visible to you, your manager and HR. {saved ? `Last updated ${saved.updatedOn}.` : "Not shared yet."}
+          Visible to you{sharedWith === "HR" ? " and HR" : ", your manager and HR"}. {saved ? `Last updated ${saved.updatedOn}.` : "Not shared yet."}
           {mentor ? ` Mentor: ${mentor}.` : ""}
         </p>
         <fieldset className="stack">
@@ -285,7 +287,7 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
             {m.gaps.length === 0 ? (
               <EmptyState
                 title="You meet every skill requirement"
-                description={m.role.postingId ? "This job is open now." : "Talk to your manager about next steps."}
+                description={m.role.postingId ? "This job is open now." : managementChain(me.id).length > 0 ? "Talk to your manager about next steps." : "Talk to HR about next steps."}
               />
             ) : (
               <div className="stack">
@@ -356,7 +358,7 @@ export function RoleMatchesPanel({ me }: { me: DemoAccount }) {
                   </div>
                 )}
                 <p className="muted">
-                  {review ? "Plan items show under Performance → Development plan." : "No open review cycle — enroll directly or ask your manager to add a plan item."}{" "}
+                  {review ? "Plan items show under Performance → Development plan." : managementChain(me.id).length > 0 ? "No open review cycle — enroll directly or ask your manager to add a plan item." : "No open review cycle — enroll directly."}{" "}
                   {m.role.postingId && seesJobs && <Link to="/internal-jobs">See the job</Link>}
                 </p>
               </div>

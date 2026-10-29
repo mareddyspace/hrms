@@ -340,6 +340,8 @@ export interface CorrectionInput {
   context?: AttendanceDayContext;
   /** Whether the day already has a check-in. False: no attendance that day, so both times are needed. */
   dayHasCheckIn?: boolean;
+  /** Top of the organization (nobody above): the correction is approved automatically. */
+  autoApprove?: boolean;
 }
 
 /** Sends the correction to the API in backend mode (after the same checks); same as submitCorrection otherwise. */
@@ -406,6 +408,16 @@ function correctionInputError(input: CorrectionInput): string | null {
 }
 
 export function submitCorrection(input: CorrectionInput): string | null {
+  if (input.autoApprove && !input.managerId) {
+    // Nobody above this person: record it and approve it straight away.
+    const invalidTop = correctionInputError({ ...input, managerId: input.employeeId });
+    if (invalidTop) return invalidTop;
+    const err = submitCorrection({ ...input, managerId: input.employeeId, autoApprove: false });
+    if (err) return err;
+    const row = getAttendanceState().corrections.find((c) => c.employeeId === input.employeeId && c.date === input.date && c.status === "Pending");
+    if (row) applyCorrectionDecision(row.id, { id: input.employeeId, fullName: input.employeeName }, "Approved", "Approved automatically.");
+    return null;
+  }
   const invalid = correctionInputError(input);
   if (invalid) return invalid;
   const reason = input.reason.trim();
@@ -445,7 +457,7 @@ export function submitCorrection(input: CorrectionInput): string | null {
       ],
     },
   ]);
-  pushPersonTaskAlert({
+  if (input.managerId !== input.employeeId) pushPersonTaskAlert({
     recipientId: input.managerId,
     title: "Attendance correction",
     body: `${input.employeeName} asked to correct ${formatShortDate(input.date)}.`,
@@ -472,6 +484,19 @@ export function decideCorrection(
     isHrReviewer(approver.role);
   if (!inLine) return "Only someone above this person in their reporting line, or HR, can review this correction.";
   if (row.status !== "Pending") return "This request was already decided.";
+  applyCorrectionDecision(id, approver, status, note);
+  return null;
+}
+
+/** Saves a decision (after the checks above) and fixes the day when approved. */
+function applyCorrectionDecision(
+  id: string,
+  approver: { id: string; fullName?: string },
+  status: Extract<CorrectionStatus, "Approved" | "Rejected">,
+  note?: string,
+): void {
+  const row = getAttendanceState().corrections.find((c) => c.id === id);
+  if (!row) return;
   const before = sessionFor(getAttendanceState(), row.employeeId, row.date);
   const beforeIn = punchHm(before?.checkIn);
   const beforeOut = punchHm(before?.checkOut);
@@ -520,13 +545,13 @@ export function decideCorrection(
       ],
     },
   ]);
+  if (approver.id === row.employeeId) return; // approved automatically — no alert to oneself
   pushPersonTaskAlert({
     recipientId: row.employeeId,
     title: `Correction ${status.toLowerCase()}`,
     body: `${approver.fullName ?? "Your reviewer"} ${status.toLowerCase()} your correction for ${formatShortDate(row.date)}.${note?.trim() ? ` Note: ${note.trim()}` : ""}`,
     href: "/attendance",
   });
-  return null;
 }
 
 export function sessionHours(session: TodaySession): {

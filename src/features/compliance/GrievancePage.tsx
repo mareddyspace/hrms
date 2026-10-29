@@ -42,6 +42,7 @@ import { PersonPicker, toneFor } from "./ComplianceUi.tsx";
 import { useComplianceActor } from "./useActor.ts";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../../data/requestTemplates.ts";
 import { API_ENABLED } from "../../api/syncOps.ts";
+import { managementChain } from "../../demoAccounts.ts";
 import "./compliance.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -227,7 +228,7 @@ function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (cod
         <p className="muted">
           {anonymous ? "Your name is never shown to anyone handling the case. " : ""}
           {category === "Harassment/POSH" ? `Handled by the Internal Committee within ${POSH_SLA_DAYS} days.` : "Handled confidentially by HR."}
-          {" "}Your manager cannot see cases.
+          {managementChain(actor.id).length > 0 ? " Your manager cannot see cases." : ""}
         </p>
         <div>
           <ActionButton

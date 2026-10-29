@@ -16,6 +16,7 @@ import {
 import { TIMEZ_COUNTRIES, formatShortDate, todayISO } from "../../model.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { isHr } from "./shared.ts";
+import { hasReports } from "../../data/delegations.ts";
 import { useActor } from "./useActor.ts";
 import { API_ENABLED } from "../../api/syncOps.ts";
 import {
@@ -71,9 +72,11 @@ export function EngagementSurveysPage() {
   const state = useSyncExternalStore(subscribeSurveys, getSurveysState);
   const hr = isHr(actor.role);
   const [tab, setTab] = useState("open");
+  // Team results only for HR and people who lead others.
+  const leads = useMemo(() => hasReports(actor.id), [actor.id]);
   const tabs = [
     { id: "open", label: "Open surveys" },
-    { id: "results", label: hr ? "Results" : "Team results" },
+    ...(hr || leads ? [{ id: "results", label: hr ? "Results" : "Team results" }] : []),
     ...(hr ? [{ id: "manage", label: "Manage" }] : []),
   ];
 
@@ -81,7 +84,7 @@ export function EngagementSurveysPage() {
     <Page title="Engagement surveys">
       <Tabs tabs={tabs} value={tabs.some((t) => t.id === tab) ? tab : "open"} onChange={setTab} />
       {tab === "open" && <OpenSurveys surveys={state.surveys} />}
-      {tab === "results" && (API_ENABLED ? <ApiResults surveys={state.surveys} results={state.apiResults ?? {}} /> : <Results surveys={state.surveys} />)}
+      {tab === "results" && (hr || leads) && (API_ENABLED ? <ApiResults surveys={state.surveys} results={state.apiResults ?? {}} /> : <Results surveys={state.surveys} />)}
       {tab === "manage" && hr && <Manage surveys={state.surveys} />}
     </Page>
   );

@@ -26,6 +26,7 @@ import {
   type Stage,
 } from "./jobBoardStore.ts";
 import { MaskedValue } from "../../components/MaskedValue.tsx";
+import { managementChain } from "../../demoAccounts.ts";
 import "./talentplus.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -137,10 +138,13 @@ function ApplyDialog({ req, onClose }: { req: Requisition; onClose: (message?: s
   const actor = useActor();
   const [note, setNote] = useState("");
   const [msg, setMsg] = useState<Msg>(null);
+  // Nobody above the CEO to tell.
+  const hasManager = managementChain(actor.id).length > 0;
+  const told = hasManager ? " Your manager has been notified." : "";
   function submit() {
     const error = applyInternally(actor, req.id, note);
     if (error) setMsg({ tone: "err", text: error });
-    else onClose(`Applied for ${req.title}. Your manager has been notified.`);
+    else onClose(`Applied for ${req.title}.${told}`);
     return error;
   }
   return (
@@ -153,13 +157,13 @@ function ApplyDialog({ req, onClose }: { req: Requisition; onClose: (message?: s
           <button type="button" className="btn btn-ghost" onClick={() => onClose()}>
             Cancel
           </button>
-          <ActionButton className="btn" onAction={submit} success={`Application for ${req.title} sent. Your manager has been notified.`}>
+          <ActionButton className="btn" onAction={submit} success={`Application for ${req.title} sent.${told}`}>
             Submit application
           </ActionButton>
         </>
       }
     >
-      <p className="note">Your manager will be told that you applied.</p>
+      {hasManager && <p className="note">Your manager will be told that you applied.</p>}
       <Field label="Why are you interested? (optional)">
         <textarea rows={4} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
