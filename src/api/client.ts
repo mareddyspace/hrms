@@ -165,7 +165,7 @@ function messageFrom(body: unknown, status: number): string {
     const msg = (first.msg ?? "Check the details and try again.").replace(/^Value error, /, "");
     return field && typeof field === "string" ? `${field}: ${msg}` : msg;
   }
-  if (status === 0) return "Can't reach the server. Try again.";
+  if (status === 0) return "The server is starting up. Try again in about 30 seconds.";
   if (status >= 500) return "Something went wrong on the server. Try again.";
   return "That didn't work. Try again.";
 }

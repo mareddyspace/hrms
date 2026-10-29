@@ -317,7 +317,7 @@ async function uploadFile(path: string, file: File, query: Record<string, string
     }
   } catch (e) {
     if (e instanceof ApiError) throw e;
-    throw new ApiError(0, "Can't reach the server. Try again.");
+    throw new ApiError(0, "The server is starting up. Try again in about 30 seconds.");
   }
   if (!res.ok) {
     let message = res.status === 413 ? "The file is too large." : "That didn't work. Try again.";

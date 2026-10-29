@@ -793,7 +793,7 @@ async function rawFetch(path: string, init: RequestInit): Promise<Response> {
     }
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    throw new ApiError(0, "Can't reach the server. Try again.");
+    throw new ApiError(0, "The server is starting up. Try again in about 30 seconds.");
   }
   if (!res.ok) {
     let message = res.status === 413 ? "The file is larger than 5 MB." : "That didn't work. Try again.";
