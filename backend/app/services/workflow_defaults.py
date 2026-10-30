@@ -13,7 +13,24 @@ from sqlalchemy.orm import Session
 from app.models import ApprovalInstance
 from app.services import approvals as engine
 
+# The expense finance step's min_amount is in Indian rupees (the default 10000). Claims in other countries are compared
+# in their own currency against the equivalent local threshold below (no FX table in the app), so a claim of 450 SAR
+# or 125 USD reaches Finance just as 10000 INR does. Countries not listed use the India value.
 EXPENSE_FINANCE_THRESHOLD = 10000
+EXPENSE_FINANCE_THRESHOLDS: dict[str, float] = {
+    "IN": 10000, "US": 125, "GB": 100, "AU": 175, "CA": 150, "AE": 450, "SA": 450, "DE": 110,
+}
+
+
+def expense_finance_threshold(country_code: str | None) -> float:
+    """The finance-review threshold for a claim, in the claimant's own currency."""
+    return EXPENSE_FINANCE_THRESHOLDS.get((country_code or "").upper(), EXPENSE_FINANCE_THRESHOLD)
+
+
+def expense_compare_amount(amount: float, country_code: str | None) -> float:
+    """A claim amount in the workflow threshold's terms (India rupees): amount x (10000 / local threshold)."""
+    return amount * EXPENSE_FINANCE_THRESHOLD / expense_finance_threshold(country_code)
+
 
 DEFAULT_WORKFLOWS: dict[str, list[dict[str, Any]]] = {
     "expense": [

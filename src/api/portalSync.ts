@@ -3,7 +3,7 @@
  * the directory into peopleLocal, leave requests into PortalState.leaveRequests, notifications into the
  * notification centre.
  */
-import { setApiPeople } from "../data/peopleLocal.ts";
+import { getPerson, setApiPeople } from "../data/peopleLocal.ts";
 import type { EmploymentStatus, PersonRecord, WorkArrangement } from "../data/peopleData.ts";
 import { syncApiNotifications } from "../data/collabLocal.ts";
 import { TIMEZ_COUNTRIES } from "../model.ts";
@@ -200,7 +200,11 @@ export async function loadApiLeave(
       canDecide:
         r.status === "pending" &&
         r.employee_id !== user.id &&
-        (isHr || (r.approval ? Boolean(r.approval.waiting_on_me) : teamIds.has(r.id))),
+        (isHr ||
+          (r.approval
+            ? Boolean(r.approval.waiting_on_me)
+            : // Outside a chain only the line manager decides (the team view also lists skip-level reports).
+              teamIds.has(r.id) && (getPerson(r.employee_id)?.managerId ?? user.id) === user.id)),
     });
   }
   return {

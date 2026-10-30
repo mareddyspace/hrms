@@ -92,7 +92,7 @@ function statusTone(status: ExitStatus): "ok" | "warn" | "danger" | "info" | "ne
 
 function statusLabel(row: ExitCase): string {
   if (row.status === "Accepted") return row.lastWorkingDay < todayISO() ? "Clearing" : "Notice period";
-  if (row.status === "Completed") return "Exited";
+  if (row.status === "Completed") return row.api?.clearancePending ? "Exited · clearance pending" : "Exited";
   if (row.status === "Submitted" || row.status === "Manager approved") return "Waiting";
   return row.status;
 }

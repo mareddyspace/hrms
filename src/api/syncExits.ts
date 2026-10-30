@@ -40,6 +40,7 @@ interface ExitCaseOut {
   can_withdraw: boolean;
   clearance: { key: string; label: string; owner: string; done: boolean; done_by: string | null; done_on: string | null; can_tick: boolean }[];
   interview_submitted: boolean;
+  clearance_pending?: boolean;
   interview: { rating: number; reasons: string[]; would_return: string; comments: string; submitted_on: string } | null;
   settlement: { status: string; unused_leave_days: number; frozen: boolean; updated_by: string | null; updated_on: string | null } | null;
   completed_at: string | null;
@@ -131,6 +132,7 @@ function toCase(c: ExitCaseOut, scopes: Set<string>): ExitCase {
       canWithdraw: c.can_withdraw,
       canAddRetention: Boolean(c.can_add_retention),
       interviewSubmitted: c.interview_submitted,
+      clearancePending: Boolean(c.clearance_pending),
       ...(c.settlement ? { unusedLeaveDays: c.settlement.unused_leave_days, settlementFrozen: c.settlement.frozen } : {}),
       inTeam: scopes.has("team"),
       inAll: scopes.has("all"),

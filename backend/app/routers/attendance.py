@@ -260,7 +260,7 @@ def decide_correction(
         chain.decide(db, user, instance, emp, body.decision, body.note, client_ip(request))
         db.commit()
         return _correction_out_one(db, user.employee_id, item, emp.full_name)
-    if not can_decide(db, user, emp):
+    if not can_decide(db, user, emp, "attendance_correction"):
         raise HTTPException(403, "You can't decide this request.")
     if item.status != "pending":
         raise HTTPException(409, f"This request is already {item.status}.")

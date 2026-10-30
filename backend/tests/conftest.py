@@ -43,6 +43,15 @@ def database():
 
 
 @pytest.fixture(autouse=True)
+def fresh_login_throttle():
+    """Every test client signs in from the same address; start each test with a clean per-IP sign-in throttle."""
+    from app.services import login_throttle
+
+    login_throttle.reset()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def any_timesheet_day(monkeypatch):
     """Most tests log time on fixed dates; test_timesheet_today_only switches the today-only rule back on and
     the attendance tests switch the check-out-before-submit rule back on."""

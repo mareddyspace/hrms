@@ -1175,8 +1175,8 @@ export function PayrollPage() {
 
   if (API_ENABLED) {
     return (
-      <Page title="Payroll">
-        <Banner message={{ tone: "warn", text: "Payroll is run by external providers. This tab shows integration status only." }} />
+      <Page title="Payroll providers">
+        <Banner message={{ tone: "warn", text: "Provider integration status. Monthly runs are on the Payroll page." }} />
         <FilterBar>
           <RegionalFilter />
         </FilterBar>
@@ -1193,7 +1193,7 @@ export function PayrollPage() {
   }
 
   return (
-    <Page title="Payroll">
+    <Page title="Payroll providers">
       <Banner message={{ tone: "warn", text: "Payroll is run by external providers." }} />
       <FilterBar>
         <RegionalFilter />

@@ -211,9 +211,10 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
       note: "",
     },
     workingTime: {
-      weekStart: "Sunday",
+      // The UAE moved to a Monday–Friday week (Saturday–Sunday weekend) in 2022.
+      weekStart: "Monday",
       standardHours: "09:00–18:00 GST",
-      workDays: "Sun–Thu",
+      workDays: "Mon–Fri",
       note: "",
     },
     benefits: [

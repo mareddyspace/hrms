@@ -21,6 +21,7 @@ import { isWaitingOn } from "./expenseFlow.ts";
 import { canDecideTravel, getTravelRequests } from "./travelStore.ts";
 import { API_ENABLED } from "../api/client.ts";
 import { claimsMirror } from "../api/syncTimeExpenses.ts";
+import { apiLeaveMeta } from "../api/portalSync.ts";
 import { pendingMirror } from "../api/syncTimeApprovals.ts";
 import { getShiftState } from "../features/workforce/shiftsStore.ts";
 import { waitingDays } from "./timesheetDays.ts";
@@ -275,7 +276,7 @@ export function dayStatus(state: PortalState, personId: string, countryCode: str
   if (leave) return leave.code === "wfh" || leave.code === "emergency_wfh" ? "WFH" : "On leave";
   if (holidaysForCountry(state.holidays, countryCode as CountryCode).some((h) => h.date === today)) return "Holiday";
   const dow = parseISODate(today).getDay();
-  const weekendFriSat = countryCode === "AE" || countryCode === "SA";
+  const weekendFriSat = countryCode === "SA"; // the UAE moved to a Saturday–Sunday weekend in 2022
   if (weekendFriSat ? dow === 5 || dow === 6 : dow === 0 || dow === 6) return "Weekly off";
   return "Working";
 }
@@ -309,7 +310,8 @@ export function waitingItems(
     for (const x of list) if (open(x.status) && mine(x.employeeId)) items.push({ id: x.id, employeeId: x.employeeId, kind, detail: detail(x as never), date: date(x as never) });
   };
   add(state.backdatedPermissions, "Past-date leave", () => "Permission request", (x: { from?: string }) => x.from ?? "");
-  add(state.leaveRequests, "Leave", (x: { code: string; employeeId: string }) => leaveNameFor(state.leavePolicies, x.code, x.employeeId) ?? x.code.toUpperCase(), (x: { from: string }) => x.from);
+  // Backend mode: the server says who decides (the line manager or the chain step), not anyone above the line.
+  add(API_ENABLED ? state.leaveRequests.filter((r) => apiLeaveMeta.get(r.id)?.canDecide) : state.leaveRequests, "Leave", (x: { code: string; employeeId: string }) => leaveNameFor(state.leavePolicies, x.code, x.employeeId) ?? x.code.toUpperCase(), (x: { from: string }) => x.from);
   add(state.encashments, "Encashment", (x: { days: number }) => `${x.days} days`, (x: { appliedOn: string }) => x.appliedOn);
   // Expense claims and travel follow their approval steps, like the Approvals count.
   for (const x of state.expenses) {

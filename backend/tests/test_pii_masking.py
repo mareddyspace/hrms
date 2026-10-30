@@ -77,12 +77,15 @@ def test_owner_reveals_without_audit(client, babu, babu_raw):
     assert len(_reveal_audits("emp-mahesh")) == before
 
 
-def test_hr_and_admin_reveal_is_audited_without_value(client, farhan, babu_raw):
+def test_hr_reveal_is_audited_without_value(client, farhan, babu_raw):
     before = len(_reveal_audits("emp-mahesh"))
     res = client.get(f"{P}/emp-mahesh/reveal", headers=farhan, params={"field": "mobile"})
     assert res.status_code == 200 and res.json()["value"] == babu_raw["mobile"]
+    # The platform admin is a system administrator, not HR: no PII reveal (src/data/rbac.ts canViewSensitivePii).
     admin = token_for("demo-admin", "admin")
-    assert client.get(f"{P}/emp-mahesh/reveal", headers=admin, params={"field": "date_of_birth"}).status_code == 200
+    assert client.get(f"{P}/emp-mahesh/reveal", headers=admin, params={"field": "date_of_birth"}).status_code == 403
+    res = client.get(f"{P}/emp-mahesh/reveal", headers=farhan, params={"field": "date_of_birth"})
+    assert res.status_code == 200
     rows = _reveal_audits("emp-mahesh")
     assert len(rows) == before + 2
     last = rows[-2]
@@ -109,7 +112,7 @@ def test_hr_outside_country_scope_cannot_reveal():
 
     india, uk = SimpleNamespace(id="emp-in", country_code="IN"), SimpleNamespace(id="emp-gb", country_code="GB")
     assert can_reveal_employee(user("hr_admin", ["IN"]), india) and not can_reveal_employee(user("hr_admin", ["IN"]), uk)
-    assert can_reveal_employee(user("admin"), uk) and not can_reveal_employee(user("executive"), uk)
+    assert not can_reveal_employee(user("admin"), uk) and not can_reveal_employee(user("executive"), uk)
     assert can_reveal_employee(user("executive", self_id="emp-gb"), uk)  # their own record
 
 

@@ -171,10 +171,11 @@ def _team_block(db: Session, user: CurrentUser, me: Employee) -> str | None:
 
 
 def _org_block(db: Session, user: CurrentUser) -> str | None:
-    if user.account.role not in ORG_ROLES or not user.scope.is_global:
+    if user.account.role not in ORG_ROLES or not user.scope.org_wide:
         return None
     today = local_today(user.employee) if user.employee else date.today()
-    active = and_(user.scope.employee_filter(), func.lower(Employee.employment_status).not_in(_LEFT_STATUSES),
+    # Counts only, so admin / executive see the whole organisation (Scope.org_filter).
+    active = and_(user.scope.org_filter(), func.lower(Employee.employment_status).not_in(_LEFT_STATUSES),
                   started_clause(today))  # pre-boarding joiners aren't headcount yet
     total = db.scalar(select(func.count()).select_from(Employee).where(active)) or 0
     by_country = db.execute(

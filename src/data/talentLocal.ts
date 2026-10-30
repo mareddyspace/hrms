@@ -1836,6 +1836,11 @@ export function canWriteManagerReview(actor: TalentActor, employeeId: string): b
   return isAboveInChain(actor.id, employeeId);
 }
 
+/** Manager assessment and rating: the direct manager only (skip-level managers and HR may view, not write). */
+export function canAssessAsManager(actor: TalentActor, employeeId: string): boolean {
+  return employeeId !== actor.id && managementChain(employeeId, DEMO_ACCOUNTS)[0]?.id === actor.id;
+}
+
 /** What this viewer may see of the rating: the employee only once it is released. */
 export function visibleRating(actor: TalentActor, review: PerfReview): string | undefined {
   if (review.employeeId === actor.id) return review.released ? review.rating : undefined;
@@ -1870,7 +1875,7 @@ export function saveManagerAssessment(actor: TalentActor, id: string, text: stri
   return guarded((s) => {
     const row = reviewFor(s, id);
     if (typeof row === "string") return row;
-    if (!canWriteManagerReview(actor, row.employeeId)) return "Only someone above the employee in their reporting line can do this.";
+    if (!canAssessAsManager(actor, row.employeeId)) return "Only the employee's direct manager can write the manager assessment.";
     if (cycleStatusOf(s, row.cycleId) !== "Active") return "Manager assessments are only open while the cycle is active.";
     if (row.managerStatus === "Submitted") return "The manager assessment is already submitted.";
     const clean = text.trim();
@@ -1898,7 +1903,7 @@ export function setRating(actor: TalentActor, id: string, rating: string | undef
   return guarded((s) => {
     const row = reviewFor(s, id);
     if (typeof row === "string") return row;
-    if (!canWriteManagerReview(actor, row.employeeId)) return "Only someone above the employee in their reporting line can rate.";
+    if (!canAssessAsManager(actor, row.employeeId)) return "Only the employee's direct manager can propose a rating.";
     const status = cycleStatusOf(s, row.cycleId);
     if (status !== "Active" && status !== "Calibration") return status === "Closed" ? "This cycle is closed." : "Ratings open once the cycle starts.";
     if (row.released) return "This rating is already released.";

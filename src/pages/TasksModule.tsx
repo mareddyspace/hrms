@@ -146,6 +146,8 @@ export function TasksPage() {
   const [blockDepends, setBlockDepends] = useState("");
   const [showBlockForm, setShowBlockForm] = useState(false);
   const [showHelpForm, setShowHelpForm] = useState(false);
+  const [showDeclineForm, setShowDeclineForm] = useState(false);
+  const [declineReason, setDeclineReason] = useState("");
   const [commentDraft, setCommentDraft] = useState("");
   const [helpDraft, setHelpDraft] = useState("");
   const emptyDraft = () => ({
@@ -397,7 +399,7 @@ export function TasksPage() {
   }
 
   function runAction(
-    action: "accept" | "start" | "progress" | "block" | "unblock" | "help" | "review" | "complete",
+    action: "accept" | "decline" | "start" | "progress" | "block" | "unblock" | "help" | "review" | "complete",
     payload?: { progressPct?: number; blockedReason?: string; dependsOn?: string; comment?: string },
   ) {
     if (!selected) return false;
@@ -408,6 +410,7 @@ export function TasksPage() {
     }
     const labels: Record<typeof action, string> = {
       accept: "Task accepted.",
+      decline: hasManager ? "Task declined — manager notified." : "Task declined.",
       start: "Task started.",
       progress: "Progress updated.",
       block: hasManager ? "Task marked blocked — manager notified." : "Task marked blocked.",
@@ -1299,6 +1302,34 @@ export function TasksPage() {
                               Accept task
                             </ActionButton>
                           )}
+                        {selectedIsOwn &&
+                          selected.status === "open" &&
+                          !selected.accepted &&
+                          !selectedBlocked &&
+                          !selected.activity?.some((a) => a.action === "Declined") &&
+                          (showDeclineForm ? (
+                            <>
+                              <label className="field" style={{ minWidth: 220 }}>
+                                Reason
+                                <input value={declineReason} onChange={(e) => setDeclineReason(e.target.value)} />
+                              </label>
+                              <ActionButton
+                                className="btn-ghost"
+                                onAction={() => {
+                                  if (!runAction("decline", { comment: declineReason })) return false;
+                                  setShowDeclineForm(false);
+                                  setDeclineReason("");
+                                  return true;
+                                }}
+                              >
+                                Send decline
+                              </ActionButton>
+                            </>
+                          ) : (
+                            <button type="button" className="btn-ghost" onClick={() => setShowDeclineForm(true)}>
+                              Decline
+                            </button>
+                          ))}
                         {canActOnSelected &&
                           selected.status === "open" &&
                           selected.accepted &&

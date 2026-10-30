@@ -4,6 +4,7 @@ import { decideCorrectionAsync, getAttendanceState, subscribeAttendance } from "
 import { API_ENABLED } from "../api/client.ts";
 import { apiDecideInstance, pendingMirror, reloadTimeArea, type PendingItemOut } from "../api/syncTimeApprovals.ts";
 import { claimsMirror } from "../api/syncTimeExpenses.ts";
+import { apiLeaveMeta } from "../api/portalSync.ts";
 import { DEMO_ACCOUNTS, managementChain } from "../demoAccounts.ts";
 import {
   compOffCandidates,
@@ -43,10 +44,10 @@ import { currentStepOf, isWaitingOn, stepText, waitingApproverIds } from "../dat
 import { decideTravel, getTravelRequests, subscribeTravel, withdrawTravel } from "../data/travelStore.ts";
 import { cashViews, cashWaitingOn, decideCash, getCashSnapshot, subscribeCash, withdrawCash } from "../features/payrequests/cashStore.ts";
 import { decideSoftware, endSoftware, getSoftwareSnapshot, softwareViews, softwareWaitingOn, subscribeSoftware } from "../features/payrequests/softwareStore.ts";
-import { getTalentState, hiringManagerIdOf, requisitionMoves, requisitionWaitingFor, setRequisitionApproval, subscribeTalent, talentAction } from "../data/talentLocal.ts";
+import { getTalentState, hiringManagerIdOf, requisitionApprovers, requisitionMoves, requisitionWaitingFor, setRequisitionApproval, subscribeTalent, talentAction } from "../data/talentLocal.ts";
 
 /** Which delegation scope (§25) a request kind falls under. */
-function scopeOf(kind: string): DelegationScope {
+export function scopeOf(kind: string): DelegationScope {
   switch (kind) {
     case "Leave":
     case "Backdated leave permission":
@@ -90,6 +91,8 @@ type RequestItem = {
   canAct?: boolean;
   /** Multi-step requests: who it's with now, e.g. "Finance approval · step 2 of 2". */
   withText?: string;
+  /** Multi-step requests: who decides the open step (Workflows' Remind goes to them). */
+  approverIds?: string[];
 };
 
 const STATUS_TONE: Record<string, "ok" | "warn" | "danger" | "neutral" | "info"> = {
@@ -128,7 +131,8 @@ export function countWaitingOnMe(
   const mine = (employeeId: string, scope: DelegationScope = "others") => employeeId !== myId && canApprove(employeeId, scope);
   const lists: [DelegationScope, { employeeId: string; status: string }[]][] = [
     ["leave", state.backdatedPermissions],
-    ["leave", state.leaveRequests],
+    // Backend mode: the server says who decides each leave request (line manager or the chain step).
+    ["leave", API_ENABLED ? state.leaveRequests.filter((r) => apiLeaveMeta.get(r.id)?.canDecide) : state.leaveRequests],
     ["leave", state.encashments],
     ["expenses", state.reimbursements],
     // Cash advances and software are counted from their own stores (state.cashAdvances / softwareRequests are
@@ -174,8 +178,14 @@ export function countWaitingOnMe(
   return requests + stepped + timesheets + proofs + corrections + swaps + reqs + selfService;
 }
 
-/** Approvals inbox built from real requests: decide what's waiting on you, track what you've asked for. */
-export function ApprovalsCenterPage() {
+/** One open request in the inbox, as Workflows lists it. */
+export type ApprovalInboxItem = RequestItem;
+
+/**
+ * Every request the signed-in person can see, with the same decide actions the Approvals page uses —
+ * shared with Workflows & approvals so both pages decide the same way.
+ */
+export function useApprovalInbox() {
   const portal = usePortal();
   const { state, employee, demoAccounts, leaveTable, canDecideFor, canVerifyProofs } = portal;
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
@@ -196,15 +206,6 @@ export function ApprovalsCenterPage() {
   noteLeaves(state.leaveRequests);
   const actor = { id: employee.id, fullName: employee.fullName, role: portal.demoProfile.role };
   const rosterCtx = { leaves: state.leaveRequests, holidays: state.holidays };
-  // Links like /approvals?tab=mine open straight on "My requests".
-  const [searchParams] = useSearchParams();
-  const linkedTab = searchParams.get("tab");
-  const [tab, setTab] = useState<"waiting" | "mine" | "delegate">(
-    linkedTab === "mine" || linkedTab === "delegate" ? linkedTab : "waiting",
-  );
-  const canDelegate = useMemo(() => hasReports(employee.id), [employee.id, people]);
-  const [notes, setNotes] = useState<Record<string, string>>({});
-  const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   const nameOf = (id: string) =>
     demoAccounts.find((a) => a.id === id)?.fullName ??
@@ -288,7 +289,7 @@ export function ApprovalsCenterPage() {
         decided: x,
         decide: (d, note) => portal.setExpenseStatus(x.id, d, note),
         withdraw: () => portal.setExpenseStatus(x.id, "withdrawn"),
-        ...(x.steps?.length || API_ENABLED ? { canAct: portal.canDecideExpense(x), withText: withTextFor(x) } : {}),
+        ...(x.steps?.length || API_ENABLED ? { canAct: portal.canDecideExpense(x), withText: withTextFor(x), approverIds: waitingApproverIds(x) } : {}),
       });
     }
     for (const t of travel) {
@@ -308,6 +309,7 @@ export function ApprovalsCenterPage() {
         withdraw: () => withdrawTravel(actorRef, t.id),
         canAct: API_ENABLED ? t.status === "pending" && claims.toDecide.has(t.id) : isWaitingOn(t, employee.id, (id) => canDecideFor(id, "expenses")),
         withText: withTextFor(t),
+        approverIds: waitingApproverIds(t),
       });
     }
     // Requisitions: each approval step's approvers decide here too (finance has no Recruiting page).
@@ -328,6 +330,8 @@ export function ApprovalsCenterPage() {
           ),
         canAct: requisitionMoves(actor, r).includes("Approved"),
         withText: requisitionWaitingFor(r) || undefined,
+        // The open step's approvers (so "Waiting with" and Remind go to HR after the skip-level step, not the manager).
+        approverIds: requisitionApprovers(r).map((a) => a.id),
       });
     }
     for (const x of state.reimbursements) {
@@ -610,7 +614,6 @@ export function ApprovalsCenterPage() {
     const d = delegatedAuthority(employee.id, item.employeeId, scopeOf(item.kind));
     return d ? { delegatedFrom: d.delegatorId } : {};
   };
-  const myDelegation = activeDelegationFor(employee.id, today);
   const awayToday = (personId: string) =>
     state.leaveRequests.some(
       (r) => r.employeeId === personId && r.status === "approved" && r.code !== "wfh" && r.code !== "emergency_wfh" && r.from <= today && today <= r.to,
@@ -622,6 +625,23 @@ export function ApprovalsCenterPage() {
     const available = chain.find((m) => !awayToday(m.id));
     return { first, available };
   };
+  return { portal, people, items, waiting, mine, nameOf, ageOf, holdOf, isEscalated, currentApprover, today };
+}
+
+/** Approvals inbox built from real requests: decide what's waiting on you, track what you've asked for. */
+export function ApprovalsCenterPage() {
+  const { portal, people, waiting, mine, nameOf, ageOf, holdOf, isEscalated, currentApprover, today } = useApprovalInbox();
+  const { employee } = portal;
+  // Links like /approvals?tab=mine open straight on "My requests".
+  const [searchParams] = useSearchParams();
+  const linkedTab = searchParams.get("tab");
+  const [tab, setTab] = useState<"waiting" | "mine" | "delegate">(
+    linkedTab === "mine" || linkedTab === "delegate" ? linkedTab : "waiting",
+  );
+  const canDelegate = useMemo(() => hasReports(employee.id), [employee.id, people]);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const myDelegation = activeDelegationFor(employee.id, today);
 
   async function run(action: () => string | null | Promise<string | null>, success: string, key?: string) {
     const error = await action();

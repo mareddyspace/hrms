@@ -50,7 +50,11 @@ def test_excel_fields_and_company_are_returned(client, babu, farhan):
     assert basic["view"] == "basic" and basic["company"] == "TimeZ"
 
 
-def test_owner_updates_own_profile_masked_and_audited(client, babu):
+def test_owner_updates_own_profile_masked_and_audited(client, babu, monkeypatch):
+    from app.config import get_settings
+    from app.services import profile_otp
+    monkeypatch.setattr(get_settings(), "otp_dev_echo", True)
+    monkeypatch.setattr(profile_otp, "RESEND_SECONDS", 0)
     body = {
         "preferred_name": "Babu",
         "address_line": "12 MG Road, Flat 4B",
@@ -66,7 +70,9 @@ def test_owner_updates_own_profile_masked_and_audited(client, babu):
         "experience": [{"employer": "Acme", "title": "Engineer", "from": "2012-06", "to": "2016-03"}],
         "career_goals": "Lead a platform team.",
     }
-    res = client.patch(f"{P}/me", headers=babu, json=body)
+    assert client.patch(f"{P}/me", headers=babu, json=body).status_code == 400  # personal details need a code
+    code = client.post(f"{P}/me/otp", headers=babu, json={"changes": body}).json()["dev_code"]
+    res = client.patch(f"{P}/me", headers=babu, json={**body, "otp_code": code})
     assert res.status_code == 200, res.text
     out = res.json()
     assert out["address_line"] == DOT * 4 and out["address_postcode"] == DOT * 4
@@ -120,8 +126,9 @@ def test_hr_edits_in_scope_and_others_cannot(client, babu, ram, farhan, alex, jo
     entry = _audits("employee", "TZ0001")[-1]
     assert entry.actor_id == "demo-hr-admin" and entry.action == "updated profile"
     assert "1991-05-06" not in str(entry.changes) and entry.changes["after"]["work_arrangement"] == "Hybrid"
-    # Admin may edit too; HR may not edit themselves through this route.
-    assert client.patch(f"{P}/TZ0001", headers=alex, json={"work_arrangement": "Office"}).status_code == 200
+    # The platform admin is not HR and may not edit people's records (src/data/rbac.ts canManagePeopleRecords);
+    # HR may not edit themselves through this route.
+    assert client.patch(f"{P}/TZ0001", headers=alex, json={"work_arrangement": "Office"}).status_code in (403, 404)
     assert client.patch(f"{P}/demo-hr-admin", headers=farhan, json={"nationality": "Indian"}).status_code == 403
     assert client.patch(f"{P}/TZ0001", headers=farhan, json={"work_arrangement": "Moon"}).status_code == 422
 

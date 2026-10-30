@@ -13,6 +13,8 @@ import { usePortal } from "./store.tsx";
 // Pages load on first visit, so the first screen opens fast.
 const EmailOutboxPage = lazy(() => import("./pages/EmailOutboxPage.tsx").then((m) => ({ default: m.EmailOutboxPage })));
 const LifecycleActionsPage = lazy(() => import("./features/lifecycle/LifecycleActionsPage.tsx").then((m) => ({ default: m.LifecycleActionsPage })));
+const CelebrationsPage = lazy(() => import("./features/celebrations/CelebrationsPage.tsx").then((m) => ({ default: m.CelebrationsPage })));
+const ComplianceCalendarPage = lazy(() => import("./features/compliancecal/ComplianceCalendarPage.tsx").then((m) => ({ default: m.ComplianceCalendarPage })));
 const RecognitionPage = lazy(() => import("./pages/RecognitionPage.tsx").then((m) => ({ default: m.RecognitionPage })));
 const RolesPermissionsPage = lazy(() => import("./pages/RolesPermissionsPage.tsx").then((m) => ({ default: m.RolesPermissionsPage })));
 const AiSettingsPage = lazy(() => import("./pages/AiSettingsPage.tsx").then((m) => ({ default: m.AiSettingsPage })));
@@ -97,6 +99,8 @@ const OptionalHolidaysPage = lazy(() => import("./features/workforce/OptionalHol
 const CareersPage = lazy(() => import("./pages/PublicHiring.tsx").then((m) => ({ default: m.CareersPage })));
 const CareerPostPage = lazy(() => import("./pages/PublicHiring.tsx").then((m) => ({ default: m.CareerPostPage })));
 const OfferAnswerPage = lazy(() => import("./pages/PublicHiring.tsx").then((m) => ({ default: m.OfferAnswerPage })));
+const PayrollRunsPage = lazy(() => import("./features/payroll/PayrollRunsPage.tsx").then((m) => ({ default: m.PayrollRunsPage })));
+const OvertimePage = lazy(() => import("./features/overtime/OvertimePage.tsx").then((m) => ({ default: m.OvertimePage })));
 const ContractorsPage = lazy(() => import("./features/workforce/ContractorsPage.tsx").then((m) => ({ default: m.ContractorsPage })));
 
 /** Pages are reachable only when the signed-in role has them in its access list — not just from the menu. */
@@ -152,7 +156,9 @@ export function App() {
         <Route path="/skills" element={<Allowed id="skills"><SkillsCareerPage /></Allowed>} />
         <Route path="/compensation" element={<Allowed id="compensation"><CompensationPage /></Allowed>} />
         <Route path="/benefits" element={<Allowed id="benefits"><BenefitsPage /></Allowed>} />
-        <Route path="/payroll" element={<Allowed id="payroll"><PayrollPage /></Allowed>} />
+        <Route path="/payroll" element={<Allowed id="payroll"><PayrollRunsPage /></Allowed>} />
+        <Route path="/payroll/providers" element={<Allowed id="payroll"><PayrollPage /></Allowed>} />
+        <Route path="/overtime" element={<Allowed id="overtime"><OvertimePage /></Allowed>} />
         <Route path="/payroll/preview" element={<Allowed id="paypreview"><PayPreviewPage /></Allowed>} />
         <Route path="/analytics" element={<Allowed id="analytics"><AnalyticsPage /></Allowed>} />
         <Route path="/ai/copilot" element={<Allowed id="copilot"><AiCopilotPage /></Allowed>} />
@@ -183,6 +189,8 @@ export function App() {
         <Route path="/admin/email-outbox" element={<Allowed id="emailoutbox"><EmailOutboxPage /></Allowed>} />
         <Route path="/lifecycle/actions" element={<Allowed id="lifecycleactions"><LifecycleActionsPage /></Allowed>} />
         <Route path="/recognition" element={<Allowed id="recognition"><RecognitionPage /></Allowed>} />
+        <Route path="/celebrations" element={<Allowed id="celebrations"><CelebrationsPage /></Allowed>} />
+        <Route path="/compliance-calendar" element={<Allowed id="compliancecalendar"><ComplianceCalendarPage /></Allowed>} />
         <Route path="/admin/roles" element={<Allowed id="accessroles"><RolesPermissionsPage /></Allowed>} />
         <Route path="/admin/ai" element={<Allowed id="aisettings"><AiSettingsPage /></Allowed>} />
         <Route path="/admin/leave-policies" element={<Allowed id="leavepolicies"><LeavePoliciesAdminPage /></Allowed>} />

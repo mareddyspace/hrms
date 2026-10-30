@@ -77,9 +77,17 @@ def test_password_change_required_after_90_days(client):
     from app.security import hash_password
 
     email = "jordan.blake@timez.com"
+    # Not signed in for months, but the password itself is recent: no change asked (the rule is the password's age).
     with SessionLocal() as db:
         acc = db.query(Account).filter(Account.email == email).one()
-        acc.last_login_at = utcnow() - timedelta(days=91)
+        acc.last_login_at = utcnow() - timedelta(days=200)
+        acc.password_changed_at = utcnow() - timedelta(days=10)
+        db.commit()
+    assert client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORDS[email]}).json()[
+        "must_change_password"] is False
+    with SessionLocal() as db:
+        acc = db.query(Account).filter(Account.email == email).one()
+        acc.password_changed_at = utcnow() - timedelta(days=91)
         db.commit()
     try:
         res = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORDS[email]})

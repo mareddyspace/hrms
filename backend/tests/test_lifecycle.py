@@ -8,7 +8,7 @@ from sqlalchemy.orm import aliased
 
 from app.db import SessionLocal
 from app.main import app
-from app.models import AuditLog, Employee, EmployeeAssignment, LifecycleAction
+from app.models import Account, AuditLog, Employee, EmployeeAssignment, LifecycleAction
 from app.security import create_access_token
 from app.services.lifecycle import apply_due_lifecycle_actions, run_due_at_startup
 from tests.conftest import login
@@ -53,6 +53,19 @@ def default_workflow(client, admin):
     assert client.put("/api/v1/workflows/lifecycle", headers=admin, json={"steps": DEFAULT_LIFECYCLE}).status_code == 200
     yield
     client.put("/api/v1/workflows/lifecycle", headers=admin, json={"steps": DEFAULT_LIFECYCLE})
+
+
+def line_manager(employee_id: str) -> dict[str, str]:
+    """A token for the person's own manager (lifecycle approvals follow the SUBJECT's line, not the requester's)."""
+    with SessionLocal() as db:
+        manager_id = db.get(Employee, employee_id).manager_id
+        acc = db.scalar(select(Account).where(Account.employee_id == manager_id))
+        if acc is None:
+            acc = Account(id=f"lc-{manager_id}", email=f"lc.{manager_id.lower()}@timez.example", password_hash="x",
+                          role="manager", employee_id=manager_id, active=True)
+            db.add(acc)
+            db.commit()
+        return token_for(acc.id, acc.role)
 
 
 def raise_action(client, headers, employee_id, action_type, after, effective=None, reason="Business need"):
@@ -113,10 +126,13 @@ def test_promotion_applies_now_with_history(client, farhan, jordan, admin, babu,
     assert item["status"] == "submitted" and item["before"] == {"grade": old_grade, "job_title": old_title}
     assert raise_action(client, farhan, who, "promotion", {"grade": "G8"}).status_code == 409  # one open promotion
     aid = item["id"]
-    # Farhan raised it: manager step = Farhan's manager (Jordan); HR step falls back to admin (never Farhan himself)
+    # Farhan raised it: manager step = the employee's own manager (not Farhan's manager Jordan); HR step falls back to
+    # admin (never Farhan himself)
     assert client.post(f"{API}/{aid}/decision", headers=farhan, json={"decision": "approve"}).status_code == 403
-    assert aid in {a["id"] for a in client.get(API, params={"view": "to_decide"}, headers=jordan).json()}
-    item = approve_all(client, aid, jordan, admin)
+    assert aid not in {a["id"] for a in client.get(API, params={"view": "to_decide"}, headers=jordan).json()}
+    assert client.post(f"{API}/{aid}/decision", headers=jordan, json={"decision": "approve"}).status_code in (403, 404)
+    assert aid in {a["id"] for a in client.get(API, params={"view": "to_decide"}, headers=line_manager(who)).json()}
+    item = approve_all(client, aid, line_manager(who), admin)
     assert item["status"] == "applied" and item["applied_at"]
     with SessionLocal() as db:
         emp = db.get(Employee, who)
@@ -142,7 +158,7 @@ def test_scheduled_transfer_applied_when_due(client, farhan, jordan, admin, babu
         old_location = db.get(Employee, who).location
     new_location = "Pune" if old_location != "Pune" else "Chennai"
     aid = raise_action(client, farhan, who, "location_change", {"location": new_location}, effective).json()["id"]
-    item = approve_all(client, aid, jordan, admin)
+    item = approve_all(client, aid, line_manager(who), admin)
     assert item["status"] == "scheduled" and item["applied_at"] is None
     with SessionLocal() as db:
         assert db.get(Employee, who).location == old_location
@@ -164,7 +180,7 @@ def test_startup_applies_due_actions(client, farhan, jordan, admin, leaves):
     who = leaves[3]
     aid = raise_action(client, farhan, who, "job_change", {"job_title": "Operations Lead"},
                        today_ist() + timedelta(days=5)).json()["id"]
-    assert approve_all(client, aid, jordan, admin)["status"] == "scheduled"
+    assert approve_all(client, aid, line_manager(who), admin)["status"] == "scheduled"
     with SessionLocal() as db:  # pretend the date has come
         db.get(LifecycleAction, aid).effective_date = today_ist() - timedelta(days=1)
         db.commit()
@@ -202,7 +218,7 @@ def test_hr_withdraws_scheduled_action(client, farhan, jordan, admin, leaves):
     who = leaves[4]
     aid = raise_action(client, farhan, who, "probation_completion", {"probation_end_date": "2027-01-31"},
                        today_ist() + timedelta(days=30)).json()["id"]
-    assert approve_all(client, aid, jordan, admin)["status"] == "scheduled"
+    assert approve_all(client, aid, line_manager(who), admin)["status"] == "scheduled"
     assert client.post(f"{API}/{aid}/withdraw", headers=farhan).json()["status"] == "withdrawn"
     with SessionLocal() as db:
         assert apply_due_lifecycle_actions(db, today=today_ist() + timedelta(days=30)) == []
@@ -221,21 +237,21 @@ def test_any_and_all_modes(client, admin, farhan, jordan, leaves):
     client.put("/api/v1/workflows/lifecycle", headers=admin, json={"steps": [{"roles": ["manager", "hr"], "mode": "all"}]})
     aid = raise_action(client, farhan, leaves[6], "promotion", {"grade": "G7"}).json()["id"]
     assert approve_all(client, aid, admin)["status"] == "submitted"
-    assert approve_all(client, aid, jordan)["status"] == "applied"
+    assert approve_all(client, aid, line_manager(leaves[6]))["status"] == "applied"
     client.put("/api/v1/workflows/lifecycle", headers=admin, json={"steps": DEFAULT_LIFECYCLE})
 
 
 def test_rehire_and_country_transfer(client, farhan, jordan, admin, leaves):
     who = leaves[7]
     with SessionLocal() as db:
-        db.get(Employee, who).employment_status = "Terminated"
+        db.get(Employee, who).employment_status = "Terminated"  # an older record (exits now set "Exited")
         db.commit()
     assert raise_action(client, farhan, who, "promotion", {"grade": "G9"}).status_code == 422  # has left
     aid = raise_action(client, farhan, who, "rehire", {"job_title": "Analyst"}).json()["id"]
-    assert approve_all(client, aid, jordan, admin)["status"] == "applied"
+    assert approve_all(client, aid, line_manager(who), admin)["status"] == "applied"
     aid = raise_action(client, farhan, who, "transfer", {"country_code": "AE", "location": "Dubai",
                                                          "legal_entity": "TimeZ UAE LLC"}).json()["id"]
-    assert approve_all(client, aid, jordan, admin)["status"] == "applied"
+    assert approve_all(client, aid, line_manager(who), admin)["status"] == "applied"
     with SessionLocal() as db:
         emp = db.get(Employee, who)
         assert (emp.employment_status, emp.country_code, emp.currency, emp.time_zone) == ("Active", "AE", "AED", "Asia/Dubai")

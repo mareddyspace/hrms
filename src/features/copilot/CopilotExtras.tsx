@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { API_ENABLED } from "../../api/client.ts";
-import { apiRequestProfileOtp, apiUpdateOwnProfile, type ApiSelfProfileUpdate } from "../../api/syncProfile.ts";
+import { apiUpdateOwnProfile, type ApiSelfProfileUpdate } from "../../api/syncProfile.ts";
+import { useProfileCode } from "../../components/ProfileCodeDialog.tsx";
 import { ActionButton, Banner, Field, notify } from "../../components/ui.tsx";
 import type { CopilotAction, CopilotAnswer, CopilotChart as Chart, CopilotLetterDraft } from "../../data/platformData.ts";
 import { requestLetter } from "../../data/letterService.ts";
@@ -174,81 +175,52 @@ function splitAddress(text: string): ApiSelfProfileUpdate {
 }
 
 function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "profile" }> }) {
-  const { employee, requestProfileOtp, updateProfileWithOtp, verifyProfileOtp } = usePortal();
+  const { employee, updateProfile } = usePortal();
   const [value, setValue] = useState(action.proposed);
-  const [otp, setOtp] = useState("");
-  const [code, setCode] = useState("");
   const [state, setState] = useState<"open" | "done" | "cancelled">("open");
   const [message, setMessage] = useState<Msg>(null);
+  const codeFlow = useProfileCode();
   const isMobile = action.field === "mobile";
   const label = isMobile ? "New mobile number" : "New address";
-
-  // Backend mode: only a new mobile needs a code (sent by the server); an address change is confirmed directly.
-  const needsCode = !API_ENABLED || isMobile;
 
   function fail(text: string) {
     setMessage({ tone: "err", text });
     return false;
   }
 
-  async function sendCode() {
-    if (API_ENABLED) {
-      const next = value.trim();
-      if (!validPhone(next)) return fail("Enter a valid mobile number: 8–15 digits, optionally starting with +.");
-      const sent = await apiRequestProfileOtp("mobile", next);
-      if (sent.error) return fail(sent.error);
-      // "sent" marks the code step as open; the code itself is shown only when the server echoes it (dev).
-      setCode(sent.devCode ?? "sent");
-      setOtp("");
-      setMessage({ tone: "ok", text: `Code sent to ${sent.sentTo || "your email"}.` });
-      notify(`Code sent to ${sent.sentTo || "your email"}.`);
-      return true;
-    }
-    setCode(requestProfileOtp());
-    setOtp("");
-    setMessage({ tone: "ok", text: `Code sent to ${maskMobile(employee.mobile)}.` });
-    notify(`Code sent to ${maskMobile(employee.mobile)}.`);
-    return true;
+  function saveLocal(next: string): string | null {
+    return updateProfile({
+      fullName: employee.fullName,
+      designation: employee.designation,
+      email: employee.email,
+      shiftName: employee.shiftName,
+      shiftHours: employee.shiftHours,
+      mobile: isMobile ? next : employee.mobile,
+      address: isMobile ? employee.address : next,
+    });
   }
 
+  // A mobile or address change is confirmed with a code sent to your TimeZ inbox (ProfileCodeDialog).
   async function confirm() {
     const next = value.trim();
     if (!next) return fail(`Enter the ${isMobile ? "new number" : "new address"}.`);
     if (isMobile && !validPhone(next)) return fail("Enter a valid mobile number: 8–15 digits, optionally starting with +.");
-    if (API_ENABLED) {
-      // Backend mode: the server checks the code, saves (PATCH /people/me) and audits the change.
-      if (needsCode) {
-        const otpError = verifyProfileOtp(otp);
-        if (otpError) return fail(otpError);
-      }
-      const failed = await apiUpdateOwnProfile(isMobile ? { mobile: next, otp_code: otp } : splitAddress(next));
-      if (failed) return fail(failed);
-      logCopilotAction("Confirmed", { id: employee.id, name: employee.fullName }, { action: { ...action, proposed: next } }, "Profile updated");
-      setState("done");
-      setCode("");
-      setMessage({ tone: "ok", text: `${isMobile ? "Mobile number" : "Address"} updated.` });
-      notify(`${isMobile ? "Mobile number" : "Address"} updated.`);
-      return true;
-    }
-    const error = updateProfileWithOtp(
-      {
-        fullName: employee.fullName,
-        designation: employee.designation,
-        email: employee.email,
-        shiftName: employee.shiftName,
-        shiftHours: employee.shiftHours,
-        mobile: isMobile ? next : employee.mobile,
-        address: isMobile ? employee.address : next,
+    const update: ApiSelfProfileUpdate = isMobile ? { mobile: next } : splitAddress(next);
+    const current = isMobile ? employee.mobile : employee.address;
+    const result = await codeFlow.start({
+      userId: employee.id,
+      apiChanges: update,
+      localChanges: next !== current ? { [isMobile ? "mobile" : "address"]: next } : {},
+      save: (otp) => (API_ENABLED ? apiUpdateOwnProfile(otp ? { ...update, otp_code: otp } : update) : saveLocal(next)),
+      onSaved: () => {
+        logCopilotAction("Confirmed", { id: employee.id, name: employee.fullName }, { action: { ...action, proposed: next } }, "Profile updated");
+        setState("done");
+        setMessage({ tone: "ok", text: `${isMobile ? "Mobile number" : "Address"} updated.` });
+        notify(`${isMobile ? "Mobile number" : "Address"} updated.`);
       },
-      otp,
-    );
-    if (error) return fail(error);
-    logCopilotAction("Confirmed", { id: employee.id, name: employee.fullName }, { action: { ...action, proposed: next } }, "Profile updated");
-    setState("done");
-    setCode("");
-    setMessage({ tone: "ok", text: `${isMobile ? "Mobile number" : "Address"} updated.` });
-    notify(`${isMobile ? "Mobile number" : "Address"} updated.`);
-    return true;
+    });
+    if (typeof result === "string") return fail(result);
+    return result;
   }
 
   return (
@@ -265,38 +237,11 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
                 <textarea rows={2} value={value} onChange={(e) => setValue(e.target.value)} />
               )}
             </Field>
-            {code && (
-              <Field label="Verification code">
-                <input
-                  value={otp}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  placeholder="6-digit code"
-                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                />
-              </Field>
-            )}
           </div>
-          {code && code !== "sent" && <p className="note">Code: <strong>{code}</strong></p>}
           <div className="row-gap" style={{ marginTop: 8 }}>
-            {!needsCode ? (
-              <ActionButton className="btn" onAction={confirm} disabled={!value.trim()} busyLabel="Saving…" doneLabel="Saved">
-                Confirm change
-              </ActionButton>
-            ) : !code ? (
-              <ActionButton className="btn" onAction={sendCode} disabled={!value.trim()}>
-                Send code to confirm
-              </ActionButton>
-            ) : (
-              <>
-                <ActionButton className="btn" onAction={confirm} disabled={otp.length !== 6} busyLabel="Saving…" doneLabel="Saved">
-                  Confirm change
-                </ActionButton>
-                <ActionButton className="btn-ghost" onAction={sendCode} busyLabel="Sending…" doneLabel="Sent">
-                  Resend code
-                </ActionButton>
-              </>
-            )}
+            <ActionButton className="btn" onAction={confirm} disabled={!value.trim()} busyLabel="Sending code…" doneLabel="Saved">
+              Confirm change
+            </ActionButton>
             <button
               type="button"
               className="btn-ghost"
@@ -312,6 +257,7 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
         </>
       )}
       <Banner message={message} />
+      {codeFlow.dialog}
     </div>
   );
 }

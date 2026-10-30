@@ -51,6 +51,16 @@ NAMED_DELEGATION_TYPES = ("leave", "expense", "timesheet", "attendance_correctio
 ENTITY_HREFS: dict[str, str] = {}  # type -> "/leave/requests/{entity_id}"
 NOTICE_LABELS: dict[str, str] = {}  # type -> "Leave request" (title "<label> from <name>")
 OWN_FINISH_NOTICE: set[str] = set()
+# The requester's "your request was approved / rejected" notice opens the requester's own page for the item (the
+# approver inbox /approvals/{id} is the wrong place for them). Modules may add their own.
+REQUESTER_HREFS: dict[str, str] = {
+    "expense": "/expenses/{entity_id}",
+    "travel": "/travel/{entity_id}",
+    "lifecycle": "/lifecycle/actions/{entity_id}",
+    "compensation": "/compensation/proposals/{entity_id}",
+    "letter": "/letters/requests/{entity_id}",
+    "requisition": "/recruiting/requisitions/{entity_id}",
+}
 
 
 class ApprovalError(ValueError):
@@ -258,8 +268,9 @@ def delegates_of(db: Session, delegator_id: str, type_: str, on: date | None = N
 
 
 def _acting_as(db: Session, instance: ApprovalInstance, employee_id: str) -> tuple[str, str | None] | None:
-    """(group, on_behalf_of) this person may decide in the current step, or None."""
-    if instance.requester_id == employee_id:
+    """(group, on_behalf_of) this person may decide in the current step, or None. Never the requester or someone the
+    step excludes (e.g. the subject of a request raised by someone else) - not even as somebody's delegate."""
+    if employee_id in _barred(instance):
         return None
     groups = open_groups(db, instance)
     for g, ids in groups.items():
@@ -271,6 +282,14 @@ def _acting_as(db: Session, instance: ApprovalInstance, employee_id: str) -> tup
         if hit:
             return g, hit
     return None
+
+
+def _barred(instance: ApprovalInstance) -> set[str]:
+    """People who may never decide this request: the requester and the current step's exclude list."""
+    out = {instance.requester_id}
+    if instance.current_step < len(instance.steps or []):
+        out |= set(instance.steps[instance.current_step].get("exclude") or [])
+    return out
 
 
 def can_act(db: Session, instance: ApprovalInstance | None, employee_id: str | None) -> bool:
@@ -291,6 +310,8 @@ def is_delegate_for(db: Session, instance: ApprovalInstance, employee_id: str | 
 def _step_applies(step: dict[str, Any], amount: float | None) -> bool:
     if step.get("applies") is False:  # its condition did not match when the request started
         return False
+    if "min_amount_met" in step:  # decided when the request started (amount compared in the threshold's terms)
+        return bool(step["min_amount_met"])
     minimum = step.get("min_amount")
     return minimum is None or (amount is not None and amount >= float(minimum))
 
@@ -337,6 +358,12 @@ def _snapshot(instance: ApprovalInstance) -> dict[str, Any]:
 def _href(instance: ApprovalInstance) -> str:
     template = ENTITY_HREFS.get(instance.type)
     return template.format(entity_id=instance.entity_id) if template else f"/approvals/{instance.id}"
+
+
+def requester_href(instance: ApprovalInstance) -> str:
+    """Where the requester follows their own request (never the approver inbox)."""
+    template = REQUESTER_HREFS.get(instance.type) or ENTITY_HREFS.get(instance.type)
+    return template.format(entity_id=instance.entity_id) if template else "/notifications"
 
 
 def _label(instance: ApprovalInstance) -> str:
@@ -395,8 +422,8 @@ def _finish(db: Session, instance: ApprovalInstance, requester: Employee, outcom
             db,
             recipient_id=requester.id,
             title=f"{instance.type.replace('_', ' ').capitalize()} request {outcome}",
-            body=f"Your request {instance.entity_id} was {outcome}.",
-            href=_href(instance),
+            body=f"Your {instance.type.replace('_', ' ')} request was {outcome}.",  # no internal ids in user text
+            href=requester_href(instance),
         )
     for handler in _FINISH_HANDLERS.get(instance.type, []):
         handler(db, instance)
@@ -434,19 +461,21 @@ def cancel(db: Session, instance: ApprovalInstance, actor_id: str | None = None,
 def start(
     db: Session, type_: str, entity_id: str, requester: Employee, amount: float | None = None, actor_id: str | None = None,
     line_from_requester: bool = False, context: dict[str, Any] | None = None, fallback: bool = True,
-    exclude: set[str] | None = None,
+    exclude: set[str] | None = None, compare_amount: float | None = None,
 ) -> ApprovalInstance:
     """context: facts step conditions may use (country / department / grade override the requester's; flags such as
     needs_hr / via_manager for only_if). exclude: people who may never approve it besides the requester (e.g. the
-    subject of a request raised by someone else)."""
+    subject of a request raised by someone else). compare_amount: the amount to test step thresholds (min_amount)
+    against when it differs from the amount shown (e.g. an expense in another currency, scaled to the threshold's)."""
     definition = latest_definition(db, type_)
+    threshold_amount = amount if compare_amount is None else compare_amount
     if definition is None:
         raise ApprovalError(f"No approval workflow is set up for {type_}.")
     steps = []
     for raw in definition.steps:
         groups = {role: resolve_group(db, role, requester, line_from_requester, fallback) for role in raw["roles"]}
         matched = condition_matches(raw, requester, context)
-        applies = matched and _step_applies(raw, amount)
+        applies = matched and _step_applies(raw, threshold_amount)
         step = {
             "roles": list(raw["roles"]),
             "mode": raw.get("mode", "any"),
@@ -459,6 +488,8 @@ def start(
                 step[key] = raw[key]
         if not matched:
             step["applies"] = False
+        if raw.get("min_amount") is not None:
+            step["min_amount_met"] = _step_applies({"min_amount": raw["min_amount"]}, threshold_amount)
         steps.append(step)
     steps = retarget(db, steps, 0, set(), amount, {requester.id} | (exclude or set()))
     instance = ApprovalInstance(
@@ -505,6 +536,8 @@ def decide(
         raise ApprovalError("Add a note saying why the request is rejected.")
     if any(approver_id in (d.approver_id, d.on_behalf_of) for d in _approvals_in_step(db, instance, instance.current_step)):
         raise NotAllowed("You have already approved this step.")
+    if approver_id in _barred(instance):
+        raise NotAllowed("You can't decide a request about yourself.")
     acting = _acting_as(db, instance, approver_id)
     if acting is None and authority:
         waiting = list(open_groups(db, instance))
@@ -547,7 +580,7 @@ def pending_for(db: Session, employee_id: str) -> list[ApprovalInstance]:
     out = []
     delegators = delegators_for(db, employee_id)
     for instance in db.scalars(select(ApprovalInstance).where(ApprovalInstance.status == "pending").order_by(ApprovalInstance.created_at)):
-        if instance.requester_id == employee_id:
+        if employee_id in _barred(instance):
             continue
         waiting = {i for ids in open_groups(db, instance).values() for i in ids}
         if employee_id in waiting or any(_covers(delegators[d], instance.type) for d in waiting & set(delegators)):

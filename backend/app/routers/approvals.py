@@ -64,6 +64,10 @@ def _instance_summary(db: DbSession, inst: ApprovalInstance) -> str:
 
     if text := summary_for(db, inst):
         return f"{text}{step}"
+    from app.services.overtime import summary_for as overtime_summary
+
+    if text := overtime_summary(db, inst):
+        return f"{text} for {name(inst.requester_id)}{step}"
     return (f"{inst.type.replace('_', ' ').capitalize()} {inst.entity_id}"
             + (f", amount {inst.amount:g}" if inst.amount is not None else "") + f" (step {inst.current_step + 1})")
 

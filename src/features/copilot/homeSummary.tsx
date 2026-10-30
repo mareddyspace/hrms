@@ -75,7 +75,7 @@ export function employeeSummary(input: {
   }
   if (input.timesheet.olderDrafts) lines.push({ text: `${plural(input.timesheet.olderDrafts, "earlier timesheet week is", "earlier timesheet weeks are")} still in draft.`, to: "/timesheet" });
   else if (input.timesheet.weekEnding && input.timesheet.status !== "Submitted" && input.timesheet.status !== "Approved") {
-    lines.push({ text: `This week's timesheet is ${input.timesheet.status.toLowerCase()} (${input.timesheet.hours} h) — submit it before the week ends.`, to: "/timesheet" });
+    lines.push({ text: `Today's timesheet is ${input.timesheet.status.toLowerCase()} (${input.timesheet.hours} h) — submit it after you check out.`, to: "/timesheet" });
   }
 
   // Pending items.

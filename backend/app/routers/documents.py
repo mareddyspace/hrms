@@ -242,7 +242,11 @@ def list_policy_acks(db: DbSession, user: CurrentUserDep, employee_id: str | Non
 
 @router.post("/policy-acks", response_model=PolicyAckOut, status_code=status.HTTP_201_CREATED)
 def acknowledge_policy(body: PolicyAckIn, request: Request, db: DbSession, user: CurrentUserDep) -> PolicyAcknowledgment:
+    from app.services.policies import known_policy_version
+
     emp = me(user)
+    if not known_policy_version(db, emp, body.policy_id.strip(), body.policy_version.strip()):
+        raise HTTPException(422, "Unknown policy or version.")
     if db.scalar(select(PolicyAcknowledgment.id).where(PolicyAcknowledgment.employee_id == emp.id,
                                                        PolicyAcknowledgment.policy_id == body.policy_id,
                                                        PolicyAcknowledgment.policy_version == body.policy_version)):

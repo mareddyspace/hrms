@@ -11,6 +11,9 @@
 - complete_due_exits() (jobs.run_all, at startup and from the admin jobs run): once the last working day has passed in
   the leaver's time zone the case is "Completed", the person "Exited", their sign-in account deactivated and their
   sessions revoked, and the unused leave days for the final settlement frozen.
+- Clearance: if the checklist isn't done by then the exit still completes (the sign-in must not outlive the last
+  working day), but the case is flagged settlement["clearance_pending"] = [open item keys] and HR in scope is told.
+  The checklist stays open on the completed case until every item is ticked; then the flag is cleared.
 """
 
 from __future__ import annotations
@@ -245,6 +248,9 @@ def complete_case(db: Session, case: ExitCase, actor_id: str | None = None) -> N
     settlement = dict(case.settlement or {})
     settlement.setdefault("status", "Pending")
     settlement["unused_leave_days"] = unused_leave_days(db, emp)
+    pending = [i["key"] for i in case.clearance or [] if not i.get("done")]
+    if pending:
+        settlement["clearance_pending"] = pending
     case.settlement = settlement
     case.status = "Completed"
     case.completed_at = utcnow()
@@ -268,7 +274,14 @@ def complete_case(db: Session, case: ExitCase, actor_id: str | None = None) -> N
         record_audit(db, actor_id=actor_id, action="account_deactivated", entity="account", entity_id=account.id,
                      subject_id=emp.id, before={"active": True}, after={"active": False, "reason": "exit completed"})
     record_audit(db, actor_id=actor_id, action="exit_completed", entity="exit_case", entity_id=case.id, subject_id=emp.id,
-                 before=before, after=_snapshot(case) | {"unused_leave_days": settlement["unused_leave_days"]})
+                 before=before, after=_snapshot(case) | {"unused_leave_days": settlement["unused_leave_days"],
+                                                         "clearance_pending": pending})
+    if pending:
+        labels = {k: label for k, label, _ in CLEARANCE}
+        open_items = ", ".join(labels.get(k, k) for k in pending)
+        for rid in engine.resolve_group(db, "hr", emp):
+            notify(db, recipient_id=rid, title=f"Exit completed with clearance pending · {emp.full_name}",
+                   body=f"Still open: {open_items}.", href="/people/exits")
     record_audit(db, actor_id=actor_id, action="employee_updated", entity="employee", entity_id=emp.id, subject_id=emp.id,
                  before=emp_before, after={"employment_status": "Exited", "exit_case_id": case.id})
 
@@ -291,9 +304,14 @@ def complete_due_exits(db: Session, today: date | None = None) -> list[str]:
 
 
 # ---------- who may do what ----------
+def clearance_open(case: ExitCase) -> bool:
+    """The checklist can be ticked while the exit is approved, or after completion while items are still pending."""
+    return case.status == "Approved" or (case.status == "Completed" and bool((case.settlement or {}).get("clearance_pending")))
+
+
 def can_tick(case: ExitCase, owner: str, *, actor_id: str | None, role: str, is_hr: bool, in_chain: bool,
              subject_has_manager: bool) -> bool:
-    if case.status != "Approved" or not actor_id or actor_id == case.employee_id:
+    if not clearance_open(case) or not actor_id or actor_id == case.employee_id:
         return False
     if is_hr:
         return True
@@ -319,6 +337,16 @@ def set_clearance(db: Session, case: ExitCase, key: str, done: bool, actor: Empl
     case.clearance = items
     record_audit(db, actor_id=actor_id, action="exit_clearance_updated", entity="exit_case", entity_id=case.id,
                  subject_id=case.employee_id, before=before, after=item, ip=ip)
+    if case.status == "Completed":  # clearance finished after the exit completed: keep the pending flag current
+        settlement = dict(case.settlement or {})
+        pending = [i["key"] for i in items if not i.get("done")]
+        if pending:
+            settlement["clearance_pending"] = pending
+        else:
+            settlement.pop("clearance_pending", None)
+            record_audit(db, actor_id=actor_id, action="exit_clearance_completed", entity="exit_case", entity_id=case.id,
+                         subject_id=case.employee_id, after={"clearance_pending": []}, ip=ip)
+        case.settlement = settlement
 
 
 def submit_interview(db: Session, case: ExitCase, emp: Employee, data: dict[str, Any], actor_id: str, ip: str | None) -> None:

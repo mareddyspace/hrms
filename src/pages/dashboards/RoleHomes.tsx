@@ -10,6 +10,7 @@ import { useProfileCorrections } from "../../data/profileCorrections.ts";
 import { canDecide as canDecideLifecycle, getLifecycleActions, subscribeLifecycleActions } from "../../features/lifecycle/lifecycleActionsStore.ts";
 import { getPerson, listPeople, subscribePeople, getExitDetails } from "../../data/peopleLocal.ts";
 import { TASK_TEAM } from "../../data/taskTeam.ts";
+import { useTeamToday } from "../../api/syncTeam.ts";
 import { inHeadcount } from "../../data/peopleData.ts";
 import { getPlatformVersion, listAuditLog, listIntegrations, subscribePlatform } from "../../data/platformLocal.ts";
 import {
@@ -90,7 +91,7 @@ import { RegionalFilter } from "../../locale/RegionalFilter.tsx";
 import { useLocale } from "../../locale/LocaleContext.tsx";
 import { usePortal } from "../../store.tsx";
 import { DAY_STATUS_LABEL, DAY_TARGET, HALF_DAY_TARGET, dayRecordFor, useDayRecords } from "../../data/timesheetDays.ts";
-import { halfDayLeave as halfDayLeaveOn, plural } from "../../model.ts";
+import { halfDayLeave as halfDayLeaveOn, leaveNameFor, plural } from "../../model.ts";
 import { countWaitingOnMe } from "../ApprovalsCenter.tsx";
 import { AuthShortcuts, DashGreeting, DateRangeFilter, MiniBars, ProgressBar, useDateRange } from "./widgets.tsx";
 import {
@@ -110,6 +111,8 @@ import { useAuditTrail } from "../../data/auditTrail.ts";
 import { TICKET_STATUSES, useTickets } from "../../data/ticketStore.ts";
 import { TodaySummaryCard, employeeSummary, hrSummary, managerSummary } from "../../features/copilot/homeSummary.tsx";
 import { OnboardingHomeCard } from "../../features/onboarding/OnboardingAnalytics.tsx";
+import { CelebrationsHomeCard } from "../../features/celebrations/CelebrationsPage.tsx";
+import { ComplianceHomeCard } from "../../features/compliancecal/ComplianceCalendarPage.tsx";
 
 /** Map dashboard shortcut labels to real routes. */
 const R = {
@@ -165,7 +168,7 @@ function HomeSections({ userId, sections }: { userId: string; sections: Section[
     <div className="mgr-home-grid">
       {ordered.map((s) => {
         const fresh = byId.get(s.id);
-        return fresh ? <div key={fresh.id} style={{ display: "contents" }}>{fresh.node}</div> : null;
+        return fresh ? <div key={fresh.id} className="mgr-home-item">{fresh.node}</div> : null;
       })}
     </div>
   );
@@ -392,7 +395,7 @@ export function EmployeeHome() {
   const requests: OwnRequest[] = [
     ...mine(state.leaveRequests)
       .filter((r) => r.status === "pending")
-      .map((r) => ({ id: r.id, type: "Leave", detail: `${r.code.toUpperCase()} · ${formatShortDate(r.from)}${r.to !== r.from ? ` → ${formatShortDate(r.to)}` : ""}`, date: r.appliedOn, to: R.leave })),
+      .map((r) => ({ id: r.id, type: "Leave", detail: `${leaveNameFor(state.leavePolicies, r.code, r.employeeId) ?? r.code} · ${formatShortDate(r.from)}${r.to !== r.from ? ` → ${formatShortDate(r.to)}` : ""}`, date: r.appliedOn, to: R.leave })),
     ...mine(state.backdatedPermissions)
       .filter((r) => r.status === "pending")
       .map((r) => ({ id: r.id, type: "Past-date leave", detail: "Permission request", date: (r as { from?: string }).from ?? "", to: R.leave })),
@@ -431,13 +434,6 @@ export function EmployeeHome() {
   const week = mondayOf(today);
   const weekSheets = state.timesheets.filter((t) => t.employeeId === employee.id && t.weekStart === week);
   const weekHours = weekSheets.reduce((n, t) => n + Object.values(t.hours).reduce((a, b) => a + b, 0), 0);
-  const weekStatus = !weekSheets.length
-    ? "Not started"
-    : weekSheets.some((t) => t.status === "draft")
-      ? "Draft"
-      : weekSheets.every((t) => t.status === "approved")
-        ? "Approved"
-        : "Submitted";
   const olderDrafts = 0; // daily timesheets: each day is submitted on its own (see today's status below)
   // Target: 9 h on each working day this week (weekly offs and holidays left out).
   const holidayDates = new Set(dayContext.holidays.map((h) => h.date));
@@ -535,7 +531,8 @@ export function EmployeeHome() {
       : undefined,
     interview: nextInterview ? { candidate: nextInterview.candidateName, role: nextInterview.role, when: nextInterview.when } : undefined,
     feedbackDue: myInterviews.filter((i) => i.when.slice(0, 10) < today && i.feedbackStatus === "Pending").length,
-    timesheet: { status: weekStatus, hours: weekHours, olderDrafts, weekEnding: [4, 5].includes(new Date().getDay()) },
+    // Daily timesheets: the reminder is about today's day (a week-level "draft" counted days already approved).
+    timesheet: { status: todayStatusLabel, hours: todayHours, olderDrafts, weekEnding: todayTarget > 0 },
   });
 
   useTitle("Home");
@@ -872,6 +869,7 @@ export function EmployeeHome() {
         </Card>
       ),
     },
+    { id: "celebrations", label: "Celebrations this week", node: <CelebrationsHomeCard /> },
   ];
 
   return (
@@ -937,9 +935,12 @@ export function ManagerHome() {
   const m = teamMetrics(data.team, data.statuses);
   const teamIds = useMemo(() => new Set(data.team.map((t) => t.id)), [data.team]);
   const peopleById = useMemo(() => new Map(data.people.map((p) => [p.id, p])), [data.people]);
-  const checkedIn = new Set(
-    attState.sessions.filter((s) => s.date === today && s.phase !== "not_started" && teamIds.has(s.employeeId)).map((s) => s.employeeId),
-  );
+  const teamToday = useTeamToday();
+  // Backend mode: the team's check-ins come from the server (the local store only holds my own sessions).
+  const checkedIn = new Set([
+    ...attState.sessions.filter((s) => s.date === today && s.phase !== "not_started" && teamIds.has(s.employeeId)).map((s) => s.employeeId),
+    ...[...teamToday.rows.values()].filter((r) => r.date === today && r.check_in && teamIds.has(r.employee_id)).map((r) => r.employee_id),
+  ]);
   const workplace = teamWorkplace(
     data.statuses.map((x) => ({ id: x.member.id, name: x.member.name, status: x.status })),
     peopleById,
@@ -1060,7 +1061,7 @@ export function ManagerHome() {
             headers={["Person", "Type", "From", "Status"]}
             rows={leaveQueue.slice(0, 5).map((req) => [
               personName(req.employeeId, data.people),
-              req.code.toUpperCase(),
+              leaveNameFor(state.leavePolicies, req.code, req.employeeId) ?? req.code,
               formatShortDate(req.from),
               <StatusPill key={req.id} status={req.status} />,
             ])}
@@ -1191,7 +1192,7 @@ export function ManagerHome() {
             {upcomingLeave.length ? (
               upcomingLeave.map((r) => (
                 <li key={r.id}>
-                  {personName(r.employeeId, data.people)} · {r.code.toUpperCase()} · {formatShortDate(r.from)}
+                  {personName(r.employeeId, data.people)} · {leaveNameFor(state.leavePolicies, r.code, r.employeeId) ?? r.code} · {formatShortDate(r.from)}
                   {r.to !== r.from ? ` → ${formatShortDate(r.to)}` : ""}
                 </li>
               ))
@@ -1221,6 +1222,7 @@ export function ManagerHome() {
         </Card>
       ),
     },
+    { id: "celebrations", label: "Celebrations this week", node: <CelebrationsHomeCard /> },
   ];
 
   return (
@@ -1594,6 +1596,8 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
         </Card>
       ),
     },
+    { id: "compliance", label: "Compliance due", node: <ComplianceHomeCard /> },
+    { id: "celebrations", label: "Celebrations this week", node: <CelebrationsHomeCard /> },
   ];
 
   return (
@@ -1691,6 +1695,7 @@ export function RecruiterHome() {
         </Card>
       ),
     },
+    { id: "celebrations", label: "Celebrations this week", node: <CelebrationsHomeCard /> },
   ];
 
   return (
@@ -1793,6 +1798,7 @@ export function ExecutiveHome() {
         </Card>
       ),
     },
+    { id: "celebrations", label: "Celebrations this week", node: <CelebrationsHomeCard /> },
   ];
 
   return (
@@ -2090,6 +2096,8 @@ export function AdministrationHome() {
         </Card>
       ),
     },
+    { id: "compliance", label: "Compliance due", node: <ComplianceHomeCard /> },
+    { id: "celebrations", label: "Celebrations this week", node: <CelebrationsHomeCard /> },
   ];
 
   return (

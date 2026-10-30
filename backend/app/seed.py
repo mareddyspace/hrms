@@ -280,6 +280,9 @@ def run(reset_passwords: bool = False) -> dict[str, int]:
         stats.update(_seed_demo_requests(db))  # a few open requests per demo sign-in (app/seed_demo.py)
         stats.update(_seed_hr_content(db))  # Babu's documents and a policy change to acknowledge (app/seed_hr_content.py)
         stats["tickets_added"] = _seed_tickets(db)  # sample work tickets (0020)
+        stats.update(_seed_compliance(db))  # compliance calendar sample dates, visas, contract ends (0023)
+        stats["bank_details_added"] = _seed_bank_details(db)  # payroll bank details, a few left missing (0023)
+        stats["shared_collab_added"] = _seed_shared_collab(db)  # chats, mail, tasks, announcements, meetings (0022)
         db.commit()
         del cache
     return stats
@@ -426,10 +429,32 @@ def _seed_tickets(db: Session) -> int:
     return seed_samples(db)
 
 
+def _seed_shared_collab(db: Session) -> int:
+    """Sample chats, mail, tasks, announcements and meetings (app/services/sharing.py). Insert-once by id."""
+    from app.services.sharing import seed_samples
+
+    db.flush()
+    return seed_samples(db)
+
+
+def _seed_compliance(db: Session) -> dict[str, int]:
+    from app.services.compliance_calendar import seed_defaults, seed_people_items
+
+    db.flush()
+    return {"compliance_due_dates_added": seed_defaults(db), **seed_people_items(db, date.today())}
+
+
 def _seed_optional_holidays(db: Session) -> int:
     from app.services.optional_holidays import seed_defaults
 
     return seed_defaults(db)
+
+
+def _seed_bank_details(db: Session) -> int:
+    from app.services.payroll_runs import seed_bank_details
+
+    db.flush()
+    return seed_bank_details(db)
 
 
 if __name__ == "__main__":

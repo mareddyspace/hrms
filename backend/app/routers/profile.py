@@ -1,7 +1,7 @@
 """Profile edits, profile correction requests and the Copilot action audit.
 
 - PATCH /people/me: the signed-in person edits their own details (preferred name, contact, address, emergency
-  contact, languages, education, experience, career goals).
+  contact, languages, education, experience, career goals). Personal details need a code (app/services/profile_otp.py).
 - PATCH /people/{id}: HR / admin within their data scope edit anyone else's record, HR-owned fields included.
 - Corrections: an employee asks for an HR-owned field to change; HR / admin in scope approve (the value is applied)
   or reject. The employee may withdraw an open request.
@@ -153,12 +153,12 @@ def update_own_profile(body: SelfProfileUpdateIn, request: Request, db: DbSessio
         raise HTTPException(404, "This account has no employee record.")
     emp = user.employee
     values = _normalise(body)
-    # A new mobile or personal email needs the code sent by POST /people/me/otp (clearing one does not).
-    changing = [f for f in profile_otp.OTP_FIELDS if values.get(f) is not None and values[f] != getattr(emp, f)]
-    if len(changing) > 1:
-        raise HTTPException(422, "Change your mobile and personal email one at a time.")
-    if changing:
-        profile_otp.check(db, emp, changing[0], values[changing[0]], body.otp_code)
+    # Personal details need the code sent by POST /people/me/otp for exactly these values.
+    changes = profile_otp.sensitive_changes(emp, values)
+    if changes:
+        profile_otp.check(db, emp, changes, body.otp_code, actor_id=user.id, ip=client_ip(request))
+        record_audit(db, actor_id=user.id, action="verified profile code", entity="employee", entity_id=emp.id,
+                     subject_id=emp.id, before=None, after={"fields": sorted(changes)}, ip=client_ip(request))
     _apply(db, user, emp, values, request, "updated own profile")
     db.commit()
     return _full(db, user, emp)
@@ -166,21 +166,19 @@ def update_own_profile(body: SelfProfileUpdateIn, request: Request, db: DbSessio
 
 @router.post("/people/me/otp", response_model=ProfileOtpOut, status_code=201)
 def request_profile_otp(body: ProfileOtpIn, request: Request, db: DbSession, user: CurrentUserDep) -> ProfileOtpOut:
-    """Sends a 6-digit code (10 minutes, 5 tries) for changing your own mobile or personal email."""
+    """Sends a 6-digit code (10 minutes, 5 tries) to your portal inbox for the personal details in `changes`."""
     if user.employee is None:
         raise HTTPException(404, "This account has no employee record.")
     emp = user.employee
-    value = body.new_value.strip()
-    if body.field == "personal_email":
-        value = value.lower()
-    _validate({body.field: value})
-    if value == getattr(emp, body.field):
-        raise HTTPException(422, f"That is already your {profile_otp.FIELD_LABEL[body.field]}.")
-    code, expires, to = profile_otp.issue(db, emp, body.field, value, user.id)
+    changes = profile_otp.sensitive_changes(emp, _normalise(body.changes))
+    if not changes:
+        return ProfileOtpOut(required=False)
+    code, expires, to, href = profile_otp.issue(db, emp, changes, user.id)
     record_audit(db, actor_id=user.id, action="requested verification code", entity="employee", entity_id=emp.id,
-                 subject_id=emp.id, before=None, after={"field": body.field}, ip=client_ip(request))
+                 subject_id=emp.id, before=None, after={"fields": sorted(changes)}, ip=client_ip(request))
     db.commit()
-    return ProfileOtpOut(field=body.field, sent_to=mask_email(to) or "", expires_at=expires,
+    return ProfileOtpOut(required=True, fields=sorted(changes), sent_to=mask_email(to) or "", inbox_href=href,
+                         expires_at=expires, resend_after=profile_otp.RESEND_SECONDS,
                          dev_code=code if get_settings().otp_dev_echo else None)
 
 

@@ -96,6 +96,8 @@ function keepBuiltIn(question: string, ctx: CopilotContext, builtIn: CopilotAnsw
   return Boolean(ctx.assist?.(question));
 }
 
+const COPILOT_PAGE_ALIASES: Record<string, string> = { "/performance": "/evaluations", "/learning": "/programs" };
+
 function fromAi(out: AiAnswerOut): CopilotAnswer {
   const sources: CopilotSource[] = [];
   const links: { label: string; to: string }[] = [];
@@ -104,8 +106,10 @@ function fromAi(out: AiAnswerOut): CopilotAnswer {
       const [policyId] = s.ref.split("#");
       const section = s.section ?? "";
       sources.push({ title: s.title, version: s.version ?? "", effective: s.effective ?? "", section, to: policyHref(policyId, section) });
-    } else if (s.ref.startsWith("/") && !links.some((l) => l.to === s.ref)) {
-      links.push({ label: s.title, to: s.ref });
+    } else if (s.ref.startsWith("/")) {
+      // Older servers sent API-style paths; send them to the app's pages (unknown paths would land on Home).
+      const to = COPILOT_PAGE_ALIASES[s.ref] ?? s.ref;
+      if (!links.some((l) => l.to === to)) links.push({ label: s.title, to });
     }
   }
   return {

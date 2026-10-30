@@ -85,6 +85,22 @@ export interface PayslipExtras {
   tax: TaxComputation;
   /** Year-to-date totals in the slip's tax year, from the payslips held online. */
   ytd: { taxYear: string; gross: number; tax: number; net: number; fromMonth: string };
+  /** Set when the slip comes from a locked payroll run (src/features/payroll). */
+  runId?: string;
+  /** Unpaid leave days taken off the month's pay (payroll runs). */
+  unpaidDays?: number;
+}
+
+/**
+ * Extra inputs a payroll run adds to a month's slip: unpaid leave, taxable one-offs (approved overtime, leave
+ * encashment payouts), untaxed additions (approved reimbursements) and after-tax deductions (cash advance recovery,
+ * replacing the registered deduction source).
+ */
+export interface RunExtras {
+  unpaidDays?: number;
+  earnings?: PayLine[];
+  untaxed?: PayLine[];
+  deductions?: PayLine[];
 }
 
 export type GeneratedPayslip = Payslip & PayslipExtras;
@@ -134,10 +150,13 @@ function buildSlip(
   withOneOffs: boolean,
   ytd: YtdRunning,
   to?: string,
+  extras?: RunExtras,
 ): GeneratedPayslip {
   const { rules, scale, basis, rate } = ctx;
   const total = daysInMonth(month);
-  const paidDays = Math.max(0, endDay - startDay + 1);
+  const employedDays = Math.max(0, endDay - startDay + 1);
+  const unpaidDays = basis === "hourly" ? 0 : Math.min(employedDays, Math.max(0, extras?.unpaidDays ?? 0));
+  const paidDays = employedDays - unpaidDays;
   const share = paidDays / total;
   const full = monthlyPay(rules, scale, 0);
   const fullRegular = sum(full.earnings);
@@ -177,7 +196,8 @@ function buildSlip(
   if (withOneOffs && isFinal && input.unusedLeaveDays && input.unusedLeaveDays > 0) {
     oneOffs.push({ name: `Leave encashment (${input.unusedLeaveDays} days)`, amount: Math.round(dailyRate * input.unusedLeaveDays) });
   }
-  const earnings = [...regularEarnings, ...oneOffs];
+  if (extras?.earnings) oneOffs.push(...extras.earnings.filter((l) => l.amount));
+  const earnings = [...regularEarnings, ...oneOffs, ...(extras?.untaxed ?? []).filter((l) => l.amount)];
   const regular = sum(regularEarnings);
   const oneOff = sum(oneOffs);
 
@@ -210,7 +230,8 @@ function buildSlip(
       .filter((item) => item.amount > 0 || withExtras.taxLines.includes(item.name));
   const deductions = regular + oneOff > 0 ? monthly((a) => a.deductions) : [];
   // Other modules' after-tax lines (e.g. cash advance recovery), only on real payslips.
-  if (withOneOffs && regular + oneOff > 0) deductions.push(...extraDeductions(input.employeeId, month));
+  if (extras?.deductions) deductions.push(...extras.deductions.filter((l) => l.amount));
+  else if (withOneOffs && regular + oneOff > 0) deductions.push(...extraDeductions(input.employeeId, month));
   const employerContributions = regular + oneOff > 0 ? monthly((a) => a.employer) : [];
   const monthTax = sum(deductions.filter((l) => withExtras.taxLines.includes(l.name)));
   const gross = sum(earnings);
@@ -228,6 +249,7 @@ function buildSlip(
     earnings,
     deductions,
     ...(basis === "monthly" && paidDays < total ? { paidDays, totalDays: total } : {}),
+    ...(unpaidDays > 0 ? { unpaidDays } : {}),
     ...(isFinal ? { finalSettlement: true } : {}),
     basis,
     ...(rate ? { hourlyRate: rate, hours } : {}),
@@ -273,9 +295,54 @@ export function generatePayslips(input: PayslipInput): GeneratedPayslip[] {
     const startDay = month === joinMonth && input.joiningDate ? Number(input.joiningDate.slice(8, 10)) : 1;
     const isFinal = exitReached && month === exitMonth;
     const endDay = isFinal && input.lastWorkingDay ? Number(input.lastWorkingDay.slice(8, 10)) : total;
+    const fromRun = runSource?.slip(input.employeeId, month);
+    if (fromRun) {
+      slips.push(fromRun);
+      ytd.set(fromRun.ytd.taxYear, { gross: fromRun.ytd.gross, tax: fromRun.ytd.tax, net: fromRun.ytd.net, fromMonth: fromRun.ytd.fromMonth });
+      continue;
+    }
     slips.push(buildSlip(input, ctx, month, startDay, endDay, isFinal, true, ytd, exitReached ? input.lastWorkingDay : undefined));
   }
-  return slips.reverse();
+  // A month paid by a locked payroll run shows as soon as the run is locked, even before the month ends.
+  for (const month of runSource?.months(input.employeeId) ?? []) {
+    if (month > lastMonth && month <= todayMonth && !slips.some((s) => s.month === month)) {
+      const fromRun = runSource?.slip(input.employeeId, month);
+      if (fromRun) slips.push(fromRun);
+    }
+  }
+  return slips.sort((a, b) => b.month.localeCompare(a.month));
+}
+
+/* Payslips from locked payroll runs (src/features/payroll/runsStore.ts); other months are generated. */
+type RunSource = {
+  slip: (employeeId: string, month: string) => GeneratedPayslip | null;
+  months: (employeeId: string) => string[];
+  version: () => string;
+};
+let runSource: RunSource | null = null;
+
+export function setPayslipRunSource(source: RunSource | null): void {
+  runSource = source;
+}
+
+/**
+ * One month's payslip for a payroll run: worked out exactly as the payslips are (pro-rated for joiners and
+ * leavers, statutory deductions from the country's rules) with the run's extras added. Year-to-date figures
+ * follow the payslips before it.
+ */
+export function buildRunSlip(input: PayslipInput, month: string, extras: RunExtras): GeneratedPayslip {
+  const ctx = contextFor(input);
+  const total = daysInMonth(month);
+  const joinMonth = input.joiningDate?.slice(0, 7);
+  const startDay = joinMonth === month && input.joiningDate ? Number(input.joiningDate.slice(8, 10)) : 1;
+  const lwd = input.lastWorkingDay;
+  const isFinal = Boolean(lwd && lwd.slice(0, 7) === month);
+  const endDay = isFinal && lwd ? Number(lwd.slice(8, 10)) : total;
+  const ytd: YtdRunning = new Map();
+  // Earlier slips this tax year (generated, or from locked runs) give the running totals.
+  const earlier = joinMonth && joinMonth >= month ? [] : generatePayslips({ ...input, today: `${month}-01`, lastWorkingDay: isFinal ? undefined : lwd });
+  for (const slip of [...earlier].reverse()) ytd.set(slip.ytd.taxYear, { gross: slip.ytd.gross, tax: slip.ytd.tax, net: slip.ytd.net, fromMonth: slip.ytd.fromMonth });
+  return buildSlip(input, ctx, month, startDay, endDay, isFinal, true, ytd, isFinal ? lwd : undefined, extras);
 }
 
 /** Weekly days off by country (0 = Sunday … 6 = Saturday). */
@@ -321,6 +388,7 @@ export function estimateMonthSoFar(input: PayslipInput): MonthSoFar | null {
   const lwd = input.lastWorkingDay;
   if (lwd && lwd <= today) return null; // left, or the final payslip for this month is already out
   if (input.joiningDate && input.joiningDate > today) return null;
+  if (runSource?.slip(input.employeeId, month)) return null; // this month's payslip is out (locked payroll run)
   const startDay = input.joiningDate && input.joiningDate.slice(0, 7) === month ? Number(input.joiningDate.slice(8, 10)) : 1;
   const endDay = Number(today.slice(8, 10));
   const ctx = contextFor(input);
@@ -468,13 +536,16 @@ function extraDeductions(employeeId: string, month: string): PayLine[] {
   return deductionSource?.lines(employeeId, month) ?? [];
 }
 
+/** The registered after-tax lines (cash advance recovery) for a month — payroll runs in local mode. */
+export const extraDeductionLines = extraDeductions;
+
 /** Registers extra deduction lines on payslips; `version` changes whenever the lines change (clears the cache key). */
 export function setPayslipDeductionSource(source: DeductionSource | null): void {
   deductionSource = source;
 }
 
 export function cachedPayslips(owner: object, rawKey: string, build: () => PayslipView[]): PayslipView[] {
-  const key = deductionSource ? `${rawKey}|${deductionSource.version()}` : rawKey;
+  const key = `${deductionSource ? `${rawKey}|${deductionSource.version()}` : rawKey}|${runSource?.version() ?? ""}`;
   let byKey = cache.get(owner);
   if (!byKey) {
     byKey = new Map();

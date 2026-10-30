@@ -18,6 +18,8 @@ import {
   decideProfileCorrection,
   requestProfileCorrection,
   saveOwnBackground,
+  checkOwnBackground,
+  ownBackgroundUpdate,
   useProfileCorrections,
   withdrawProfileCorrection,
   type CorrectionField,
@@ -26,6 +28,7 @@ import {
 import type { DemoAccount } from "../demoAccounts.ts";
 import { formatShortDate } from "../model.ts";
 import { MaskedValue } from "../components/MaskedValue.tsx";
+import { useProfileCode } from "../components/ProfileCodeDialog.tsx";
 import { canRevealPersonal, personRevealer } from "../data/piiReveal.ts";
 import { isMasked } from "../utils/mask.ts";
 
@@ -436,20 +439,33 @@ function BackgroundEditor({ record, viewer, onClose, onSaved }: { record: Person
 
   const saveAction = useAction();
 
+  const codeFlow = useProfileCode();
+
   async function submit() {
-    const result = await saveOwnBackground(viewer, { preferredName, preferredLanguage, spokenLanguages: languages, education, experience, careerGoals });
-    if (result) {
-      setError(result);
+    setError("");
+    const input = { preferredName, preferredLanguage, spokenLanguages: languages, education, experience, careerGoals };
+    const invalid = checkOwnBackground(input);
+    if (invalid) {
+      setError(invalid);
       return false;
     }
-    onSaved();
-    return true;
+    // A new preferred name needs a code from your TimeZ inbox; the other fields do not.
+    const result = await codeFlow.start({
+      userId: viewer.id,
+      apiChanges: ownBackgroundUpdate(input),
+      localChanges: preferredName.trim() !== (record.preferredName ?? "").trim() ? { preferredName: preferredName.trim() } : {},
+      save: (otp) => saveOwnBackground(viewer, input, otp ?? undefined),
+      onSaved,
+    });
+    if (typeof result === "string") setError(result);
+    return result === true;
   }
 
   const setEdu = (i: number, patch: Partial<EducationRecord>) => setEducation(education.map((e, j) => (j === i ? { ...e, ...patch } : e)));
   const setExp = (i: number, patch: Partial<ExperienceRecord>) => setExperience(experience.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
   return (
+    <>
     <Dialog open wide title="Edit profile details" onClose={onClose}>
       <form className="stack" onSubmit={saveAction.submit(submit, { success: "Profile saved." })}>
         <div className="form-grid-2">
@@ -560,5 +576,7 @@ function BackgroundEditor({ record, viewer, onClose, onSaved }: { record: Person
         </div>
       </form>
     </Dialog>
+    {codeFlow.dialog}
+    </>
   );
 }

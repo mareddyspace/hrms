@@ -84,7 +84,9 @@ def add_optional(body: OptionalHolidayIn, request: Request, db: DbSession, user:
         raise HTTPException(422, "Pick a country.")
     if body.date < date.today():
         raise HTTPException(422, "Pick a date that hasn't passed.")
-    if body.date.weekday() >= 5:
+    from app.services.leave import weekly_off_for
+
+    if body.date.weekday() in weekly_off_for(db, cc):
         raise HTTPException(422, "That date is a weekend. Pick a working day.")
     if body.date in leave_rules.holiday_dates(db, cc, body.date, body.date):
         raise HTTPException(422, "That date is already a public holiday.")

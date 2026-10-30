@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -41,7 +41,9 @@ class Settings(BaseSettings):
 
     # "production" turns on the strict start-up checks (JWT_SECRET) and HSTS.
     app_env: str = Field(default="development", validation_alias="APP_ENV")
-    docs_enabled: bool = Field(default=True, validation_alias="DOCS_ENABLED")  # false hides /docs and /openapi.json
+    # /docs and /openapi.json. Unset = on in development, off in production. In production, DOCS_ENABLED=true serves
+    # them only after signing in with a portal account (HTTP Basic, app/docs_auth.py).
+    docs_enabled: bool | None = Field(default=None, validation_alias="DOCS_ENABLED")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     # Run `alembic upgrade head` once at start-up (Render free has no pre-deploy command).
     run_migrations_on_start: bool = Field(default=False, validation_alias="RUN_MIGRATIONS_ON_START")
@@ -49,7 +51,7 @@ class Settings(BaseSettings):
     refresh_token_days: int = 7
     max_failed_logins: int = 5
     lockout_minutes: int = 15
-    # Not signed in for this many days: the next sign-in must set a new password.
+    # Password older than this many days (password_changed_at): the next sign-in must set a new password.
     password_stale_days: int = 90
     # Local testing only: POST /people/me/otp also returns the code (dev_code). Never set in production.
     otp_dev_echo: bool = Field(default=False, validation_alias="OTP_DEV_ECHO")
@@ -60,6 +62,12 @@ class Settings(BaseSettings):
     ai_model: str = Field(default="", validation_alias="AI_MODEL")
     ai_model_fallbacks: str = Field(default="", validation_alias="AI_MODEL_FALLBACKS")  # comma-separated
     ai_timeout_seconds: float = Field(default=14.0, validation_alias="AI_TIMEOUT_SECONDS")
+
+    @model_validator(mode="after")
+    def _default_docs(self) -> "Settings":
+        if self.docs_enabled is None:
+            self.docs_enabled = not self.is_production
+        return self
 
     @property
     def ai_models(self) -> list[str]:

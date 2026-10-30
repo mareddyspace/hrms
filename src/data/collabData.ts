@@ -96,6 +96,11 @@ export interface Announcement {
   authorId?: string;
   /** User ids who have read this announcement. */
   readBy: string[];
+  /** Backend mode: readers must acknowledge it; HR sees read receipts. */
+  mustAcknowledge?: boolean;
+  acknowledged?: boolean;
+  serverCanManage?: boolean;
+  receipts?: { audience: number; read: number; acknowledged: number };
 }
 
 export type NotifCategory =

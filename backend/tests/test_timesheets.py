@@ -3,8 +3,9 @@ from datetime import date
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import AuditLog, LeaveRequest
+from app.models import AuditLog, LeaveRequest, TimesheetWeek
 from tests.conftest import login
+from tests.timesheet_helpers import legacy_submit_week
 
 E = "/api/v1/timesheets/entries"
 
@@ -49,15 +50,19 @@ def test_entry_crud_and_validation(client, babu, ram):
         assert actions == ["timesheet_entry_added", "timesheet_entry_updated", "timesheet_entry_deleted"]
 
 
-def test_submit_validation_day_limit_and_leave(client, babu):
-    # more than 24 h on one day
-    a = _add(client, babu, "2026-02-10", 20).json()
+def test_weekly_submit_is_retired(client, babu):
+    """Timesheets are daily (today, 9 h, after check-out): the old weekly submit refuses every week."""
     _add(client, babu, "2026-02-10", 8, "prj-acme")
-    res = client.post("/api/v1/timesheets/weeks/2026-02-09/submit", headers=babu)
-    assert res.status_code == 422 and "24 h" in res.json()["detail"]
-    client.delete(f"{E}/{a['id']}", headers=babu)
-    assert client.post("/api/v1/timesheets/weeks/2026-02-10/submit", headers=babu).status_code == 422  # not a Monday
-    assert client.post("/api/v1/timesheets/weeks/2025-02-10/submit", headers=babu).status_code == 422  # nothing logged
+    for week in ("2026-02-09", "2026-02-10", "2025-02-10"):
+        res = client.post(f"/api/v1/timesheets/weeks/{week}/submit", headers=babu)
+        assert res.status_code == 409 and res.json()["detail"] == "Timesheets are submitted day by day."
+    with SessionLocal() as db:
+        week = db.scalar(select(TimesheetWeek).where(TimesheetWeek.employee_id == "emp-mahesh",
+                                                     TimesheetWeek.week_start == date(2026, 2, 9)))
+        assert week is not None and week.status == "draft"  # nothing was submitted
+
+
+def test_submit_validation_day_limit_and_leave(client, babu):
 
     # approved full-day leave (seed: PTO 16-18 March 2026): no hours can be logged that day
     res = _add(client, babu, "2026-03-17", 2)
@@ -68,21 +73,17 @@ def test_submit_validation_day_limit_and_leave(client, babu):
         db.add(LeaveRequest(id="lv-test-half", employee_id="emp-mahesh", leave_code="casual", from_date=date(2026, 3, 20),
                             to_date=date(2026, 3, 20), half="first", days=0.5, reason="test", status="approved"))
         db.commit()
-    half = _add(client, babu, "2026-03-20", 5).json()
-    res = client.post("/api/v1/timesheets/weeks/2026-03-16/submit", headers=babu)
-    assert res.status_code == 422 and "half-day" in res.json()["detail"]
-    client.put(f"{E}/{half['id']}", headers=babu, json={"work_date": "2026-03-20", "project_id": "prj-hrms", "task": "Build", "hours": 4.5})
-    res = client.post("/api/v1/timesheets/weeks/2026-03-16/submit", headers=babu)
-    assert res.status_code == 200, res.text
-    assert res.json()["status"] == "submitted" and res.json()["total_hours"] == 4.5
-    # a submitted week locks the days it was submitted with (other days are logged day by day)
+    half = _add(client, babu, "2026-03-20", 4.5).json()
+    week = legacy_submit_week(client, babu, "emp-mahesh", "2026-03-16")
+    assert week["status"] == "submitted" and week["total_hours"] == 4.5
+    # an old week submitted before timesheets went daily still locks the days it was submitted with (other days are logged day by day)
     assert _add(client, babu, "2026-03-20", 1).status_code == 409
     assert client.delete(f"{E}/{half['id']}", headers=babu).status_code == 409
 
 
 def test_decision_permissions_reject_resubmit_hr_approve(client, babu, ram, farhan):
     _add(client, babu, "2026-02-16", 8)
-    week = client.post("/api/v1/timesheets/weeks/2026-02-16/submit", headers=babu).json()
+    week = legacy_submit_week(client, babu, "emp-mahesh", "2026-02-16")
     url = f"/api/v1/timesheets/weeks/{week['id']}/decision"
     assert week["id"] in {w["id"] for w in client.get("/api/v1/timesheets/weeks", headers=ram, params={"view": "team"}).json()}
     assert week["id"] in {w["id"] for w in client.get("/api/v1/timesheets/weeks", headers=babu).json()}
@@ -96,9 +97,11 @@ def test_decision_permissions_reject_resubmit_hr_approve(client, babu, ram, farh
     assert res.status_code == 200 and res.json()["status"] == "rejected"
     assert any(n["title"] == "Timesheet rejected" for n in client.get("/api/v1/notifications", headers=babu).json())
 
-    # rejected weeks can be edited and resubmitted; HR can approve
+    # rejected weeks can be edited, but no longer resubmitted as a week (days are submitted one by one)
     assert _add(client, babu, "2026-02-17", 1).status_code == 201
-    assert client.post("/api/v1/timesheets/weeks/2026-02-16/submit", headers=babu).json()["status"] == "submitted"
+    assert client.post("/api/v1/timesheets/weeks/2026-02-16/submit", headers=babu).status_code == 409
+    # (an old resubmission made before the change) HR in scope can approve it
+    assert legacy_submit_week(client, babu, "emp-mahesh", "2026-02-16")["status"] == "submitted"
     res = client.post(url, headers=farhan, json={"decision": "approve"})
     assert res.status_code == 200 and res.json()["status"] == "approved" and res.json()["decided_by"] == "demo-hr-admin"
     assert client.post(url, headers=ram, json={"decision": "approve"}).status_code == 409
@@ -111,7 +114,7 @@ def test_decision_permissions_reject_resubmit_hr_approve(client, babu, ram, farh
 def test_no_manager_week_auto_approved(client):
     jordan = login(client, "jordan.blake@timez.com")
     assert _add(client, jordan, "2026-02-23", 3, "prj-internal").status_code == 201
-    assert client.post("/api/v1/timesheets/weeks/2026-02-23/submit", headers=jordan).json()["status"] == "approved"
+    assert legacy_submit_week(client, jordan, "demo-ceo", "2026-02-23")["status"] == "approved"
 
 
 def test_utilization_is_scoped(client, babu, ram):
@@ -134,9 +137,7 @@ def test_utilization_is_scoped(client, babu, ram):
 def test_week_detail_for_manager_with_project_names(client, babu, ram):
     _add(client, babu, "2025-09-08", 6)
     _add(client, babu, "2025-09-09", 2, "prj-acme")
-    res = client.post("/api/v1/timesheets/weeks/2025-09-08/submit", headers=babu)
-    assert res.status_code == 200, res.text
-    week = res.json()
+    week = legacy_submit_week(client, babu, "emp-mahesh", "2025-09-08")
     url = f"/api/v1/timesheets/weeks/{week['id']}/detail"
     res = client.get(url, headers=ram)
     assert res.status_code == 200, res.text
@@ -296,7 +297,7 @@ def test_day_without_manager_goes_to_hr(client, farhan):
 def test_old_weekly_submission_still_listed_and_decidable(client, babu, ram):
     """Weeks submitted under the weekly flow keep showing for the manager after the switch to daily timesheets."""
     _add(client, babu, "2025-12-01", 8)
-    week = client.post("/api/v1/timesheets/weeks/2025-12-01/submit", headers=babu).json()
+    week = legacy_submit_week(client, babu, "emp-mahesh", "2025-12-01")
     assert week["status"] == "submitted"
     pending = {p["id"]: p for p in client.get("/api/v1/approvals/pending", headers=ram).json()}
     assert pending[week["id"]]["kind"] == "timesheet_week"
@@ -315,7 +316,7 @@ def test_old_weekly_submission_still_listed_and_decidable(client, babu, ram):
 def test_old_week_does_not_block_other_days(client, babu, ram):
     """A pending old weekly submission doesn't stop logging and submitting another day of that week."""
     _add(client, babu, "2025-12-08", 6)
-    week = client.post("/api/v1/timesheets/weeks/2025-12-08/submit", headers=babu).json()
+    week = legacy_submit_week(client, babu, "emp-mahesh", "2025-12-08")
     assert week["status"] == "submitted"
     assert _add(client, babu, "2025-12-08", 1).status_code == 409  # covered by the week
     assert _add(client, babu, "2025-12-10", 5).status_code == 201

@@ -12,6 +12,9 @@ export function LetterFrame({ html, title }: { html: string; title: string }) {
 export function printLetter(html: string): void {
   const frame = document.createElement("iframe");
   frame.setAttribute("aria-hidden", "true");
+  // Scripts stay off inside the letter. allow-same-origin lets this page call print() on the frame,
+  // allow-modals lets the print dialog open.
+  frame.setAttribute("sandbox", "allow-modals allow-same-origin");
   frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
   document.body.appendChild(frame);
   const cleanup = () => window.setTimeout(() => frame.remove(), 1000);

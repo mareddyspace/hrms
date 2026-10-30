@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { API_ENABLED } from "../api/client.ts";
 import { formatShortDate, parseISODate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { pushManagerTaskAlert, pushPersonTaskAlert } from "./collabLocal.ts";
@@ -18,6 +19,8 @@ export function useTaskAutoReminders() {
   const { state, recordTaskAutoEvents } = usePortal();
   const today = todayISO();
   useEffect(() => {
+    // Backend mode: tasks live on the server; the local demo list would raise alerts for tasks that don't exist there.
+    if (API_ENABLED) return;
     const sent = readSentReminders();
     const alerts: (() => void)[] = [];
     const events: { taskId: string; action: string; detail?: string }[] = [];

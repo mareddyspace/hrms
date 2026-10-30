@@ -36,7 +36,8 @@ type TalentState = ReturnType<typeof getTalentState>;
 const WFH_CODES = new Set(["wfh", "emergency_wfh"]);
 
 export function weeklyOffFor(countryCode: string | undefined): number[] {
-  return countryCode === "AE" || countryCode === "SA" ? [5, 6] : [0, 6];
+  // Saudi Arabia: Friday–Saturday weekend; the UAE (since 2022) and everyone else: Saturday–Sunday. Same as the server.
+  return countryCode === "SA" ? [5, 6] : [0, 6];
 }
 
 /* ───────────── Performance ───────────── */

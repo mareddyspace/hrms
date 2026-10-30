@@ -31,6 +31,7 @@ import type { CvFields } from "../features/ai/cvReader.ts";
 import type { MatchResult } from "../features/ai/candidateMatch.ts";
 import { API_ENABLED, API_URL, ApiError, api, apiRequest, apiSessionAccount, onApiSession } from "./client.ts";
 import { loadInstances, nameOf, stepsFromInstance, type ApprovalInstanceOut } from "./syncShared.ts";
+import { keepFresh } from "./syncShare.ts";
 
 export { API_ENABLED };
 
@@ -75,6 +76,8 @@ export function createTalentMirror<T>(empty: () => T, load: (accountId: string) 
         }
       }),
     );
+    // New careers applications, approvals and offers made by others show up without a full page reload.
+    keepFresh(reload, 120_000);
   }
   return {
     get: () => value,

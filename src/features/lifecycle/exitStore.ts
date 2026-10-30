@@ -152,6 +152,8 @@ export interface ExitApiExtras {
   canWithdraw: boolean;
   canAddRetention: boolean;
   interviewSubmitted: boolean;
+  /** Exited on the last day with checklist items still open (HR finishes them on the completed case). */
+  clearancePending?: boolean;
   /** Unused privilege leave paid out in the final settlement (leaver and HR only). */
   unusedLeaveDays?: number;
   settlementFrozen?: boolean;

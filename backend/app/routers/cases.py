@@ -38,14 +38,14 @@ def _role(user: CurrentUser) -> str:
 
 def _visible(db: DbSession, user: CurrentUser, case_id: str) -> HrCase:
     case = db.get(HrCase, case_id)
-    if case is None or not rules.can_see(db, case, user.employee_id, _role(user)):
+    if case is None or not rules.can_see(db, case, user.employee_id, _role(user), user.scope):
         raise NOT_FOUND
     return case
 
 
 def _managed(db: DbSession, user: CurrentUser, case_id: str) -> HrCase:
     case = _visible(db, user, case_id)
-    if not rules.can_manage(db, case, user.employee_id, _role(user)):
+    if not rules.can_manage(db, case, user.employee_id, _role(user), user.scope):
         raise HTTPException(403, "Only HR (or the Internal Committee for POSH cases) can update this case."
                             if rules.is_posh(case) else "Only HR can update this case.")
     return case
@@ -62,7 +62,7 @@ def _name(db: DbSession, emp_id: str | None) -> str | None:
 
 
 def _out(db: DbSession, user: CurrentUser, case: HrCase) -> HrCaseOut:
-    manager = rules.can_manage(db, case, user.employee_id, _role(user))
+    manager = rules.can_manage(db, case, user.employee_id, _role(user), user.scope)
     notes = list(db.scalars(select(HrCaseNote).where(HrCaseNote.case_id == case.id).order_by(HrCaseNote.created_at, HrCaseNote.id)))
     files = list(db.scalars(select(HrCaseFile).where(HrCaseFile.case_id == case.id).order_by(HrCaseFile.created_at)))
     if not manager:
@@ -156,14 +156,14 @@ def list_cases(
         stmt = stmt.where(HrCase.category == category)
     if assigned_to_me:
         stmt = stmt.where(HrCase.assignee_id == emp_id)
-    cases = [c for c in db.scalars(stmt.order_by(HrCase.created_at.desc())) if rules.can_see(db, c, user.employee_id, _role(user))]
+    cases = [c for c in db.scalars(stmt.order_by(HrCase.created_at.desc())) if rules.can_see(db, c, user.employee_id, _role(user), user.scope)]
     return [_out(db, user, c) for c in cases]
 
 
 @router.get("/by-code/{code}", response_model=HrCaseOut)
 def by_code(code: str, db: DbSession, user: CurrentUserDep) -> HrCaseOut:
     case = db.scalar(select(HrCase).where(HrCase.code == code.strip().upper()))
-    if case is None or not rules.can_see(db, case, user.employee_id, _role(user)):
+    if case is None or not rules.can_see(db, case, user.employee_id, _role(user), user.scope):
         raise NOT_FOUND
     return _out(db, user, case)
 
@@ -319,7 +319,7 @@ def download_file(case_id: str, file_id: str, request: Request, db: DbSession, u
     row = db.get(HrCaseFile, file_id)
     if row is None or row.case_id != case.id:
         raise NOT_FOUND
-    if row.confidential and not rules.can_manage(db, case, user.employee_id, _role(user)):
+    if row.confidential and not rules.can_manage(db, case, user.employee_id, _role(user), user.scope):
         raise NOT_FOUND
     try:
         response = storage.download(row.storage_path, media_type=row.content_type, filename=row.file_name)

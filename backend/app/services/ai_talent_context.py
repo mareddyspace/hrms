@@ -202,15 +202,15 @@ def copilot_blocks(db: Session, user) -> list[tuple[str, str | None, str | None]
 
     if me is not None:
         today = local_today(me)
-        add(goals_block(db, me), "Your goals", "/performance")
-        add(ratings_block(db, me), "Your released ratings", "/performance")
+        add(goals_block(db, me), "Your goals", "/evaluations")
+        add(ratings_block(db, me), "Your released ratings", "/evaluations")
         add(skills_block(db, me), "Your skills", "/skills")
-        add(learning_block(db, me, today), "Your learning", "/learning")
+        add(learning_block(db, me, today), "Your learning", "/programs")
         add(benefits_block(db, me), "Your benefits", "/benefits")
         add(career_block(db, me), "Your career interests", "/skills")
         if user.scope.reports:
             add(team_goals_block(db, me), "Your team's goals", "/team")
-            add(team_learning_block(db, user.scope.reports, today), "Your team's learning", "/learning")
+            add(team_learning_block(db, user.scope.reports, today), "Your team's learning", "/programs")
             if not user.scope.is_hr:
                 add(team_career_block(db, "YOUR TEAM'S CAREER INTERESTS (counts only)", report_ids=user.scope.reports),
                     "Team career interests", "/skills")

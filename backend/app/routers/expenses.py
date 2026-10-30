@@ -28,9 +28,10 @@ from app.services.activity import notify, record_audit
 from app.services.decisions import NOT_FOUND, can_view, me
 from app.services.leave import today_for
 from app.services.workflow_defaults import (
-    EXPENSE_FINANCE_THRESHOLD,
     decide_http,
     ensure_default,
+    expense_compare_amount,
+    expense_finance_threshold,
     is_approver,
     notify_withdrawn,
     waiting_entity_ids,
@@ -93,7 +94,7 @@ def get_rules(user: CurrentUserDep) -> ExpenseRulesOut:
     return ExpenseRulesOut(
         country_code=emp.country_code, currency=emp.currency, max_claim=limits["max_claim"],
         receipt_required_over=limits["receipt_above"], max_cash_advance=limits["max_cash_advance"],
-        claim_window_days=rules.CLAIM_WINDOW_DAYS, finance_threshold=EXPENSE_FINANCE_THRESHOLD,
+        claim_window_days=rules.CLAIM_WINDOW_DAYS, finance_threshold=expense_finance_threshold(emp.country_code),
         categories=list(EXPENSE_CATEGORIES), max_receipt_bytes=storage.MAX_RECEIPT_BYTES,
         receipt_types=sorted(storage.ALLOWED_TYPES),
     )
@@ -157,7 +158,8 @@ def create_claim(body: ExpenseClaimIn, request: Request, db: DbSession, user: Cu
                  subject_id=emp.id, after=_snapshot(claim) | {"receipts": [r.id for r in receipts]}, ip=client_ip(request))
     ensure_default(db, "expense")
     try:
-        instance = engine.start(db, "expense", claim.id, emp, claim.amount, actor_id=user.id)
+        instance = engine.start(db, "expense", claim.id, emp, claim.amount, actor_id=user.id,
+                                compare_amount=expense_compare_amount(claim.amount, emp.country_code))
     except engine.ApprovalError as exc:
         db.rollback()
         raise HTTPException(422, str(exc)) from exc

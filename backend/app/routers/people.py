@@ -2,9 +2,10 @@
 
 Everyone signed in sees the directory with basic fields (name, title, department, location, country, email,
 manager, photo). The full record comes back only for people in the caller's data scope: themselves, their
-reporting line, or (HR/admin/executive) everyone within their country scope. Pay fields are never returned.
+reporting line, or (HR) everyone within their country scope. Admin and executive get basic profiles outside
+their own line (src/data/rbac.ts getProfileDepth). Pay fields are never returned.
 Mobile, personal email and date of birth are always masked; GET /people/{id}/reveal returns one full value to the
-person themselves or HR / admin in scope (HR / admin reveals are audited, without the value).
+person themselves or HR in scope (HR reveals are audited, without the value).
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def list_people(
     location: str | None = None,
     status: Annotated[str | None, Query(description="Employment status, e.g. Active")] = None,
     scope: Annotated[str, Query(pattern="^(directory|mine)$", description="mine = only people whose full record you may see")] = "directory",
-    page: Annotated[int, Query(ge=1)] = 1,
+    page: Annotated[int, Query(ge=1, le=10_000)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> Page[PersonBasicOut | PersonFullOut]:
     manager = aliased(Employee)

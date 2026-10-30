@@ -263,7 +263,7 @@ function MyPoliciesView({
                     return (
                       <li key={p.id}>
                         <button type="button" className={p.id === openId ? "pol-row active" : "pol-row"} onClick={() => setOpenId(p.id)}>
-                          <span className="pol-row-title">{p.title}</span>
+                          <span className="pol-row-title" title={p.title}>{p.title}</span>
                           <span className="pol-row-meta">
                             v{p.version}
                             {badge}
@@ -322,7 +322,7 @@ function PolicyDetail({ policy, userId, acks, query }: { policy: Policy; userId:
       <header>
         <h2>{policy.title}</h2>
         <p className="muted">
-          {policy.category} · Version {policy.version} · Effective {policy.effective} · Owner: {policy.owner}
+          {policy.category} · Version {policy.version} · Effective {/^\d{4}-\d{2}-\d{2}$/.test(policy.effective) ? fmtDay(policy.effective) : policy.effective} · Owner: {policy.owner}
           {policy.mandatory ? " · Mandatory" : ""}
         </p>
       </header>

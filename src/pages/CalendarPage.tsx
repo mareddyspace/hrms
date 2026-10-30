@@ -1,6 +1,6 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
-import { holidaysForPerson } from "../model.ts";
+import { holidaysForPerson, leaveNameFor } from "../model.ts";
 import {
   Banner,
   Card,
@@ -16,14 +16,15 @@ import {
 } from "../components/ui.tsx";
 import {
   CALENDAR_KIND_LABEL,
+  calendarVersion,
   eventSpansDate,
-  declineLocalMeeting,
   eventsForPerson,
   isLocalEvent,
   notesToEvents,
   reminderError,
-  removeLocalReminder,
-  saveLocalReminder,
+  removeOrDeclineShared,
+  saveReminderShared,
+  subscribeCalendar,
   type CalendarEvent,
   type CalendarEventKind,
 } from "../data/calendarData.ts";
@@ -102,6 +103,8 @@ export function CalendarPage() {
   const [selected, setSelected] = useState(today);
   const [filter, setFilter] = useState<"all" | CalendarEventKind>("all");
   const [tick, setTick] = useState(0);
+  // Backend mode: shared reminders and meetings (re-renders when they change).
+  const sharedEvents = useSyncExternalStore(subscribeCalendar, calendarVersion, calendarVersion);
   const [title, setTitle] = useState("");
   const [date, setDate] = useState(today);
   const [time, setTime] = useState("");
@@ -133,10 +136,10 @@ export function CalendarPage() {
         date: r.from,
         endDate: r.to,
         kind: (r.code === "wfh" || r.code === "emergency_wfh" ? "wfh" : "leave") as CalendarEventKind,
-        title: r.code === "wfh" || r.code === "emergency_wfh" ? "WFH (approved)" : `Leave · ${r.code}`,
+        title: r.code === "wfh" || r.code === "emergency_wfh" ? "WFH (approved)" : `Leave · ${leaveNameFor(state.leavePolicies, r.code, r.employeeId) ?? r.code}`,
         audienceIds: [employee.id],
       }));
-  }, [state.leaveRequests, employee.id]);
+  }, [state.leaveRequests, state.leavePolicies, employee.id]);
 
   // Interviews I sit on (or run as the recruiter), from Recruiting.
   const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
@@ -165,7 +168,7 @@ export function CalendarPage() {
     });
     // tick refreshes after local reminder add/remove
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employee.id, holidaySource, leaveEvents, interviewEvents, myNotes, tick]);
+  }, [employee.id, holidaySource, leaveEvents, interviewEvents, myNotes, tick, sharedEvents]);
 
   const cells = monthCells(cursor.year, cursor.month);
 
@@ -208,7 +211,7 @@ export function CalendarPage() {
 
   const reminderAction = useAction();
 
-  function onAddReminder(): boolean {
+  async function onAddReminder(): Promise<boolean> {
     const now = new Date();
     const nowHm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
     const invalid = reminderError({ title, date, time }, today, nowHm);
@@ -217,13 +220,17 @@ export function CalendarPage() {
       return false;
     }
     setError("");
-    saveLocalReminder({
+    const failed = await saveReminderShared({
       title: title.trim(),
       date,
       time: time.trim() || undefined,
       description: note.trim() || undefined,
       ownerId: employee.id,
     });
+    if (failed) {
+      setError(failed);
+      return false;
+    }
     setTitle("");
     setTime("");
     setNote("");
@@ -233,8 +240,8 @@ export function CalendarPage() {
     return true;
   }
 
-  function onLocalAction(e: CalendarEvent, action: "remove" | "decline") {
-    const err = action === "decline" ? declineLocalMeeting(e.id, employee.id) : removeLocalReminder(e.id, employee.id);
+  async function onLocalAction(e: CalendarEvent, action: "remove" | "decline") {
+    const err = await removeOrDeclineShared(e.id, employee.id, action);
     if (err) {
       setNotice({ tone: "err", text: err });
       return false;

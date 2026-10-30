@@ -103,10 +103,18 @@ def test_expiring(client, babu, farhan):
 
 
 def test_policy_acknowledgment(client, babu, farhan):
-    res = client.post(f"{DOCS}/policy-acks", headers=babu, json={"policy_id": "code-of-conduct", "policy_version": "2026.1"})
+    # Unknown policies or versions are refused (built-in library ids at their current version, or published HR policies).
+    for bad in ({"policy_id": "made-up-policy", "policy_version": "1.0"},
+                {"policy_id": "code-of-conduct", "policy_version": "9.9"},
+                {"policy_id": "leave-US", "policy_version": "2026.1"}):  # another country's policy (Babu is in India)
+        res = client.post(f"{DOCS}/policy-acks", headers=babu, json=bad)
+        assert res.status_code == 422 and res.json()["detail"] == "Unknown policy or version.", bad
+    assert client.post(f"{DOCS}/policy-acks", headers=babu,
+                       json={"policy_id": "leave-IN", "policy_version": "2026.1"}).status_code == 201
+    res = client.post(f"{DOCS}/policy-acks", headers=babu, json={"policy_id": "code-of-conduct", "policy_version": "2.0"})
     assert res.status_code == 201 and res.json()["acknowledged_at"]
     assert client.post(f"{DOCS}/policy-acks", headers=babu,
-                       json={"policy_id": "code-of-conduct", "policy_version": "2026.1"}).status_code == 409
+                       json={"policy_id": "code-of-conduct", "policy_version": "2.0"}).status_code == 409
     rows = client.get(f"{DOCS}/policy-acks", headers=farhan, params={"policy_id": "code-of-conduct"}).json()
     assert [r["employee_id"] for r in rows] == ["emp-mahesh"]
 

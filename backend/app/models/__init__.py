@@ -131,3 +131,19 @@ __all__ += ["HrPolicy", "HrPolicyVersion"]
 from app.models.tickets import Ticket, TicketEvent, TicketTask  # noqa: E402
 
 __all__ += ["Ticket", "TicketEvent", "TicketTask"]
+
+# Shared chat, mail, tasks, announcements and calendar events (migration 0022)
+from app.models.sharing import (  # noqa: E402
+    Announcement, AnnouncementRead, CalendarAttendee, CalendarEvent, ChatConversation, ChatMember, ChatMessage,
+    MailMessage, MailRecipient, SharedTask,
+)
+
+__all__ += ["Announcement", "AnnouncementRead", "CalendarAttendee", "CalendarEvent", "ChatConversation", "ChatMember",
+            "ChatMessage", "MailMessage", "MailRecipient", "SharedTask"]
+
+# Payroll runs, bank details, overtime / comp-off, compliance due dates (migration 0023)
+from app.models.payroll_runs import (  # noqa: E402
+    ComplianceDueDate, EmployeeBankDetail, OvertimeRequest, PayrollRun, PayrollRunLine,
+)
+
+__all__ += ["ComplianceDueDate", "EmployeeBankDetail", "OvertimeRequest", "PayrollRun", "PayrollRunLine"]

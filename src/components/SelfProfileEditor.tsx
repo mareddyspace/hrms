@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { API_ENABLED } from "../api/client.ts";
+import { getPerson } from "../data/peopleLocal.ts";
 import { usePortal } from "../store.tsx";
 import { ProfileEditForm } from "./ProfileEditForm.tsx";
 import { Card } from "./ui.tsx";
@@ -9,7 +11,10 @@ const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 /** "Edit profile" card for the signed-in employee: contact details and photo, confirmed with an OTP. */
 export function SelfProfileEditor({ onClose }: { onClose: () => void }) {
   const { employee } = usePortal();
-  const [draft, setDraft] = useState(employee);
+  // Backend mode: start from the server record (masked mobile = keep), not the copy taken at sign-in.
+  const [draft, setDraft] = useState(() =>
+    API_ENABLED ? { ...employee, mobile: getPerson(employee.id)?.mobile || employee.mobile } : employee,
+  );
   const [photoFile, setPhotoFile] = useState("");
   const [photoError, setPhotoError] = useState("");
 

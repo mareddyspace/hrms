@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models import AuditLog
+from app.security import create_access_token
 from tests.conftest import login
 
 P = "/api/v1/performance"
@@ -122,10 +123,15 @@ def test_review_360_privacy_rating_release(client, babu, ram, farhan, sophie, cy
     assert client.put(f"{P}/reviews/{rid}/self", headers=babu, json={"text": "Changed", "submit": True}).status_code == 409
     assert client.put(f"{P}/reviews/{rid}/manager", headers=babu, json={"text": "I am great", "submit": True}).status_code == 403
     assert client.put(f"{P}/reviews/{rid}/manager", headers=farhan, json={"text": "HR is not the line", "submit": True}).status_code == 403
+    # skip-level (Jordan, Ram's manager) may view the review but not write the assessment or rate (direct manager only)
+    jordan = {"Authorization": f"Bearer {create_access_token('demo-ceo', 'executive')[0]}"}
+    assert client.get(f"{P}/cycles/{cycle['id']}/reviews/emp-mahesh", headers=jordan).status_code == 200
+    assert client.put(f"{P}/reviews/{rid}/manager", headers=jordan, json={"text": "Skip level writing", "submit": True}).status_code == 403
     assert client.post(rate, headers=ram, json={"rating": "Strong"}).status_code == 409  # manager assessment first
     assert client.put(f"{P}/reviews/{rid}/manager", headers=ram, json={"text": "Consistently strong delivery", "submit": True}).status_code == 200
     assert client.post(rate, headers=ram, json={"rating": "Brilliant"}).status_code == 422
     assert client.post(rate, headers=babu, json={"rating": "Exceptional"}).status_code == 403
+    assert client.post(rate, headers=jordan, json={"rating": "Exceptional"}).status_code == 403  # skip-level
     assert client.post(rate, headers=ram, json={"rating": "Strong"}).json()["rating"] == "Strong"
 
     assert client.get(f"{P}/cycles/{cycle['id']}/reviews/emp-mahesh", headers=babu).json()["rating"] is None  # not released

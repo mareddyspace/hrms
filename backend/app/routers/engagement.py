@@ -383,9 +383,9 @@ def toggle_like(kudos_id: str, db: DbSession, user: CurrentUserDep) -> KudosOut:
 def points(db: DbSession, user: CurrentUserDep, employee_id: str | None = None) -> PointsBalanceOut:
     emp = me(user)
     if employee_id and employee_id != emp.id:
-        if user.account.role not in HR_ROLES:
-            raise NOT_FOUND
-        if db.get(Employee, employee_id) is None:
+        other = db.get(Employee, employee_id)
+        # HR only, and only within its data scope (country-limited HR doesn't see other countries' points).
+        if user.account.role not in HR_ROLES or other is None or not user.scope.can_see(other):
             raise NOT_FOUND
         return _balance(db, employee_id)
     return _balance(db, emp.id)

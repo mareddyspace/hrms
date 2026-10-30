@@ -279,9 +279,6 @@ export function apiRemoveTimeEntry(entryId: string): Promise<string | null> {
   }, timeMirror);
 }
 
-export function apiSubmitWeek(weekStart: string): Promise<string | null> {
-  return mutate(() => api.post<TimesheetWeekOut>(`/timesheets/weeks/${encodeURIComponent(weekStart)}/submit`), timeMirror);
-}
 
 /** Submit one day (needs 9 h, 4.5 h on half-day leave) to the manager. */
 export function apiSubmitDay(date: string): Promise<string | null> {

@@ -90,7 +90,8 @@ def list_policies(db: DbSession, user: CurrentUserDep, employee_id: str | None =
 
 
 @router.get("/holidays", response_model=list[HolidayOut])
-def list_holidays(db: DbSession, user: CurrentUserDep, year: int | None = None) -> list[Holiday]:
+def list_holidays(db: DbSession, user: CurrentUserDep,
+                  year: Annotated[int | None, Query(ge=2000, le=2100)] = None) -> list[Holiday]:
     emp = _me(user)
     year = year or rules.today_for(emp).year
     return list(
@@ -173,11 +174,10 @@ def apply_leave(body: LeaveRequestIn, request: Request, db: DbSession, user: Cur
 
 
 def _can_decide(db: DbSession, user: CurrentUser, emp: Employee) -> bool:
-    if not user.employee_id or emp.id == user.employee_id:
-        return False  # never your own request
-    if user.scope.is_hr and user.scope.can_see(emp):
-        return True
-    return user.employee_id in manager_chain_ids(db, emp.id)
+    """Line manager (or their delegate) or HR in scope; never skip-level, never your own request."""
+    from app.services.decisions import can_decide
+
+    return can_decide(db, user, emp, "leave")
 
 
 @router.post("/requests/{request_id}/decision", response_model=LeaveRequestOut)

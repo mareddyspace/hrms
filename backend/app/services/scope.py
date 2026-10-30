@@ -2,7 +2,10 @@
 
 - everyone: themselves
 - anyone with reports: their whole reporting line (recursive via manager_id)
-- HR / admin / executive: global (HR can be limited to a list of countries in access_scopes)
+- HR: global for HR data (can be limited to a list of countries in access_scopes)
+- admin (system administrator) / executive (CEO, founder): organisation-wide for the directory (basic profiles) and
+  aggregate dashboards only (`org_wide`, `org_filter`), never HR data about people outside their own reporting line
+  (front-end policy src/data/rbac.ts: getProfileDepth gives them "basic", canViewSensitivePii gives them nothing).
 """
 
 from __future__ import annotations
@@ -15,7 +18,9 @@ from sqlalchemy.orm import Session
 from app.models import AccessScope, Account, Employee
 
 HR_ROLES = frozenset({"hr_admin", "hr", "hrbp"})
+# Organisation-wide for aggregates / dashboards / the directory. Only HR_ROLES get HR data about everyone (is_global).
 GLOBAL_ROLES = HR_ROLES | {"admin", "executive"}
+ORG_WIDE_ROLES = GLOBAL_ROLES
 # Saved data scopes that mean "people sharing my <column>" (app/services/data_scope.py).
 SCOPE_MATCH_COLUMNS = {
     "department": "department", "country": "country_code", "entity": "legal_entity",
@@ -49,6 +54,8 @@ class Scope:
     is_global: bool
     countries: list[str] | None = None
     reports: set[str] = field(default_factory=set)
+    # Organisation-wide aggregates (counts, dashboards) without HR data access: admin and executive, plus HR.
+    org_wide: bool = False
 
     @property
     def is_hr(self) -> bool:
@@ -73,6 +80,12 @@ class Scope:
             return not self.countries or employee.country_code in self.countries
         return False
 
+    def org_filter(self) -> ColumnElement[bool]:
+        """SQL condition for counts / aggregate dashboards: everyone for org-wide roles (HR within its countries)."""
+        if self.org_wide and not self.is_global and not self.countries:
+            return true()
+        return self.employee_filter()
+
 
 def build_scope(db: Session, account: Account) -> Scope:
     reports = report_ids(db, account.employee_id) if account.employee_id else set()
@@ -83,7 +96,8 @@ def build_scope(db: Session, account: Account) -> Scope:
     return Scope(
         self_id=account.employee_id,
         role=account.role,
-        is_global=account.role in GLOBAL_ROLES,
-        countries=countries,
+        is_global=account.role in HR_ROLES,
+        countries=countries if account.role in HR_ROLES else None,
         reports=reports,
+        org_wide=account.role in ORG_WIDE_ROLES,
     )

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { appendAuditEntries, diffForAudit } from "./data/auditTrail.ts";
 import { getTickets, isOpenTicket } from "./data/ticketStore.ts";
 import { compOffCreditsFor, getShiftState, subscribeShifts } from "./features/workforce/shiftsStore.ts";
+import { overtimeCompOffDays, overtimeVersion, subscribeOvertime } from "./features/overtime/overtimeStore.ts";
+import { getRunSlipsSnapshot, subscribeRunSlips } from "./features/payroll/runsStore.ts"; // locked payroll runs feed the payslips
 import { claimLimitsFor, declarableTaxYears, money, payRulesFor, receiptThresholdFor } from "./countryPay.ts";
 import type { ReactNode } from "react";
 import { createContext, useContext } from "react";
@@ -100,11 +102,12 @@ import {
 } from "./api/portalSync.ts";
 import { setApiNotificationReadHandler } from "./data/collabLocal.ts";
 import type { LeaveRow } from "./model.ts";
-import { apiAddTimeEntry, apiDecideDay, apiDecideWeek, apiRemoveTimeEntry, apiReopenDay, apiSubmitDay, apiSubmitWeek, timeMirror } from "./api/syncTimeSheets.ts";
+import { apiAddTimeEntry, apiDecideDay, apiDecideWeek, apiRemoveTimeEntry, apiReopenDay, apiSubmitDay, timeMirror } from "./api/syncTimeSheets.ts";
 import { checkOutNeededToSubmit } from "./data/attendanceLocal.ts";
 import { DAY_TARGET, HALF_DAY_TARGET, dayFromApi, dayRecordFor, getLocalDays, isFixable, legacyLockedDate, saveLocalDays, shortfallText } from "./data/timesheetDays.ts";
 import { halfDayLeave as halfDayLeaveOn, blockingLeave as fullDayLeaveOn, parseISODate } from "./model.ts";
 import { pendingMirror } from "./api/syncTimeApprovals.ts";
+import { bindSharedTasks, mergeSharedTasks, pushTaskChanges } from "./api/syncTasks.ts";
 import { apiAddExpense, apiDecideExpense, apiPayExpense, apiWithdrawExpense, claimsMirror } from "./api/syncTimeExpenses.ts";
 
 /** Portal lists that the API owns in backend mode (the server writes their audit entries). */
@@ -456,7 +459,7 @@ interface PortalApi {
   }) => string | null;
   taskAction: (
     taskId: string,
-    action: "accept" | "start" | "progress" | "block" | "unblock" | "help" | "review" | "complete",
+    action: "accept" | "decline" | "start" | "progress" | "block" | "unblock" | "help" | "review" | "complete",
     payload?: { progressPct?: number; blockedReason?: string; dependsOn?: string; comment?: string },
   ) => string | null;
   toggleTaskSubtask: (taskId: string, subtaskId: string) => string | null;
@@ -480,6 +483,8 @@ interface PortalApi {
   setSoftwareStatus: (id: string, status: RequestStatus, note?: string) => string | null;
   addCab: (booking: Omit<CabBooking, "id" | "employeeId" | "status">) => string | null;
   setCabStatus: (id: string, status: RequestStatus, note?: string) => string | null;
+  /** Holiday calendar edits (HR editor, or the API list in backend mode); rules live in data/holidayAdmin.ts. */
+  replaceHolidays: (change: (holidays: PortalState["holidays"]) => PortalState["holidays"]) => void;
   orderMeal: (menuItemId: string) => string | null;
   cancelMeal: (orderId: string) => string | null;
   addSignature: (documentName: string, dataUrl: string) => string | null;
@@ -541,11 +546,13 @@ function compOffDaysTaken(employeeId: string): string[] {
     });
 }
 setEarnedLeaveSource((employeeId, code, year) =>
-  code === "comp_off" ? compOffCreditsFor(employeeId, year, compOffDaysTaken(employeeId)) : 0,
+  code === "comp_off" ? compOffCreditsFor(employeeId, year, compOffDaysTaken(employeeId)) + overtimeCompOffDays(employeeId, year) : 0,
 );
 
 export function PortalProvider({ children }: { children: ReactNode }) {
   const shiftState = useSyncExternalStore(subscribeShifts, getShiftState);
+  const overtimeRevision = useSyncExternalStore(subscribeOvertime, overtimeVersion);
+  const runSlips = useSyncExternalStore(subscribeRunSlips, getRunSlipsSnapshot);
   const optionalHolidayState = useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState);
   const exitState = useSyncExternalStore(subscribeExits, getExitState);
   // Approved name corrections change the signed-in person's own name everywhere.
@@ -667,6 +674,16 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       }, API_AUDITED_LISTS),
     );
   }, [state, userId]);
+
+  // Backend mode: tasks are shared through the server (src/api/syncTasks.ts): its tasks replace the list, and each
+  // change made here is sent back (the server checks it and notifies the other side).
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    return bindSharedTasks((tasks, keep) => setState((prev) => ({ ...prev, tasks: mergeSharedTasks(prev.tasks, tasks, keep) })));
+  }, []);
+  useEffect(() => {
+    if (API_ENABLED) pushTaskChanges(state.tasks);
+  }, [state.tasks]);
 
   useEffect(() => {
     try {
@@ -1623,7 +1640,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (mine.every((sheet) => sheet.status === "approved")) return "This week is already approved.";
         if (weekStart > todayISO()) return "You can't submit a week that hasn't started yet.";
         // Backend mode: the API checks the week and sends it to the manager (or approves it when there is none).
-        if (API_ENABLED) return apiSubmitWeek(weekStart);
+        // Timesheets are daily now (submitDayTimesheet); the server no longer takes whole weeks.
+        if (API_ENABLED) return "Timesheets are submitted day by day.";
         const hours = mine.reduce((sum, sheet) => sum + Object.values(sheet.hours).reduce((a, b) => a + b, 0), 0);
         const projectSummary = mine
           .map((sheet) => state.projects.find((p) => p.id === sheet.projectId)?.name)
@@ -2209,6 +2227,23 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           }));
         };
 
+        if (action === "decline") {
+          const reason = (payload.comment || "").trim();
+          if (task.employeeId !== active.id) return "Only the person it's assigned to can decline it.";
+          if (task.accepted) return "You've already accepted this task.";
+          if (!reason) return "Add a reason.";
+          pushActivity("Declined", reason, {
+            automationNote: `Declined: ${reason}`,
+            comments: [...(task.comments ?? []), { id: uid("tc"), author: actor, text: `Declined: ${reason}`, at: now }],
+          });
+          pushManagerTaskAlert({
+            title: `Task declined · ${task.code}`,
+            body: `${actor} declined “${task.subject}”: ${reason}`,
+            href: `/tasks?task=${encodeURIComponent(task.id)}`,
+            employeeId: task.employeeId,
+          });
+          return null;
+        }
         if (action === "accept") {
           if (task.accepted) return "Task already accepted.";
           pushActivity("Accepted", undefined, { accepted: true, automationNote: "Accepted by assignee" });
@@ -2759,6 +2794,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({ ...prev, cabBookings: patchById(prev.cabBookings, requestId, { status, ...decision(status, note) }) }));
         return null;
       },
+      replaceHolidays: (change) => setState((prev) => ({ ...prev, holidays: change(prev.holidays) })),
       orderMeal: (menuItemId) => {
         const menuItem = state.menu.find((item) => item.id === menuItemId);
         if (!menuItem) return "That item is not on the menu.";
@@ -2847,7 +2883,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
     };
-  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState, exitState, corrections, people, apiLeave, apiTime, apiClaims, payRevision]);
+  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState, exitState, corrections, people, apiLeave, apiTime, apiClaims, payRevision, overtimeRevision, runSlips]);
 
   return <PortalContext.Provider value={api}>{children}</PortalContext.Provider>;
 }

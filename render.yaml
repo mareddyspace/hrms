@@ -29,8 +29,6 @@ services:
       # Apply database migrations once at start-up (advisory-locked). Seeding is manual (DEPLOY.md).
       - key: RUN_MIGRATIONS_ON_START
         value: "true"
-      - key: DOCS_ENABLED
-        value: "true"
       - key: OTP_DEV_ECHO
         value: "false"
       - key: STORAGE_BACKEND
@@ -44,6 +42,8 @@ services:
       - key: CORS_ORIGINS          # https://<your-app>.vercel.app,http://localhost:5173
         sync: false
       - key: CORS_ORIGIN_REGEX     # optional, Vercel previews: ^https://<project>-[a-z0-9-]+\.vercel\.app$
+        sync: false
+      - key: DOCS_ENABLED          # optional: "true" = Swagger at /docs, asks for a portal sign-in (app/docs_auth.py); unset = off
         sync: false
       - key: OPENROUTER_API_KEY    # optional; empty = Copilot uses built-in answers
         sync: false

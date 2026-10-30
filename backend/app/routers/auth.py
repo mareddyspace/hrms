@@ -16,13 +16,26 @@ from app.security import (
     create_access_token, create_mfa_token, create_refresh_token, decode_token, hash_password, password_needs_rehash,
     verify_password,
 )
-from app.services import mfa
+from app.services import login_throttle, mfa
 from app.services.activity import record_audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 LOGIN_FAILED = "Invalid email or password."
 CODE_FAILED = "That code is not right. Try again."
+TOO_MANY = "Too many failed sign-in attempts from this device. Try again in a few minutes."
+
+
+def _throttle(request: Request) -> None:
+    """429 once this client (IP) has failed too many sign-ins recently (services/login_throttle.py)."""
+    wait = login_throttle.retry_after(client_ip(request))
+    if wait is not None:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, TOO_MANY, headers={"Retry-After": str(wait)})
+
+
+def _fail(request: Request, detail: str) -> HTTPException:
+    login_throttle.record_failure(client_ip(request))
+    return HTTPException(status.HTTP_401_UNAUTHORIZED, detail)
 
 
 def user_agent(request: Request) -> str | None:
@@ -67,7 +80,11 @@ def _finish_login(db: DbSession, account: Account, request: Request, method: str
     settings = get_settings()
     now = utcnow()
     previous_login = account.last_login_at
-    if previous_login and now - previous_login > timedelta(days=settings.password_stale_days):
+    # The 90-day rule measures the password's age, not the time since the last sign-in. Accounts with no recorded
+    # change date (older rows, seeded accounts) start the clock now, so nobody is forced to change at once.
+    if account.password_changed_at is None:
+        account.password_changed_at = now
+    elif now - account.password_changed_at > timedelta(days=settings.password_stale_days):
         account.must_change_password = True
     account.failed_attempts = 0
     account.locked_until = None
@@ -84,21 +101,22 @@ def _finish_login(db: DbSession, account: Account, request: Request, method: str
 
 @router.post("/login", response_model=MfaLoginOut)
 def login(body: LoginIn, request: Request, db: DbSession) -> MfaLoginOut:
+    _throttle(request)
     now = utcnow()
     account = db.scalar(select(Account).where(func.lower(Account.email) == body.email.strip().lower()))
 
     if account is None:
         verify_password(body.password, None)  # same work as a real check
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, LOGIN_FAILED)
+        raise _fail(request, LOGIN_FAILED)
 
     if account.locked_until and account.locked_until > now:
         _audit_auth(db, account, request, "login_blocked_locked", "failure")
         db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, LOGIN_FAILED)
+        raise _fail(request, LOGIN_FAILED)
 
     if not account.active or not verify_password(body.password, account.password_hash):
         _failed_attempt(db, account, request, "login_failed")
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, LOGIN_FAILED)
+        raise _fail(request, LOGIN_FAILED)
     if password_needs_rehash(account.password_hash):
         # Upgrade older hashes to the current settings now that we have the plain password.
         account.password_hash = hash_password(body.password)
@@ -116,6 +134,7 @@ def login(body: LoginIn, request: Request, db: DbSession) -> MfaLoginOut:
 def mfa_verify(body: MfaVerifyIn, request: Request, db: DbSession) -> MfaLoginOut:
     """Second sign-in step: the code from the authenticator app, or a backup code."""
     expired = HTTPException(status.HTTP_401_UNAUTHORIZED, "Sign-in timed out. Enter your password again.")
+    _throttle(request)
     claims = decode_token(body.mfa_token, "mfa")
     if claims is None:
         raise expired
@@ -125,12 +144,28 @@ def mfa_verify(body: MfaVerifyIn, request: Request, db: DbSession) -> MfaLoginOu
     if account.locked_until and account.locked_until > utcnow():
         _audit_auth(db, account, request, "login_blocked_locked", "failure")
         db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, CODE_FAILED)
+        raise _fail(request, CODE_FAILED)
     method = mfa.check_code(account, body.code)
     if method is None:
         _failed_attempt(db, account, request, "mfa_failed")
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, CODE_FAILED)
+        raise _fail(request, CODE_FAILED)
     return _finish_login(db, account, request, method)
+
+
+def _revoke_sessions(db: DbSession, account_id: str, *, only_session: str | None = None,
+                     keep_session: str | None = None) -> int:
+    """Revoke live refresh tokens of an account: one session (only_session), or all but one (keep_session).
+    Access tokens of a revoked session stop working at once (deps._check_session_and_mfa). Returns tokens revoked."""
+    now = utcnow()
+    count = 0
+    for row in db.scalars(select(RefreshToken).where(RefreshToken.account_id == account_id,
+                                                      RefreshToken.revoked_at.is_(None))):
+        sid = row.session_id or row.jti
+        if (only_session is not None and sid != only_session) or (keep_session is not None and sid == keep_session):
+            continue
+        row.revoked_at = now
+        count += 1
+    return count
 
 
 @router.post("/refresh", response_model=TokenOut)
@@ -140,7 +175,16 @@ def refresh(body: RefreshIn, request: Request, db: DbSession) -> TokenOut:
     if claims is None:
         raise invalid
     stored = db.get(RefreshToken, claims.get("jti", ""))
-    if stored is None or stored.revoked_at is not None or stored.expires_at <= utcnow() or stored.account_id != claims["sub"]:
+    if stored is not None and stored.revoked_at is not None and stored.account_id == claims["sub"]:
+        # Reuse of a spent (rotated or revoked) refresh token: it may have been stolen, so end the whole session
+        # (every token of this signed-in device), including a successor an attacker or the user already holds.
+        ended = _revoke_sessions(db, stored.account_id, only_session=stored.session_id or stored.jti)
+        account = db.get(Account, stored.account_id)
+        if account is not None and ended:
+            _audit_auth(db, account, request, "refresh_token_reuse", "failure", after={"tokens_revoked": ended})
+        db.commit()
+        raise invalid
+    if stored is None or stored.expires_at <= utcnow() or stored.account_id != claims["sub"]:
         raise invalid
     account = db.get(Account, stored.account_id)
     if account is None or not account.active:
@@ -158,12 +202,7 @@ def logout(body: RefreshIn, request: Request, db: DbSession) -> None:
     stored = db.get(RefreshToken, claims.get("jti", "")) if claims else None
     if stored is None or stored.revoked_at is not None:
         return
-    session_id = stored.session_id or stored.jti
-    now = utcnow()
-    for row in db.scalars(select(RefreshToken).where(RefreshToken.account_id == stored.account_id,
-                                                      RefreshToken.revoked_at.is_(None))):
-        if (row.session_id or row.jti) == session_id:
-            row.revoked_at = now
+    _revoke_sessions(db, stored.account_id, only_session=stored.session_id or stored.jti)
     account = db.get(Account, stored.account_id)
     if account is not None:
         _audit_auth(db, account, request, "logout", "success")
@@ -203,10 +242,15 @@ def password_problem(new: str, current: str, email: str) -> str | None:
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 def change_password(body: ChangePasswordIn, request: Request, user: CurrentUserDep, db: DbSession) -> None:
+    """Sets a new password and signs the account out on every other device (this session stays signed in).
+    Wrong current passwords count toward the same lockout as sign-in."""
     account = user.account
-    if not verify_password(body.current_password, account.password_hash):
-        _audit_auth(db, account, request, "password_change_failed", "failure")
+    if account.locked_until and account.locked_until > utcnow():
+        _audit_auth(db, account, request, "password_change_blocked_locked", "failure")
         db.commit()
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many wrong passwords. Try again in a few minutes.")
+    if not verify_password(body.current_password, account.password_hash):
+        _failed_attempt(db, account, request, "password_change_failed")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is not correct.")
     problem = password_problem(body.new_password, body.current_password, account.email)
     if problem:
@@ -214,5 +258,15 @@ def change_password(body: ChangePasswordIn, request: Request, user: CurrentUserD
     account.password_hash = hash_password(body.new_password)
     account.password_changed_at = utcnow()
     account.must_change_password = False
-    _audit_auth(db, account, request, "password_changed", "success")
+    account.failed_attempts = 0
+    ended = _revoke_sessions(db, account.id, keep_session=_current_session(request))
+    _audit_auth(db, account, request, "password_changed", "success", after={"other_sessions_ended": ended})
     db.commit()
+
+
+def _current_session(request: Request) -> str | None:
+    """The session id (sid claim) of the access token on this request."""
+    header = request.headers.get("authorization") or ""
+    token = header[7:] if header.lower().startswith("bearer ") else ""
+    claims = decode_token(token, "access") if token else None
+    return claims.get("sid") if claims else None

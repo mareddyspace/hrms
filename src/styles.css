@@ -1045,15 +1045,30 @@ a.card-title:hover { text-decoration: underline; }
   font-size: 12px;
   color: var(--muted);
 }
+/* Cards stack in columns at their own height, so a short card never leaves a gap under it. */
 .mgr-home-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  align-items: stretch;
+  column-count: 3;
+  column-gap: 14px;
 }
-.mgr-home-grid > .card {
+.mgr-home-grid > * {
+  break-inside: avoid;
+  margin-bottom: 14px;
+}
+/* Recruiting → Requisitions: list and the selected requisition side by side; stacked below 1100px. */
+.req-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.req-layout > * { min-width: 0; }
+@media (max-width: 1100px) {
+  .req-layout { grid-template-columns: minmax(0, 1fr); }
+}
+.mgr-home-grid > .card,
+.mgr-home-item > .card {
+  display: block;
   padding: 14px 16px 16px;
-  height: 100%;
   box-sizing: border-box;
 }
 .mgr-people {
@@ -2370,7 +2385,7 @@ html[data-theme="night"] .ts-submit-bar.approved { background: #163526; border-c
 
 @media (max-width: 1100px) {
   .mgr-kpi { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .mgr-home-grid { grid-template-columns: 1fr 1fr; }
+  .mgr-home-grid { column-count: 2; }
 }
 .help-center {
   max-width: 720px;
@@ -2617,7 +2632,8 @@ html[data-theme="night"] .help-ticket-btn:hover {
 }
 @media (max-width: 720px) {
   .cash-summary { grid-template-columns: 1fr; }
-  .mgr-kpi, .mgr-home-grid { grid-template-columns: 1fr; }
+  .mgr-kpi { grid-template-columns: 1fr; }
+  .mgr-home-grid { column-count: 1; }
   .summary-row, .home-grid, .split, .directory-layout, .leave-layout, .form-grid, .projects-layout, .board, .chat, .menu-grid, .info-grid, .stat-grid, .pay-lines, .program-grid, .program-stats {
     grid-template-columns: 1fr;
   }

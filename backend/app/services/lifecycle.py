@@ -32,6 +32,8 @@ EMPLOYMENT_TYPES = ("Full-Time", "Part-Time", "Contract")
 INFO_DATE_FIELDS = ("contract_end_date", "probation_end_date", "leave_end_date")
 STRING_FIELDS = ("department", "location", "legal_entity", "business_unit", "division", "cost_centre", "job_title",
                  "grade", "job_family", "position_id")
+# Exits set "Exited" (services/exits.py); older records may say "Terminated". Either way the person has left.
+LEFT_STATUSES = ("Exited", "Terminated")
 ASSIGNMENT_FIELDS = ("manager_id", "job_title", "grade", "department", "location", "legal_entity", "employment_status")
 
 
@@ -40,7 +42,7 @@ class ActionSpec:
     allowed: frozenset[str]
     required: frozenset[str] = frozenset()
     fixed: dict[str, str] = field(default_factory=dict)  # employee fields the action always sets
-    needs_status: str | None = None  # current employment_status the person must have
+    needs_status: str | tuple[str, ...] | None = None  # current employment_status the person must have (one of)
     self_service: bool = False  # the employee may raise it for themselves
     must_change: bool = True  # at least one employee field must actually change
 
@@ -59,7 +61,7 @@ SPECS: dict[str, ActionSpec] = {
                                      must_change=False),
     "probation_completion": ActionSpec(frozenset({"probation_end_date"}), must_change=False),
     "rehire": ActionSpec(frozenset({"job_title", "grade", "department", "location", "legal_entity", "manager_id"}),
-                         fixed={"employment_status": "Active"}, needs_status="Terminated"),
+                         fixed={"employment_status": "Active"}, needs_status=("Exited", "Terminated")),
 }
 
 
@@ -81,10 +83,11 @@ def validate(db: Session, emp: Employee, action_type: str, effective: date, afte
     missing = [k for k in spec.required if after.get(k) in (None, "")]
     if missing:
         raise LifecycleError(f"A {_label(action_type)} needs: {', '.join(sorted(missing))}.")
-    if spec.needs_status and emp.employment_status != spec.needs_status:
-        raise LifecycleError(f"A {_label(action_type)} needs the person to be {spec.needs_status}; "
+    wanted = (spec.needs_status,) if isinstance(spec.needs_status, str) else spec.needs_status
+    if wanted and emp.employment_status not in wanted:
+        raise LifecycleError(f"A {_label(action_type)} needs the person to be {' or '.join(wanted)}; "
                              f"they are {emp.employment_status}.")
-    if not spec.needs_status and emp.employment_status == "Terminated":
+    if not wanted and emp.employment_status in LEFT_STATUSES:
         raise LifecycleError("This person has left; use a rehire first.")
     clean: dict[str, Any] = {}
     for key, value in after.items():
@@ -94,7 +97,7 @@ def validate(db: Session, emp: Employee, action_type: str, effective: date, afte
             clean[key] = value.strip()
         elif key == "manager_id":
             manager = db.get(Employee, value) if isinstance(value, str) else None
-            if manager is None or manager.employment_status == "Terminated":
+            if manager is None or manager.employment_status in LEFT_STATUSES:
                 raise LifecycleError("Choose a current employee as the manager.")
             if manager.id == emp.id or manager.id in report_ids(db, emp.id):
                 raise LifecycleError("That manager would create a loop in the reporting line.")
@@ -115,7 +118,8 @@ def validate(db: Session, emp: Employee, action_type: str, effective: date, afte
             if day < effective:
                 raise LifecycleError(f"{key.replace('_', ' ').capitalize()} can't be before the effective date.")
             clean[key] = day.isoformat()
-    employee_changes = {k: v for k, v in {**clean, **spec.fixed}.items() if hasattr(Employee, k)}
+    # Informational dates stay out of the job record (employees.contract_end_date is set on its own in apply_action).
+    employee_changes = {k: v for k, v in {**clean, **spec.fixed}.items() if hasattr(Employee, k) and k not in INFO_DATE_FIELDS}
     if spec.must_change and not any(getattr(emp, k) != v for k, v in employee_changes.items()):
         raise LifecycleError("Nothing would change; enter the new values.")
     before = {k: getattr(emp, k) for k in employee_changes}
@@ -140,11 +144,32 @@ def _close_and_add_assignment(db: Session, emp: Employee, effective: date) -> No
     db.add(EmployeeAssignment(employee_id=emp.id, effective_from=effective, effective_to=None, **values))
 
 
+def _reopen_sign_in(db: Session, emp: Employee, actor_id: str | None) -> None:
+    """A rehire gets back the sign-in account the exit closed (and is no longer on a last working day). An account
+    switched off for any other reason (by an administrator) stays off."""
+    from app.models import Account, AuditLog
+
+    emp.last_working_day = None
+    account = db.scalar(select(Account).where(Account.employee_id == emp.id))
+    if account is None or account.active:
+        return
+    last = db.scalar(select(AuditLog).where(AuditLog.entity == "account", AuditLog.entity_id == account.id,
+                                            AuditLog.action.in_(("account_deactivated", "account_reactivated")))
+                     .order_by(AuditLog.id.desc()))
+    closed_by_exit = last is not None and last.action == "account_deactivated" and         ((last.changes or {}).get("after") or {}).get("reason") == "exit completed"
+    if closed_by_exit:
+        account.active = True
+        record_audit(db, actor_id=actor_id, action="account_reactivated", entity="account", entity_id=account.id,
+                     subject_id=emp.id, before={"active": False}, after={"active": True, "reason": "rehired"})
+
+
 def apply_action(db: Session, action: LifecycleAction, actor_id: str | None = None) -> None:
     emp = db.get(Employee, action.employee_id)
     assert emp is not None
     spec = SPECS[action.action_type]
-    changes = {k: v for k, v in {**action.after, **spec.fixed}.items() if hasattr(Employee, k)}
+    changes = {k: v for k, v in {**action.after, **spec.fixed}.items() if hasattr(Employee, k) and k not in INFO_DATE_FIELDS}
+    if isinstance(action.after.get("contract_end_date"), str):  # compliance calendar reads it (migration 0023)
+        emp.contract_end_date = date.fromisoformat(action.after["contract_end_date"])
     before = {k: getattr(emp, k) for k in changes}
     for k, v in changes.items():
         setattr(emp, k, v)
@@ -152,6 +177,8 @@ def apply_action(db: Session, action: LifecycleAction, actor_id: str | None = No
         country = db.get(Country, changes["country_code"])
         if country is not None:
             emp.currency, emp.time_zone = country.currency, country.time_zone
+    if action.action_type == "rehire":
+        _reopen_sign_in(db, emp, actor_id)
     db.flush()
     if any(before[k] != changes[k] for k in changes):
         _close_and_add_assignment(db, emp, action.effective_date)

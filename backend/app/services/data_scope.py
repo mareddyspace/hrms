@@ -16,14 +16,14 @@ from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Account, AccountDataScope, Employee
-from app.services.scope import GLOBAL_ROLES, HR_ROLES, SCOPE_MATCH_COLUMNS, Scope, build_scope
+from app.services.scope import HR_ROLES, ORG_WIDE_ROLES, SCOPE_MATCH_COLUMNS, Scope, build_scope
 
 DATA_SCOPES = ("own", "direct", "line", "department", "country", "entity", "business_unit", "location", "global")
 _MATCH_COLUMN = SCOPE_MATCH_COLUMNS
 
 
 def default_scope_name(role: str) -> str:
-    if role in GLOBAL_ROLES:
+    if role in HR_ROLES:  # admin / executive: their line for HR data; org-wide only for aggregates (Scope.org_wide)
         return "global"
     return "line"
 
@@ -80,6 +80,7 @@ def scope_for(db: Session, account: Account) -> Scope:
         is_global=row.scope == "global",
         countries=countries if row.scope == "global" or row.scope in _MATCH_COLUMN else None,
         reports=reports,
+        org_wide=base.org_wide,
         kind=row.scope,
         match_column=column if value else None,
         match_value=value,

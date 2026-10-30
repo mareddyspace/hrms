@@ -13,6 +13,7 @@ from app.services import approvals as engine
 from app.services import jobs
 from app.services import time_approvals as chain
 from tests.conftest import login
+from tests.timesheet_helpers import legacy_submit_week
 
 L = "/api/v1/leave/requests"
 IST = ZoneInfo("Asia/Kolkata")
@@ -169,7 +170,7 @@ def test_correction_and_timesheet_through_engine(client, babu, ram):
 
     assert client.post("/api/v1/timesheets/entries", headers=babu, json={"work_date": "2026-04-06", "project_id": "prj-hrms",
                        "task": "Build", "hours": 8}).status_code == 201
-    week = client.post("/api/v1/timesheets/weeks/2026-04-06/submit", headers=babu).json()
+    week = legacy_submit_week(client, babu, "emp-mahesh", "2026-04-06")  # submitted before timesheets went daily
     assert week["status"] == "submitted" and week["approval"]["total_steps"] == 1
     assert week["id"] in _pending(client, ram)
     res = _decide(client, ram, f"/api/v1/approvals/{week['approval']['instance_id']}/decision")

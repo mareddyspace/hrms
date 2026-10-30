@@ -19,7 +19,10 @@ from app.services.activity import notify
 _SUBJECT_ROLES = ("manager", "skip_manager", "hr")
 
 
-def _ids_for(db: Session, role: str, subject: Employee, resolved: list[str], excluded: set[str]) -> list[str]:
+def _ids_for(db: Session, role: str, subject: Employee, resolved: list[str], excluded: set[str],
+             requester_id: str | None = None) -> list[str]:
+    if role == "manager" and requester_id and subject.manager_id == requester_id:
+        return []  # the subject's own manager raised it: that is the manager's say, so the manager step is skipped
     ids = engine.resolve_group(db, role, subject) if role in _SUBJECT_ROLES else list(resolved)
     ids = [i for i in ids if i not in excluded]
     if not ids and role == "skip_manager":
@@ -33,21 +36,23 @@ def _ids_for(db: Session, role: str, subject: Employee, resolved: list[str], exc
 
 def start_about(
     db: Session, type_: str, entity_id: str, requester: Employee, subject: Employee, *, amount: float | None,
-    actor_id: str, title: str, body: str, href: str,
+    actor_id: str, title: str, body: str, href: str | None,
 ) -> ApprovalInstance:
-    """engine.start, then re-target the steps. Raises engine.ApprovalError when nobody is left to approve."""
+    """engine.start, then re-target the steps. Raises engine.ApprovalError when nobody is left to approve.
+    href None: the engine's own link for the request (so its "waiting" notices are cleared as steps move on)."""
     instance = engine.start(db, type_, entity_id, requester, amount, actor_id=actor_id)
     if instance.status != "pending":
         return instance
     for obj in list(db.new):
-        if isinstance(obj, Notification) and obj.href == f"/approvals/{instance.id}":
+        if isinstance(obj, Notification) and obj.href == engine._href(instance):
             db.expunge(obj)
     excluded = {requester.id, subject.id}
     steps: list[dict[str, Any]] = []
     for step in instance.steps:
         minimum = step.get("min_amount")
         applies = minimum is None or (amount is not None and amount >= float(minimum))
-        groups = {role: _ids_for(db, role, subject, step["groups"].get(role, []), excluded) for role in step["roles"]}
+        groups = {role: _ids_for(db, role, subject, step["groups"].get(role, []), excluded, requester.id)
+                  for role in step["roles"]}
         steps.append({**step, "groups": groups, "skipped": not applies or not any(groups.values())})
     # nobody approves two steps: drop whoever surely approves an earlier one (same fallback, still not them)
     steps = engine.retarget(db, steps, 0, set(), amount, excluded)
@@ -59,7 +64,7 @@ def start_about(
     instance.steps = steps
     instance.current_step = current
     db.flush()
-    notify_waiting(db, instance, title, body, href)
+    notify_waiting(db, instance, title, body, href or engine._href(instance))
     return instance
 
 

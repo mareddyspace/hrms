@@ -70,6 +70,32 @@ def targets(policy: HrPolicy, emp: Employee) -> bool:
     return True
 
 
+# The built-in policy library the portal shows (src/data/policyLibrary.ts): id -> current version. Country policies are
+# "<prefix>-<COUNTRY CODE>" (e.g. "leave-IN"), all at version 2026.1. Keep in step with the portal when a version changes.
+BUILTIN_GLOBAL_POLICIES = {
+    "handbook": "1.0", "code-of-conduct": "2.0", "remote-work": "1.0", "learning": "1.0", "data-privacy": "1.0",
+    "manager-approvals": "1.0", "hr-procedures": "1.0", "contractor-terms": "1.0",
+}
+BUILTIN_COUNTRY_PREFIXES = ("leave", "holidays", "working-time", "travel-expenses", "benefits", "pay-tax", "exit")
+BUILTIN_COUNTRY_VERSION = "2026.1"
+
+
+def known_policy_version(db: Session, emp: Employee, policy_id: str, version: str) -> bool:
+    """A policy id and version this person can acknowledge: a published HR policy version that targets them, or the
+    current version of a built-in library policy (country ones only for their own country)."""
+    managed = db.get(HrPolicy, policy_id)
+    if managed is not None:
+        if managed.status != "published" or not targets(managed, emp) or not version.isdigit():
+            return False
+        return db.scalar(select(HrPolicyVersion.id).where(HrPolicyVersion.policy_id == policy_id,
+                                                         HrPolicyVersion.version == int(version),
+                                                         HrPolicyVersion.status != "draft")) is not None
+    if policy_id in BUILTIN_GLOBAL_POLICIES:
+        return BUILTIN_GLOBAL_POLICIES[policy_id] == version
+    prefix, _, code = policy_id.rpartition("-")
+    return prefix in BUILTIN_COUNTRY_PREFIXES and code == emp.country_code and version == BUILTIN_COUNTRY_VERSION
+
+
 def target_query(policy: HrPolicy):
     # People working here now (as in headcount): joiners who haven't started are asked once they start.
     stmt = select(Employee).where(Employee.employment_status.not_in(LEFT_STATUSES), started_clause(date.today()))

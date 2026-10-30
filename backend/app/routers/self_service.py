@@ -68,19 +68,23 @@ def _steps(db: DbSession, instance: ApprovalInstance | None) -> list[StepOut]:
     return out
 
 
-def _can_view(db: DbSession, user: CurrentUser, row: Any, emp: Employee, extra: bool = False) -> bool:
+def _can_view(db: DbSession, user: CurrentUser, row: Any, emp: Employee, extra: bool = False,
+              everyone: bool = False) -> bool:
+    """everyone: the caller's function covers the whole organisation (IT for software licences), not just their
+    data scope. Admin is not HR, so its data scope alone is only its own reporting line (services/scope.py)."""
     me_id = user.employee_id
     if me_id and me_id in (emp.id, getattr(row, "raised_by", None)):
         return True
     instance = rules.instance_of(db, row)
     if is_approver(instance, me_id) or (instance is not None and engine.is_delegate_for(db, instance, me_id)):
         return True
-    if extra and user.scope.can_see(emp):
+    if extra and (everyone or user.scope.can_see(emp)):
         return True
     return bool(me_id) and me_id in manager_chain_ids(db, emp.id)
 
 
-def _list(db: DbSession, user: CurrentUser, model: Any, type_: str, scope: str, all_ok: bool, limit: int) -> list[Any]:
+def _list(db: DbSession, user: CurrentUser, model: Any, type_: str, scope: str, all_ok: bool, limit: int,
+          everyone: bool = False) -> list[Any]:
     stmt = select(model).join(Employee, Employee.id == model.employee_id)
     me_id = user.employee_id or ""
     if scope == "mine":
@@ -94,14 +98,16 @@ def _list(db: DbSession, user: CurrentUser, model: Any, type_: str, scope: str, 
     else:
         if not all_ok:
             raise HTTPException(403, "You can't see everyone's requests.")
-        stmt = stmt.where(user.scope.employee_filter())
+        if not everyone:
+            stmt = stmt.where(user.scope.employee_filter())
     return list(db.scalars(stmt.order_by(model.created_at.desc()).limit(limit)))
 
 
-def _get(db: DbSession, user: CurrentUser, model: Any, row_id: str, extra: bool) -> tuple[Any, Employee]:
+def _get(db: DbSession, user: CurrentUser, model: Any, row_id: str, extra: bool,
+         everyone: bool = False) -> tuple[Any, Employee]:
     row = db.get(model, row_id)
     emp = db.get(Employee, row.employee_id) if row else None
-    if row is None or emp is None or not _can_view(db, user, row, emp, extra):
+    if row is None or emp is None or not _can_view(db, user, row, emp, extra, everyone):
         raise NOT_FOUND
     return row, emp
 
@@ -315,9 +321,10 @@ def update_title(title_id: str, body: SoftwareTitleIn, request: Request, db: DbS
 def list_software(db: DbSession, user: CurrentUserDep, scope: Scope = "mine",
                   limit: Annotated[int, Query(ge=1, le=500)] = 300) -> list[SoftwareOut]:
     out = []
-    for row in _list(db, user, SoftwareRequest, rules.SOFTWARE, scope, _is_it(user), limit):
+    it = _is_it(user)  # IT manages licences for the whole organisation
+    for row in _list(db, user, SoftwareRequest, rules.SOFTWARE, scope, it, limit, everyone=it):
         emp = db.get(Employee, row.employee_id)
-        if emp is not None and _can_view(db, user, row, emp, _is_it(user)):
+        if emp is not None and _can_view(db, user, row, emp, it, everyone=it):
             out.append(_sw_out(db, user, row, emp))
     return out
 
@@ -333,8 +340,8 @@ def create_software(body: SoftwareIn, request: Request, db: DbSession, user: Cur
     if body.employee_id and body.employee_id != raiser.id:
         if not _is_it(user):
             raise HTTPException(403, "Only IT can assign software to someone else.")
-        emp = db.get(Employee, body.employee_id)
-        if emp is None or not user.scope.can_see(emp):
+        emp = db.get(Employee, body.employee_id)  # IT assigns licences across the organisation
+        if emp is None:
             raise NOT_FOUND
     try:
         row = rules.create_software(db, emp, title, body.reason, body.duration_months, raiser, user.id, client_ip(request))
@@ -347,7 +354,7 @@ def create_software(body: SoftwareIn, request: Request, db: DbSession, user: Cur
 
 @software_router.post("/requests/{row_id}/decision", response_model=SoftwareOut)
 def decide_software(row_id: str, body: DecisionIn, request: Request, db: DbSession, user: CurrentUserDep) -> SoftwareOut:
-    row, emp = _get(db, user, SoftwareRequest, row_id, _is_it(user))
+    row, emp = _get(db, user, SoftwareRequest, row_id, _is_it(user), everyone=_is_it(user))
     _decide(db, user, row, body, request)
     db.commit()
     return _sw_out(db, user, row, emp)
@@ -381,7 +388,7 @@ def return_software(row_id: str, request: Request, db: DbSession, user: CurrentU
 
 @software_router.post("/requests/{row_id}/revoke", response_model=SoftwareOut)
 def revoke_software(row_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> SoftwareOut:
-    row, emp = _get(db, user, SoftwareRequest, row_id, _is_it(user))
+    row, emp = _get(db, user, SoftwareRequest, row_id, _is_it(user), everyone=_is_it(user))
     if not _is_it(user) or emp.id == user.employee_id:
         raise HTTPException(403, "Only IT can revoke a licence.")
     try:

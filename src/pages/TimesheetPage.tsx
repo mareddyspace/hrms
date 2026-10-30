@@ -21,7 +21,7 @@ import {
 } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
-import { ticketsAssignedTo, useTickets } from "../data/ticketStore.ts";
+import { refreshTickets, ticketsAssignedTo, useTickets } from "../data/ticketStore.ts";
 import type { Project, Task } from "../model.ts";
 import { addDaysISO } from "../model.ts";
 import { API_ENABLED } from "../api/client.ts";
@@ -128,6 +128,10 @@ export function TimesheetPage() {
   const myDay = (day: string) => dayRecordFor(dayRecords, employee.id, day);
   const pending = useSyncExternalStore(pendingMirror.subscribe, pendingMirror.get, pendingMirror.get);
   const tickets = useTickets();
+  // Backend mode only loads tickets when asked; without this "Ticket (0)" shows until the Tickets page is opened.
+  useEffect(() => {
+    void refreshTickets();
+  }, []);
   const myTickets = useMemo(() => ticketsAssignedTo(employee.id, tickets), [employee.id, tickets]);
   const myTasks = useMemo(
     () => state.tasks.filter((t) => t.employeeId === employee.id && (t.status === "open" || t.status === "progress")),

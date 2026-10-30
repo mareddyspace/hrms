@@ -19,6 +19,7 @@ from app.schemas import ApplyDueOut, AssignmentOut, DecisionIn, LifecycleActionI
 from app.services import approvals as engine
 from app.services import lifecycle as rules
 from app.services.activity import record_audit
+from app.services.approval_targets import start_about
 from app.services.decisions import NOT_FOUND, can_view, me
 from app.services.scope import manager_chain_ids
 from app.services.workflow_defaults import decide_http, ensure_default, is_approver, notify_withdrawn, waiting_entity_ids
@@ -133,7 +134,13 @@ def create_action(body: LifecycleActionIn, request: Request, db: DbSession, user
                  subject_id=emp.id, after=_snapshot(action), ip=client_ip(request))
     ensure_default(db, "lifecycle")
     try:
-        instance = engine.start(db, "lifecycle", action.id, requester, None, actor_id=user.id)
+        if emp.id == requester.id:  # self-service (leave of absence, return): the person's own line
+            instance = engine.start(db, "lifecycle", action.id, requester, None, actor_id=user.id)
+        else:  # about someone else: the SUBJECT's manager and HR decide (never the requester or the subject)
+            what = body.action_type.replace("_", " ")
+            instance = start_about(db, "lifecycle", action.id, requester, emp, amount=None, actor_id=user.id,
+                                   title=f"Lifecycle request from {requester.full_name}",
+                                   body=f"Waiting for your approval: {what} for {emp.full_name}.", href=None)
     except engine.ApprovalError as exc:
         db.rollback()
         raise HTTPException(422, str(exc)) from exc

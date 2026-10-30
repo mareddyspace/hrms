@@ -226,9 +226,9 @@ _DATA_TOPICS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(timesheets?|hours|logged)\b", re.I), "/timesheet"),
     (re.compile(r"\b(team|reports|reportees|direct)\b", re.I), "/team"),
     (re.compile(r"\b(headcount|employees|workforce|department|departments|countr(y|ies)|organi[sz]ation)\b", re.I), "/analytics"),
-    (re.compile(r"\b(goals?|okrs?|kpis?|rating|review|performance)\b", re.I), "/performance"),
+    (re.compile(r"\b(goals?|okrs?|kpis?|rating|review|performance)\b", re.I), "/evaluations"),
     (re.compile(r"\b(skills?|career|promotion|target role|next role|mentor)\b", re.I), "/skills"),
-    (re.compile(r"\b(courses?|training|learning|certifications?|certificates?)\b", re.I), "/learning"),
+    (re.compile(r"\b(courses?|training|learning|certifications?|certificates?)\b", re.I), "/programs"),
     (re.compile(r"\b(benefits?|insurance|medical plan|pension|enrol(ment|led)?|enroll(ment|ed)?)\b", re.I), "/benefits"),
 ]
 

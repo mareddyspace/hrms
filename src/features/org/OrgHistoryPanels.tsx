@@ -14,6 +14,7 @@ import {
   type OrgVersionOut,
 } from "../../api/syncOpsOrg.ts";
 import { Banner, DataTable, EmptyState, Field, StatusBadge, SubmitButton, useAction } from "../../components/ui.tsx";
+import { formatShortDate } from "../../model.ts";
 
 const todayIso = () => {
   const d = new Date();
@@ -150,7 +151,7 @@ export function AsOfOrgTree() {
               {" "}
               · {u.type.replace(/_/g, " ")} · {u.code}
               {typeof u.headcount === "number" ? ` · Budget ${u.headcount}` : ""}
-              {u.effective_from ? ` · since ${u.effective_from}` : ""}
+              {u.effective_from ? ` · since ${formatShortDate(u.effective_from.slice(0, 10))}` : ""}
             </span>{" "}
             <button type="button" className="btn-ghost btn-tiny" onClick={() => setHistoryFor(u)}>
               History

@@ -5,12 +5,13 @@ import { usePortal } from "../store.tsx";
 import { managementChain } from "../demoAccounts.ts";
 import { allReportIds, getPerson } from "../data/peopleLocal.ts";
 import { pushPersonTaskAlert } from "../data/collabLocal.ts";
+import { API_ENABLED } from "../api/client.ts";
 import {
   MAIL_CATEGORIES,
   inboxThreads,
   mailtoHref,
   markThreadRead,
-  sendMail,
+  sendMailShared,
   sentThreads,
   threadFor,
   useMail,
@@ -159,13 +160,13 @@ export function MailPage() {
     return false;
   }
 
-  function onSend() {
+  async function onSend() {
     setError("");
     if (!toId) return fail("Choose who to send this to.");
     if (!subject.trim()) return fail("Add a subject.");
     if (!body.trim()) return fail("Write a message.");
     if (!recipients.some((r) => r.id === toId)) return fail("You can only write to your reporting line, HR or your team here.");
-    const message = sendMail({
+    const message = await sendMailShared({
       fromId: me,
       fromName: employee.fullName,
       toIds: [toId],
@@ -174,6 +175,7 @@ export function MailPage() {
       body,
       category,
     });
+    if (typeof message === "string") return fail(message);
     notify(message.toIds.concat(message.ccIds), message.subject, message.threadId);
     setSentNote({
       text: `Sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.`,
@@ -187,6 +189,7 @@ export function MailPage() {
   }
 
   function notify(ids: string[], subj: string, threadId: string) {
+    if (API_ENABLED) return; // the server notifies the recipients
     for (const id of ids) {
       if (!canSignIn(id)) continue; // stored; they'll see it in Mail if they sign in
       pushPersonTaskAlert({
@@ -482,12 +485,16 @@ function ThreadView({
 
   const replyAction = useAction();
 
-  function send() {
+  async function send() {
     if (!body.trim()) {
       setError("Write a reply.");
       return false;
     }
-    const message = sendMail({ fromId: me, fromName: myName, toIds, ccIds, subject, body, category: thread.category, threadId: thread.threadId });
+    const message = await sendMailShared({ fromId: me, fromName: myName, toIds, ccIds, subject, body, category: thread.category, threadId: thread.threadId });
+    if (typeof message === "string") {
+      setError(message);
+      return false;
+    }
     onSent([...message.toIds, ...message.ccIds], message.subject);
     const offline = [...message.toIds, ...message.ccIds].filter((id) => !canSignIn(id));
     setNote(

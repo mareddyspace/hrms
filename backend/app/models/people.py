@@ -90,6 +90,9 @@ class Employee(TimestampMixin, Base):
     last_working_day: Mapped[date | None] = mapped_column(Date)
     # India income tax regime chosen by the employee: "new" (default when NULL) or "old" (migration 0015).
     tax_regime: Mapped[str | None] = mapped_column(String(8))
+    # Celebrations and compliance calendar (migration 0023): hide my birthday from colleagues; fixed-term contract end.
+    hide_birthday: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    contract_end_date: Mapped[date | None] = mapped_column(Date)
 
 
 class EmployeeAssignment(TimestampMixin, Base):

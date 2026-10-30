@@ -31,9 +31,14 @@ def _audit(db: DbSession, user: CurrentUser, request: Request, action: str, enti
 
 
 def _check_password(db: DbSession, user: CurrentUser, request: Request, password: str) -> None:
+    """Wrong passwords count toward the same lockout as sign-in (so a stolen session can't guess it)."""
+    from app.db import utcnow
+    from app.routers.auth import _failed_attempt
+
+    if user.account.locked_until and user.account.locked_until > utcnow():
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many wrong passwords. Try again in a few minutes.")
     if not verify_password(password, user.account.password_hash):
-        _audit(db, user, request, "mfa_password_check_failed", result="failure")
-        db.commit()
+        _failed_attempt(db, user.account, request, "mfa_password_check_failed")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password is not correct.")
 
 

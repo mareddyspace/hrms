@@ -111,7 +111,8 @@ def onboarding_analytics(db: DbSession, user: CurrentUserDep, country: str | Non
     """Joiners in this user's data scope: by month and country, checklist completion, overdue tasks by owner."""
     if user.account.role not in ANALYTICS_ROLES:
         raise HTTPException(403, "Onboarding analytics is for HR, admins and executives.")
-    stmt = select(Joiner).join(Employee, Employee.id == Joiner.employee_id).where(user.scope.employee_filter())
+    # Aggregates only: admin / executive see the whole organisation, HR its countries (Scope.org_filter).
+    stmt = select(Joiner).join(Employee, Employee.id == Joiner.employee_id).where(user.scope.org_filter())
     if country:
         stmt = stmt.where(Joiner.country_code == country.upper())
     joiners = list(db.scalars(stmt))

@@ -73,6 +73,7 @@ import {
   isJoinerSelf,
   canEditGoal,
   canViewReview,
+  canAssessAsManager,
   canWriteManagerReview,
   courseOpenTo,
   cycleCompletion,
@@ -505,7 +506,7 @@ export function RecruitingPage() {
       />
 
       {tab === "reqs" && (
-        <div className="mgr-home-grid">
+        <div className="req-layout">
           <Card title="Job requisitions">
             <DataTable
               headers={["ID", "Title", "Dept", "Location", "Openings", "Approval", ""]}
@@ -1376,7 +1377,7 @@ export function OnboardingPage() {
               t.title,
               t.owner,
               t.category,
-              t.due,
+              t.due ? formatShortDate(t.due.slice(0, 10)) : "—",
               (t.dependsOn ?? [])
                 .map((k) => talent.tasks.find((x) => x.joinerId === t.joinerId && x.key === k)?.title ?? k)
                 .join(", ") || "—",
@@ -1783,7 +1784,7 @@ export function PerformancePage() {
             <ul className="feedback-list">
               {reviews.map((r) => {
                 const isOwn = r.employeeId === actor.id;
-                const writer = canWriteManagerReview(actor, r.employeeId);
+                const writer = canAssessAsManager(actor, r.employeeId);
                 return (
                   <li key={r.id} className="feedback-item">
                     <div className="row-between">
@@ -1852,7 +1853,7 @@ export function PerformancePage() {
           <DataTable
             headers={["Employee", "Self", "Manager", "360", "Rating", "Released"]}
             rows={reviews.map((r) => {
-              const writer = canWriteManagerReview(actor, r.employeeId);
+              const writer = canAssessAsManager(actor, r.employeeId);
               const canRate = writer && !r.released && (status === "Active" || status === "Calibration");
               const ready = r.selfStatus === "Submitted" && r.managerStatus === "Submitted";
               const shown = visibleRating(actor, r);

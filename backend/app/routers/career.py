@@ -11,8 +11,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
 
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
@@ -219,7 +220,8 @@ def _course_out(c: Course) -> CareerCourseOut:
 
 
 @router.get("/matches", response_model=CareerMatchesOut)
-def role_matches(db: DbSession, user: CurrentUserDep, employee_id: str | None = None, limit: int = 5) -> CareerMatchesOut:
+def role_matches(db: DbSession, user: CurrentUserDep, employee_id: str | None = None,
+                 limit: Annotated[int, Query(ge=1, le=20)] = 5) -> CareerMatchesOut:
     emp = _visible_employee(db, user, employee_id)
     _, saved = career.skills_of(db, emp)
     matches = career.rank_roles(db, user, emp, limit=max(1, min(limit, 20)))

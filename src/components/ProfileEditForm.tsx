@@ -1,12 +1,12 @@
 import { useState } from "react";
 import type { Employee } from "../model.ts";
-import { maskMobile } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { profileExtrasFor, saveProfileExtras } from "../data/profileExtras.ts";
 import type { ProfileExtras } from "../data/profileExtras.ts";
-import { ActionButton, Banner, Field, SubmitButton, useAction } from "./ui.tsx";
+import { Banner, Field, SubmitButton, useAction } from "./ui.tsx";
+import { useProfileCode } from "./ProfileCodeDialog.tsx";
 import { API_ENABLED } from "../api/client.ts";
-import { apiRequestProfileOtp, apiUpdateOwnProfile, type ApiOtpField, type ApiSelfProfileUpdate } from "../api/syncProfile.ts";
+import { apiUpdateOwnProfile, type ApiSelfProfileUpdate } from "../api/syncProfile.ts";
 import { getPerson } from "../data/peopleLocal.ts";
 import { isMasked } from "../utils/mask.ts";
 
@@ -81,41 +81,15 @@ export function ProfileEditForm({
   onCancel: () => void;
   onSaved: () => void;
 }) {
-  const { employee, requestProfileOtp, updateProfileWithOtp, verifyProfileOtp } = usePortal();
-  const [otp, setOtp] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [demoHint, setDemoHint] = useState("");
+  const { employee, updateProfile } = usePortal();
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [extras, setExtras] = useState<ProfileExtras>(() => (API_ENABLED ? apiStart(employee.id).extras : profileExtrasFor(employee.id)));
   const [apiAddress, setApiAddress] = useState<ApiAddress>(() => apiStart(employee.id).address);
-  const [saving, setSaving] = useState(false);
+  const code = useProfileCode();
+  const saveAction = useAction();
 
-  /** Backend mode: the mobile / personal email change that needs a server code, if any. */
-  function codeNeededFor(): { field: ApiOtpField; value: string } | "both" | null {
-    const start = apiStart(employee.id);
-    const mobile = !isMasked(draft.mobile) && draft.mobile.trim() !== employee.mobile;
-    const email = Boolean(extras.personalEmail.trim()) && extras.personalEmail.trim().toLowerCase() !== start.extras.personalEmail.toLowerCase();
-    if (mobile && email) return "both";
-    if (mobile) return { field: "mobile", value: draft.mobile.trim() };
-    if (email) return { field: "personal_email", value: extras.personalEmail.trim() };
-    return null;
-  }
-  const apiNeed = API_ENABLED ? codeNeededFor() : null;
-  const needsCode = !API_ENABLED || apiNeed !== null;
-
-  /** Backend mode: save on the server (only fields that changed or were typed); the server checks the code. */
-  async function saveToServer(): Promise<boolean> {
-    if (apiNeed === "both") {
-      setMessage({ tone: "err", text: "Change your mobile and personal email one at a time." });
-      return false;
-    }
-    if (apiNeed) {
-      const error = verifyProfileOtp(otp);
-      if (error) {
-        setMessage({ tone: "err", text: error });
-        return false;
-      }
-    }
+  /** Backend mode: only fields that changed or were typed (masked ones start blank = keep). */
+  function apiUpdate(): ApiSelfProfileUpdate {
     const start = apiStart(employee.id);
     const update: ApiSelfProfileUpdate = {
       emergency_name: extras.emergencyName,
@@ -129,99 +103,64 @@ export function ProfileEditForm({
     else if (!extras.emergencyName.trim()) update.emergency_phone = null;
     if (apiAddress.line.trim()) update.address_line = apiAddress.line;
     if (apiAddress.postcode.trim()) update.address_postcode = apiAddress.postcode;
-    if (apiNeed) update.otp_code = otp;
-    setSaving(true);
-    const failed = await apiUpdateOwnProfile(update);
-    setSaving(false);
-    if (failed) {
-      setMessage({ tone: "err", text: failed });
-      return false;
-    }
-    setMessage({ tone: "ok", text: "Profile updated." });
-    setOtp("");
-    setOtpSent(false);
-    setDemoHint("");
-    onSaved();
-    return true;
+    return update;
   }
 
-  async function sendServerOtp(): Promise<boolean> {
-    if (apiNeed === "both") {
-      setMessage({ tone: "err", text: "Change your mobile and personal email one at a time." });
-      return false;
-    }
-    if (!apiNeed) return false;
-    const invalid = validateDraft(draft, extras);
-    if (invalid) {
-      setMessage({ tone: "err", text: invalid });
-      return false;
-    }
-    const sent = await apiRequestProfileOtp(apiNeed.field, apiNeed.value);
-    if (sent.error) {
-      setMessage({ tone: "err", text: sent.error });
-      return false;
-    }
-    setOtp("");
-    setOtpSent(true);
-    setDemoHint(sent.devCode ?? "");
-    setMessage({ tone: "ok", text: `Code sent to ${sent.sentTo || "your email"}. Enter it below to save.` });
-    return true;
+  /** Local mode: the personal details that differ from the saved ones (these need a code). */
+  function localChanges(): Record<string, unknown> {
+    const saved = profileExtrasFor(employee.id);
+    const next: Record<string, [string, string]> = {
+      mobile: [draft.mobile.trim(), employee.mobile],
+      address: [draft.address.trim(), employee.address],
+      personalEmail: [extras.personalEmail.trim(), saved.personalEmail],
+      emergencyName: [extras.emergencyName.trim(), saved.emergencyName],
+      emergencyRelation: [extras.emergencyRelation.trim(), saved.emergencyRelation],
+      emergencyPhone: [extras.emergencyPhone.trim(), saved.emergencyPhone],
+    };
+    return Object.fromEntries(Object.entries(next).filter(([, [a, b]]) => a !== (b ?? "").trim()).map(([k, [a]]) => [k, a]));
   }
 
-  function sendOtp() {
-    if (API_ENABLED) return sendServerOtp();
-    const code = requestProfileOtp();
-    setOtp("");
-    setOtpSent(true);
-    setDemoHint(code);
-    setMessage({
-      tone: "ok",
-      text: `Verification code sent to ${maskMobile(employee.mobile)}. Enter it below to save.`,
-    });
-    return true;
-  }
-
-  const saveAction = useAction();
-
-  function saveProfile(): boolean | Promise<boolean> {
-    if (needsCode && !otpSent) {
-      setMessage({ tone: "err", text: "Send a verification code before saving." });
-      return false;
-    }
-    const invalid = validateDraft(draft, extras);
-    if (invalid) {
-      setMessage({ tone: "err", text: invalid });
-      return false;
-    }
-    if (API_ENABLED) return saveToServer();
+  function saveLocal(): string | null {
     // Legal name, work email, designation and shift are HR-owned: always send the current values, never the draft's.
-    const error = updateProfileWithOtp(
-      {
-        ...draft,
-        fullName: employee.fullName,
-        email: employee.email,
-        designation: employee.designation,
-        shiftName: employee.shiftName,
-        shiftHours: employee.shiftHours,
-        photo: photoFile || undefined,
-      },
-      otp,
-    );
-    if (error) {
-      setMessage({ tone: "err", text: error });
-      return false;
-    }
+    const error = updateProfile({
+      ...draft,
+      fullName: employee.fullName,
+      email: employee.email,
+      designation: employee.designation,
+      shiftName: employee.shiftName,
+      shiftHours: employee.shiftHours,
+      photo: photoFile || undefined,
+    });
+    if (error) return error;
     // Preferred name is edited under Personal; keep the latest saved value rather than the one loaded with this form.
     saveProfileExtras(employee.id, { ...extras, preferredName: profileExtrasFor(employee.id).preferredName });
-    setMessage({ tone: "ok", text: "Profile updated." });
-    setOtp("");
-    setOtpSent(false);
-    setDemoHint("");
-    onSaved();
-    return true;
+    return null;
+  }
+
+  async function saveProfile(): Promise<boolean | string> {
+    setMessage(null);
+    const invalid = validateDraft(draft, extras);
+    if (invalid) {
+      setMessage({ tone: "err", text: invalid });
+      return false;
+    }
+    const update = API_ENABLED ? apiUpdate() : {};
+    const result = await code.start({
+      userId: employee.id,
+      apiChanges: update,
+      localChanges: API_ENABLED ? {} : localChanges(),
+      save: (otp) => (API_ENABLED ? apiUpdateOwnProfile(otp ? { ...update, otp_code: otp } : update) : saveLocal()),
+      onSaved: () => {
+        setMessage({ tone: "ok", text: "Profile updated." });
+        onSaved();
+      },
+    });
+    if (typeof result === "string") setMessage({ tone: "err", text: result });
+    return result === true;
   }
 
   return (
+    <>
     <form className="identity-edit" onSubmit={saveAction.submit(saveProfile, { success: "Profile saved." })}>
       <div className="form-grid">
         <Field label="Photo">
@@ -325,33 +264,8 @@ export function ProfileEditForm({
         <p className="note">Managed by HR.</p>
       </section>
 
-      {needsCode && (
-      <div className="otp-box">
-        <p className="otp-title">{API_ENABLED ? "Verify the new mobile or personal email" : "Verify before save"}</p>
-        <div className="form-actions" style={{ marginTop: 10 }}>
-          <ActionButton className="btn-ghost" onAction={sendOtp} busyLabel="Sending…" doneLabel="Code sent">
-            {otpSent ? "Resend code" : "Send OTP"}
-          </ActionButton>
-        </div>
-        {otpSent && (
-          <div className="form-grid" style={{ marginTop: 10 }}>
-            <Field label="Enter OTP">
-              <input
-                value={otp}
-                onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                placeholder="6-digit code"
-              />
-            </Field>
-          </div>
-        )}
-        {demoHint && <p className="note">Code: <strong>{demoHint}</strong></p>}
-      </div>
-      )}
-
       <div className="form-actions">
-        <SubmitButton action={saveAction} className="btn" disabled={saving || (needsCode && (!otpSent || otp.length !== 6))}>
+        <SubmitButton action={saveAction} className="btn">
           Save profile
         </SubmitButton>
         <button className="btn-ghost" type="button" onClick={onCancel}>
@@ -360,5 +274,7 @@ export function ProfileEditForm({
       </div>
       <Banner message={message} />
     </form>
+    {code.dialog}
+    </>
   );
 }

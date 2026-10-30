@@ -19,10 +19,11 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Employee, Holiday, LeavePolicy, LeaveRequest, LeaveType
+from app.models import Country, Employee, Holiday, LeavePolicy, LeaveRequest, LeaveType
 from app.services import leave_rules as eligibility
 
-WEEKLY_OFF = {5, 6}  # Python weekday(): Saturday, Sunday
+WEEKLY_OFF = {5, 6}  # Python weekday(): Saturday, Sunday - the default when a country sets no working week
+DAY_INDEX = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
 WORKING_LEAVE = {"wfh", "emergency_wfh"}  # no half days
 SICK_LEAVE_GRACE_DAYS = 7
 OPEN_STATUSES = ("pending", "approved")
@@ -53,15 +54,30 @@ def holiday_dates_for(db: Session, employee: Employee, start: date, end: date) -
     return holiday_dates(db, employee.country_code, start, end, employee.holiday_calendar)
 
 
-def working_days(start: date, end: date, holidays: set[date], half: str = "none") -> float:
+def weekly_off_for(db: Session, country_code: str | None) -> set[int]:
+    """Weekly days off (Python weekday numbers) for a country: countries.work_week_days, else the country default
+    (SA Fri-Sat; AE Sat-Sun since 2022; everyone else Sat-Sun)."""
+    country = db.get(Country, country_code) if country_code else None
+    days = (country.work_week_days if country is not None else None) or         eligibility.COUNTRY_DEFAULTS.get(country_code or "", eligibility.COUNTRY_FALLBACK)["work_week_days"]
+    working = {DAY_INDEX[d] for d in days if d in DAY_INDEX}
+    return set(range(7)) - working if working else set(WEEKLY_OFF)
+
+
+def weekly_off_for_employee(db: Session, employee: Employee) -> set[int]:
+    return weekly_off_for(db, employee.country_code)
+
+
+def working_days(start: date, end: date, holidays: set[date], half: str = "none", weekly_off: set[int] | None = None) -> float:
+    """Working days in [start, end]; weekly_off: the person's country's days off (default Sat/Sun)."""
+    off = WEEKLY_OFF if weekly_off is None else weekly_off
     if end < start:
         return 0
     if half in ("first", "second") and start == end:
-        return 0 if start.weekday() in WEEKLY_OFF or start in holidays else 0.5
+        return 0 if start.weekday() in off or start in holidays else 0.5
     count = 0
     day = start
     while day <= end:
-        if day.weekday() not in WEEKLY_OFF and day not in holidays:
+        if day.weekday() not in off and day not in holidays:
             count += 1
         day += timedelta(days=1)
     return float(count)
@@ -147,8 +163,11 @@ def balances(db: Session, employee: Employee, year: int | None = None) -> list[B
         if total <= 0 and used == 0 and pending == 0 and policy.leave_code != "comp_off":
             continue  # not offered in this country
         if policy.leave_code == "comp_off":
-            # Earned comp-off days aren't tracked yet, so days already taken count as earned; never below zero.
-            total = max(total, used + pending)
+            # Approved overtime taken as comp-off adds days (app/services/overtime.py); never below zero.
+            from app.services.overtime import comp_off_credit
+
+            earned, before_earning = comp_off_credit(db, employee.id, year)
+            total = max(total + earned + before_earning, used + pending)
         left = total - used
         reason = eligibility.ineligible_reason(db, employee, policy, on)
         rows.append(
@@ -198,7 +217,7 @@ def validate_new_request(
         problem = request_problem(db, employee, start, end, half)
         if problem:
             raise LeaveError(problem)
-    days = working_days(start, end, holiday_dates_for(db, employee, start, end), half)
+    days = working_days(start, end, holiday_dates_for(db, employee, start, end), half, weekly_off_for_employee(db, employee))
     if days <= 0:
         raise LeaveError("That range has no working days (weekends and holidays are skipped).")
 

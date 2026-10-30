@@ -26,7 +26,8 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, utcnow
 from app.models import (
-    Account, ApprovalInstance, AttendanceCorrection, DeskTicket, Employee, HrCase, LeaveRequest, ReminderLog, TimesheetWeek,
+    Account, ApprovalInstance, AttendanceCorrection, DeskTicket, Employee, HrCase, LeaveRequest, LeaveType, ReminderLog,
+    TimesheetWeek,
 )
 from app.services import approvals as engine
 from app.services import cases as case_rules
@@ -43,6 +44,12 @@ NEAR_SLA = timedelta(hours=4)
 def _already_sent(db: Session, key: str, recipient_id: str, day: date) -> bool:
     return db.scalar(select(ReminderLog.id).where(ReminderLog.item_key == key, ReminderLog.recipient_id == recipient_id,
                                                   ReminderLog.sent_on == day)) is not None
+
+
+def _leave_name(db: Session, code: str) -> str:
+    """"casual" -> "Casual leave" for reminder text (the code itself if the type is unknown)."""
+    leave_type = db.get(LeaveType, code)
+    return leave_type.name if leave_type else f"{code} leave"
 
 
 def _send(db: Session, key: str, recipient_id: str | None, day: date, kind: str, title: str, body: str, href: str) -> bool:
@@ -79,7 +86,7 @@ def send_due_reminders(db: Session | None = None, now: datetime | None = None) -
         emp = db.get(Employee, r.employee_id)
         sent += _send(db, f"leave:{r.id}", emp.manager_id if emp else None, today, "approval_reminder",
                       f"Approve leave · {who.get(r.employee_id, 'A team member')}",
-                      f"{r.leave_code} leave from {r.from_date} has waited {_days(now - r.created_at)} days for your decision.",
+                      f"{_leave_name(db, r.leave_code)} from {r.from_date} has waited {_days(now - r.created_at)} days for your decision.",
                       "/approvals")
     corrections = [c for c in db.scalars(select(AttendanceCorrection).where(AttendanceCorrection.status == "pending",
                                                                             AttendanceCorrection.created_at < cutoff))
@@ -162,6 +169,9 @@ def run_all(db: Session, now: datetime | None = None) -> dict[str, Any]:
     from app.services.exits import complete_due_exits  # leavers past their last working day
 
     out["exits_completed"] = len(complete_due_exits(db))
+    from app.services.compliance_calendar import run_alerts  # HR: compliance items due in 7 days
+
+    out["compliance_alerts"] = run_alerts(db, now.date(), _send)
     return out
 
 

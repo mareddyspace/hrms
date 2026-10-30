@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.db import utcnow
 from app.models import AttendanceSession, Employee, LeaveRequest
-from app.services.leave import WEEKLY_OFF, WORKING_LEAVE, holiday_dates
+from app.services.leave import WORKING_LEAVE, holiday_dates, weekly_off_for_employee
 
 DEFAULT_SHIFT = ("09:30", "18:30")
 COUNTRY_SHIFTS: dict[str, tuple[str, str]] = {
@@ -164,6 +164,7 @@ def month_summary(db: Session, employee: Employee, year: int, month: int) -> Mon
         )
     }
     holidays = holiday_dates(db, employee.country_code, first, last, employee.holiday_calendar)
+    weekly_off = weekly_off_for_employee(db, employee)
     leave_days: dict[date, float] = {}
     for lv in db.scalars(
         select(LeaveRequest).where(
@@ -183,7 +184,7 @@ def month_summary(db: Session, employee: Employee, year: int, month: int) -> Mon
     on_leave = 0.0
     day = first
     while day <= last:
-        is_working = day.weekday() not in WEEKLY_OFF and day not in holidays
+        is_working = day.weekday() not in weekly_off and day not in holidays
         if is_working:
             working += 1
         if day in sessions:

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { API_ENABLED } from "../api/client.ts";
 import {
   ArrowLeft,
   Award,
@@ -87,7 +88,8 @@ function fromAccount(account: DemoAccount, record?: PersonRecord): ProfilePerson
     designation: (editedPerson(account.id) ?? editedPerson(account.employeeCode))?.designation || account.designation,
     department: (editedPerson(account.id) ?? editedPerson(account.employeeCode))?.department || account.department || record?.department || "",
     email: account.email,
-    mobile: account.mobile,
+    // Backend mode: the server record (reloaded after a verified edit) wins over the sign-in copy.
+    mobile: (API_ENABLED && record?.mobile) || account.mobile,
     photo: account.photo,
     location: account.location ?? record?.location ?? "",
     countryName: account.countryName ?? record?.countryName ?? "",

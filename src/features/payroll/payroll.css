@@ -1,0 +1,33 @@
+.payroll-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.payroll-actions .spacer { flex: 1 1 auto; }
+.payroll-note { min-width: 0; flex: 1 1 180px; max-width: 320px; }
+.payroll-exceptions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.payroll-exceptions li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.payroll-check { display: inline-flex; align-items: center; gap: 6px; align-self: end; padding-bottom: 8px; }
+.pay-lines { width: 100%; border-collapse: collapse; }
+.pay-lines td { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.pay-lines td.num { text-align: right; white-space: nowrap; padding-left: 12px; }
+.pay-lines tr.total td { font-weight: 600; }
+@media (max-width: 480px) {
+  .payroll-actions > * { flex: 1 1 100%; }
+  .payroll-actions .spacer { display: none; }
+  .payroll-note { max-width: none; }
+}

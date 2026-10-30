@@ -55,6 +55,11 @@ def _above(db: DbSession, user: CurrentUser, employee_id: str) -> bool:
     return user.employee_id is not None and user.employee_id != employee_id and user.employee_id in manager_chain_ids(db, employee_id)
 
 
+def _line_manager(user: CurrentUser, emp: Employee) -> bool:
+    """Ratings and manager assessments: the direct manager only (skip-level managers and HR may view, not write)."""
+    return user.employee_id is not None and emp.id != user.employee_id and emp.manager_id == user.employee_id
+
+
 def _hr_for(user: CurrentUser, emp: Employee) -> bool:
     return user.scope.is_hr and (not user.scope.countries or emp.country_code in user.scope.countries)
 
@@ -358,8 +363,8 @@ def save_self(review_id: str, body: AssessmentIn, request: Request, db: DbSessio
 @router.put("/reviews/{review_id}/manager", response_model=ReviewOut)
 def save_manager(review_id: str, body: AssessmentIn, request: Request, db: DbSession, user: CurrentUserDep) -> ReviewOut:
     review, cycle, emp = _review(db, user, review_id)
-    if not _above(db, user, emp.id):
-        raise HTTPException(403, "Only someone above the employee in their reporting line can do this.")
+    if not _line_manager(user, emp):
+        raise HTTPException(403, "Only the employee's direct manager can write the manager assessment.")
     if cycle.status != "active":
         raise HTTPException(409, "Manager assessments are only open while the cycle is active.")
     if review.manager_status == "submitted":
@@ -380,8 +385,8 @@ def save_manager(review_id: str, body: AssessmentIn, request: Request, db: DbSes
 @router.post("/reviews/{review_id}/rating", response_model=ReviewOut)
 def propose_rating(review_id: str, body: RatingIn, request: Request, db: DbSession, user: CurrentUserDep) -> ReviewOut:
     review, cycle, emp = _review(db, user, review_id)
-    if not _above(db, user, emp.id):
-        raise HTTPException(403, "Only someone above the employee in their reporting line can rate.")
+    if not _line_manager(user, emp):
+        raise HTTPException(403, "Only the employee's direct manager can propose a rating.")
     if cycle.status not in ("active", "calibration"):
         raise HTTPException(409, "Ratings are proposed while the cycle is active or in calibration.")
     if review.released:

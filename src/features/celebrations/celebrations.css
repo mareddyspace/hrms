@@ -1,0 +1,20 @@
+/* Celebrations and compliance calendar lists (shared look). */
+.cel-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.cel-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line, #e6e8ef); flex-wrap: wrap; }
+.cel-row:last-child { border-bottom: 0; }
+.cel-when { min-width: 54px; font-weight: 600; font-size: 13px; color: var(--muted); }
+.cel-main { flex: 1 1 0; min-width: 0; }
+.cel-main strong, .cel-main a { font-weight: 600; }
+.cel-main small { display: block; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.cel-actions { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+.cel-compose { flex-basis: 100%; display: grid; gap: 6px; }
+.cel-compose textarea { width: 100%; box-sizing: border-box; }
+.cel-month { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.cel-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.cel-filters select { min-width: 0; max-width: 100%; }
+.cel-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; align-items: end; }
+.cel-check { display: flex; align-items: center; gap: 8px; }
+@media (max-width: 480px) {
+  .cel-actions { margin-left: 0; }
+  .cel-when { min-width: 48px; }
+}

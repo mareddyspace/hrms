@@ -1,7 +1,7 @@
 """Masking of sensitive personal details (phone, personal email, date of birth, address, ID / bank numbers).
 
 API responses always carry the masked form. The full value comes only from a reveal endpoint, and only for the
-person themselves or HR / admin within their data scope (the HR / admin reveal is audited, without the value).
+person themselves or HR within their data scope (the HR reveal is audited, without the value). Not admin or executive.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from app.models import Employee
 
 DOT = "•"
-REVEAL_ROLES = HR_ROLES | {"admin"}
+REVEAL_ROLES = HR_ROLES  # not admin / executive: a system admin or the CEO gets basic profiles, no PII (src/data/rbac.ts)
 
 
 def mask_phone(value: str | None) -> str | None:

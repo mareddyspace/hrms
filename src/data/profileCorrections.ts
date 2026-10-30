@@ -32,6 +32,7 @@ import {
   apiUpdateOwnProfile,
   apiWithdrawCorrection,
   type ApiCorrectionField,
+  type ApiSelfProfileUpdate,
   type ProfileCorrectionOut,
 } from "../api/syncProfile.ts";
 
@@ -85,19 +86,32 @@ function validateBackground(input: OwnBackgroundInput, today: string): ProfileRe
   return null;
 }
 
-/** Save the employee-editable background fields on your own directory record. */
-export function saveOwnBackground(actor: Pick<Actor, "id" | "fullName">, input: OwnBackgroundInput): ProfileResultAsync {
+/** Backend mode: the PATCH /people/me body for the background fields. */
+export function ownBackgroundUpdate(input: OwnBackgroundInput): ApiSelfProfileUpdate {
+  return {
+    preferred_name: input.preferredName,
+    preferred_language: input.preferredLanguage,
+    languages: input.spokenLanguages,
+    education: input.education.map((e) => ({ degree: e.degree.trim(), institution: e.institution.trim(), year: Number(e.year) })),
+    experience: input.experience.map((x) => ({ employer: x.employer.trim(), title: x.title.trim(), from: x.from, to: x.to })),
+    career_goals: input.careerGoals,
+  };
+}
+
+/** Problems with the background fields, or null. */
+export function checkOwnBackground(input: OwnBackgroundInput): string | null {
+  return validateBackground(input, localToday());
+}
+
+/**
+ * Save the employee-editable background fields on your own directory record. A new preferred name needs a code
+ * (otpCode in backend mode; local mode checks it before calling, see ProfileCodeDialog).
+ */
+export function saveOwnBackground(actor: Pick<Actor, "id" | "fullName">, input: OwnBackgroundInput, otpCode?: string): ProfileResultAsync {
   if (API_ENABLED) {
     const error = validateBackground(input, localToday());
     if (error) return error;
-    return apiUpdateOwnProfile({
-      preferred_name: input.preferredName,
-      preferred_language: input.preferredLanguage,
-      languages: input.spokenLanguages,
-      education: input.education.map((e) => ({ degree: e.degree.trim(), institution: e.institution.trim(), year: Number(e.year) })),
-      experience: input.experience.map((x) => ({ employer: x.employer.trim(), title: x.title.trim(), from: x.from, to: x.to })),
-      career_goals: input.careerGoals,
-    });
+    return apiUpdateOwnProfile({ ...ownBackgroundUpdate(input), ...(otpCode ? { otp_code: otpCode } : {}) });
   }
   const person = getPerson(actor.id);
   if (!person) return "Your directory record was not found.";

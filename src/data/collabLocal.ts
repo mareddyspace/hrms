@@ -44,6 +44,8 @@ import {
   apiHrUploadFile,
   loadApiHrRequests,
 } from "../api/syncOpsCases.ts";
+import { announcementsMirror } from "../api/syncAnnouncements.ts";
+import { apiMarkChatRead, apiStartDirect, chatMirror } from "../api/syncChat.ts";
 import { DEMO_ACCOUNTS, RETIRED_ACCOUNT_IDS, RETIRED_ACCOUNT_NAMES, findDemoById, managementChain, mentionsRetiredAccount } from "../demoAccounts.ts";
 
 const KEY = "timez.collab.state.v6";
@@ -290,12 +292,14 @@ export function subscribeCollab(listener: () => void) {
 }
 
 /**
- * Backend mode: HR service desk requests come from the API (in memory only). The rest of the collab state
- * stays in this browser.
+ * Backend mode: HR service desk requests, conversations and announcements come from the API (in memory only,
+ * src/api/syncChat.ts, syncAnnouncements.ts). The rest of the collab state stays in this browser.
  */
 const apiHrRequests = createApiMirror<HrRequest[]>(() => [], () => loadApiHrRequests());
-if (API_ENABLED) apiHrRequests.subscribe(() => listeners.forEach((fn) => fn()));
-let composed: { local: CollabState; hr: HrRequest[]; out: CollabState } | null = null;
+if (API_ENABLED) {
+  for (const m of [apiHrRequests, chatMirror, announcementsMirror]) m.subscribe(() => listeners.forEach((fn) => fn()));
+}
+let composed: { local: CollabState; hr: HrRequest[]; chat: Conversation[]; ann: Announcement[]; out: CollabState } | null = null;
 
 function localCollabState(): CollabState {
   if (!cache) cache = read();
@@ -307,7 +311,11 @@ export function getCollabState(): CollabState {
   const local = localCollabState();
   if (!API_ENABLED) return local;
   const hr = apiHrRequests.get();
-  if (composed?.local !== local || composed.hr !== hr) composed = { local, hr, out: { ...local, hrRequests: hr } };
+  const chat = chatMirror.get();
+  const ann = announcementsMirror.get();
+  if (composed?.local !== local || composed.hr !== hr || composed.chat !== chat || composed.ann !== ann) {
+    composed = { local, hr, chat, ann, out: { ...local, hrRequests: hr, conversations: chat, announcements: ann } };
+  }
   return composed.out;
 }
 
@@ -416,6 +424,7 @@ export function sendChatMessage(
 export function markConversationRead(conversationId: string, userId: string) {
   const current = getCollabState().conversations.find((c) => c.id === conversationId);
   if (!current || conversationUnreadCount(current, userId) === 0) return;
+  if (API_ENABLED) return apiMarkChatRead(conversationId);
   updateCollab((s) => {
     const conv = s.conversations.find((c) => c.id === conversationId);
     if (!conv) return;
@@ -430,6 +439,7 @@ export function markConversationRead(conversationId: string, userId: string) {
  * being added to it is the access grant. The role rule (canAccessRestrictedChat) only decides who may be added.
  */
 export function conversationVisibleToUser(conv: Conversation, userId: string, _role: string): boolean {
+  if (API_ENABLED) return true; // the server only sends threads this person may see (HR also sees confidential ones)
   return conv.participantIds.includes(userId);
 }
 
@@ -438,6 +448,7 @@ export function listConversationsForUser(userId: string, role: string): Conversa
 }
 
 export function startDirectChat(personId: string, personName: string, selfId: string, selfName: string) {
+  if (API_ENABLED) return apiStartDirect(personId); // "dm:<id>" until the server answers; Messages resolves it
   let createdId = "";
   updateCollab((s) => {
     const existing = s.conversations.find(
@@ -623,10 +634,13 @@ const API_DEEP_LINKS: [RegExp, (m: RegExpMatchArray) => string][] = [
 ];
 
 /** Approvals open the inbox (timesheets open the manager's team view); everything else opens its own page. */
-function apiNotifLink(href: string | undefined, waitingOnMe: boolean): string | undefined {
+function apiNotifLink(href: string | undefined, waitingOnMe: boolean, title = ""): string | undefined {
   if (href && /^\/timesheets\//.test(href)) return waitingOnMe ? "/timesheet?view=team" : "/timesheet";
   if (waitingOnMe) return "/approvals";
   if (!href) return undefined;
+  // A reporter's own case ("Your HR case was updated", "New update on your HR case") opens their grievances page;
+  // the HR case desk (/people/cases) is for the HR team only.
+  if (/^\/cases\//.test(href) && /\byour HR case\b/i.test(title)) return "/me/grievances";
   const deep = API_DEEP_LINKS.map(([pattern, to]) => href.match(pattern) && to(href.match(pattern)!)).find(Boolean);
   if (deep) return deep;
   return API_LINK_PAGES.find(([pattern]) => pattern.test(href))?.[1] ?? href;
@@ -642,7 +656,7 @@ export function syncApiNotifications(userId: string, items: ApiNotificationInput
     const old = previous.get(id);
     const leaveId = item.href?.match(/^\/leave\/requests\/(.+)$/)?.[1];
     const waitingOnMe = /^Waiting for your approval/.test(item.body ?? "");
-    const link = apiNotifLink(item.href ?? undefined, waitingOnMe);
+    const link = apiNotifLink(item.href ?? undefined, waitingOnMe, item.title);
     const readBy = new Set(old?.readBy ?? []);
     if (item.readAt) readBy.add(userId);
     return {

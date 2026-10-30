@@ -214,30 +214,11 @@ def delete_entry(entry_id: str, request: Request, db: DbSession, user: CurrentUs
 
 
 @router.post("/weeks/{week_start}/submit", response_model=TimesheetWeekOut)
-def submit_week(week_start: date, request: Request, db: DbSession, user: CurrentUserDep) -> TimesheetWeekOut:
-    emp = me(user)
-    if week_start.weekday() != 0:
-        raise HTTPException(422, "A timesheet week starts on a Monday.")
-    week = db.scalar(select(TimesheetWeek).where(TimesheetWeek.employee_id == emp.id, TimesheetWeek.week_start == week_start))
-    if week is None:
-        raise HTTPException(422, "Add at least one entry before submitting.")
-    try:
-        rules.validate_submit(db, week)
-    except rules.TimesheetError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    before = _week_snapshot(week)
-    week.status = "submitted"
-    week.submitted_at = utcnow()
-    week.decided_by = week.decided_at = week.decision_note = None
-    db.flush()
-    # approval chain "timesheet" (manager); nobody above this person: approved straight away. The engine tells the approvers.
-    chain.start(db, chain.TIMESHEET, week.id, emp, user.id)
-    record_audit(
-        db, actor_id=user.id, action="timesheet_submitted", entity="timesheet_week", entity_id=week.id,
-        subject_id=emp.id, before=before, after=_week_snapshot(week), ip=client_ip(request),
-    )
-    db.commit()
-    return _week_out(db, week, emp.full_name, user.employee_id)
+def submit_week(week_start: date, db: DbSession, user: CurrentUserDep) -> TimesheetWeekOut:
+    """Retired: timesheets are daily (today only, 9 h, after check-out; POST /timesheets/days/{date}/submit).
+    Weeks submitted before the change can still be decided (POST /timesheets/weeks/{id}/decision)."""
+    me(user)
+    raise HTTPException(409, "Timesheets are submitted day by day.")
 
 
 @router.get("/weeks", response_model=list[TimesheetWeekOut])
@@ -307,7 +288,7 @@ def decide_week(week_id: str, body: DecisionIn, request: Request, db: DbSession,
         chain.decide(db, user, instance, emp, body.decision, body.note, client_ip(request))
         db.commit()
         return _week_out(db, week, emp.full_name, user.employee_id)
-    if not can_decide(db, user, emp):
+    if not can_decide(db, user, emp, "timesheet"):
         raise HTTPException(403, "You can't decide this timesheet.")
     if week.status != "submitted":
         raise HTTPException(409, f"This timesheet is {week.status}.")
@@ -416,9 +397,9 @@ def _day_out(
         instance = chain.pending_instance(db, chain.TIMESHEET, row.id)
         if instance is not None:
             out.waiting_on_me = bool(out.approval and out.approval.get("waiting_on_me"))
-            out.can_decide = out.waiting_on_me or can_decide(db, user, emp)
+            out.can_decide = out.waiting_on_me or can_decide(db, user, emp, "timesheet")
         else:  # no one above the person (or submitted before a chain): HR in scope / the reporting line decides
-            out.can_decide = can_decide(db, user, emp)
+            out.can_decide = can_decide(db, user, emp, "timesheet")
             out.waiting_on_me = out.can_decide
     return out
 
@@ -565,13 +546,13 @@ def reopen_day(employee_id: str, work_date: date, body: ReopenIn, request: Reque
                user: CurrentUserDep) -> TimesheetDayOut:
     """A missed (or never submitted) past day: the person's manager - or HR for someone with no manager - opens it so
     they can log and submit it later."""
-    from app.services.scope import manager_chain_ids
-
     emp = db.get(Employee, employee_id)
     if emp is None or not user.employee_id or emp.id == user.employee_id:
         raise NOT_FOUND
-    if emp.manager_id:
-        allowed = user.employee_id in manager_chain_ids(db, emp.id)
+    if emp.manager_id:  # the line manager (or someone covering for them) - not a skip-level manager
+        from app.services.approvals import delegators_for
+
+        allowed = emp.manager_id == user.employee_id or emp.manager_id in delegators_for(db, user.employee_id, "timesheet")
     else:
         allowed = user.scope.is_hr and user.scope.can_see(emp)
     if not allowed:
@@ -643,7 +624,7 @@ def decide_day(day_id: str, body: DecisionIn, request: Request, db: DbSession, u
         chain.decide(db, user, instance, emp, body.decision, body.note, client_ip(request))
         db.commit()
         return _day_out(db, user, emp, row.work_date, row)
-    if not can_decide(db, user, emp):
+    if not can_decide(db, user, emp, "timesheet"):
         raise HTTPException(403, "You can't decide this timesheet.")
     if row.status != "submitted":
         raise HTTPException(409, f"This day is {row.status}.")

@@ -107,7 +107,8 @@ def _out(db: DbSession, user: CurrentUser, case: ExitCase) -> ExitCaseOut:
         raised_by_name=names.get(case.raised_by), approval_instance_id=case.approval_instance_id,
         steps=_steps(db, instance, names), can_decide=engine.can_act(db, instance, me_id),
         can_withdraw=case.status in rules.PENDING and case.raised_by == me_id,
-        clearance=clearance, interview_submitted=bool(case.interview),
+        clearance=clearance, clearance_pending=bool((case.settlement or {}).get("clearance_pending")),
+        interview_submitted=bool(case.interview),
         interview=InterviewOut(**case.interview) if case.interview and hr_view else None,
         settlement=settlement, completed_at=case.completed_at, created_at=case.created_at,
         early_release_reason=(case.details or {}).get("early_release_reason"),
@@ -268,8 +269,8 @@ def update_clearance(exit_id: str, key: str, body: ClearanceIn, request: Request
     in_chain = bool(user.employee_id) and user.employee_id in manager_chain_ids(db, emp.id)
     if not rules.can_tick(case, item["owner"], actor_id=user.employee_id, role=user.account.role, is_hr=hr_view,
                           in_chain=in_chain, subject_has_manager=bool(emp.manager_id)):
-        if case.status != "Approved":
-            raise HTTPException(409, "The checklist is open only while the exit is approved and not yet completed.")
+        if not rules.clearance_open(case):
+            raise HTTPException(409, "The checklist is open only while the exit is approved (or clearance is still pending).")
         raise HTTPException(403, "You can't update this item.")
     try:
         rules.set_clearance(db, case, key, body.done, me(user), user.id, client_ip(request))

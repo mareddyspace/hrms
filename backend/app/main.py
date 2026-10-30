@@ -21,17 +21,24 @@ log = logging.getLogger("timez")
 for _noisy in ("httpx", "httpcore", "botocore", "boto3", "urllib3"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
+# API docs: open in development; in production off unless DOCS_ENABLED=true, and then only after signing in with a
+# portal account (app/docs_auth.py).
+_open_docs = bool(settings.docs_enabled) and not settings.is_production
 app = FastAPI(
     title="TimeZ HRMS API", version="1.0.0", redoc_url=None,
-    docs_url="/docs" if settings.docs_enabled else None,
-    openapi_url="/openapi.json" if settings.docs_enabled else None,
+    docs_url="/docs" if _open_docs else None,
+    openapi_url="/openapi.json" if _open_docs else None,
 )
+if settings.docs_enabled and settings.is_production:
+    from app import docs_auth
+
+    docs_auth.install(app)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
     allow_origin_regex=settings.cors_origin_regex.strip() or None,
-    allow_credentials=True,
+    allow_credentials=False,  # bearer tokens only, no cookies: a future cookie can never become CSRF-able by accident
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
@@ -189,6 +196,34 @@ app.include_router(tickets_router.router, prefix=API_PREFIX)
 from app.routers import careers as careers_router  # noqa: E402
 
 app.include_router(careers_router.router, prefix=API_PREFIX)
+
+# ---------- team overview (today per person) and approval reminders (no new tables) ----------
+from app.routers import team as team_router  # noqa: E402
+
+app.include_router(team_router.router, prefix=API_PREFIX)
+app.include_router(team_router.reminders_router, prefix=API_PREFIX)
+
+# ---------- shared chat, mail, tasks, announcements and calendar events (migration 0022) ----------
+from app.routers import announcements as announcements_router  # noqa: E402
+from app.routers import calendar as calendar_router  # noqa: E402
+from app.routers import chat as chat_router  # noqa: E402
+from app.routers import mail as mail_router  # noqa: E402
+from app.routers import shared_tasks as shared_tasks_router  # noqa: E402
+
+for _r in (chat_router, mail_router, shared_tasks_router, announcements_router, calendar_router):
+    app.include_router(_r.router, prefix=API_PREFIX)
+
+# ---------- celebrations (birthdays, anniversaries, new joiners) and the HR compliance calendar (migration 0023) ----------
+from app.routers import celebrations as celebrations_router, compliance_calendar as compliance_router  # noqa: E402
+
+app.include_router(celebrations_router.router, prefix=API_PREFIX)
+app.include_router(compliance_router.router, prefix=API_PREFIX)
+
+# ---------- monthly payroll runs, bank details, overtime and comp-off (migration 0023) ----------
+from app.routers import overtime as overtime_router, payroll_runs as payroll_runs_router  # noqa: E402
+
+app.include_router(payroll_runs_router.router, prefix=API_PREFIX)
+app.include_router(overtime_router.router, prefix=API_PREFIX)
 
 # ---------- start-up: optional migrations (outermost hook, so it runs before the jobs above touch the database) ----------
 from app import migrate as _migrate  # noqa: E402

@@ -400,3 +400,36 @@ export function decideRedemption(actor: PlusActor, id: string, fulfil: boolean, 
   audit(actor, "Reward redemption", row.id, row.personId, "Updated", [{ field: "Status", before: "Requested", after: row.status }]);
   return null;
 }
+
+/* ───────────── Celebration wishes (src/features/celebrations) ───────────── */
+
+/** Value on kudos that are birthday / anniversary / welcome wishes (no points, never use the allowance). */
+export const CELEBRATION_VALUE = "Celebration";
+
+/** Local mode: posts a wish to the wall as a kudos without points and notifies the person. */
+export function postCelebrationKudos(actor: PlusActor, toId: string, message: string, title: string): PlusResult {
+  const now = new Date();
+  const result = store.mutate((s) => {
+    s.kudos.unshift({
+      id: newId("kd"),
+      fromId: actor.id,
+      fromName: actor.fullName,
+      toId,
+      toName: personName(toId),
+      value: CELEBRATION_VALUE as PraiseBadge,
+      message,
+      points: 0,
+      createdOn: todayISO(),
+      createdAt: now.toISOString(),
+      likes: [],
+    });
+    return null;
+  });
+  if (!result) alert(toId, title, message);
+  return result;
+}
+
+/** Backend mode: reload the wall after a wish was sent through /celebrations/wishes. */
+export function reloadRecognition(): Promise<void> {
+  return API_ENABLED ? mirror.reload() : Promise.resolve();
+}

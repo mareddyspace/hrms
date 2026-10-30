@@ -84,7 +84,10 @@ export type NavAccessId =
   | "recognition"
   | "accessroles"
   | "aisettings"
-  | "leavepolicies";
+  | "leavepolicies"
+  | "celebrations"
+  | "compliancecalendar"
+  | "overtime";
 
 export interface DemoAccount extends Employee {
   /** Prototype-only plain-text password (frontend mock). */
@@ -145,10 +148,12 @@ const ACCESS_EMPLOYEE: NavAccessId[] = [
   "projects",
   "encashment",
   "cashadvance",
+  "overtime",
   "assets",
   "software",
   "travel",
   "recognition",
+  "celebrations",
 ];
 
 const ACCESS_MANAGER: NavAccessId[] = [
@@ -191,6 +196,7 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "accessroles", // Roles & permissions (/admin/roles)
   "aisettings", // AI settings (/admin/ai)
   "leavepolicies", // Leave policies (/admin/leave-policies)
+  "compliancecalendar", // statutory dates and expiries (/compliance-calendar)
 ];
 
 function account(
@@ -303,6 +309,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "hrcases",
       "integrations", // sync health for payroll and HR data
       "leavepolicies", // Leave policies (/admin/leave-policies)
+      "compliancecalendar", // statutory dates, visas, probation and contract ends
     ],
   }),
   account({
@@ -365,6 +372,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
       "recruiting",
       "reportbuilder",
       "exitsadmin",
+      "payroll", // approves monthly payroll runs as the second person
       // no compensation — salary stays restricted unless salaryAuthorized
     ],
   }),

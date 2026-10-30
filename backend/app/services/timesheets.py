@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Employee, LeaveRequest, TimesheetDay, TimesheetEntry, TimesheetWeek
-from app.services.leave import WEEKLY_OFF, WORKING_LEAVE, holiday_dates_for
+from app.services.leave import WORKING_LEAVE, holiday_dates_for, weekly_off_for_employee
 
 EDITABLE = ("draft", "rejected")
 MAX_DAY_HOURS = 24.0
@@ -138,7 +138,7 @@ def day_target(db: Session, employee: Employee, day: date) -> tuple[float, str |
     leave = leave_on(db, employee.id, day, day).get(day)
     if leave == "full":
         return 0.0, "leave"
-    if day.weekday() in WEEKLY_OFF:
+    if day.weekday() in weekly_off_for_employee(db, employee):
         return 0.0, "weekend"
     if day in holiday_dates_for(db, employee, day, day):
         return 0.0, "holiday"

@@ -1,5 +1,12 @@
-/** Shared work calendar — meetings, reminders, IP (in-person) days, leave, holidays, personal notes. */
+/**
+ * Shared work calendar — meetings, reminders, IP (in-person) days, leave, holidays, personal notes.
+ * Reminders and meetings people create stay in this browser in local mode; with VITE_API_URL set they live on the
+ * server (/calendar/events), so invitees see a meeting on their own sign-in.
+ */
 import type { Note } from "./notesStore.ts";
+import { API_ENABLED, api, apiRequest, apiSessionAccount } from "../api/client.ts";
+import { createApiMirror, errorText } from "../api/syncOps.ts";
+import { keepFresh } from "../api/syncShare.ts";
 
 export type CalendarEventKind =
   | "meeting"
@@ -212,8 +219,96 @@ export const CALENDAR_SEED: CalendarEvent[] = [
   },
 ];
 
+/* ───────── Backend mirror (reminders and meetings from /calendar/events) ───────── */
+
+interface EventOut {
+  id: string;
+  kind: "reminder" | "meeting";
+  title: string;
+  date: string;
+  time: string | null;
+  location: string | null;
+  description: string | null;
+  owner_id: string;
+  attendees: { person_id: string; name: string; response: string }[];
+}
+
+function fromApi(e: EventOut): CalendarEvent & { declinedBy: string[] } {
+  return {
+    id: e.id,
+    date: e.date,
+    kind: e.kind,
+    title: e.title,
+    time: e.time ?? undefined,
+    location: e.location ?? undefined,
+    description: e.description ?? undefined,
+    audienceIds: [e.owner_id, ...e.attendees.map((a) => a.person_id)],
+    ownerId: e.owner_id,
+    declinedBy: e.attendees.filter((a) => a.response === "declined").map((a) => a.person_id),
+  };
+}
+
+const mirror = createApiMirror<(CalendarEvent & { declinedBy: string[] })[]>(
+  () => [],
+  async () => (await api.get<EventOut[]>("/calendar/events")).map(fromApi),
+);
+keepFresh(() => mirror.reload(), 60_000);
+
+/** Backend mode: re-render when the shared events change. Local mode: never fires. */
+export function subscribeCalendar(listener: () => void): () => void {
+  return API_ENABLED ? mirror.subscribe(listener) : () => undefined;
+}
+export const calendarVersion = (): unknown => (API_ENABLED ? mirror.get() : null);
+
+async function createApi(body: Record<string, unknown>): Promise<CalendarEvent | string> {
+  try {
+    const row = fromApi(await api.post<EventOut>("/calendar/events", body));
+    mirror.set([...mirror.get(), row]);
+    return row;
+  } catch (e) {
+    return errorText(e);
+  }
+}
+
+/** Saves a personal reminder (server in backend mode). Resolves to an error message or null. */
+export async function saveReminderShared(input: Parameters<typeof saveLocalReminder>[0]): Promise<string | null> {
+  if (!API_ENABLED) {
+    saveLocalReminder(input);
+    return null;
+  }
+  const out = await createApi({
+    kind: "reminder",
+    title: input.title.trim() || "Personal reminder",
+    date: input.date,
+    time: input.time?.trim() || null,
+    description: input.description?.trim() || null,
+  });
+  return typeof out === "string" ? out : null;
+}
+
+/** Organiser cancels / owner removes (everyone), or an invitee declines (only them). */
+export async function removeOrDeclineShared(id: string, personId: string, action: "remove" | "decline"): Promise<string | null> {
+  if (!API_ENABLED) return action === "decline" ? declineLocalMeeting(id, personId) : removeLocalReminder(id, personId);
+  try {
+    if (action === "decline") {
+      const row = fromApi(await api.post<EventOut>(`/calendar/events/${encodeURIComponent(id)}/respond`, { response: "declined" }));
+      mirror.set(mirror.get().map((e) => (e.id === id ? row : e)));
+    } else {
+      await apiRequest(`/calendar/events/${encodeURIComponent(id)}`, { method: "DELETE" });
+      mirror.set(mirror.get().filter((e) => e.id !== id));
+    }
+    return null;
+  } catch (e) {
+    return errorText(e);
+  }
+}
+
 /** Older saved events have no ownerId — the first audience id was always the creator. */
 export function listLocalReminders(): CalendarEvent[] {
+  if (API_ENABLED) {
+    const me = apiSessionAccount();
+    return mirror.get().filter((e) => !me || !e.declinedBy.includes(me));
+  }
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return [];
@@ -272,6 +367,18 @@ export function saveLocalMeeting(input: {
   ownerId?: string;
 }): CalendarEvent {
   const ownerId = input.ownerId ?? input.attendeeIds[0];
+  if (API_ENABLED) {
+    // The organiser is whoever is signed in; the server notifies the invitees.
+    void createApi({
+      kind: "meeting",
+      title: input.title.trim() || "Meeting",
+      date: input.date,
+      time: input.time,
+      location: input.location?.trim() || null,
+      description: input.description?.trim() || null,
+      attendee_ids: input.attendeeIds.filter((id) => id !== apiSessionAccount()),
+    }).then((out) => typeof out === "string" && console.warn("Could not book the meeting", out));
+  }
   const event: CalendarEvent = {
     id: `cal-meet-${Date.now()}`,
     date: input.date,
@@ -283,11 +390,12 @@ export function saveLocalMeeting(input: {
     audienceIds: [...new Set(ownerId ? [ownerId, ...input.attendeeIds] : input.attendeeIds)],
     ownerId,
   };
-  writeLocal([event, ...listLocalReminders()]);
+  if (!API_ENABLED) writeLocal([event, ...listLocalReminders()]);
   return event;
 }
 
 export function isLocalEvent(event: CalendarEvent): boolean {
+  if (API_ENABLED) return mirror.get().some((e) => e.id === event.id);
   return event.id.startsWith("cal-local-") || event.id.startsWith("cal-meet-");
 }
 
@@ -341,7 +449,7 @@ export function eventsForPerson(
     title: h.name,
     description: "Company holiday — office closed / leave planning.",
   }));
-  const declined = declinedEventIds(personId);
+  const declined = API_ENABLED ? new Set<string>() : declinedEventIds(personId);
   const local = listLocalReminders().filter(
     (e) => (!e.audienceIds?.length || e.audienceIds.includes(personId)) && !declined.has(e.id),
   );

@@ -113,6 +113,7 @@ class ExitCaseOut(BaseModel):
     can_decide: bool = False
     can_withdraw: bool = False
     clearance: list[ClearanceItemOut] = []
+    clearance_pending: bool = False  # completed (sign-in closed on the last day) with checklist items still open
     interview_submitted: bool = False
     interview: InterviewOut | None = None  # HR only
     settlement: SettlementOut | None = None  # the leaver and HR only

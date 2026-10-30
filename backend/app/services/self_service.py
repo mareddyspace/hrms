@@ -339,7 +339,8 @@ def _encash_finished(db: Session, instance: ApprovalInstance) -> None:
                  entity="encashment_requests", entity_id=row.id, subject_id=row.employee_id,
                  after={"status": row.status, "payout_month": row.payout_month})
     notify(db, recipient_id=row.employee_id, title=f"Leave encashment {row.status.lower()}",
-           body=f"Paid with {row.payout_month} pay." if row.payout_month else "Open it to see the note.", href="/encashment")
+           body=f"Paid with {date.fromisoformat(row.payout_month + '-01'):%B %Y} pay." if row.payout_month
+           else "Open it to see the note.", href="/encashment")
 
 
 # ---------- software ----------

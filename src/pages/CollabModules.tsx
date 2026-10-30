@@ -40,6 +40,21 @@ import {
 } from "../data/collabData.ts";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 import { API_ENABLED } from "../api/client.ts";
+import { TIMEZ_COUNTRIES } from "../model.ts";
+
+/** "IN" → "India" (announcement audiences are stored as country codes). */
+const countryLabel = (code: string) => TIMEZ_COUNTRIES.find((c) => c.code === code)?.name ?? code;
+import { PENDING_DIRECT, apiCreateGroup, apiSendChat, findDirect } from "../api/syncChat.ts";
+import {
+  type AnnouncementReceipt,
+  announcementsMirror,
+  apiAcknowledgeAnnouncement,
+  apiAnnouncementReceipts,
+  apiCreateAnnouncement,
+  apiMarkAnnouncementRead,
+  apiSetAnnouncementState,
+} from "../api/syncAnnouncements.ts";
+import { usePeopleList } from "../data/peopleLocal.ts";
 import {
   addHrComment,
   addHrCommentApi,
@@ -359,11 +374,18 @@ export function MessagingPage() {
   }, [visibleConversations, filter, convQ]);
 
   const active = visibleConversations.find((c) => c.id === activeId) ?? null;
+  // Backend mode: "dm:<person>" is a direct chat the server is still opening.
+  const pendingPerson = activeId.startsWith(PENDING_DIRECT) ? activeId.slice(PENDING_DIRECT.length) : "";
 
   useEffect(() => {
+    if (pendingPerson) {
+      const opened = findDirect(pendingPerson, visibleConversations);
+      if (opened) setActiveId(opened.id);
+      return;
+    }
     if (activeId && visibleConversations.some((c) => c.id === activeId)) return;
     setActiveId(visibleConversations[0]?.id ?? "");
-  }, [visibleConversations, activeId]);
+  }, [visibleConversations, activeId, pendingPerson]);
 
   useEffect(() => {
     if (!active?.id) return;
@@ -402,19 +424,29 @@ export function MessagingPage() {
     setGroupMemberIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
-  function createGroup() {
+  async function createGroup() {
     if (groupMemberIds.length === 0) {
       setError("Select at least one colleague.");
       return false;
     }
     const members = CHAT_PEOPLE.filter((p) => groupMemberIds.includes(p.id));
-    const id = createGroupConversation({
-      title: groupTitle,
-      selfId: employee.id,
-      selfName: employee.fullName,
-      memberIds: members.map((m) => m.id),
-      memberNames: members.map((m) => m.name),
-    });
+    let id: string;
+    if (API_ENABLED) {
+      const made = await apiCreateGroup(groupTitle.trim(), members.map((m) => m.id));
+      if (!made.ok) {
+        setError(made.error);
+        return false;
+      }
+      id = made.id;
+    } else {
+      id = createGroupConversation({
+        title: groupTitle,
+        selfId: employee.id,
+        selfName: employee.fullName,
+        memberIds: members.map((m) => m.id),
+        memberNames: members.map((m) => m.name),
+      });
+    }
     markedReadRef.current = null;
     setActiveId(id);
     setFilter("group");
@@ -426,7 +458,7 @@ export function MessagingPage() {
     return true;
   }
 
-  function send() {
+  async function send() {
     if (!active) {
       setError("Select or start a conversation first.");
       return false;
@@ -435,13 +467,10 @@ export function MessagingPage() {
       setError("Type a message or attach a file.");
       return false;
     }
-    const failure = sendChatMessage(
-      active.id,
-      employee.id,
-      employee.fullName,
-      text.trim() || `(Attachment) ${attachName}`,
-      attachName,
-    );
+    const body = text.trim() || `(Attachment) ${attachName}`;
+    const failure = API_ENABLED
+      ? await apiSendChat(active.id, body, attachName)
+      : sendChatMessage(active.id, employee.id, employee.fullName, body, attachName);
     if (failure) {
       setError(failure);
       return false;
@@ -784,14 +813,29 @@ export function MessagingPage() {
 export function AnnouncementsPage() {
   const { employee, demoProfile } = usePortal();
   const collab = useCollab();
+  const people = usePeopleList();
+  const [searchParams] = useSearchParams();
   const [scope, setScope] = useState<AnnouncementScope | "">("");
   const [stateFilter, setStateFilter] = useState("");
-  const [selectedId, setSelectedId] = useState(collab.announcements[0]?.id ?? "");
+  // ?id=<announcement> opens that post, e.g. from a notification.
+  const [selectedId, setSelectedId] = useState(() => searchParams.get("id") ?? collab.announcements[0]?.id ?? "");
   const [publishError, setPublishError] = useState("");
+  const [composing, setComposing] = useState(false);
+  const [draft, setDraft] = useState({ title: "", body: "", scope: "Company" as AnnouncementScope, audience: "", mustAcknowledge: false });
+  const [composeError, setComposeError] = useState("");
+  const [receipts, setReceipts] = useState<{ id: string; rows: AnnouncementReceipt[] } | null>(null);
+  const publishAction = useAction();
+  const draftAction = useAction();
 
   const actor = { id: employee.id, fullName: employee.fullName, role: demoProfile.role };
-  const canManage = (a: (typeof collab.announcements)[number]) => canManageAnnouncement(a, actor);
+  const canManage = (a: (typeof collab.announcements)[number]) =>
+    API_ENABLED ? !!a.serverCanManage : canManageAnnouncement(a, actor);
   const isReadByMe = (a: (typeof collab.announcements)[number]) => a.readBy.includes(employee.id);
+  const leadsAll = isHrRole(demoProfile.role) || ["admin", "super_admin"].includes(demoProfile.role);
+  const leadsTeam = ["manager", "executive"].includes(demoProfile.role);
+  const scopeOptions: AnnouncementScope[] = leadsAll ? ["Company", "Country", "Department"] : ["Team"];
+  const countries = [...new Set(people.map((p) => p.countryCode).filter(Boolean))].sort();
+  const departments = [...new Set(people.map((p) => p.department).filter(Boolean))].sort();
 
   // Drafts / scheduled posts are only visible to people who may manage them.
   const list = collab.announcements.filter((a) => {
@@ -803,8 +847,142 @@ export function AnnouncementsPage() {
 
   const selected = list.find((a) => a.id === selectedId) ?? list[0] ?? null;
 
+  function markRead(id: string) {
+    if (API_ENABLED) apiMarkAnnouncementRead(id);
+    else markAnnouncementRead(id, employee.id);
+  }
+
+  useEffect(() => {
+    if (API_ENABLED && selected?.state === "Published" && !isReadByMe(selected)) markRead(selected.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
+  function openCompose() {
+    setComposing((v) => !v);
+    setComposeError("");
+    setDraft({ title: "", body: "", scope: scopeOptions[0], audience: "", mustAcknowledge: false });
+  }
+
+  async function save(state: "Draft" | "Published") {
+    const fail = (text: string) => {
+      setComposeError(text);
+      return false;
+    };
+    if (draft.title.trim().length < 3) return fail("Add a title.");
+    if (!draft.body.trim()) return fail("Write the announcement.");
+    if ((draft.scope === "Country" || draft.scope === "Department") && !draft.audience) {
+      return fail(`Pick the ${draft.scope.toLowerCase()}.`);
+    }
+    const error = await apiCreateAnnouncement({ ...draft, state });
+    if (error) return fail(error);
+    setComposing(false);
+    setComposeError("");
+    const made = announcementsMirror.get()[0];
+    if (made) setSelectedId(made.id);
+    notify(state === "Published" ? "Announcement published." : "Draft saved.");
+    return true;
+  }
+
+  async function changeState(next: (typeof collab.announcements)[number]["state"]) {
+    if (!selected) return;
+    if (!API_ENABLED) {
+      setPublishError(setAnnouncementState(selected.id, next, actor) ?? "");
+      return;
+    }
+    const error = await apiSetAnnouncementState(selected.id, next);
+    setPublishError(error ?? "");
+    if (!error) notify(next === "Published" ? "Announcement published." : `Moved to ${next.toLowerCase()}.`);
+  }
+
+  async function toggleReceipts(id: string) {
+    if (receipts?.id === id) {
+      setReceipts(null);
+      return null;
+    }
+    const rows = await apiAnnouncementReceipts(id);
+    if (typeof rows === "string") return rows;
+    setReceipts({ id, rows });
+    return null;
+  }
+
   return (
-    <Page title="Announcements">
+    <Page
+      title="Announcements"
+      action={
+        API_ENABLED && (leadsAll || leadsTeam) ? (
+          <button type="button" className="btn" onClick={openCompose}>
+            New announcement
+          </button>
+        ) : undefined
+      }
+    >
+      {composing && (
+        <Card title="New announcement">
+          <form className="stack" onSubmit={publishAction.submit(() => save("Published"))}>
+            <Field label="Title">
+              <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} maxLength={200} />
+            </Field>
+            <Field label="Message" wide>
+              <textarea rows={4} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
+            </Field>
+            <div className="row-gap">
+              <Field label="Audience">
+                <select
+                  value={draft.scope}
+                  onChange={(e) => setDraft({ ...draft, scope: e.target.value as AnnouncementScope, audience: "" })}
+                >
+                  {scopeOptions.map((s) => (
+                    <option key={s} value={s}>
+                      {s === "Company" ? "Everyone" : s === "Team" ? "My team" : s}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {draft.scope === "Country" && (
+                <Field label="Country">
+                  <select value={draft.audience} onChange={(e) => setDraft({ ...draft, audience: e.target.value })}>
+                    <option value="">Pick…</option>
+                    {countries.map((c) => (
+                      <option key={c} value={c}>{countryLabel(c)}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+              {draft.scope === "Department" && (
+                <Field label="Department">
+                  <select value={draft.audience} onChange={(e) => setDraft({ ...draft, audience: e.target.value })}>
+                    <option value="">Pick…</option>
+                    {departments.map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+            </div>
+            <label className="msg-check-label">
+              <input
+                type="checkbox"
+                checked={draft.mustAcknowledge}
+                onChange={(e) => setDraft({ ...draft, mustAcknowledge: e.target.checked })}
+              />
+              <span>Must acknowledge</span>
+            </label>
+            {composeError && <Banner message={{ tone: "err", text: composeError }} />}
+            <div className="row-gap">
+              <SubmitButton action={publishAction} className="btn">
+                Publish
+              </SubmitButton>
+              <ActionButton className="btn-ghost" action={draftAction} onAction={() => save("Draft")}>
+                Save draft
+              </ActionButton>
+              <button type="button" className="btn-ghost" onClick={() => setComposing(false)}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </Card>
+      )}
+
       <FilterBar>
         <label className="filter-label">
           Scope
@@ -840,14 +1018,17 @@ export function AnnouncementsPage() {
                     onClick={() => {
                       setSelectedId(a.id);
                       setPublishError("");
-                      if (a.state === "Published") markAnnouncementRead(a.id, employee.id);
+                      if (!API_ENABLED && a.state === "Published") markRead(a.id);
                     }}
                   >
                     <strong>
                       {a.title} {!isReadByMe(a) && a.state === "Published" && <StatusBadge status="Unread" tone="warn" />}
+                      {a.mustAcknowledge && !a.acknowledged && a.state === "Published" && !canManage(a) && (
+                        <StatusBadge status="Acknowledge" tone="warn" />
+                      )}
                     </strong>
                     <span className="muted">
-                      {a.scope} · {a.audience} · {a.state}
+                      {a.scope} · {a.scope === "Country" ? countryLabel(a.audience) : a.audience} · {a.state}
                     </span>
                   </button>
                 </li>
@@ -870,32 +1051,61 @@ export function AnnouncementsPage() {
                 ) : (
                   <StatusBadge status="Unread" tone="warn" />
                 )}
+                {selected.mustAcknowledge && (
+                  <StatusBadge
+                    status={selected.acknowledged ? "Acknowledged" : "Must acknowledge"}
+                    tone={selected.acknowledged ? "ok" : "warn"}
+                  />
+                )}
               </div>
               <p className="muted">
-                Audience: {selected.audience} · Author: {selected.author}
+                Audience: {selected.scope === "Country" ? countryLabel(selected.audience) : selected.audience} · Author: {selected.author}
                 {selected.publishedAt ? ` · Published ${formatWhen(selected.publishedAt)}` : ""}
                 {selected.scheduledFor ? ` · Scheduled ${formatWhen(selected.scheduledFor)}` : ""}
               </p>
               <p>{selected.body}</p>
               {canManage(selected) && (
                 <Field label="Publish state">
-                  <select
-                    value={selected.state}
-                    onChange={(e) =>
-                      setPublishError(
-                        setAnnouncementState(selected.id, e.target.value as typeof selected.state, actor) ?? "",
-                      )
-                    }
-                  >
-                    {(["Draft", "Scheduled", "Published"] as const).map((s) => (
+                  <select value={selected.state} onChange={(e) => void changeState(e.target.value as typeof selected.state)}>
+                    {(API_ENABLED && selected.state !== "Scheduled"
+                      ? (["Draft", "Published"] as const)
+                      : (["Draft", "Scheduled", "Published"] as const)
+                    ).map((s) => (
                       <option key={s} value={s}>{s}</option>
                     ))}
                   </select>
                 </Field>
               )}
               {publishError && <Banner message={{ tone: "err", text: publishError }} />}
-              {selected.state === "Published" && !isReadByMe(selected) && (
-                <ActionButton className="btn" success="Marked as read." onAction={() => markAnnouncementRead(selected.id, employee.id)}>
+              {selected.receipts && (
+                <div className="row-between">
+                  <span className="muted">
+                    Read by {selected.receipts.read} of {selected.receipts.audience}
+                    {selected.mustAcknowledge ? ` · Acknowledged by ${selected.receipts.acknowledged}` : ""}
+                  </span>
+                  <ActionButton className="btn-ghost" toastError onAction={() => toggleReceipts(selected.id)}>
+                    {receipts?.id === selected.id ? "Hide receipts" : "Receipts"}
+                  </ActionButton>
+                </div>
+              )}
+              {receipts?.id === selected.id && (
+                <DataTable
+                  headers={["Name", "Department", "Read", ...(selected.mustAcknowledge ? ["Acknowledged"] : [])]}
+                  rows={receipts.rows.map((r) => [
+                    r.name,
+                    r.department,
+                    r.readAt ? formatWhen(r.readAt) : "—",
+                    ...(selected.mustAcknowledge ? [r.acknowledgedAt ? formatWhen(r.acknowledgedAt) : "—"] : []),
+                  ])}
+                />
+              )}
+              {selected.state === "Published" && selected.mustAcknowledge && !selected.acknowledged && !canManage(selected) && (
+                <ActionButton className="btn" success="Acknowledged." toastError onAction={() => apiAcknowledgeAnnouncement(selected.id)}>
+                  Acknowledge
+                </ActionButton>
+              )}
+              {selected.state === "Published" && !isReadByMe(selected) && !selected.mustAcknowledge && (
+                <ActionButton className="btn" success="Marked as read." onAction={() => markRead(selected.id)}>
                   Mark as read
                 </ActionButton>
               )}

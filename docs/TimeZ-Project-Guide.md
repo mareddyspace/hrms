@@ -139,7 +139,8 @@ answers.
 
 Other back-end settings (not secret): `CORS_ORIGINS` (which websites may call the API —
 `https://hrms-lemon-mu.vercel.app,http://localhost:5173,http://localhost:5174`), `APP_ENV=production`,
-`STORAGE_BACKEND=s3`, `RUN_MIGRATIONS_ON_START=true`, `DOCS_ENABLED=true`, `OTP_DEV_ECHO=false`, `PYTHON_VERSION`.
+`STORAGE_BACKEND=s3`, `RUN_MIGRATIONS_ON_START=true`, `DOCS_ENABLED=true` (optional: in production Swagger at `/docs`
+then asks for a portal e-mail and password; leave it unset to switch the docs off), `OTP_DEV_ECHO=false`, `PYTHON_VERSION`.
 
 AI models (all free):
 - `AI_MODEL` = `nvidia/nemotron-3-ultra-550b-a55b:free`

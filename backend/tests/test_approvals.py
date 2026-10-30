@@ -8,6 +8,7 @@ from app.db import SessionLocal
 from app.models import ApprovalInstance, AuditLog, Employee, LeaveRequest
 from app.security import create_access_token
 from app.services import approvals as engine
+from tests.timesheet_helpers import legacy_submit_week
 
 
 def token_for(account_id: str, role: str) -> dict[str, str]:
@@ -141,7 +142,7 @@ def test_pending_inbox_covers_every_kind(client, admin, babu, ram):
     # timesheet week
     assert client.post("/api/v1/timesheets/entries", headers=babu, json={"work_date": "2026-01-05", "project_id": "prj-hrms",
                        "task": "Build", "hours": 8}).status_code == 201
-    assert client.post("/api/v1/timesheets/weeks/2026-01-05/submit", headers=babu).status_code == 200
+    legacy_submit_week(client, babu, "emp-mahesh", "2026-01-05")  # submitted before timesheets went daily
     # leave
     with SessionLocal() as db:
         db.add(LeaveRequest(id="lv-inbox", employee_id="emp-mahesh", leave_code="casual", from_date=date(2027, 8, 16),

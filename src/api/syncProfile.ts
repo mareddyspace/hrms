@@ -24,7 +24,7 @@ export interface ApiSelfProfileUpdate {
   education?: { degree: string; institution: string; year: number }[];
   experience?: { employer: string; title: string; from: string; to: string }[];
   career_goals?: string | null;
-  /** Code from POST /people/me/otp; needed when mobile or personal_email changes. */
+  /** Code from POST /people/me/otp; needed when a personal detail (name, contact, address, emergency contact) changes. */
   otp_code?: string;
 }
 
@@ -77,24 +77,40 @@ function body<T extends object>(input: T): T {
   return out as T;
 }
 
-export type ApiOtpField = "mobile" | "personal_email";
+/** Result of asking for a profile code. required=false: nothing in the change needs one, so nothing was sent. */
+export interface ProfileCodeSent {
+  error: string | null;
+  required: boolean;
+  /** Portal page that shows the code (Mail or Notifications). */
+  inboxHref?: string;
+  /** ms since epoch. */
+  expiresAt?: number;
+  resendAfter?: number;
+  /** Only when the server runs with OTP_DEV_ECHO=true. */
+  devCode?: string;
+}
 
-/**
- * Asks the server to send a 6-digit code (10 minutes, 5 tries) for changing your own mobile or personal email.
- * devCode is only filled when the server runs with OTP_DEV_ECHO=true.
- */
-export async function apiRequestProfileOtp(
-  field: ApiOtpField,
-  newValue: string,
-): Promise<{ error: string | null; sentTo?: string; devCode?: string }> {
+/** POST /people/me/otp with the body you will PATCH; the server sends a code to your portal inbox when needed. */
+export async function apiRequestProfileOtp(changes: ApiSelfProfileUpdate): Promise<ProfileCodeSent> {
+  const { otp_code: _ignored, ...rest } = changes;
   try {
-    const out = await apiRequest<{ field: string; sent_to: string; expires_at: string; dev_code: string | null }>(
-      "/people/me/otp",
-      { method: "POST", body: { field, new_value: newValue.trim() } },
-    );
-    return { error: null, sentTo: out.sent_to, devCode: out.dev_code ?? undefined };
+    const out = await apiRequest<{
+      required: boolean;
+      inbox_href: string | null;
+      expires_at: string | null;
+      resend_after: number;
+      dev_code: string | null;
+    }>("/people/me/otp", { method: "POST", body: { changes: body(rest) } });
+    return {
+      error: null,
+      required: out.required,
+      inboxHref: out.inbox_href ?? undefined,
+      expiresAt: out.expires_at ? Date.parse(out.expires_at) : undefined,
+      resendAfter: out.resend_after,
+      devCode: out.dev_code ?? undefined,
+    };
   } catch (error) {
-    return { error: message(error, "Could not send the code. Try again.") };
+    return { error: message(error, "Could not send the code. Try again."), required: false };
   }
 }
 

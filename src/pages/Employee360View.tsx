@@ -126,7 +126,8 @@ export function Employee360View({
   // Self-maintained details (preferred name, personal email, emergency contact) win over the HR record.
   const preferredName = extras.preferredName || person.preferredName;
   const personalEmail = extras.personalEmail || person.personalEmail;
-  const mobile = isSelf ? employee.mobile || person.mobile : person.mobile;
+  // Backend mode: the server record (reloaded after a profile save), not the session copy from sign-in.
+  const mobile = API_ENABLED ? person.mobile || (isSelf ? employee.mobile : "") : isSelf ? employee.mobile || person.mobile : person.mobile;
   // Backend mode: address and emergency contact come from the server record (masked parts arrive masked).
   const address = API_ENABLED ? person.address : isSelf ? employee.address || person.address : person.address;
   const emergencyName = API_ENABLED ? person.emergencyName ?? "" : extras.emergencyName;

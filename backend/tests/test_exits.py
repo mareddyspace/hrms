@@ -8,7 +8,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.orm import aliased
 
 from app.db import SessionLocal
-from app.models import Account, AuditLog, Employee, ExitCase
+from app.models import Account, AuditLog, Employee, ExitCase, Notification
 from app.security import create_access_token
 from app.services.exits import complete_due_exits
 from app.services.leave import today_for
@@ -165,10 +165,40 @@ def test_resignation_flow_clearance_interview_settlement_and_job(client, babu, f
         assert row.status == "Completed" and "unused_leave_days" in row.settlement
         actions = set(db.scalars(select(AuditLog.action).where(AuditLog.entity_id.in_([case["id"], emp_id]))))
         assert {"exit_submitted", "exit_approved", "exit_completed", "exit_interview_submitted"} <= actions
+        # Clearance wasn't finished: the exit still completes (the sign-in must not outlive the last day), flagged
+        # "clearance pending", and HR in scope is told.
+        assert row.settlement["clearance_pending"] == ["assets_returned", "it_access"]
+        notes = list(db.scalars(select(Notification.title).where(Notification.recipient_id == "demo-hr-admin",
+                                                                  Notification.title.like("Exit completed with clearance pending%"))))
+        assert notes
     assert client.get(f"{API}/{case['id']}", headers=me).status_code == 401  # sign-in deactivated
     final = client.get(f"{API}/{case['id']}", headers=farhan).json()
-    assert final["status"] == "Completed" and final["settlement"]["frozen"]
-    assert client.post(f"{API}/{case['id']}/clearance/it_access", headers=farhan, json={"done": True}).status_code == 409
+    assert final["status"] == "Completed" and final["settlement"]["frozen"] and final["clearance_pending"] is True
+    # HR finishes the checklist on the completed case; the flag clears with the last item, then the list closes.
+    res = client.post(f"{API}/{case['id']}/clearance/it_access", headers=farhan, json={"done": True})
+    assert res.status_code == 200 and res.json()["clearance_pending"] is True
+    res = client.post(f"{API}/{case['id']}/clearance/assets_returned", headers=farhan, json={"done": True})
+    assert res.status_code == 200 and res.json()["clearance_pending"] is False
+    assert client.post(f"{API}/{case['id']}/clearance/it_access", headers=farhan, json={"done": False}).status_code == 409
+
+    # Rehire after the exit: "Exited" (what exits set) qualifies; promotions for someone who left don't.
+    lc = "/api/v1/lifecycle/actions"
+    body = {"employee_id": emp_id, "effective_date": today.isoformat(), "reason": "Coming back"}
+    assert client.post(lc, headers=farhan, json=body | {"action_type": "promotion", "after": {"grade": "G9"}}).status_code == 422
+    res = client.post(lc, headers=farhan, json=body | {"action_type": "rehire", "after": {"job_title": "Analyst"}})
+    assert res.status_code == 201, res.text
+    action = res.json()
+    for who in (mgr, token_for("demo-admin", "admin")):
+        if action["status"] != "submitted":
+            break
+        res = client.post(f"{lc}/{action['id']}/decision", headers=who, json={"decision": "approve"})
+        assert res.status_code == 200, res.text
+        action = res.json()
+    assert action["status"] == "applied"
+    with SessionLocal() as db:
+        emp = db.get(Employee, emp_id)
+        assert emp.employment_status == "Active" and emp.last_working_day is None
+        assert db.scalar(select(Account.active).where(Account.employee_id == emp_id)) is True
     with SessionLocal() as db:  # back in the directory for the other test modules (they count people)
         emp = db.get(Employee, emp_id)
         emp.employment_status, emp.last_working_day = "Active", None

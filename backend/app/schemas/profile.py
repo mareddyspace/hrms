@@ -31,7 +31,8 @@ class ProfileExperienceItem(BaseModel):
 class SelfProfileUpdateIn(BaseModel):
     """PATCH /people/me. Only the fields sent are changed; send null or "" to clear one.
 
-    Changing mobile or personal_email needs otp_code from POST /people/me/otp (one of the two per request).
+    Changing a personal detail (preferred name, mobile, personal email, address, emergency contact) needs otp_code
+    from POST /people/me/otp, sent for exactly these new values.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -55,16 +56,20 @@ class SelfProfileUpdateIn(BaseModel):
 
 
 class ProfileOtpIn(BaseModel):
+    """The same body you will send to PATCH /people/me (without otp_code)."""
+
     model_config = ConfigDict(extra="forbid")
 
-    field: Literal["mobile", "personal_email"]
-    new_value: str = Field(min_length=1, max_length=255)
+    changes: SelfProfileUpdateIn
 
 
 class ProfileOtpOut(BaseModel):
-    field: str
-    sent_to: str
-    expires_at: datetime
+    required: bool  # false: nothing in the change needs a code, so no code was sent
+    fields: list[str] = []
+    sent_to: str = ""  # masked outbox address
+    inbox_href: str | None = None  # portal page that shows the code
+    expires_at: datetime | None = None
+    resend_after: int = 0  # seconds
     dev_code: str | None = None
 
 

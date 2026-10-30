@@ -1,7 +1,7 @@
 """Who may decide a request raised by someone else (attendance corrections, timesheet weeks, approvals list).
 
-Same rule as leave (app/routers/leave.py): anyone above the person in the reporting line, or HR whose data scope
-covers the person. Never your own request.
+Product-owner rule: only the person's direct (line) manager, someone covering for that manager through an active
+delegation, or HR whose data scope covers the person. Never a skip-level manager, never your own request.
 """
 
 from __future__ import annotations
@@ -37,12 +37,23 @@ def can_view(db: Session, user: CurrentUser, emp: Employee) -> bool:
     return user.scope.can_see(emp) or (user.employee_id is not None and user.employee_id in manager_chain_ids(db, emp.id))
 
 
-def can_decide(db: Session, user: CurrentUser, emp: Employee) -> bool:
+def is_line_manager(user: CurrentUser, emp: Employee) -> bool:
+    return bool(user.employee_id) and emp.manager_id == user.employee_id and emp.id != user.employee_id
+
+
+def can_decide(db: Session, user: CurrentUser, emp: Employee, type_: str = "other") -> bool:
+    """Direct manager, the direct manager's delegate (for this request type) or HR in scope. Not skip-level."""
     if not user.employee_id or emp.id == user.employee_id:
         return False
     if user.scope.is_hr and user.scope.can_see(emp):
         return True
-    return user.employee_id in manager_chain_ids(db, emp.id)
+    if is_line_manager(user, emp):
+        return True
+    if emp.manager_id:
+        from app.services.approvals import delegators_for
+
+        return emp.manager_id in delegators_for(db, user.employee_id, type_)
+    return False
 
 
 def decidable_filter(user: CurrentUser) -> ColumnElement[bool]:
@@ -50,8 +61,8 @@ def decidable_filter(user: CurrentUser) -> ColumnElement[bool]:
     if not user.employee_id:
         return false()
     parts: list[ColumnElement[bool]] = []
-    if user.scope.reports:
-        parts.append(Employee.id.in_(user.scope.reports))
+    if user.scope.reports:  # direct reports only (no skip-level)
+        parts.append(Employee.manager_id == user.employee_id)
     if user.scope.is_hr:
         parts.append(user.scope.employee_filter())
     if not parts:

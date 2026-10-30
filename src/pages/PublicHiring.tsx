@@ -16,6 +16,12 @@ import { money } from "../countryPay.ts";
 import { COMPANY_NAME } from "../brand.ts";
 import "./publicHiring.css";
 
+/** "Bengaluru, India" stays as it is; "Bengaluru" + "India" becomes "Bengaluru, India" (no "India, India"). */
+function placeOf(location: string, country: string): string {
+  if (!country || location.trim().toLowerCase().endsWith(country.trim().toLowerCase())) return location;
+  return location ? `${location}, ${country}` : country;
+}
+
 type Msg = { tone: "ok" | "err"; text: string } | null;
 
 function toPublic(r: Requisition): PublicPostingOut {
@@ -65,7 +71,7 @@ export function CareersPage() {
             <li key={p.id} className="card">
               <Link to={`/careers/${p.id}`} className="pub-title">{p.title}</Link>
               <p className="muted">
-                {p.department} · {p.location}, {p.country_name} · {p.employment_type} · apply by {formatShortDate(p.closing_date)}
+                {p.department} · {placeOf(p.location, p.country_name)} · {p.employment_type} · apply by {formatShortDate(p.closing_date)}
               </p>
             </li>
           ))}
@@ -117,7 +123,7 @@ export function CareerPostPage() {
       <p><Link to="/careers">← All jobs</Link></p>
       <h1>{post.title}</h1>
       <p className="muted">
-        {post.department} · {post.location}, {post.country_name} · {post.employment_type} · {post.openings} {post.openings === 1 ? "opening" : "openings"} · apply by {formatShortDate(post.closing_date)}
+        {post.department} · {placeOf(post.location, post.country_name)} · {post.employment_type} · {post.openings} {post.openings === 1 ? "opening" : "openings"} · apply by {formatShortDate(post.closing_date)}
       </p>
       <div className="pub-desc">{post.description}</div>
       <section className="card">

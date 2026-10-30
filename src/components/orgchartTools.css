@@ -1,0 +1,35 @@
+/* Org chart: search, filters, headcounts, open roles, print view */
+.orgchart-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.orgchart-tools select { min-width: 0; max-width: 100%; }
+.orgchart-search { position: relative; flex: 1 1 220px; min-width: 0; }
+.orgchart-search input { width: 100%; }
+.orgchart-suggest {
+  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0;
+  list-style: none; margin: 0; padding: 4px; background: var(--card); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow-sm); max-height: 280px; overflow: auto;
+}
+.orgchart-suggest button {
+  display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 8px;
+  border-radius: 6px; cursor: pointer; font: inherit; color: var(--ink);
+}
+.orgchart-suggest button:hover, .orgchart-suggest button:focus-visible { background: var(--soft); }
+.orgchart-none { position: absolute; top: calc(100% + 4px); margin: 0; }
+.orgchart-count { font-size: 11px; color: var(--muted); }
+.orgchart-card.is-found { outline: 3px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 6px var(--accent-soft); }
+.orgchart-card.is-faded { opacity: 0.5; }
+.orgchart-card.is-joining { border-style: dashed; }
+.orgchart-card.is-vacancy { border: 2px dashed var(--line); background: transparent; box-shadow: none; padding: 10px; }
+.orgchart-card.is-vacancy .orgchart-role { color: var(--muted); }
+.orgchart-row.is-wide { flex-wrap: wrap; max-width: min(1100px, 96vw); row-gap: 12px; }
+.orgchart-row.is-wide::before { display: none; }
+.orgchart-row.is-wide > .orgchart-col { padding-top: 0; }
+.orgchart-row.is-wide > .orgchart-col > .orgchart-elbow { display: none; }
+@media print {
+  .no-print, .orgchart-expand, .orgchart-actions { display: none !important; }
+  .orgchart-canvas { overflow: visible !important; }
+  .orgchart-card { box-shadow: none !important; break-inside: avoid; }
+  .orgchart-card.is-faded { opacity: 1; }
+}
+.orgchart-loose { margin-top: 24px; display: grid; gap: 12px; justify-items: center; }
+.orgchart-loose-grid { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.orgchart-forest { display: flex; flex-wrap: wrap; gap: 20px 16px; justify-content: center; align-items: flex-start; margin-top: 24px; }

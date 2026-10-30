@@ -1,7 +1,13 @@
 import { useSyncExternalStore } from "react";
 import { mentionsRetiredAccount } from "../demoAccounts.ts";
+import { API_ENABLED, api, apiSessionAccount } from "../api/client.ts";
+import { createApiMirror, errorText } from "../api/syncOps.ts";
+import { keepFresh } from "../api/syncShare.ts";
 
-/** Internal mail between a person and their reporting line / HR. */
+/**
+ * Internal mail between a person and their reporting line / HR. Local mode keeps it in this browser
+ * (kastech.mail.v1); with VITE_API_URL set it lives on the server (/mail) so recipients see it on their own sign-in.
+ */
 export type MailCategory = "Leave" | "Attendance" | "Work from home" | "Pay" | "General";
 
 export const MAIL_CATEGORIES: MailCategory[] = ["Leave", "Attendance", "Work from home", "Pay", "General"];
@@ -96,7 +102,45 @@ function seed(): MailMessage[] {
   ];
 }
 
+/* ───────── Backend mirror ───────── */
+
+interface MailOut {
+  id: string;
+  thread_id: string;
+  from_id: string;
+  from_name: string;
+  to_ids: string[];
+  cc_ids: string[];
+  subject: string;
+  body: string;
+  category: MailCategory | null;
+  sent_at: string;
+  read_by: string[];
+}
+
+const utc = (iso: string) => (/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+
+function fromApi(m: MailOut): MailMessage {
+  return {
+    id: m.id,
+    threadId: m.thread_id,
+    fromId: m.from_id,
+    fromName: m.from_name,
+    toIds: m.to_ids,
+    ccIds: m.cc_ids,
+    subject: m.subject,
+    body: m.body,
+    sentAt: utc(m.sent_at),
+    readBy: m.read_by,
+    category: m.category ?? undefined,
+  };
+}
+
+const mirror = createApiMirror<MailMessage[]>(() => [], async () => (await api.get<MailOut[]>("/mail")).map(fromApi));
+keepFresh(() => mirror.reload(), 30_000);
+
 function read(): MailMessage[] {
+  if (API_ENABLED) return mirror.get();
   if (cache) return cache;
   try {
     const raw = localStorage.getItem(KEY);
@@ -122,6 +166,7 @@ function write(next: MailMessage[]) {
 }
 
 export function subscribeMail(listener: () => void): () => void {
+  if (API_ENABLED) return mirror.subscribe(listener);
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -183,6 +228,14 @@ export function threadFor(messages: MailMessage[], userId: string, threadId: str
 }
 
 export function markThreadRead(threadId: string, userId: string): void {
+  if (API_ENABLED) {
+    const me = apiSessionAccount() ?? userId;
+    const list = mirror.get();
+    if (!list.some((m) => m.threadId === threadId && isRecipient(m, me) && !m.readBy.includes(me))) return;
+    mirror.set(list.map((m) => (m.threadId === threadId && isRecipient(m, me) && !m.readBy.includes(me) ? { ...m, readBy: [...m.readBy, me] } : m)));
+    void api.post(`/mail/threads/${encodeURIComponent(threadId)}/read`).catch((e) => console.warn("Could not mark mail read", e));
+    return;
+  }
   const current = read();
   let changed = false;
   const next = current.map((m) => {
@@ -221,6 +274,30 @@ export function sendMail(input: {
   };
   write([...read(), message]);
   return message;
+}
+
+/**
+ * Sends mail in either mode: the server in backend mode (it also notifies the recipients), this browser otherwise.
+ * Resolves to the sent message or an error message.
+ */
+export async function sendMailShared(input: Parameters<typeof sendMail>[0]): Promise<MailMessage | string> {
+  if (!API_ENABLED) return sendMail(input);
+  try {
+    const out = fromApi(
+      await api.post<MailOut>("/mail", {
+        to_ids: input.toIds,
+        cc_ids: input.ccIds ?? [],
+        subject: input.subject.trim(),
+        body: input.body.trim(),
+        category: input.category ?? null,
+        thread_id: input.threadId ?? null,
+      }),
+    );
+    mirror.set([...mirror.get(), out]);
+    return out;
+  } catch (e) {
+    return errorText(e);
+  }
 }
 
 /** A mailto: link for the user's own mail app. Only addresses plus what the user typed. */
