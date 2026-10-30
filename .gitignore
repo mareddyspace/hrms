@@ -32,3 +32,4 @@ __pycache__/
 *.pyc
 *.db
 backend/storage/
+tsconfig.tsbuildinfo

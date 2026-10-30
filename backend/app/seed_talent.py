@@ -20,6 +20,7 @@ from app.models import (
     Course,
     Employee,
     Goal,
+    JobPosting,
     OnboardingTemplateTask,
     Requisition,
     ReviewCycle,
@@ -166,6 +167,31 @@ def _candidates(db: Session) -> int:
     return added
 
 
+# requisition, posting id, description (the job posts on the internal board and careers page; migration 0021)
+POSTINGS: list[tuple[str, str, str]] = [
+    ("JOB-221", "post-seed-221", "Build the React front end of our HR platform with a small product team in Bengaluru. "
+     "You will own features end to end, review code and help shape the design system. "
+     "We look for 5+ years of React, strong TypeScript and good system design sense."),
+    ("JOB-218", "post-seed-218", "Partner with leaders in our London office on organisation design, employee relations and "
+     "workforce planning. You will be the first people partner for a fast-growing UK team."),
+    ("JOB-230", "post-seed-230", "Lead product discovery and delivery for the people analytics area. "
+     "Work with engineering, design and HR customers; run user research and own the roadmap."),
+]
+
+
+def _postings(db: Session) -> int:
+    added = 0
+    for rid, pid, text in POSTINGS:
+        req = db.get(Requisition, rid)
+        if req is None or db.get(JobPosting, pid) is not None or db.scalar(select(JobPosting.id).where(JobPosting.requisition_id == rid)):
+            continue
+        db.add(JobPosting(id=pid, requisition_id=rid, title=req.title, description=text, location=req.location,
+                          employment_type="Full-time", closing_date=date.today() + timedelta(days=45), on_careers_site=True,
+                          status="open", published_by=RECRUITER, published_on=req.decided_on or req.raised_on))
+        added += 1
+    return added
+
+
 def _performance(db: Session) -> int:
     added = 0
     for cid, name, status, start, end, self_due, mgr_due in CYCLES:
@@ -204,6 +230,7 @@ def seed(db: Session) -> dict[str, int]:
     db.flush()
     stats["requisitions_added"] = _requisitions(db)
     stats["candidates_added"] = _candidates(db)
+    stats["job_postings_added"] = _postings(db)
     stats["review_cycles_added"] = _performance(db)
     stats["courses"] = _learning(db)
     return stats

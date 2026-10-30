@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import JSON, Boolean, Date, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, TimestampMixin
@@ -61,3 +61,7 @@ class EmployeeSkill(TimestampMixin, Base):
     skill: Mapped[str] = mapped_column(String(100))
     level: Mapped[int] = mapped_column(Integer)  # 1-5
     target_level: Mapped[int | None] = mapped_column(Integer)  # 1-5
+    # Migration 0015: how long, when last used (YYYY-MM) and a link to a certificate or work sample.
+    years: Mapped[float | None] = mapped_column(Float)
+    last_used: Mapped[str | None] = mapped_column(String(7))
+    evidence_url: Mapped[str | None] = mapped_column(String(500))

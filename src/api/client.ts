@@ -214,7 +214,9 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
     } catch {
       res = null;
     }
-    const waking = res === null || res.status === 502 || res.status === 503 || res.status === 504;
+    // A 504 or a dropped connection may mean the server already saved a POST, so only reads retry on those.
+    const safe = (options.method ?? "GET") === "GET";
+    const waking = res === null ? safe : res.status === 502 || res.status === 503 || (res.status === 504 && safe);
     if (!waking) return res!;
     if (attempt >= WAKE_RETRY_MS.length) {
       if (res) return res;
@@ -320,6 +322,9 @@ export interface PersonBasicOut {
   manager_name: string | null;
   photo: string | null;
   company?: string;
+  /** Basic card: joining date and whether they have started (pre-boarding joiners haven't). */
+  joining_date?: string | null;
+  started?: boolean;
 }
 
 export interface PersonFullOut extends Omit<PersonBasicOut, "view"> {
@@ -342,6 +347,8 @@ export interface PersonFullOut extends Omit<PersonBasicOut, "view"> {
   joining_date: string;
   /** Set once an exit is approved (status "Notice period", then "Exited"). */
   last_working_day?: string | null;
+  /** India tax regime the person chose ("new" / "old"); null = new (migration 0015). */
+  tax_regime?: string | null;
   time_zone: string;
   currency: string;
   date_of_birth: string | null;

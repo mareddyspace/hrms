@@ -40,3 +40,5 @@ class ExitCase(TimestampMixin, Base):
     interview: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     settlement: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Migration 0016: {handover_plan, handover_to, early_release_reason, retention: [{by_id, by, note, on}]}
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON)

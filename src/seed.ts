@@ -188,6 +188,8 @@ export function createSeed(): PortalState {
       { code: "emergency_wfh", name: "Emergency WFH", quota: 3 },
       { code: "bereavement", name: "Bereavement leave", quota: 3 },
       { code: "unpaid", name: "Leave without pay", quota: 12 },
+      // Picks from the optional (restricted) holiday list; see src/features/workforce/optionalHolidaysStore.ts.
+      { code: "optional", name: "Optional holiday", quota: 0, byCountry: { IN: { quota: 2 }, US: { quota: 1 } } },
     ],
     leaveRequests: [
       {

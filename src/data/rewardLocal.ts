@@ -183,7 +183,8 @@ function read(): RewardState {
       enrollments: list("enrollments"),
       changeRequests: list("changeRequests"),
       letters: list("letters"),
-      library: list("library"),
+      // Seeded documents a saved state is missing are added (ids starting "dl-"); uploads are kept as they are.
+      library: [...list("library"), ...base.library.filter((d) => !list("library").some((x) => x.id === d.id))],
       dependents: list("dependents"),
       lifeEvents: list("lifeEvents"),
       benefitHistory: list("benefitHistory"),
@@ -1419,7 +1420,7 @@ export function setLetterStatus(actor: DemoAccount, id: string, status: LetterSt
 /** Raw request — also used by exit and probation flows. Checks on who may request what live in letterService. */
 export function addLetterRequest(
   actor: LetterActor,
-  input: { employeeId: string; employeeName: string; type: LetterType; note: string; details?: string; effectiveDate?: string },
+  input: { employeeId: string; employeeName: string; type: LetterType; note: string; details?: string; effectiveDate?: string; customText?: string },
 ): RewardResult {
   if (input.employeeId !== actor.id && !isLetterHr(actor)) {
     return "You can only request letters for yourself.";
@@ -1448,6 +1449,7 @@ export function addLetterRequest(
       note: input.note,
       details: input.details?.trim() || undefined,
       effectiveDate: input.effectiveDate || undefined,
+      customText: input.customText?.trim() || undefined,
       previewBody: `${input.type} letter for ${input.employeeName}. Generated once approved.`,
     });
   });

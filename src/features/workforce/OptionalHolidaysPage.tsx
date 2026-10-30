@@ -1,25 +1,25 @@
 import { useState, useSyncExternalStore } from "react";
+import { Link } from "react-router-dom";
 import { ActionButton, Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, SubmitButton, Tabs, notify, useAction } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
-import { todayISO, TIMEZ_COUNTRIES } from "../../model.ts";
+import { todayISO, TIMEZ_COUNTRIES, type LeaveCode, type LeaveRequest } from "../../model.ts";
 import { taskTeamFor } from "../../data/taskTeam.ts";
+import { managementChain } from "../../demoAccounts.ts";
+import { API_ENABLED } from "../../api/client.ts";
+import { refreshApiOptional } from "../../api/syncOptionalHolidays.ts";
 import {
   addOptionalHoliday,
-  CANCEL_CUTOFF_DAYS,
-  cancelDeadline,
-  cancelOptionalPick,
   countryName,
   countryOf,
   getOptionalHolidayState,
   holidaysFor,
-  limitFor,
-  MAX_LIMIT,
-  pickOptionalHoliday,
-  picksFor,
+  localPickCount,
+  OPTIONAL_CODE,
+  optionalRequestsFor,
   removeOptionalHoliday,
-  setYearlyLimit,
+  requestOn,
   subscribeOptionalHolidays,
-  teamPicks,
+  type OptionalHoliday,
 } from "./optionalHolidaysStore.ts";
 import { fmt, isHrRole, shortDay, type WorkforceActor } from "./workforceShared.ts";
 import "./workforce.css";
@@ -30,33 +30,54 @@ function useOptional() {
   return useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState, getOptionalHolidayState);
 }
 
-function result(error: string | null, ok: string): Msg {
-  return error ? { tone: "err", text: error } : { tone: "ok", text: ok };
-}
-
 const currentYear = () => Number(todayISO().slice(0, 4));
 
-/** Drop-in card for the Holiday calendar: the signed-in person's optional holidays and picks. */
+const STATUS: Record<string, [string, "ok" | "warn" | "danger" | "neutral"]> = {
+  pending: ["Waiting for approval", "warn"],
+  approved: ["Approved", "ok"],
+  rejected: ["Declined", "danger"],
+  withdrawn: ["Withdrawn", "neutral"],
+};
+
+function PickStatus({ request, past }: { request?: LeaveRequest; past: boolean }) {
+  if (!request || request.status === "withdrawn") return past ? <StatusBadge status="Passed" tone="neutral" literal /> : null;
+  const [text, tone] = request.status === "approved" && past ? ["Taken", "ok" as const] : (STATUS[request.status] ?? [request.status, "neutral" as const]);
+  return <StatusBadge status={text} tone={tone} literal />;
+}
+
+/** The signed-in person's optional holidays: pick (sent to the manager), withdraw, and what's left this year. */
 export function OptionalHolidaysCard({ title = "Optional holidays" }: { title?: string }) {
-  const { demoProfile } = usePortal();
+  const { demoProfile, state, leaveTable, applyLeave, setLeaveStatus } = usePortal();
   const actor: WorkforceActor = demoProfile;
-  const data = useOptional();
+  useOptional();
   const [msg, setMsg] = useState<Msg>(null);
   const year = currentYear();
   const today = todayISO();
   const country = countryOf(actor.id);
-  const limit = limitFor(country, data);
-  const list = holidaysFor(country, year, data);
-  const picks = picksFor(actor.id, year, data);
-  const left = Math.max(0, limit - picks.length);
-  /** Shows the result in the card banner; false tells the button it failed. */
-  const show = (error: string | null, ok: string) => {
-    setMsg(result(error, ok));
-    return error ? false : true;
-  };
+  const balance = leaveTable.find((r) => r.code === OPTIONAL_CODE);
+  const limit = balance?.quota ?? 0;
+  const left = balance?.available ?? 0;
+  const list = holidaysFor(country, year);
+  const requests = optionalRequestsFor(state.leaveRequests, actor.id, year);
+  const open = requests.filter((r) => r.status === "pending" || r.status === "approved").length;
+  const manager = managementChain(actor.id)[0]?.fullName;
+
+  async function pick(h: OptionalHoliday) {
+    const error = await applyLeave({ code: OPTIONAL_CODE as LeaveCode, from: h.date, to: h.date, reason: `Optional holiday: ${h.name}` });
+    setMsg(error ? { tone: "err", text: error } : null);
+    if (!error && API_ENABLED) refreshApiOptional();
+    return error;
+  }
+
+  async function withdraw(r: LeaveRequest, name: string) {
+    const error = await setLeaveStatus(r.id, "withdrawn");
+    setMsg(error ? { tone: "err", text: error } : null);
+    if (!error && API_ENABLED) refreshApiOptional();
+    return error ?? (notify(`${name} ${r.status === "pending" ? "withdrawn" : "cancelled"}.`), null);
+  }
 
   return (
-    <Card title={title} action={<span className="muted">{`${picks.length} of ${limit} picked`}</span>}>
+    <Card title={title} action={limit ? <span className="muted">{`${open} of ${limit} used · ${left} left`}</span> : undefined}>
       <div className="stack">
         <Banner message={msg} />
         {list.length === 0 || limit === 0 ? (
@@ -64,42 +85,34 @@ export function OptionalHolidaysCard({ title = "Optional holidays" }: { title?: 
         ) : (
           <ul className="approval-list">
             {list.map((h) => {
-              const pick = picks.find((p) => p.holiday.id === h.id)?.pick;
-              const past = h.date <= today;
-              const canCancel = pick && today <= cancelDeadline(h.date);
+              const request = requestOn(requests, h.date);
+              const active = request && (request.status === "pending" || request.status === "approved");
+              const past = h.date < today;
               return (
                 <li key={h.id} className="approval-item">
                   <div className="row-between wf-wrap">
                     <strong>{h.name}</strong>
-                    {pick ? (
-                      <StatusBadge status={past ? "Taken" : "Picked"} tone="ok" literal />
-                    ) : past ? (
-                      <StatusBadge status="Passed" tone="neutral" literal />
-                    ) : null}
+                    <PickStatus request={request} past={past} />
                   </div>
-                  <span className="muted">{shortDay(h.date)}</span>
+                  <span className="muted">
+                    {shortDay(h.date)}
+                    {request?.status === "rejected" && request.decisionNote ? ` · “${request.decisionNote}”` : ""}
+                  </span>
                   {!past && (
                     <div className="approval-actions">
-                      {pick ? (
-                        canCancel ? (
-                          <ActionButton
-                            className="btn-ghost btn-tiny"
-                            success={`${h.name} pick cancelled.`}
-                            onAction={() => show(cancelOptionalPick(actor, pick.id), `${h.name} cancelled.`)}
-                          >
-                            Cancel pick
-                          </ActionButton>
-                        ) : (
-                          <span className="muted">Can't cancel within {CANCEL_CUTOFF_DAYS} days</span>
-                        )
+                      {active ? (
+                        <ActionButton key="withdraw" className="btn-ghost btn-tiny" onAction={() => withdraw(request, h.name)}>
+                          {request.status === "pending" ? "Withdraw" : "Cancel"}
+                        </ActionButton>
                       ) : (
                         <ActionButton
+                          key="pick"
                           className="btn btn-tiny"
-                          disabled={left === 0}
-                          busyLabel="Picking…"
-                          doneLabel="Picked"
-                          success={`${h.name} added to your holidays.`}
-                          onAction={() => show(pickOptionalHoliday(actor, h.id), `${h.name} added to your holidays.`)}
+                          disabled={left <= 0}
+                          busyLabel="Sending…"
+                          doneLabel="Sent"
+                          success={manager ? `${h.name} sent to ${manager} for approval.` : `${h.name} added to your holidays.`}
+                          onAction={() => pick(h)}
                         >
                           Pick
                         </ActionButton>
@@ -140,22 +153,37 @@ export function OptionalHolidaysPage() {
 }
 
 function TeamPicks({ actor }: { actor: WorkforceActor }) {
-  const data = useOptional();
+  const { state } = usePortal();
+  useOptional();
   const year = currentYear();
   const today = todayISO();
-  const rows = teamPicks(actor.id, year, data).sort((a, b) => a.holiday.date.localeCompare(b.holiday.date));
-  const upcoming = rows.filter((r) => r.holiday.date > today);
+  const team = taskTeamFor(actor.id);
+  const rows = team
+    .flatMap((person) =>
+      optionalRequestsFor(state.leaveRequests, person.id, year)
+        .filter((r) => r.status !== "withdrawn")
+        .map((r) => ({ person, r, name: holidaysFor(countryOf(person.id), year).find((h) => h.date === r.from)?.name ?? r.reason.replace(/^Optional holiday:\s*/, "") })),
+    )
+    .sort((a, b) => a.r.from.localeCompare(b.r.from));
+  const upcoming = rows.filter((x) => x.r.from > today && x.r.status === "approved");
+  const waiting = rows.filter((x) => x.r.status === "pending").length;
 
   return (
     <>
       <MetricGrid>
-        <MetricCard label="Upcoming team picks" value={upcoming.length} />
-        <MetricCard label="Next" value={upcoming[0] ? fmt(upcoming[0].holiday.date) : "—"} hint={upcoming[0]?.personName} />
+        <MetricCard label="Waiting for you" value={waiting} />
+        <MetricCard label="Upcoming" value={upcoming.length} />
+        <MetricCard label="Next" value={upcoming[0] ? fmt(upcoming[0].r.from) : "—"} hint={upcoming[0]?.person.fullName} />
       </MetricGrid>
-      <Card title={`Team picks · ${year}`}>
+      <Card title={`Team picks · ${year}`} action={waiting ? <Link to="/approvals">Review</Link> : undefined}>
         <DataTable
-          headers={["Person", "Holiday", "Date", "Picked on"]}
-          rows={rows.map((r) => [r.personName, r.holiday.name, shortDay(r.holiday.date), fmt(r.pick.pickedOn)])}
+          headers={["Person", "Holiday", "Date", "Status"]}
+          rows={rows.map((x) => [
+            x.person.fullName,
+            x.name,
+            shortDay(x.r.from),
+            <PickStatus key="s" request={x.r} past={x.r.from <= today} />,
+          ])}
           empty={<EmptyState title="No picks yet" />}
         />
       </Card>
@@ -169,30 +197,17 @@ function Setup({ actor }: { actor: WorkforceActor }) {
   const year = currentYear();
   const [country, setCountry] = useState<string>("IN");
   const [msg, setMsg] = useState<Msg>(null);
-  const [limitInput, setLimitInput] = useState<string>("");
   const [date, setDate] = useState("");
   const [name, setName] = useState("");
-  const limit = limitFor(country, data);
-  const list = holidaysFor(country, year, data).concat(holidaysFor(country, year + 1, data));
-  const pickCount = (id: string) => data.picks.filter((p) => p.holidayId === id && p.status === "picked").length;
-
-  const limitAction = useAction();
+  const list = holidaysFor(country, year, data, false).concat(holidaysFor(country, year + 1, data, false));
+  const quota = state.leavePolicies.find((p) => p.code === OPTIONAL_CODE);
+  const limit = API_ENABLED ? undefined : (quota?.byCountry?.[country as keyof NonNullable<typeof quota.byCountry>]?.quota ?? quota?.quota ?? 0);
+  const pickCount = (h: OptionalHoliday) => (API_ENABLED ? (h.pickedBy ?? 0) : localPickCount(state.leaveRequests, h));
   const addAction = useAction();
 
-  function saveLimit(): boolean {
-    const raw = limitInput.trim();
-    const value = raw === "" ? NaN : Number(raw);
-    const error = setYearlyLimit(actor, country, value);
-    setMsg(result(error, `Yearly limit for ${countryName(country)} set to ${value}.`));
-    if (error) return false;
-    setLimitInput("");
-    notify(`Yearly limit for ${countryName(country)} set to ${value}.`);
-    return true;
-  }
-
-  function add(): boolean {
-    const error = addOptionalHoliday(actor, { countryCode: country, date, name }, state.holidays);
-    setMsg(result(error, `${name.trim()} added.`));
+  async function add() {
+    const error = await addOptionalHoliday(actor, { countryCode: country, date, name }, state.holidays);
+    setMsg(error ? { tone: "err", text: error } : null);
     if (error) return false;
     notify(`${name.trim()} added as an optional holiday.`);
     setDate("");
@@ -214,12 +229,14 @@ function Setup({ actor }: { actor: WorkforceActor }) {
               ))}
             </select>
           </Field>
-          <form className="wf-inline-form" onSubmit={limitAction.submit(saveLimit)}>
-            <Field label={`Picks per year (now ${limit})`}>
-              <input type="number" min={0} max={MAX_LIMIT} step={1} placeholder={String(limit)} value={limitInput} onChange={(e) => setLimitInput(e.target.value)} />
-            </Field>
-            <SubmitButton action={limitAction} className="btn-ghost">Save limit</SubmitButton>
-          </form>
+          <div>
+            <span className="muted">{limit !== undefined ? `Picks per year: ${limit}` : "Picks per year are set in leave policies."}</span>
+            <div>
+              <Link className="btn-ghost btn-tiny" to="/admin/leave-policies">
+                Change in leave policies
+              </Link>
+            </div>
+          </div>
         </div>
       </Card>
       <Card title={`Optional holidays · ${countryName(country)}`}>
@@ -228,16 +245,13 @@ function Setup({ actor }: { actor: WorkforceActor }) {
           rows={list.map((h) => [
             h.name,
             shortDay(h.date),
-            pickCount(h.id),
+            pickCount(h),
             <ActionButton
               key="r"
               className="btn-ghost btn-tiny"
               success={`${h.name} removed.`}
-              onAction={() => {
-                const error = removeOptionalHoliday(actor, h.id);
-                setMsg(result(error, `${h.name} removed.`));
-                return error ? false : true;
-              }}
+              onError={(m) => setMsg({ tone: "err", text: m })}
+              onAction={() => removeOptionalHoliday(actor, h, pickCount(h))}
             >
               Remove
             </ActionButton>,

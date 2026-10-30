@@ -102,7 +102,7 @@ import {
 import { API_ENABLED } from "../api/syncOps.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
-import { formatShortDate, todayISO, type CountryCode } from "../model.ts";
+import { formatShortDate, leaveNameFor, plural, todayISO, type CountryCode } from "../model.ts";
 import { roleLabel } from "../nav.ts";
 import { usePortal } from "../store.tsx";
 import { MaskedValue } from "../components/MaskedValue.tsx";
@@ -317,7 +317,7 @@ export function AnalyticsPage() {
 
       {activeTab === "team" && (
         <MetricGrid>
-          <MetricCard label="Team size" value={team.length} hint={`${team.filter((m) => m.direct).length} direct reports`} />
+          <MetricCard label="Team size" value={team.length} hint={plural(team.filter((m) => m.direct).length, "direct report")} />
           <MetricCard label="Working today" value={workingToday} hint={`${onLeaveToday} on leave`} />
           <MetricCard label="Approvals due" value={pendingApprovals} hint="Waiting on you" />
           <MetricCard label="Open positions" value={teamOpenings} hint="Approved openings in your team" />
@@ -375,8 +375,8 @@ export function AnalyticsPage() {
                 headers={["Person", "Type", "Dates", "Status"]}
                 rows={upcomingTeamLeave.map((r) => [
                   personName(r.employeeId, people),
-                  r.code.toUpperCase(),
-                  `${formatShortDate(r.from)} → ${formatShortDate(r.to)}`,
+                  leaveNameFor(state.leavePolicies, r.code, r.employeeId) ?? r.code.toUpperCase(),
+                  r.to !== r.from ? `${formatShortDate(r.from)} → ${formatShortDate(r.to)}` : formatShortDate(r.from),
                   <StatusBadge key={r.id} status={r.status === "approved" ? "Approved" : "Pending"} tone={r.status === "approved" ? "ok" : "warn"} literal />,
                 ])}
                 empty={<p className="note">No upcoming leave in your team.</p>}

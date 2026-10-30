@@ -156,6 +156,9 @@ interface SkillOut {
   skill: string;
   level: number;
   target_level: number | null;
+  years?: number | null;
+  last_used?: string | null;
+  evidence_url?: string | null;
 }
 
 /* ───────── Mapping ───────── */
@@ -326,6 +329,9 @@ function toSkill(s: SkillOut): EmployeeSkill {
     skillName: s.skill,
     level,
     targetLevel: levelName(s.target_level) ?? LEVELS[Math.min(LEVELS.length - 1, LEVEL_RANK[level] ?? 1)]!,
+    ...(s.years != null ? { years: s.years } : {}),
+    ...(s.last_used ? { lastUsed: s.last_used } : {}),
+    ...(s.evidence_url ? { evidenceUrl: s.evidence_url } : {}),
   };
 }
 
@@ -569,12 +575,26 @@ export function apiSaveMySkills(employeeId: string, before: EmployeeSkill[], nex
     const removed = before.filter((b) => !next.some((n) => n.skillId === b.skillId));
     const changed = next.filter((n) => {
       const row = onServer(n);
-      return !row || levelName(row.level) !== n.level || levelName(row.target_level) !== n.targetLevel;
+      return (
+        !row ||
+        levelName(row.level) !== n.level ||
+        levelName(row.target_level) !== n.targetLevel ||
+        (row.years ?? undefined) !== n.years ||
+        (row.last_used || undefined) !== n.lastUsed ||
+        (row.evidence_url || undefined) !== n.evidenceUrl
+      );
     });
     for (const s of changed) {
       await apiRequest("/learning/skills/me", {
         method: "PUT",
-        body: { skill: s.skillName, level: levelNumber(s.level), target_level: levelNumber(s.targetLevel) },
+        body: {
+          skill: s.skillName,
+          level: levelNumber(s.level),
+          target_level: levelNumber(s.targetLevel),
+          years: s.years ?? null,
+          last_used: s.lastUsed || null,
+          evidence_url: s.evidenceUrl || null,
+        },
       });
     }
     for (const s of removed) {

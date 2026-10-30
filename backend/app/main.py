@@ -165,6 +165,31 @@ from app.routers import exits as exits_router  # noqa: E402
 
 app.include_router(exits_router.router, prefix=API_PREFIX)
 
+# ---------- cash advances, leave encashment, software licences (migration 0016) ----------
+from app.routers import optional_holidays as optional_holidays_router  # noqa: E402
+
+app.include_router(optional_holidays_router.router, prefix=API_PREFIX)
+
+from app.routers import self_service as self_service_router  # noqa: E402
+
+for _r in (self_service_router.cash_router, self_service_router.encash_router, self_service_router.software_router):
+    app.include_router(_r, prefix=API_PREFIX)
+
+# ---------- policies HR writes, versions, acknowledgement tracking (migration 0018) ----------
+from app.routers import policies as policies_router  # noqa: E402
+
+app.include_router(policies_router.router, prefix=API_PREFIX)
+
+# ---------- work tickets shared between people: owner, sub-owner, deadline, tasks (migration 0020) ----------
+from app.routers import tickets as tickets_router  # noqa: E402
+
+app.include_router(tickets_router.router, prefix=API_PREFIX)
+
+# ---------- hiring chain, public pages: careers page and the candidate's offer link (migration 0021) ----------
+from app.routers import careers as careers_router  # noqa: E402
+
+app.include_router(careers_router.router, prefix=API_PREFIX)
+
 # ---------- start-up: optional migrations (outermost hook, so it runs before the jobs above touch the database) ----------
 from app import migrate as _migrate  # noqa: E402
 from app.services import storage as _storage  # noqa: E402

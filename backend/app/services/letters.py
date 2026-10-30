@@ -48,7 +48,9 @@ LETTER_TYPES: dict[str, dict[str, Any]] = {
     "Promotion": {"label": "Promotion letter", "employee": False, "pay": True, "effective": True},
     "Transfer": {"label": "Transfer letter", "employee": False, "pay": False, "details": "New location / department",
                  "effective": True},
-    "Salary revision": {"label": "Salary revision letter", "employee": False, "pay": True, "effective": True},
+    "Salary revision": {"label": "Increment letter", "employee": False, "pay": True, "effective": True},
+    "Salary certificate": {"label": "Salary certificate", "employee": True, "pay": True},
+    "Bonafide": {"label": "Bonafide letter", "employee": True, "pay": False},
     "Experience": {"label": "Experience letter", "employee": True, "pay": False, "effective": True},
     "Relieving": {"label": "Relieving letter", "employee": False, "pay": False, "effective": True},
     "Confirmation": {"label": "Confirmation letter", "employee": False, "pay": False, "effective": True},
@@ -66,7 +68,8 @@ EXITED_STATUSES = frozenset({"Terminated", "Exited", "Resigned", "Separated", "I
 
 TYPE_CODE = {"Internship": "INT", "Warning": "WRN", "Termination": "TRM", "Employment": "EMP", "Experience": "EXP",
              "Relieving": "REL", "Offer": "OFR", "Appointment": "APT", "Confirmation": "CNF", "Promotion": "PRM",
-             "Salary revision": "SAL", "Transfer": "TRF", "NOC": "NOC", "Visa/Travel": "VIS", "Address proof": "ADR"}
+             "Salary revision": "INC", "Transfer": "TRF", "NOC": "NOC", "Visa/Travel": "VIS", "Address proof": "ADR",
+             "Salary certificate": "SLC", "Bonafide": "BON"}
 
 ENTITY_ADDRESS = {
     "IN": "Prestige Tech Park, Outer Ring Road, Bengaluru 560103, India",
@@ -93,6 +96,7 @@ EXTRA_REQUIRED: dict[str, tuple[str, ...]] = {
     "Appointment": ("grade", "manager", "salary"), "Confirmation": ("effective_date",),
     "Promotion": ("grade", "salary", "effective_date"), "Salary revision": ("salary", "effective_date"),
     "Transfer": ("details", "effective_date"), "NOC": ("details",), "Visa/Travel": ("details",), "Address proof": ("address",),
+    "Salary certificate": ("salary",), "Bonafide": (),
 }
 
 PLACEHOLDERS = (
@@ -161,7 +165,7 @@ def default_wording(letter_type: str, c: str) -> tuple[str, bool, list[str]]:
             "Your revised annual base salary is <b>{salary}</b>.",
             "All other terms of your employment remain unchanged."])
     if letter_type == "Salary revision":
-        return ("Salary Revision Letter", False, [
+        return ("Increment Letter", False, [
             "Your annual base salary is revised {salary_change}, effective {effective_date}.",
             "This information is confidential. All other terms remain unchanged."])
     if letter_type == "Transfer":
@@ -182,6 +186,15 @@ def default_wording(letter_type: str, c: str) -> tuple[str, bool, list[str]]:
         return ("Address Confirmation", True, [
             "This is to certify that {employee}, {role}, is employed with {entity}.",
             "As per company records, the employee's residential address is: <b>{address}</b>.",
+            no_liability])
+    if letter_type == "Salary certificate":
+        return ("Salary Certificate", True, [
+            "This is to certify that {employee} is employed with {entity} as {role} since {joining_date}.",
+            "Their current annual base salary is <b>{salary}</b>, paid monthly, before statutory deductions.",
+            no_liability])
+    if letter_type == "Bonafide":
+        return ("Bonafide Certificate", True, [
+            "This is to certify that {employee} is a bonafide employee of {entity}, working as {role} since {joining_date}.",
             no_liability])
     if letter_type == "Internship":
         return ("Internship Certificate", True, [
@@ -294,7 +307,7 @@ def collect_fields(db: Session, req: LetterRequest, emp: Employee) -> dict[str, 
     if info["pay"]:
         rows = list(db.scalars(select(CompensationRecord).where(CompensationRecord.employee_id == emp.id)
                                .order_by(CompensationRecord.effective_date.desc())))
-        # Offer / appointment use the starting salary; promotion / revision use the latest one.
+        # Offer / appointment use the starting salary; promotion / revision / salary certificate use the latest one.
         pick = rows[-1] if req.letter_type in ("Offer", "Appointment") and rows else rows[0] if rows else None
         if pick is not None:
             salary = format_money(pick.base_salary, pick.currency)
@@ -316,12 +329,14 @@ def collect_fields(db: Session, req: LetterRequest, emp: Employee) -> dict[str, 
         "country_code": emp.country_code or "",
         "country_name": country.name if country else "",
         "legal_entity": emp.legal_entity or "",
-        "address": "",  # no address on the employee record yet
+        "address": ", ".join(p.strip() for p in (emp.address_line, emp.address_city, emp.address_postcode,
+                                                 emp.address_country) if p and p.strip()),
         "salary": salary,
         "previous_salary": previous_salary,
         "effective_date": effective if req.letter_type not in ("Experience", "Relieving", "Internship") else "",
         "details": req.details or "",
-        "nationality": "",
+        "custom_text": (req.custom_text or "").strip(),
+        "nationality": emp.nationality or "",
         "end_date": effective if req.letter_type == "Internship" else "",
     }
 
@@ -370,7 +385,13 @@ def render(db: Session, letter_type: str, fields: dict[str, str]) -> tuple[str, 
         rendered = [p.format_map(values) for p in paragraphs]
     except (KeyError, ValueError, IndexError) as exc:
         raise LetterError("The letter template has a broken placeholder. Ask HR to fix the template.") from exc
-    return title, to_whom, [p for p in rendered if p.strip()]
+    rendered = [p for p in rendered if p.strip()]
+    custom = (fields.get("custom_text") or "").strip()
+    if custom:
+        # The requester's own paragraph goes before the closing line ("issued at the employee's request").
+        at = len(rendered) - 1 if len(rendered) > 1 and "request" in rendered[-1] else len(rendered)
+        rendered.insert(at, escape(custom))
+    return title, to_whom, rendered
 
 
 def reference_number(letter_type: str, country_code: str, serial: int, on: date) -> str:
@@ -398,21 +419,25 @@ def build_pdf(*, fields: dict[str, str], title: str, to_whom: bool, paragraphs: 
 
     entity = escape(fields["legal_entity"])
     story: list[Any] = [
-        Paragraph(entity, head),
-        Paragraph(escape(ENTITY_ADDRESS.get(c, ENTITY_ADDRESS["IN"])), small),
+        Paragraph("TimeZ", head),
+        Paragraph(f"{entity} · {escape(ENTITY_ADDRESS.get(c, ENTITY_ADDRESS['IN']))}", small),
         HRFlowable(width="100%", thickness=1.5, color=navy, spaceBefore=4, spaceAfter=10),
     ]
     meta = Table([[Paragraph(f"Ref: {escape(reference_no)}", small), Paragraph(escape(letter_date(on.isoformat(), c)), small)]],
                  colWidths=["70%", "30%"])
     meta.setStyle(TableStyle([("ALIGN", (1, 0), (1, 0), "RIGHT"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
                               ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
-    story += [meta, Spacer(1, 10), Paragraph(escape(title.upper()), h1)]
+    story += [meta, Spacer(1, 6)]
+    if not to_whom:
+        story.append(Paragraph(f"{escape(fields['employee_name'])}<br/>{escape(fields['title'])}, {escape(fields['department'])}"
+                               f"<br/>Employee ID {escape(fields['employee_code'])}", body))
+    story.append(Paragraph(escape(title.upper()), h1))
     story.append(Paragraph("To whom it may concern," if to_whom else f"Dear {escape(fields['employee_name'])},", body))
     story += [Paragraph(p, body) for p in paragraphs]
     story += [
         Spacer(1, 18), Paragraph(f"For {entity}", body), Spacer(1, 28),
         HRFlowable(width=55 * mm, thickness=0.8, color=colors.black, hAlign="LEFT", spaceAfter=4),
-        Paragraph("<b>Authorised Signatory</b><br/>Human Resources", body),
+        Paragraph("<b>Authorised Signatory</b><br/>Human Resources, TimeZ", body),
         Paragraph(f"Approved by {escape(approved_by)} on {escape(letter_date(on.isoformat(), c))}", approval),
         Spacer(1, 30),
         HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cccccc"), spaceAfter=4),
@@ -472,6 +497,28 @@ def issue(db: Session, req: LetterRequest, approver_id: str | None, generated_by
            href=f"/documents/{document.id}")
     db.flush()
     return row
+
+
+WORD_PROMPT = """You word one paragraph for a formal HR letter issued by TimeZ.
+Rules:
+- Write ONE short paragraph (one or two sentences, under 60 words) in formal third person about the employee.
+- Use only facts in the request. Never invent dates, places, amounts or names.
+- No greeting, no sign-off, no headings, no quotes, no markdown.
+- Reply with the paragraph only."""
+
+
+def word_custom_text(letter_type: str, employee_name: str, text: str) -> str | None:
+    """The requester's note worded as a letter paragraph by the Copilot model, or None when no AI is available."""
+    from app.services import ai_copilot
+
+    label = LETTER_TYPES[letter_type]["label"]
+    messages = [{"role": "system", "content": WORD_PROMPT},
+                {"role": "user", "content": f"Letter: {label}\nEmployee: {employee_name}\nInclude this: {text.strip()}"}]
+    answer, _model = ai_copilot._ask_models(messages)
+    if not answer:
+        return None
+    answer = " ".join(answer.replace("**", "").split()).strip().strip('"')
+    return answer[:1200] or None
 
 
 @engine.on_finish("letter")

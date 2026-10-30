@@ -83,11 +83,44 @@ function writeMeta(map: Record<string, EntryMeta>) {
   }
 }
 
+/** One person's day (daily timesheets). id is null for a day not submitted yet. */
+export interface TimesheetDayOut {
+  id: string | null;
+  employee_id: string;
+  employee_name: string | null;
+  work_date: string;
+  status: "draft" | "submitted" | "approved" | "rejected" | string;
+  total_hours: number;
+  target_hours: number;
+  day_kind: string | null;
+  submitted_at: string | null;
+  decided_by: string | null;
+  decided_by_name: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  approval?: ApprovalProgressOut | null;
+  waiting_on_me: boolean;
+  can_decide: boolean;
+  entries: WeekEntryOut[];
+}
+
+/** A person in the manager's Team timesheets: the week's days, hours per project and day status. */
+export interface TeamPersonOut {
+  employee_id: string;
+  employee_name: string;
+  employee_code: string;
+  department: string;
+  week_total: number;
+  projects: Record<string, number>;
+  days: TimesheetDayOut[];
+}
+
 interface RawTime {
   projects: ProjectOut[];
   entries: TimesheetEntryOut[];
   weeks: TimesheetWeekOut[];
   team: TimesheetWeekOut[];
+  days: TimesheetDayOut[];
 }
 
 export interface ApiTimeState {
@@ -96,9 +129,11 @@ export interface ApiTimeState {
   orgTimesheets: OrgTimesheetRecord[];
   /** The user's own weeks by week start (decision notes for sent-back weeks). */
   weeks: Record<string, TimesheetWeekOut>;
+  /** The user's own submitted / approved / sent-back days by date (daily timesheets). */
+  days: Record<string, TimesheetDayOut>;
 }
 
-const emptyTime = (): ApiTimeState => ({ projects: [], timesheets: [], orgTimesheets: [], weeks: {} });
+const emptyTime = (): ApiTimeState => ({ projects: [], timesheets: [], orgTimesheets: [], weeks: {}, days: {} });
 
 function sheetStatus(status: string): TimesheetStatus {
   return status === "submitted" || status === "approved" ? status : "draft"; // draft, rejected (sent back)
@@ -174,6 +209,8 @@ function mapTime(raw: RawTime, accountId: string): ApiTimeState {
       status: orgStatus(w.status),
       projectSummary: [...(projectsByWeek.get(w.id) ?? [])].join(", "),
       ...(approvalProgressText(w.approval) ? { approvalProgress: approvalProgressText(w.approval) } : {}),
+      ...(w.decision_note ? { decisionNote: w.decision_note } : {}),
+      ...(w.decided_by ? { decidedBy: w.decided_by } : {}),
     };
   });
   return {
@@ -181,18 +218,21 @@ function mapTime(raw: RawTime, accountId: string): ApiTimeState {
     timesheets: [...sheets.values()],
     orgTimesheets,
     weeks: Object.fromEntries(raw.weeks.map((w) => [w.week_start, w])),
+    days: Object.fromEntries(raw.days.map((d) => [d.work_date, d])),
   };
 }
 
 async function loadTime(): Promise<RawTime> {
   const today = todayISO();
-  const [projects, entries, weeks, team] = await Promise.all([
+  const [projects, entries, weeks, team, days] = await Promise.all([
     api.get<ProjectOut[]>("/timesheets/projects"),
     api.get<TimesheetEntryOut[]>("/timesheets/entries", { from: addDaysISO(mondayOf(today), -26 * 7), to: addDaysISO(mondayOf(today), 13) }),
     api.get<TimesheetWeekOut[]>("/timesheets/weeks", { view: "mine", limit: 100 }),
     api.get<TimesheetWeekOut[]>("/timesheets/weeks", { view: "team", limit: 300 }),
+    // A server without daily timesheets (404) still shows entries and weeks.
+    api.get<TimesheetDayOut[]>("/timesheets/days", { from: addDaysISO(mondayOf(today), -26 * 7), to: addDaysISO(mondayOf(today), 13) }).catch(() => []),
   ]);
-  return { projects, entries, weeks, team };
+  return { projects, entries, weeks, team, days };
 }
 
 export const timeMirror = createMirror<RawTime, ApiTimeState>(emptyTime, loadTime, mapTime);
@@ -243,6 +283,37 @@ export function apiSubmitWeek(weekStart: string): Promise<string | null> {
   return mutate(() => api.post<TimesheetWeekOut>(`/timesheets/weeks/${encodeURIComponent(weekStart)}/submit`), timeMirror);
 }
 
+/** Submit one day (needs 9 h, 4.5 h on half-day leave) to the manager. */
+export function apiSubmitDay(date: string): Promise<string | null> {
+  return mutate(() => api.post<TimesheetDayOut>(`/timesheets/days/${encodeURIComponent(date)}/submit`), timeMirror);
+}
+
+/** Approve, or send back ("reject" with a comment) a submitted day. */
+export function apiDecideDay(dayId: string, decision: "approve" | "reject", note?: string): Promise<string | null> {
+  return mutate(
+    () => api.post<TimesheetDayOut>(`/timesheets/days/${encodeURIComponent(dayId)}/decision`, { decision, note: note?.trim() || null }),
+    timeMirror,
+  );
+}
+
+/** Manager (HR for someone with no manager): open a missed past day so the person can log and submit it. */
+export function apiReopenDay(employeeId: string, date: string, note: string): Promise<string | null> {
+  return mutate(
+    () => api.post<TimesheetDayOut>(`/timesheets/team/${encodeURIComponent(employeeId)}/days/${encodeURIComponent(date)}/reopen`, { note }),
+    timeMirror,
+  );
+}
+
+/** Team timesheets for a week: per person, per day hours by project and day status. */
+export function loadApiTeamDays(weekStart: string): Promise<TeamPersonOut[]> {
+  return api.get<TeamPersonOut[]>("/timesheets/team-days", { week_start: weekStart });
+}
+
+/** Everyone's submitted days the signed-in user can approve or send back now (any date). */
+export function loadApiWaitingDays(): Promise<TimesheetDayOut[]> {
+  return api.get<TimesheetDayOut[]>("/timesheets/days", { view: "waiting" });
+}
+
 /** Approve, or send back ("reject" with a note) a submitted week. */
 export function apiDecideWeek(weekId: string, decision: "approve" | "reject", note?: string): Promise<string | null> {
   const text = note?.trim() || (decision === "reject" ? "Sent back for changes." : "");
@@ -255,4 +326,14 @@ export function apiDecideWeek(weekId: string, decision: "approve" | "reject", no
 /** Billable share of hours for everyone in the user's scope over a date range. */
 export function loadApiUtilization(from: string, to: string): Promise<UtilizationOut> {
   return api.get<UtilizationOut>("/timesheets/utilization", { from, to });
+}
+
+export interface WeekEntryOut extends TimesheetEntryOut {
+  project_code: string;
+  project_name: string;
+}
+
+/** One week's entries with project names — for the person and whoever decides it. */
+export function loadApiWeekDetail(weekId: string): Promise<{ week: TimesheetWeekOut; entries: WeekEntryOut[] }> {
+  return api.get(`/timesheets/weeks/${encodeURIComponent(weekId)}/detail`);
 }

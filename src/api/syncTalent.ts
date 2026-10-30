@@ -8,7 +8,11 @@ import type {
   ApprovalStep,
   Candidate,
   Interview,
+  JobPosting,
   OfferApproval,
+  OfferLetter,
+  Recommendation,
+  RequisitionReason,
   OfferRecord,
   OfferStatus,
   OnboardingJoiner,
@@ -188,6 +192,57 @@ export interface RequisitionOut {
   raised_on: string;
   decided_on: string | null;
   candidate_count: number;
+  budget?: number | null;
+  budget_currency?: string | null;
+  reason?: string | null;
+  justification?: string | null;
+  raised_by?: string | null;
+  posting?: PostingOut | null;
+  stage_counts?: Record<string, number>;
+}
+
+export interface PostingOut {
+  id: string;
+  requisition_id: string;
+  title: string;
+  description: string;
+  location: string;
+  employment_type: string;
+  closing_date: string;
+  on_careers_site: boolean;
+  status: string;
+  published_by: string | null;
+  published_on: string;
+  closed_on: string | null;
+  applications: number;
+}
+
+/** GET /public/careers (no sign-in). */
+export interface PublicPostingOut {
+  id: string;
+  title: string;
+  department: string;
+  location: string;
+  country_name: string;
+  employment_type: string;
+  description: string;
+  closing_date: string;
+  openings: number;
+}
+
+/** GET /public/offers/{token} (no sign-in). */
+export interface PublicOfferOut {
+  candidate_name: string;
+  title: string;
+  department: string;
+  location: string;
+  grade: string;
+  base_salary: number;
+  currency: string;
+  start_date: string;
+  status: "sent" | "accepted" | "declined" | "withdrawn";
+  responded_on: string | null;
+  letter: OfferLetter | null;
 }
 
 export interface CandidateOut {
@@ -205,6 +260,10 @@ export interface CandidateOut {
   applied_on: string;
   stage: string;
   history: { stage: string; entered_at: string; by_id: string | null; note: string | null }[];
+  posting_id?: string | null;
+  employee_id?: string | null;
+  cover_note?: string | null;
+  match_score?: number | null;
 }
 
 export interface InterviewOut {
@@ -219,6 +278,8 @@ export interface InterviewOut {
   feedback: string | null;
   feedback_by: string | null;
   feedback_at: string | null;
+  ratings?: Record<string, number> | null;
+  recommendation?: string | null;
 }
 
 export interface OfferOut {
@@ -238,6 +299,9 @@ export interface OfferOut {
   response_note: string | null;
   response_recorded_by?: string | null;
   responded_on: string | null;
+  letter?: OfferLetter | null;
+  response_token?: string | null;
+  responded_via?: string | null;
 }
 
 export interface OnboardingTaskOut {
@@ -380,6 +444,27 @@ const JOINER_STATUS: Record<string, OnboardingJoiner["overallStatus"]> = {
   completed: "Completed",
 };
 
+const REASON: Record<string, RequisitionReason> = { new_role: "New role", replacement: "Replacement" };
+const REASON_TO_API: Record<RequisitionReason, string> = { "New role": "new_role", Replacement: "replacement" };
+const RECOMMENDATION: Record<string, Recommendation> = { strong_yes: "Strong yes", yes: "Yes", no: "No", strong_no: "Strong no" };
+const RECOMMENDATION_TO_API = Object.fromEntries(Object.entries(RECOMMENDATION).map(([k, v]) => [v, k])) as Record<Recommendation, string>;
+
+function toPosting(p: PostingOut): JobPosting {
+  return {
+    id: p.id,
+    title: p.title,
+    description: p.description,
+    location: p.location,
+    employmentType: p.employment_type,
+    closingDate: p.closing_date,
+    onCareersSite: p.on_careers_site,
+    status: p.status === "open" ? "Open" : "Closed",
+    publishedBy: p.published_by ? nameOf(p.published_by) : "",
+    publishedOn: p.published_on,
+    ...(p.closed_on ? { closedOn: p.closed_on } : {}),
+  };
+}
+
 function toRequisition(r: RequisitionOut, cands: CandidateOut[], inst: ApprovalInstanceOut | undefined): Requisition {
   const status = REQ_STATUS[r.status] ?? "Pending approval";
   const hm = r.hiring_manager_name ?? nameOf(r.hiring_manager_id);
@@ -396,6 +481,8 @@ function toRequisition(r: RequisitionOut, cands: CandidateOut[], inst: ApprovalI
   if (status === "Rejected") history.push({ on: r.decided_on ?? r.raised_on, by: decidedBy || "Approver", byId: flow?.lastDecision?.approver_id ?? "", action: "Rejected" });
   if (r.recruiter_id) history.push({ on: r.recruiter_assigned_on ?? r.decided_on ?? r.raised_on, by: "HR", byId: "", action: "Recruiter assigned", note: recruiter });
   if (status === "On hold") history.push({ on: r.decided_on ?? r.raised_on, by: "HR", byId: "", action: "Put on hold" });
+  if (r.posting) history.push({ on: r.posting.published_on, by: r.posting.published_by ? nameOf(r.posting.published_by) : "Recruiting", byId: r.posting.published_by ?? "", action: "Posted" });
+  if (r.posting?.closed_on) history.push({ on: r.posting.closed_on, by: "Recruiting", byId: "", action: "Post closed" });
   const mine = cands.filter((c) => c.requisition_id === r.id);
   const hired = mine.filter((c) => c.stage === "Hired").length;
   const stageSummary =
@@ -431,6 +518,12 @@ function toRequisition(r: RequisitionOut, cands: CandidateOut[], inst: ApprovalI
     ...(flow && status === "Pending approval" ? { approvalSteps: flow.steps, currentStep: flow.currentStep, stepDecisions: flow.stepDecisions } : {}),
     ...(flow && status !== "Pending approval" ? { approvalSteps: flow.steps, currentStep: flow.steps.length, stepDecisions: flow.stepDecisions } : {}),
     requirements: r.requirements,
+    ...(r.budget != null ? { budget: r.budget, ...(r.budget_currency ? { budgetCurrency: r.budget_currency } : {}) } : {}),
+    ...(r.reason && REASON[r.reason] ? { reason: REASON[r.reason] } : {}),
+    ...(r.justification ? { justification: r.justification } : {}),
+    ...(r.raised_by ? { raisedById: r.raised_by, raisedBy: nameOf(r.raised_by) } : {}),
+    ...(r.posting ? { posting: toPosting(r.posting) } : {}),
+    ...(r.stage_counts && Object.keys(r.stage_counts).length ? { stageCounts: r.stage_counts as Requisition["stageCounts"] } : {}),
   };
 }
 
@@ -458,6 +551,10 @@ function toCandidate(c: CandidateOut, req: RequisitionOut | undefined): Candidat
     history: history.length ? history : [{ stage: "Applied", enteredOn: `${c.applied_on}T09:00`, by: c.name }],
     hasCv: c.has_cv,
     ...(c.cv_filename ? { cvFilename: c.cv_filename } : {}),
+    ...(c.posting_id ? { postingId: c.posting_id } : {}),
+    ...(c.employee_id ? { employeeId: c.employee_id } : {}),
+    ...(c.cover_note ? { coverNote: c.cover_note } : {}),
+    ...(c.match_score != null ? { matchScore: c.match_score } : {}),
   };
 }
 
@@ -474,6 +571,9 @@ function toInterview(i: InterviewOut, cand: Candidate | undefined): Interview {
     feedbackStatus: i.feedback_status === "submitted" ? "Submitted" : "Pending",
     ...(i.score != null ? { score: i.score } : {}),
     ...(i.feedback ? { feedback: i.feedback } : {}),
+    ...(i.ratings ? { ratings: i.ratings as Interview["ratings"] } : {}),
+    ...(i.recommendation && RECOMMENDATION[i.recommendation] ? { recommendation: RECOMMENDATION[i.recommendation] } : {}),
+    ...(i.feedback_by ? { feedbackBy: nameOf(i.feedback_by) } : {}),
   };
 }
 
@@ -500,6 +600,9 @@ function toOffer(o: OfferOut, cand: Candidate | undefined, req: RequisitionOut |
     ...(o.response_note ? { responseNote: o.response_note } : {}),
     ...(o.response_recorded_by ? { responseRecordedBy: nameOf(o.response_recorded_by) } : {}),
     ...(o.responded_on ? { respondedOn: o.responded_on } : {}),
+    ...(o.letter ? { letter: o.letter } : {}),
+    ...(o.response_token ? { responseToken: o.response_token } : {}),
+    ...(o.responded_via === "link" || o.responded_via === "recorded" ? { respondedVia: o.responded_via } : {}),
   };
 }
 
@@ -645,7 +748,17 @@ const run = (fn: () => Promise<unknown>) => runTalentApi(fn, recruitingMirror);
 
 /* ───────── Recruiting changes ───────── */
 
-export function apiRaiseRequisition(input: { title: string; department: string; country: string; location: string; openings: number }) {
+export function apiRaiseRequisition(input: {
+  title: string;
+  department: string;
+  country: string;
+  location: string;
+  openings: number;
+  budget?: number;
+  reason?: RequisitionReason;
+  justification?: string;
+  hiringManagerId?: string;
+}) {
   return run(async () => {
     const code = countryCode(input.country);
     if (!code) throw new TalentRefusal("Choose a country.");
@@ -656,7 +769,106 @@ export function apiRaiseRequisition(input: { title: string; department: string; 
       location: input.location.trim(),
       openings: input.openings,
       requirements: [],
+      ...(input.budget !== undefined ? { budget: input.budget } : {}),
+      ...(input.reason ? { reason: REASON_TO_API[input.reason] } : {}),
+      ...(input.justification?.trim() ? { justification: input.justification.trim() } : {}),
+      ...(input.hiringManagerId ? { hiring_manager_id: input.hiringManagerId } : {}),
     });
+  });
+}
+
+/* ───────── Job posts, applications, screening ───────── */
+
+export function apiPublishPosting(reqId: string, input: { title: string; description: string; location: string; employmentType: string; closingDate: string; onCareersSite: boolean }) {
+  return run(() =>
+    api.post(`/recruiting/requisitions/${enc(reqId)}/posting`, {
+      title: input.title.trim(),
+      description: input.description.trim(),
+      location: input.location.trim(),
+      employment_type: input.employmentType.trim() || "Full-time",
+      closing_date: input.closingDate,
+      on_careers_site: input.onCareersSite,
+    }),
+  );
+}
+
+export function apiClosePosting(reqId: string) {
+  return run(() => api.post(`/recruiting/requisitions/${enc(reqId)}/posting/close`));
+}
+
+export function apiApplyInternally(postingId: string, coverNote: string) {
+  return runTalentApi(() => api.post(`/recruiting/postings/${enc(postingId)}/apply`, { cover_note: coverNote.trim() || null }), recruitingMirror, myApplicationsMirror);
+}
+
+export function apiScreenCandidate(id: string, decision: "shortlist" | "reject", reason: string) {
+  return run(() => api.post(`/recruiting/candidates/${enc(id)}/screen`, { decision, reason: reason.trim() || null }));
+}
+
+export interface MyApplicationOut {
+  id: string;
+  requisition_id: string;
+  posting_id: string | null;
+  title: string;
+  applied_on: string;
+  stage: string;
+  cover_note: string | null;
+}
+
+/** My internal applications (stage from the job's pipeline). */
+export const myApplicationsMirror = createTalentMirror<MyApplicationOut[]>(() => [], () => settle(qget<MyApplicationOut[]>("/recruiting/my-applications"), []));
+
+/* ───────── Public pages (no sign-in) ───────── */
+
+export function apiCareers(): Promise<PublicPostingOut[]> {
+  return apiRequest<PublicPostingOut[]>("/public/careers", { anonymous: true });
+}
+
+export function apiCareerPost(id: string): Promise<PublicPostingOut> {
+  return apiRequest<PublicPostingOut>(`/public/careers/${enc(id)}`, { anonymous: true });
+}
+
+function fileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
+    reader.onerror = () => reject(new TalentRefusal("The CV file could not be read. Attach it again."));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Careers page application; resolves to null or the error message. */
+export async function apiApplyCareers(postingId: string, input: { name: string; email: string; phone: string; coverNote: string; cvFile: File | null; website?: string }): Promise<string | null> {
+  try {
+    if (!input.cvFile) throw new TalentRefusal("Attach your CV.");
+    if (input.cvFile.size > 5 * 1024 * 1024) throw new TalentRefusal("The CV is larger than 5 MB.");
+    await apiRequest(`/public/careers/${enc(postingId)}/apply`, {
+      method: "POST",
+      anonymous: true,
+      body: {
+        name: input.name.trim(),
+        email: input.email.trim(),
+        phone: input.phone.trim() || null,
+        cover_note: input.coverNote.trim() || null,
+        cv_filename: input.cvFile.name,
+        cv_base64: await fileBase64(input.cvFile),
+        website: input.website || null,
+      },
+    });
+    return null;
+  } catch (error) {
+    return apiErrorText(error);
+  }
+}
+
+export function apiPublicOffer(token: string): Promise<PublicOfferOut> {
+  return apiRequest<PublicOfferOut>(`/public/offers/${enc(token)}`, { anonymous: true });
+}
+
+export function apiAnswerOffer(token: string, accept: boolean, note: string): Promise<PublicOfferOut> {
+  return apiRequest<PublicOfferOut>(`/public/offers/${enc(token)}/respond`, {
+    method: "POST",
+    anonymous: true,
+    body: { decision: accept ? "accept" : "decline", note: note.trim() || null },
   });
 }
 
@@ -714,13 +926,13 @@ export function apiSetCandidateStage(id: string, stage: PipelineStage, note: str
   return run(() => api.post(`/recruiting/candidates/${enc(id)}/stage`, { stage, note: note.trim() || null }));
 }
 
-export function apiScheduleInterview(candidateId: string, input: { when: string; panel: string; type: string }) {
+export function apiScheduleInterview(candidateId: string, input: { when: string; panelIds: string[]; type: string }) {
   return run(async () => {
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(input.when)) throw new TalentRefusal("Choose a future date and time.");
     const when = new Date(input.when);
     if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) throw new TalentRefusal("Choose a future date and time.");
-    const panel = idsFromNames(input.panel);
-    if (!panel.length) throw new TalentRefusal("Add the panel by name (people in the directory).");
+    const panel = input.panelIds;
+    if (!panel.length) throw new TalentRefusal("Choose who interviews.");
     await api.post(`/recruiting/candidates/${enc(candidateId)}/interviews`, {
       scheduled_at: when.toISOString(),
       kind: input.type.trim() || "Interview",
@@ -729,8 +941,14 @@ export function apiScheduleInterview(candidateId: string, input: { when: string;
   });
 }
 
-export function apiSubmitInterviewFeedback(id: string, score: number, notes: string) {
-  return run(() => api.post(`/recruiting/interviews/${enc(id)}/feedback`, { score, notes: notes.trim() }));
+export function apiSubmitInterviewFeedback(id: string, card: { ratings: Record<string, number | undefined>; recommendation: Recommendation | ""; notes: string }) {
+  return run(() =>
+    api.post(`/recruiting/interviews/${enc(id)}/feedback`, {
+      ratings: card.ratings,
+      ...(card.recommendation ? { recommendation: RECOMMENDATION_TO_API[card.recommendation] } : {}),
+      notes: card.notes.trim(),
+    }),
+  );
 }
 
 export function apiCreateOffer(input: { candidateId: string; grade: string; baseSalary: number; startDate: string; packageNote: string }) {

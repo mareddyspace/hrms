@@ -9,6 +9,7 @@ person themselves or HR / admin in scope (HR / admin reveals are audited, withou
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -18,6 +19,7 @@ from sqlalchemy.orm import aliased
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
 from app.models import Employee
 from app.schemas import Page, PersonBasicOut, PersonFullOut, PersonOut
+from app.services.headcount import has_started
 from app.services.pii import EMPLOYEE_FIELDS, audit_reveal, can_reveal_employee
 
 router = APIRouter(prefix="/people", tags=["people"])
@@ -32,6 +34,8 @@ def present(user: CurrentUser, emp: Employee, manager_name: str | None) -> Perso
     item.manager_name = manager_name
     if isinstance(item, PersonFullOut):
         item.can_reveal = can_reveal_employee(user, emp)
+    else:
+        item.started = has_started(emp, date.today())
     return item
 
 

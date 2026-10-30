@@ -105,11 +105,40 @@ export interface ExitCase {
   completedBy?: string;
   completedOn?: string;
   completionNote?: string;
-  /** Set when the company starts the exit (e.g. probation not confirmed) rather than a resignation. */
-  kind?: "Resignation" | "Probation not confirmed";
+  /** Set when the company starts the exit (e.g. probation not confirmed, a termination) rather than a resignation. */
+  kind?: ExitKind;
+  /** Who raised it (HR for a termination); the employee for a resignation. */
+  raisedById?: string;
+  raisedBy?: string;
+  /** Local mode: the manager's step (then HR accepts). */
+  managerDecision?: { by: string; byId: string; on: string; note?: string };
+  earlyReason?: string;
+  handoverPlan?: string;
+  handoverTo?: string;
+  /** Retention conversations offered by the manager while the resignation waits. */
+  retention?: RetentionNote[];
   /** Backend mode only: what the server adds (approval steps, what this viewer may do, settlement days). */
   api?: ExitApiExtras;
 }
+
+export type ExitKind = "Resignation" | "Probation not confirmed" | "Termination" | "End of contract" | "Retirement";
+
+export interface RetentionNote {
+  byId: string;
+  by: string;
+  note: string;
+  on: string;
+  meetOn?: string;
+}
+
+/** HR-raised exit types (the server's exit_type values). */
+export const COMPANY_EXIT_TYPES: { value: "termination" | "end_of_contract" | "retirement"; label: ExitKind }[] = [
+  { value: "termination", label: "Termination" },
+  { value: "end_of_contract", label: "End of contract" },
+  { value: "retirement", label: "Retirement" },
+];
+
+export const PENDING_EXIT_STATUSES: ExitStatus[] = ["Submitted", "Manager approved"];
 
 export interface ExitApiExtras {
   exitType: string;
@@ -121,6 +150,7 @@ export interface ExitApiExtras {
   steps: { label: string; decision: string | null; by: string | null; note: string | null; on: string | null }[];
   canDecide: boolean;
   canWithdraw: boolean;
+  canAddRetention: boolean;
   interviewSubmitted: boolean;
   /** Unused privilege leave paid out in the final settlement (leaver and HR only). */
   unusedLeaveDays?: number;
@@ -303,10 +333,17 @@ export function completionBlocker(row: ExitCase, today = todayISO()): string | n
 
 /* ───────────── Mutations ───────────── */
 
-export function submitResignation(
-  actor: LifecycleActor,
-  input: { proposedLastDay: string; reason: string; note: string; earlyRelease: boolean },
-): LifecycleResult {
+export interface ResignationInput {
+  proposedLastDay: string;
+  reason: string;
+  note: string;
+  earlyRelease: boolean;
+  earlyReason?: string;
+  handoverPlan?: string;
+  handoverTo?: string;
+}
+
+export function submitResignation(actor: LifecycleActor, input: ResignationInput): LifecycleResult {
   const today = todayISO();
   const person = getPerson(actor.id);
   if (person?.employmentStatus === "Terminated") return "Your employment has already ended.";
@@ -323,7 +360,7 @@ export function submitResignation(
   if (input.earlyRelease && input.proposedLastDay >= earliest) {
     return "Early release is only needed when the date is inside your notice period.";
   }
-  if (input.proposedLastDay > addDaysISO(today, 180)) return "Last working day must be within 180 days.";
+  if (input.proposedLastDay > addDaysISO(today, 365)) return "Last working day must be within 365 days.";
   const state = getExitState();
   const id = `exit-${Date.now()}`;
   const row: ExitCase = {
@@ -341,25 +378,102 @@ export function submitResignation(
     clearance: [],
     settlement: "Pending",
     kind: "Resignation",
+    raisedById: actor.id,
+    raisedBy: actor.fullName,
+    ...(input.earlyRelease && input.earlyReason?.trim() ? { earlyReason: input.earlyReason.trim() } : {}),
+    ...(input.handoverPlan?.trim() ? { handoverPlan: input.handoverPlan.trim() } : {}),
+    ...(input.handoverTo?.trim() ? { handoverTo: input.handoverTo.trim() } : {}),
   };
-  // No one is above the CEO: the resignation goes to the Board and is simply recorded as accepted.
-  if (!lineManagerId(actor.id)) {
-    row.status = "Accepted";
-    row.decidedBy = BOARD;
-    row.decidedById = "board";
-    row.decidedOn = today;
-    row.decisionNote = "Recorded for the Board.";
-    row.clearance = buildClearance(id, []);
-  }
   return write({ ...state, cases: [row, ...state.cases] });
+}
+
+/** HR raises a termination, end of contract or retirement. A second person (HR, admin or executive) approves it. */
+export function raiseCompanyExit(
+  actor: LifecycleActor,
+  input: { employeeId: string; kind: ExitKind; lastWorkingDay: string; reason: string; note: string },
+): LifecycleResult {
+  if (!isHrRole(actor.role)) return "Only HR can raise an exit for someone else.";
+  if (actor.id === input.employeeId) return "You can't raise an exit for yourself here.";
+  const person = getPerson(input.employeeId);
+  if (!person) return "Pick a person from the directory.";
+  if (person.employmentStatus === "Terminated") return "This person has already left.";
+  if (openExitFor(input.employeeId)) return "An exit is already open for this person.";
+  if (!input.reason.trim()) return "Give a reason.";
+  if (!isValidISO(input.lastWorkingDay)) return "Enter a valid last working day.";
+  const today = todayISO();
+  if (input.lastWorkingDay < today) return "The last working day can't be in the past.";
+  if (input.lastWorkingDay > addDaysISO(today, 365)) return "The last working day must be within 365 days.";
+  const state = getExitState();
+  const row: ExitCase = {
+    id: `exit-${Date.now()}`,
+    employeeId: person.id,
+    employeeName: person.fullName,
+    submittedOn: today,
+    noticeDays: noticeDaysFor(person.id),
+    proposedLastDay: input.lastWorkingDay,
+    lastWorkingDay: input.lastWorkingDay,
+    earlyRelease: false,
+    reason: input.reason.trim(),
+    note: input.note.trim(),
+    status: "Submitted",
+    clearance: [],
+    settlement: "Pending",
+    kind: input.kind,
+    raisedById: actor.id,
+    raisedBy: actor.fullName,
+  };
+  return write({ ...state, cases: [row, ...state.cases] });
+}
+
+export function isCompanyRaised(row: ExitCase): boolean {
+  if (row.api) return row.api.raisedById !== row.employeeId;
+  return Boolean(row.raisedById && row.raisedById !== row.employeeId);
+}
+
+/** Local mode: who decides next — the manager, then HR; a company-raised exit needs a second HR / admin / executive. */
+export function nextExitStep(row: ExitCase): "manager" | "hr" | "second" | null {
+  if (!PENDING_EXIT_STATUSES.includes(row.status)) return null;
+  if (isCompanyRaised(row)) return "second";
+  if (row.status === "Submitted" && lineManagerId(row.employeeId)) return "manager";
+  return "hr";
+}
+
+export function canDecideExit(actor: LifecycleActor, row: ExitCase): boolean {
+  if (row.api) return row.api.canDecide;
+  if (actor.id === row.employeeId) return false;
+  const step = nextExitStep(row);
+  if (step === "manager") return canActForEmployee(actor, row.employeeId);
+  if (step === "hr") return isHrRole(actor.role) && row.managerDecision?.byId !== actor.id;
+  if (step === "second") return actor.id !== row.raisedById && (isHrRole(actor.role) || actor.role === "admin" || actor.role === "executive" || actor.role === "super_admin");
+  return false;
+}
+
+export function canWithdrawExit(actor: LifecycleActor, row: ExitCase): boolean {
+  if (row.api) return row.api.canWithdraw;
+  return PENDING_EXIT_STATUSES.includes(row.status) && (row.raisedById ?? row.employeeId) === actor.id;
+}
+
+export function canAddRetention(actor: LifecycleActor, row: ExitCase): boolean {
+  if (row.api) return row.api.canAddRetention;
+  return PENDING_EXIT_STATUSES.includes(row.status) && !isCompanyRaised(row) && actor.id !== row.employeeId && (isAboveInLine(actor.id, row.employeeId) || isHrRole(actor.role));
 }
 
 export function withdrawResignation(actor: LifecycleActor, id: string): LifecycleResult {
   return mutateCase(id, (row) => {
-    if (row.employeeId !== actor.id) return "Only the employee can withdraw their resignation.";
-    if (row.status !== "Submitted") return "A resignation can only be withdrawn before it is accepted.";
+    if ((row.raisedById ?? row.employeeId) !== actor.id) return "Only the person who raised it can withdraw it.";
+    if (!PENDING_EXIT_STATUSES.includes(row.status)) return "It can only be withdrawn before final approval.";
     row.status = "Withdrawn";
     row.decidedOn = todayISO();
+    return null;
+  });
+}
+
+export function addRetentionNote(actor: LifecycleActor, id: string, note: string, meetOn?: string): LifecycleResult {
+  return mutateCase(id, (row) => {
+    if (!canAddRetention(actor, row)) return "Only the leaver's manager can do this while the resignation waits.";
+    if (!note.trim()) return "Write a short note for the conversation.";
+    if (meetOn && !isValidISO(meetOn)) return "Enter a valid date.";
+    row.retention = [...(row.retention ?? []), { byId: actor.id, by: actor.fullName, note: note.trim().slice(0, 1000), on: todayISO(), ...(meetOn ? { meetOn } : {}) }];
     return null;
   });
 }
@@ -367,30 +481,33 @@ export function withdrawResignation(actor: LifecycleActor, id: string): Lifecycl
 export function decideResignation(
   actor: LifecycleActor,
   id: string,
-  decision: "accept" | "conversation",
+  decision: "approve" | "reject",
   options: { note: string; approveEarlyRelease?: boolean; assets: Pick<AssetAssignment, "id" | "name" | "tag" | "employeeId">[] },
 ): LifecycleResult {
   return mutateCase(id, (row) => {
     if (row.employeeId === actor.id) return "You cannot act on your own resignation.";
-    if (!canActForEmployee(actor, row.employeeId)) return "Only someone above this person in their reporting line can act on this resignation.";
-    if (row.status !== "Submitted") return `This resignation is already ${row.status.toLowerCase()}.`;
+    if (!canDecideExit(actor, row)) return "This step is waiting for someone else.";
     const note = options.note.trim();
     const today = todayISO();
-    if (decision === "conversation") {
-      if (!note) return "Add a note explaining what you'd like to discuss.";
-      row.status = "Conversation requested";
+    if (decision === "reject") {
+      if (!note) return "Add a note saying why.";
+      row.status = "Rejected";
+    } else if (nextExitStep(row) === "manager") {
+      if (row.earlyRelease && options.approveEarlyRelease === false) row.earlyRelease = false;
+      row.managerDecision = { by: actor.fullName, byId: actor.id, on: today, ...(note ? { note } : {}) };
+      row.status = "Manager approved";
+      return null;
     } else {
-      if (row.earlyRelease && options.approveEarlyRelease === false) {
-        // Early date declined — the standard notice applies from the submission date.
+      const declineEarly = options.approveEarlyRelease === false || (row.proposedLastDay < addDaysISO(row.submittedOn, row.noticeDays) && !row.earlyRelease && !isCompanyRaised(row));
+      if (declineEarly) {
+        // Early date declined: the standard notice applies from the submission date.
         const standard = addDaysISO(row.submittedOn, row.noticeDays);
         row.lastWorkingDay = standard < today ? today : standard;
-        if (!note) return "Add a note when declining the early release date.";
       } else {
         row.lastWorkingDay = row.proposedLastDay < today ? today : row.proposedLastDay;
       }
       row.status = "Accepted";
-      const assets = options.assets.filter((a) => a.employeeId === row.employeeId);
-      row.clearance = buildClearance(row.id, assets);
+      row.clearance = buildClearance(row.id, options.assets.filter((a) => a.employeeId === row.employeeId));
     }
     row.decidedBy = actor.fullName;
     row.decidedById = actor.id;

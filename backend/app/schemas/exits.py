@@ -15,6 +15,22 @@ class ExitIn(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
     note: str | None = Field(default=None, max_length=1000)
     early_release: bool = False
+    early_release_reason: str | None = Field(default=None, max_length=1000)
+    handover_plan: str | None = Field(default=None, max_length=2000)
+    handover_to: str | None = Field(default=None, max_length=200)
+
+
+class RetentionIn(BaseModel):
+    note: str = Field(min_length=1, max_length=1000)
+    meet_on: date | None = None
+
+
+class RetentionOut(BaseModel):
+    by_id: str
+    by: str
+    note: str
+    on: str
+    meet_on: str | None = None
 
 
 class ExitDecisionIn(BaseModel):
@@ -102,6 +118,11 @@ class ExitCaseOut(BaseModel):
     settlement: SettlementOut | None = None  # the leaver and HR only
     completed_at: datetime | None = None
     created_at: datetime
+    early_release_reason: str | None = None
+    handover_plan: str | None = None
+    handover_to: str | None = None
+    retention: list[RetentionOut] = []
+    can_add_retention: bool = False
 
 
 class NoticeOut(BaseModel):

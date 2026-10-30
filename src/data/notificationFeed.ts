@@ -2,12 +2,22 @@ import type { AppNotification } from "./collabData.ts";
 import { notificationFeedFor, type NotifFeedItem } from "./collabLocal.ts";
 import { getTickets, isOpenTicket } from "./ticketStore.ts";
 import type { PortalState } from "../model.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { pendingMirror } from "../api/syncTimeApprovals.ts";
 
 /** The parts of portal state used to tell whether a notification's item is already handled. */
 export type NotifPortalContext = Pick<PortalState, "leaveRequests" | "tasks" | "orgTimesheets">;
 
 /** True once the leave, timesheet, task or ticket a notification points at no longer needs this user. */
 export function portalNotificationDone(n: AppNotification, userId: string, portal?: NotifPortalContext): boolean {
+  // Backend mode: "Waiting for your approval" is done once nothing from that person waits on me in /approvals/pending.
+  if (API_ENABLED && n.body.startsWith("Waiting for your approval")) {
+    const pending = pendingMirror.get();
+    if (pending.loaded) {
+      const from = n.title.split(" from ").pop()?.trim() ?? "";
+      return !pending.items.some((i) => (i.employee_name ?? "").trim() === from);
+    }
+  }
   const ref = n.ref;
   if (!ref) return false;
   switch (ref.kind) {

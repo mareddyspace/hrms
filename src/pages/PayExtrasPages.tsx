@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Banner, Card, Field, Page, StatusPill, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { claimLimitsFor, declarableTaxYears, itemCurrency, money, payRulesFor, receiptThresholdFor } from "../countryPay.ts";
-import { addDaysISO, EXPENSE_CLAIM_WINDOW_DAYS, todayISO } from "../model.ts";
+import { addDaysISO, EXPENSE_CLAIM_WINDOW_DAYS, formatShortDate, todayISO } from "../model.ts";
 
 import { usePortal } from "../store.tsx";
+import { useTaxRegime } from "../data/taxRegime.ts";
+import { RegimePicker } from "./PayslipsPage.tsx";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 
 const REIMBURSE_CATEGORIES = ["Internet", "Books", "Medical", "Conveyance", "Other"] as const;
@@ -134,7 +136,7 @@ export function ReimbursementPage() {
               <tbody>
                 {mine.map((item) => (
                   <tr key={item.id}>
-                    <td>{item.date}</td>
+                    <td>{formatShortDate(item.date)}</td>
                     <td>
                       <strong>{item.category}</strong>
                       <div className="muted" style={{ whiteSpace: "pre-line" }}>{item.description}</div>
@@ -155,7 +157,7 @@ export function ReimbursementPage() {
 }
 
 export function InvestmentProofPage() {
-  const { state, employee, addInvestmentProof } = usePortal();
+  const { state, employee, addInvestmentProof, payInput } = usePortal();
   const rules = payRulesFor(employee.countryCode);
   const years = declarableTaxYears(rules, todayISO());
   const mine = state.investmentProofs.filter((item) => item.employeeId === employee.id);
@@ -164,7 +166,8 @@ export function InvestmentProofPage() {
   const [amount, setAmount] = useState("");
   const [financialYear, setFinancialYear] = useState(years[0]);
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const [regime, setRegime] = useState<"old" | "new">("old");
+  // The same regime as the payslips: picking it here changes the payslip TDS.
+  const regime = useTaxRegime(employee.id);
   const cap = rules.declarations.find((item) => item.code === section)?.cap;
   const hasRegimes = rules.code === "IN";
   const newRegime = hasRegimes && regime === "new";
@@ -196,12 +199,9 @@ export function InvestmentProofPage() {
   }
 
   const regimeField = hasRegimes && (
-    <Field label="Tax regime">
-      <select value={regime} onChange={(event) => setRegime(event.target.value as "old" | "new")}>
-        <option value="old">Old regime</option>
-        <option value="new">New regime</option>
-      </select>
-    </Field>
+    <div style={{ gridColumn: "1 / -1" }}>
+      <RegimePicker input={payInput} showLink={false} />
+    </div>
   );
 
   return (
@@ -212,7 +212,7 @@ export function InvestmentProofPage() {
             <div className="form-grid">
               {regimeField}
               <p className="empty">
-                No deductions under the new regime. Switch to the old regime to declare investments.
+                No deductions under the new regime. Switch to the old regime to declare investments. Verified proofs then lower your TDS.
               </p>
             </div>
           ) : (

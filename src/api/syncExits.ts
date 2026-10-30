@@ -4,8 +4,8 @@
  * Server statuses: Submitted / Manager approved / Approved / Rejected / Withdrawn / Completed ("Approved" shows
  * as the portal's "Accepted").
  */
-import type { ClearanceItem, ClearanceOwner, ExitCase, ExitInterview, ExitStatus, SettlementStatus } from "../features/lifecycle/exitStore.ts";
-import { api } from "./client.ts";
+import type { ClearanceItem, ClearanceOwner, ExitCase, ExitInterview, ExitKind, ExitStatus, SettlementStatus } from "../features/lifecycle/exitStore.ts";
+import { api, apiSessionMe, isApiAdmin, isApiHr } from "./client.ts";
 import { apiRun, createApiMirror } from "./syncOps.ts";
 
 interface ExitStepOut {
@@ -43,6 +43,11 @@ interface ExitCaseOut {
   interview: { rating: number; reasons: string[]; would_return: string; comments: string; submitted_on: string } | null;
   settlement: { status: string; unused_leave_days: number; frozen: boolean; updated_by: string | null; updated_on: string | null } | null;
   completed_at: string | null;
+  early_release_reason?: string | null;
+  handover_plan?: string | null;
+  handover_to?: string | null;
+  retention?: { by_id: string; by: string; note: string; on: string; meet_on: string | null }[];
+  can_add_retention?: boolean;
 }
 
 export interface NoticeOut {
@@ -107,6 +112,13 @@ function toCase(c: ExitCaseOut, scopes: Set<string>): ExitCase {
     ...(c.settlement?.updated_by ? { settlementUpdatedBy: c.settlement.updated_by } : {}),
     ...(c.settlement?.updated_on ? { settlementUpdatedOn: c.settlement.updated_on } : {}),
     ...(c.completed_at ? { completedOn: c.completed_at.slice(0, 10) } : {}),
+    kind: (EXIT_TYPE_LABEL[c.exit_type] ?? "Resignation") as ExitKind,
+    raisedById: c.raised_by,
+    raisedBy: c.raised_by_name ?? c.raised_by,
+    ...(c.early_release_reason ? { earlyReason: c.early_release_reason } : {}),
+    ...(c.handover_plan ? { handoverPlan: c.handover_plan } : {}),
+    ...(c.handover_to ? { handoverTo: c.handover_to } : {}),
+    retention: (c.retention ?? []).map((r) => ({ byId: r.by_id, by: r.by, note: r.note, on: r.on, ...(r.meet_on ? { meetOn: r.meet_on } : {}) })),
     api: {
       exitType: c.exit_type,
       typeLabel: EXIT_TYPE_LABEL[c.exit_type] ?? c.exit_type,
@@ -117,6 +129,7 @@ function toCase(c: ExitCaseOut, scopes: Set<string>): ExitCase {
       steps: c.steps.map((s) => ({ label: s.label, decision: s.decision, by: s.by, note: s.note, on: s.at?.slice(0, 10) ?? null })),
       canDecide: c.can_decide,
       canWithdraw: c.can_withdraw,
+      canAddRetention: Boolean(c.can_add_retention),
       interviewSubmitted: c.interview_submitted,
       ...(c.settlement ? { unusedLeaveDays: c.settlement.unused_leave_days, settlementFrozen: c.settlement.frozen } : {}),
       inTeam: scopes.has("team"),
@@ -126,7 +139,9 @@ function toCase(c: ExitCaseOut, scopes: Set<string>): ExitCase {
 }
 
 async function loadExits(): Promise<{ cases: ExitCase[] }> {
-  const scopes = ["mine", "team", "all"] as const;
+  // scope=all is HR or admin only; skip it for others (no expected 403s).
+  const role = (await apiSessionMe().catch(() => null))?.role ?? "";
+  const scopes = isApiHr(role) || isApiAdmin(role) ? (["mine", "team", "all"] as const) : (["mine", "team"] as const);
   const lists = await Promise.all(
     scopes.map((scope) => api.get<ExitCaseOut[]>("/exits", { scope, limit: 500 }).catch(() => [] as ExitCaseOut[])),
   );
@@ -153,7 +168,15 @@ export function apiMyNotice(): Promise<NoticeOut> {
   return api.get<NoticeOut>("/exits/notice");
 }
 
-export function apiSubmitResignation(input: { proposedLastDay: string; reason: string; note: string; earlyRelease: boolean }): Promise<string | null> {
+export function apiSubmitResignation(input: {
+  proposedLastDay: string;
+  reason: string;
+  note: string;
+  earlyRelease: boolean;
+  earlyReason?: string;
+  handoverPlan?: string;
+  handoverTo?: string;
+}): Promise<string | null> {
   if (!input.reason.trim()) return Promise.resolve("Choose a reason for leaving.");
   return apiRun(
     () =>
@@ -163,9 +186,33 @@ export function apiSubmitResignation(input: { proposedLastDay: string; reason: s
         reason: input.reason.trim(),
         note: input.note.trim() || null,
         early_release: input.earlyRelease,
+        early_release_reason: input.earlyRelease ? input.earlyReason?.trim() || null : null,
+        handover_plan: input.handoverPlan?.trim() || null,
+        handover_to: input.handoverTo?.trim() || null,
       }),
     exitsMirror,
   );
+}
+
+/** HR raises a termination, end of contract or retirement for someone (a second approver then decides). */
+export function apiRaiseExit(input: { employeeId: string; exitType: string; lastWorkingDay: string; reason: string; note: string }): Promise<string | null> {
+  if (!input.reason.trim()) return Promise.resolve("Give a reason.");
+  return apiRun(
+    () =>
+      api.post("/exits", {
+        employee_id: input.employeeId,
+        exit_type: input.exitType,
+        requested_last_day: input.lastWorkingDay,
+        reason: input.reason.trim(),
+        note: input.note.trim() || null,
+      }),
+    exitsMirror,
+  );
+}
+
+export function apiAddRetention(id: string, note: string, meetOn?: string): Promise<string | null> {
+  if (!note.trim()) return Promise.resolve("Write a short note for the conversation.");
+  return apiRun(() => api.post(path(id, "/retention"), { note: note.trim(), meet_on: meetOn || null }), exitsMirror);
 }
 
 export function apiWithdrawExit(id: string): Promise<string | null> {

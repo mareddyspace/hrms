@@ -123,7 +123,7 @@ export function MiniBars({
     <ul className="mini-bars">
       {items.map((item) => (
         <li key={item.label}>
-          <span className="mini-bars-label">{item.label}</span>
+          <span className="mini-bars-label" title={item.label}>{item.label}</span>
           <div className="mini-bars-track">
             <div className="mini-bars-fill" style={{ width: `${(item.value / max) * 100}%` }} />
           </div>

@@ -77,6 +77,7 @@ class LetterRequest(TimestampMixin, Base):
     note: Mapped[str] = mapped_column(Text, default="")
     details: Mapped[str | None] = mapped_column(String(200))
     effective_date: Mapped[date | None] = mapped_column(Date)
+    custom_text: Mapped[str | None] = mapped_column(Text)  # migration 0015: the requester's own paragraph
     approval_instance_id: Mapped[str | None] = mapped_column(String(64))
     document_id: Mapped[str | None] = mapped_column(String(64))
     issue_error: Mapped[str | None] = mapped_column(Text)
@@ -110,3 +111,4 @@ class PolicyAcknowledgment(Base):
     policy_version: Mapped[str] = mapped_column(String(32))
     acknowledged_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     ip: Mapped[str | None] = mapped_column(String(64))
+    comment: Mapped[str | None] = mapped_column(Text)  # migration 0015: optional comment or question

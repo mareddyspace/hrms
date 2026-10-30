@@ -17,7 +17,7 @@ from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
 from app.models import ApprovalDecision, ApprovalInstance, Employee, ExitCase
 from app.schemas.exits import (
     ClearanceIn, ClearanceItemOut, ExitCaseOut, ExitDecisionIn, ExitIn, ExitStepOut, InterviewIn, InterviewOut, NoticeOut,
-    SettlementIn, SettlementOut,
+    RetentionIn, RetentionOut, SettlementIn, SettlementOut,
 )
 from app.services import approvals as engine
 from app.services import exits as rules
@@ -110,7 +110,18 @@ def _out(db: DbSession, user: CurrentUser, case: ExitCase) -> ExitCaseOut:
         clearance=clearance, interview_submitted=bool(case.interview),
         interview=InterviewOut(**case.interview) if case.interview and hr_view else None,
         settlement=settlement, completed_at=case.completed_at, created_at=case.created_at,
+        early_release_reason=(case.details or {}).get("early_release_reason"),
+        handover_plan=(case.details or {}).get("handover_plan"), handover_to=(case.details or {}).get("handover_to"),
+        retention=[RetentionOut(**r) for r in (case.details or {}).get("retention") or []],
+        can_add_retention=_can_retain(db, user, case, instance),
     )
+
+
+def _can_retain(db: DbSession, user: CurrentUser, case: ExitCase, instance: ApprovalInstance | None) -> bool:
+    me_id = user.employee_id
+    if not me_id or me_id == case.employee_id or case.status not in rules.PENDING or not rules.is_self_raised(case):
+        return False
+    return me_id in manager_chain_ids(db, case.employee_id) or is_approver(instance, me_id)
 
 
 def _visible(db: DbSession, user: CurrentUser, exit_id: str) -> tuple[ExitCase, Employee]:
@@ -184,7 +195,9 @@ def create_exit(body: ExitIn, request: Request, db: DbSession, user: CurrentUser
         emp = raiser
     try:
         case = rules.create_case(db, emp, raiser, body.exit_type, body.requested_last_day, body.reason, body.note,
-                                 body.early_release, user.id, client_ip(request))
+                                 body.early_release, user.id, client_ip(request),
+                                 details={"early_release_reason": body.early_release_reason if body.early_release else None,
+                                          "handover_plan": body.handover_plan, "handover_to": body.handover_to})
     except rules.ExitError as exc:
         db.rollback()
         raise _err(exc) from exc
@@ -224,6 +237,22 @@ def decide_exit(exit_id: str, body: ExitDecisionIn, request: Request, db: DbSess
     current = rules.current_status(db, case, instance)
     if case.status in rules.PENDING and current != case.status:
         case.status = current
+    db.commit()
+    return _out(db, user, case)
+
+
+@router.post("/{exit_id}/retention", response_model=ExitCaseOut)
+def add_retention(exit_id: str, body: RetentionIn, request: Request, db: DbSession, user: CurrentUserDep) -> ExitCaseOut:
+    """The manager (anyone above the leaver) or an approver offers a retention conversation, shown to the leaver."""
+    case, _ = _visible(db, user, exit_id)
+    if not _can_retain(db, user, case, rules.instance_of(db, case)):
+        if case.status not in rules.PENDING:
+            raise HTTPException(409, "A retention conversation can only be offered while the resignation is waiting.")
+        raise HTTPException(403, "Only the leaver's manager or an approver can do this.")
+    try:
+        rules.add_retention_note(db, case, me(user), body.note, body.meet_on, user.id, client_ip(request))
+    except rules.ExitError as exc:
+        raise _err(exc) from exc
     db.commit()
     return _out(db, user, case)
 

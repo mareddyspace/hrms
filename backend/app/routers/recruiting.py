@@ -26,6 +26,7 @@ from app.models import (
     Country,
     Employee,
     Interview,
+    JobPosting,
     Offer,
     Requisition,
 )
@@ -37,6 +38,7 @@ from app.schemas.talent import (
     CvParseIn,
     CvParseOut,
     FeedbackIn,
+    InternalApplyIn,
     InterviewIn,
     InterviewOut,
     MatchOut,
@@ -44,10 +46,15 @@ from app.schemas.talent import (
     OfferIn,
     OfferOut,
     OfferStatusIn,
+    PostingIn,
+    PostingOut,
+    PublicApplyOut,
     RecruiterIn,
     RequisitionDecisionIn,
     RequisitionIn,
     RequisitionOut,
+    SCORECARD_CRITERIA,
+    ScreenIn,
     StageMoveIn,
     StageStepOut,
 )
@@ -91,14 +98,23 @@ def _names(db: DbSession, ids: set[str | None]) -> dict[str, str]:
 
 def _req_outs(db: DbSession, reqs: list[Requisition]) -> list[RequisitionOut]:
     names = _names(db, {r.hiring_manager_id for r in reqs} | {r.recruiter_id for r in reqs})
-    counts = dict(db.execute(select(Candidate.requisition_id, func.count()).where(Candidate.requisition_id.in_([r.id for r in reqs]))
-                             .group_by(Candidate.requisition_id)).all()) if reqs else {}
+    ids = [r.id for r in reqs]
+    by_stage: dict[str, dict[str, int]] = {}
+    if reqs:
+        for rid, stage, n in db.execute(select(Candidate.requisition_id, Candidate.stage, func.count())
+                                        .where(Candidate.requisition_id.in_(ids)).group_by(Candidate.requisition_id, Candidate.stage)):
+            by_stage.setdefault(rid, {})[stage] = n
+    postings = {p.requisition_id: p for p in db.scalars(select(JobPosting).where(JobPosting.requisition_id.in_(ids)))} if reqs else {}
     out = []
     for r in reqs:
         item = RequisitionOut.model_validate(r)
         item.hiring_manager_name = names.get(r.hiring_manager_id)
         item.recruiter_name = names.get(r.recruiter_id) if r.recruiter_id else None
-        item.candidate_count = counts.get(r.id, 0)
+        item.stage_counts = by_stage.get(r.id, {})
+        item.candidate_count = sum(item.stage_counts.values())
+        if (post := postings.get(r.id)) is not None:
+            item.posting = PostingOut.model_validate(post)
+            item.posting.applications = item.candidate_count
         out.append(item)
     return out
 
@@ -155,36 +171,61 @@ def list_requisitions(db: DbSession, user: CurrentUserDep, status_: Annotated[st
 
 @router.get("/postings", response_model=list[RequisitionOut])
 def list_postings(db: DbSession, user: CurrentUserDep):
-    """Internal job board: open requisitions (approved, recruiter assigned) for everyone signed in.
-    Approval and candidate details are left out."""
-    stmt = select(Requisition).where(Requisition.status == "approved", Requisition.recruiter_id.is_not(None))
-    out = _req_outs(db, list(db.scalars(stmt.order_by(Requisition.raised_on.desc(), Requisition.id.desc()))))
+    """Internal job board: published job postings taking applications, for everyone signed in.
+    Approval, budget and candidate details are left out."""
+    today = date.today()
+    stmt = (select(Requisition).join(JobPosting, JobPosting.requisition_id == Requisition.id)
+            .where(Requisition.status == "approved", Requisition.recruiter_id.is_not(None), JobPosting.status == "open",
+                   JobPosting.closing_date >= today))
+    out = _req_outs(db, list(db.scalars(stmt.order_by(JobPosting.published_on.desc(), Requisition.id.desc()))))
     for item in out:
         item.approval_id = None
         item.candidate_count = 0
+        item.stage_counts = {}
+        item.budget = item.budget_currency = item.justification = None
+        if item.posting:
+            item.posting.applications = 0
     return out
 
 
 @router.post("/requisitions", response_model=RequisitionOut, status_code=status.HTTP_201_CREATED)
 def raise_requisition(body: RequisitionIn, request: Request, db: DbSession, user: CurrentUserDep):
-    if not rules.can_raise(user):
-        raise HTTPException(403, "Only the manager who needs the role can raise a requisition.")
-    hm = me(user)
-    country = body.country_code.upper()
-    if db.get(Country, country) is None:
+    """The hiring manager raises it; a recruiter or HR may raise it for the hiring manager they name."""
+    for_other = bool(body.hiring_manager_id) and body.hiring_manager_id != user.employee_id
+    if for_other:
+        if not rules.can_raise_for_others(user):
+            raise HTTPException(403, "Only a recruiter or HR can raise a requisition for another manager.")
+        hm = db.get(Employee, body.hiring_manager_id)
+        if hm is None or hm.employment_status in ("Terminated", "Exited"):
+            raise HTTPException(422, "Choose the hiring manager.")
+    else:
+        if not rules.can_raise(user):
+            raise HTTPException(403, "Only the manager who needs the role can raise a requisition.")
+        hm = me(user)
+    country_code = body.country_code.upper()
+    country = db.get(Country, country_code)
+    if country is None:
         raise HTTPException(422, "Choose a country.")
     req = Requisition(
-        id=rules.next_requisition_id(db), title=body.title.strip(), department=body.department.strip(), country_code=country,
+        id=rules.next_requisition_id(db), title=body.title.strip(), department=body.department.strip(), country_code=country_code,
         location=body.location.strip(), openings=body.openings, hiring_manager_id=hm.id, status="pending_approval",
         requirements=[r.strip() for r in body.requirements if r.strip()], description=(body.description or "").strip() or None,
-        raised_on=date.today(),
+        raised_on=date.today(), budget=body.budget, budget_currency=country.currency if body.budget is not None else None,
+        reason=body.reason, justification=(body.justification or "").strip() or None, raised_by=user.employee_id,
     )
+    if for_other and user.account.role == "recruiter":
+        req.recruiter_id, req.recruiter_assigned_on = user.employee_id, date.today()  # they run it once approved
     db.add(req)
     db.flush()
     record_audit(db, actor_id=user.id, action="requisition_raised", entity="requisition", entity_id=req.id, subject_id=hm.id,
-                 after=_req_snapshot(req) | {"department": req.department, "country_code": country}, ip=client_ip(request))
+                 after=_req_snapshot(req) | {"department": req.department, "country_code": country_code, "budget": req.budget,
+                                             "reason": req.reason}, ip=client_ip(request))
     with _rules():
         rules.start_approval(db, req, hm, user.id)
+    if for_other:
+        by = user.employee.full_name if user.employee else "Recruiting"
+        notify(db, recipient_id=hm.id, title=f"Requisition {req.id} raised for you",
+               body=f"{req.title} ({req.location}). Raised by {by}.", href=f"/recruiting/requisitions/{req.id}")
     db.commit()
     return _req_outs(db, [req])[0]
 
@@ -266,6 +307,110 @@ def set_recruiter(req_id: str, body: RecruiterIn, db: DbSession, user: CurrentUs
         rules.assign_recruiter(db, req, body.recruiter_id, user.id)
     db.commit()
     return _req_outs(db, [req])[0]
+
+
+# ---------- job postings ----------
+@router.post("/requisitions/{req_id}/posting", response_model=RequisitionOut)
+def publish_posting(req_id: str, body: PostingIn, request: Request, db: DbSession, user: CurrentUserDep):
+    """The recruiter (or HR) publishes the approved requisition: internal jobs board, and the careers page when chosen.
+    Publishing again updates the post (and reopens a closed one)."""
+    req = _visible_req(db, user, req_id)
+    if not rules.can_run_pipeline(user, req):
+        raise HTTPException(403, "Only the assigned recruiter or HR publishes job posts.")
+    if not rules.is_open(req):
+        raise HTTPException(409, f"{req.id} can be posted once it is approved and has a recruiter.")
+    if body.closing_date < date.today():
+        raise HTTPException(422, "Choose a closing date that is not in the past.")
+    post = rules.posting_of(db, req.id)
+    first = post is None
+    if post is None:
+        post = JobPosting(id=rules.new_posting_id(), requisition_id=req.id, published_on=date.today())
+        db.add(post)
+    before = None if first else {"status": post.status, "title": post.title, "closing_date": post.closing_date}
+    post.title, post.description, post.location = body.title.strip(), body.description.strip(), body.location.strip()
+    post.employment_type, post.closing_date, post.on_careers_site = body.employment_type.strip(), body.closing_date, body.on_careers_site
+    post.status, post.closed_on, post.published_by = "open", None, user.employee_id
+    db.flush()
+    record_audit(db, actor_id=user.id, action="posting_published" if first else "posting_updated", entity="requisition",
+                 entity_id=req.id, subject_id=req.hiring_manager_id, before=before,
+                 after={"posting_id": post.id, "title": post.title, "closing_date": post.closing_date,
+                        "on_careers_site": post.on_careers_site}, ip=client_ip(request))
+    if first and req.hiring_manager_id != user.employee_id:
+        notify(db, recipient_id=req.hiring_manager_id, title=f"{post.title} is posted",
+               body=f"Open for applications until {post.closing_date}{' (careers page too)' if post.on_careers_site else ''}.",
+               href=f"/recruiting/requisitions/{req.id}")
+    db.commit()
+    return _req_outs(db, [req])[0]
+
+
+@router.post("/requisitions/{req_id}/posting/close", response_model=RequisitionOut)
+def close_posting(req_id: str, request: Request, db: DbSession, user: CurrentUserDep):
+    req = _visible_req(db, user, req_id)
+    if not rules.can_run_pipeline(user, req):
+        raise HTTPException(403, "Only the assigned recruiter or HR closes job posts.")
+    post = rules.posting_of(db, req.id)
+    if post is None or post.status != "open":
+        raise HTTPException(409, "This job post is not open.")
+    post.status, post.closed_on = "closed", date.today()
+    record_audit(db, actor_id=user.id, action="posting_closed", entity="requisition", entity_id=req.id,
+                 subject_id=req.hiring_manager_id, before={"status": "open"}, after={"status": "closed", "posting_id": post.id},
+                 ip=client_ip(request))
+    db.commit()
+    return _req_outs(db, [req])[0]
+
+
+@router.post("/postings/{posting_id}/apply", response_model=PublicApplyOut, status_code=status.HTTP_201_CREATED)
+def apply_internally(posting_id: str, body: InternalApplyIn, request: Request, db: DbSession, user: CurrentUserDep):
+    """An employee applies from the internal jobs board; the application lands in the job's pipeline (source Internal)."""
+    post = db.get(JobPosting, posting_id)
+    req = db.get(Requisition, post.requisition_id) if post else None
+    if post is None or not rules.posting_is_open(post, req):
+        raise HTTPException(404, "This job is not open for applications.")
+    assert req is not None
+    emp = me(user)
+    if req.hiring_manager_id == emp.id:
+        raise HTTPException(409, "You're the hiring manager for this role.")
+    if req.recruiter_id == emp.id:
+        raise HTTPException(409, "You run this role's pipeline.")
+    email = (emp.email or "").strip().lower()
+    if db.scalar(select(Candidate.id).where(Candidate.requisition_id == req.id, (Candidate.employee_id == emp.id)
+                                            | (func.lower(Candidate.email) == email))):
+        raise HTTPException(409, "You've already applied.")
+    cand = Candidate(
+        id=f"cand-{uuid.uuid4().hex[:10]}", requisition_id=req.id, posting_id=post.id, employee_id=emp.id, name=emp.full_name,
+        email=email, phone=emp.mobile, source="Internal", experience_years=0, skills=[],
+        cover_note=(body.cover_note or "").strip() or None, cv_note=f"Internal: {emp.job_title or ''}, {emp.department or ''}".strip(", "),
+        applied_on=date.today(), stage="Applied", created_by=emp.id,
+    )
+    db.add(cand)
+    db.flush()
+    rules.add_stage(db, cand, "Applied", None, "Applied on the internal jobs board")
+    record_audit(db, actor_id=user.id, action="candidate_applied", entity="candidate", entity_id=cand.id,
+                 subject_id=req.hiring_manager_id, after=_cand_snapshot(cand) | {"requisition_id": req.id, "posting_id": post.id},
+                 ip=client_ip(request))
+    if req.recruiter_id:
+        notify(db, recipient_id=req.recruiter_id, title=f"Internal application: {emp.full_name}",
+               body=f"{post.title} ({req.id}).", href=f"/recruiting/candidates/{cand.id}")
+    if emp.manager_id and emp.manager_id not in (req.recruiter_id, emp.id):
+        notify(db, recipient_id=emp.manager_id, title="Internal application",
+               body=f"{emp.full_name} applied for {post.title}.", href="/internal-jobs")
+    db.commit()
+    return PublicApplyOut(reference=cand.id, title=post.title)
+
+
+@router.get("/my-applications", response_model=list[dict])
+def my_applications(db: DbSession, user: CurrentUserDep) -> list[dict]:
+    """My internal applications and where they are (the stage is shown in plain words)."""
+    if not user.employee_id:
+        return []
+    out = []
+    for c in db.scalars(select(Candidate).where(Candidate.employee_id == user.employee_id).order_by(Candidate.applied_on.desc())):
+        req = db.get(Requisition, c.requisition_id)
+        post = db.get(JobPosting, c.posting_id) if c.posting_id else None
+        out.append({"id": c.id, "requisition_id": c.requisition_id, "posting_id": c.posting_id,
+                    "title": post.title if post else (req.title if req else c.requisition_id), "applied_on": c.applied_on.isoformat(),
+                    "stage": c.stage, "cover_note": c.cover_note})
+    return out
 
 
 # ---------- candidates ----------
@@ -351,11 +496,24 @@ def update_candidate(cand_id: str, body: CandidatePatch, request: Request, db: D
     return _cand_out(db, cand)
 
 
+def tell_applicant(db: DbSession, cand: Candidate, req: Requisition, text: str) -> None:
+    """Internal applicants follow their application on the internal jobs board."""
+    if cand.employee_id:
+        notify(db, recipient_id=cand.employee_id, title=f"Your application: {req.title}", body=text, href="/internal-jobs")
+
+
+APPLICANT_TEXT = {"Screening": "Recruiting is reviewing your application.", "Shortlisted": "You are shortlisted.",
+                  "Interview": "You are invited to interview.", "Offer": "An offer is being prepared.",
+                  "Rejected": "The team decided not to move forward this time.", "Hired": "Welcome to your new role."}
+
+
 @router.post("/candidates/{cand_id}/stage", response_model=CandidateOut)
 def move_stage(cand_id: str, body: StageMoveIn, request: Request, db: DbSession, user: CurrentUserDep):
     cand, req = _visible_cand(db, user, cand_id)
     if body.stage == cand.stage:
         return _cand_out(db, cand)
+    if body.stage == "Rejected" and len((body.note or "").strip()) < 3:
+        raise HTTPException(422, "Give a reason to reject.")
     before = _cand_snapshot(cand)
     with _rules():
         rules.check_stage_move(db, user, cand, req, body.stage)
@@ -372,6 +530,44 @@ def move_stage(cand_id: str, body: StageMoveIn, request: Request, db: DbSession,
     elif body.stage == "Offer" and req.recruiter_id and req.recruiter_id != user.employee_id:
         notify(db, recipient_id=req.recruiter_id, title=f"Prepare an offer for {cand.name}",
                body=f"The hiring manager moved {cand.name} to Offer.", href=f"/recruiting/candidates/{cand.id}")
+    if body.stage in APPLICANT_TEXT:
+        tell_applicant(db, cand, req, APPLICANT_TEXT[body.stage])
+    db.commit()
+    return _cand_out(db, cand)
+
+
+@router.post("/candidates/{cand_id}/screen", response_model=CandidateOut)
+def screen_candidate(cand_id: str, body: ScreenIn, request: Request, db: DbSession, user: CurrentUserDep):
+    """Screening decision: shortlist (Applied -> Screening -> Shortlisted) or reject with a reason.
+    The rule-based match score is saved with the decision (a guide, not the decision)."""
+    cand, req = _visible_cand(db, user, cand_id)
+    reason = (body.reason or "").strip()
+    if body.decision == "reject" and len(reason) < 3:
+        raise HTTPException(422, "Give a reason to reject.")
+    with _rules():
+        rules.check_screen(user, cand, req)
+    before = _cand_snapshot(cand)
+    needs = needs_for_role(req.title, req.department, list(req.requirements or []))
+    fit = match_candidate(MatchInput(cand.name, list(cand.skills or []), " ".join(filter(None, [cand.cv_note, cand.cover_note])),
+                                     cand.experience_years or 0), needs)
+    cand.match_score = int(fit["score"])
+    if body.decision == "shortlist":
+        if cand.stage == "Applied":
+            rules.add_stage(db, cand, "Screening", user.employee_id, f"Match {cand.match_score}%")
+        rules.add_stage(db, cand, "Shortlisted", user.employee_id, reason or None)
+    else:
+        if cand.stage == "Applied":
+            rules.add_stage(db, cand, "Screening", user.employee_id, f"Match {cand.match_score}%")
+        rules.add_stage(db, cand, "Rejected", user.employee_id, reason)
+    db.flush()
+    record_audit(db, actor_id=user.id, action="candidate_screened", entity="candidate", entity_id=cand.id,
+                 subject_id=req.hiring_manager_id, before=before,
+                 after=_cand_snapshot(cand) | {"decision": body.decision, "reason": reason or None, "match_score": cand.match_score},
+                 ip=client_ip(request))
+    if body.decision == "shortlist" and req.hiring_manager_id != user.employee_id:
+        notify(db, recipient_id=req.hiring_manager_id, title=f"{cand.name} shortlisted for {req.title}",
+               body=f"Match {cand.match_score}%. Interviews come next.", href=f"/recruiting/candidates/{cand.id}")
+    tell_applicant(db, cand, req, APPLICANT_TEXT["Shortlisted" if body.decision == "shortlist" else "Rejected"])
     db.commit()
     return _cand_out(db, cand)
 
@@ -516,27 +712,75 @@ def interview_feedback(interview_id: str, body: FeedbackIn, request: Request, db
         raise HTTPException(403, "Only the panel or the hiring manager can submit feedback.")
     if row.feedback_status == "submitted":
         raise HTTPException(409, "Feedback for this interview was already submitted.")
-    row.feedback_status, row.score, row.feedback = "submitted", body.score, body.notes.strip()
+    starts = row.scheduled_at if row.scheduled_at.tzinfo else row.scheduled_at.replace(tzinfo=UTC)
+    if starts > datetime.now(UTC):
+        raise HTTPException(409, "The scorecard opens once the interview has started.")
+    ratings = None
+    if body.ratings:
+        unknown = set(body.ratings) - set(SCORECARD_CRITERIA)
+        if unknown or any(not 1 <= v <= 5 for v in body.ratings.values()):
+            raise HTTPException(422, f"Rate {', '.join(SCORECARD_CRITERIA)} from 1 to 5.")
+        ratings = {k: int(v) for k, v in body.ratings.items()}
+    score = round(sum(ratings.values()) / len(ratings)) if ratings else body.score
+    if score is None:
+        raise HTTPException(422, "Rate the candidate from 1 to 5.")
+    row.feedback_status, row.score, row.feedback = "submitted", score, body.notes.strip()
+    row.ratings, row.recommendation = ratings, body.recommendation
     row.feedback_by, row.feedback_at = user.employee_id, datetime.now(UTC)
     record_audit(db, actor_id=user.id, action="interview_feedback_submitted", entity="interview", entity_id=row.id,
                  subject_id=req.hiring_manager_id, before={"feedback_status": "pending"},
-                 after={"feedback_status": "submitted", "score": body.score}, ip=client_ip(request))
+                 after={"feedback_status": "submitted", "score": score, "ratings": ratings, "recommendation": body.recommendation},
+                 ip=client_ip(request))
+    advice = {"strong_yes": "Strong yes", "yes": "Yes", "no": "No", "strong_no": "Strong no"}.get(body.recommendation or "", "")
     for rid in {req.recruiter_id, req.hiring_manager_id} - {user.employee_id, None}:
-        notify(db, recipient_id=rid, title=f"Interview feedback for {cand.name if cand else row.candidate_id}",  # type: ignore[arg-type]
-               body=f"Score {body.score}/5.", href=f"/recruiting/interviews/{row.id}")
+        notify(db, recipient_id=rid, title=f"Scorecard for {cand.name if cand else row.candidate_id}",  # type: ignore[arg-type]
+               body=f"Score {score}/5{f' · {advice}' if advice else ''}.", href=f"/recruiting/candidates/{row.candidate_id}")
     db.commit()
     return row
 
 
 # ---------- offers ----------
-def _offer_outs(db: DbSession, offers: list[Offer]) -> list[OfferOut]:
+def _offer_outs(db: DbSession, offers: list[Offer], user: CurrentUser | None = None) -> list[OfferOut]:
     names = dict(db.execute(select(Candidate.id, Candidate.name).where(Candidate.id.in_([o.candidate_id for o in offers]))).all()) if offers else {}
     out = []
     for o in offers:
         item = OfferOut.model_validate(o)
         item.candidate_name = names.get(o.candidate_id)
+        req = db.get(Requisition, o.requisition_id) if user is not None else None
+        if user is None or req is None or not rules.can_run_pipeline(user, req) or o.status != "sent":
+            item.response_token = None  # the answer link is for the recruiter / HR to pass on while it is open
         out.append(item)
     return out
+
+
+def record_offer_answer(db: DbSession, offer: Offer, req: Requisition, cand: Candidate, accepted: bool, note: str,
+                        user: CurrentUser | None, via: str, ip: str | None = None) -> None:
+    """Accepted / declined. Accepted moves the candidate to Hired and starts onboarding (a new joiner); an internal
+    applicant's move is handed to HR instead. user is None when the candidate answered through their link."""
+    before = _offer_snapshot(offer)
+    offer.status = "accepted" if accepted else "declined"
+    offer.response_note, offer.responded_on = note or None, date.today()
+    offer.response_recorded_by = user.employee_id if user else None
+    offer.responded_via = via  # the link keeps working to show the answer, but cannot answer again
+    record_audit(db, actor_id=user.id if user else None, action=f"offer_{offer.status}", entity="offer", entity_id=offer.id,
+                 subject_id=req.hiring_manager_id, before=before,
+                 after=_offer_snapshot(offer) | {"note": note or None, "via": via}, ip=ip)
+    who = f"{cand.name} {offer.status} the offer"
+    if accepted and cand.stage == "Offer":
+        rules.add_stage(db, cand, "Hired", user.employee_id if user else None,
+                        "Accepted the offer" + (" (answer link)" if via == "link" else ""))
+        db.flush()
+        if cand.employee_id:
+            for rid in {req.hiring_manager_id, *onboarding._hr_ids(db, req.country_code)} - {None}:
+                notify(db, recipient_id=rid, title=f"Internal move: {cand.name}",
+                       body=f"{cand.name} accepted {req.title}. Record the transfer in Lifecycle actions.",
+                       href=f"/recruiting/candidates/{cand.id}")
+        else:
+            onboarding.create_joiner(db, cand, req, user)
+        tell_applicant(db, cand, req, APPLICANT_TEXT["Hired"])
+    for rid in {req.hiring_manager_id, req.recruiter_id} - {user.employee_id if user else None, None}:
+        notify(db, recipient_id=rid, title=who, body=note or ("Onboarding has started." if accepted else ""),  # type: ignore[arg-type]
+               href=f"/recruiting/candidates/{cand.id}")
 
 
 def _offer_snapshot(o: Offer) -> dict:
@@ -568,7 +812,7 @@ def list_offers(db: DbSession, user: CurrentUserDep, status_: Annotated[str | No
         req = db.get(Requisition, o.requisition_id)
         if req is not None and rules.can_act(user, req):
             rows.append(o)
-    return _offer_outs(db, rows)
+    return _offer_outs(db, rows, user)
 
 
 @router.post("/offers", response_model=OfferOut, status_code=status.HTTP_201_CREATED)
@@ -590,12 +834,16 @@ def create_offer(body: OfferIn, request: Request, db: DbSession, user: CurrentUs
         base_salary=body.base_salary, currency=body.currency or (country.currency if country else "USD"), start_date=body.start_date,
         package_note=(body.package_note or "").strip() or None, status="preparing", approvals=[], created_by=user.employee_id or user.id,
     )
+    try:
+        offer.letter = rules.offer_letter(db, offer, cand, req)
+    except Exception:  # noqa: BLE001 - a broken HR template must not block the offer; the letter is shown when it renders
+        offer.letter = None
     db.add(offer)
     db.flush()
     record_audit(db, actor_id=user.id, action="offer_created", entity="offer", entity_id=offer.id, subject_id=req.hiring_manager_id,
                  after=_offer_snapshot(offer) | {"candidate_id": cand.id}, ip=client_ip(request))
     db.commit()
-    return _offer_outs(db, [offer])[0]
+    return _offer_outs(db, [offer], user)[0]
 
 
 @router.post("/offers/{offer_id}/submit", response_model=OfferOut)
@@ -612,7 +860,7 @@ def submit_offer(offer_id: str, request: Request, db: DbSession, user: CurrentUs
     notify(db, recipient_id=req.hiring_manager_id, title=f"Offer for {cand.name} needs your agreement",
            body=f"{offer.grade}, start {offer.start_date}.", href=f"/recruiting/offers/{offer.id}")
     db.commit()
-    return _offer_outs(db, [offer])[0]
+    return _offer_outs(db, [offer], user)[0]
 
 
 @router.post("/offers/{offer_id}/approve", response_model=OfferOut)
@@ -634,7 +882,7 @@ def approve_offer(offer_id: str, request: Request, db: DbSession, user: CurrentU
                  entity="offer", entity_id=offer.id, subject_id=req.hiring_manager_id, before=before,
                  after=_offer_snapshot(offer) | {"step": step}, ip=client_ip(request))
     db.commit()
-    return _offer_outs(db, [offer])[0]
+    return _offer_outs(db, [offer], user)[0]
 
 
 @router.post("/offers/{offer_id}/send-back", response_model=OfferOut)
@@ -649,7 +897,7 @@ def send_back_offer(offer_id: str, body: NoteIn, request: Request, db: DbSession
                  before=before, after=_offer_snapshot(offer) | {"note": body.note}, ip=client_ip(request))
     notify(db, recipient_id=offer.created_by, title=f"Offer for {cand.name} sent back", body=body.note, href=f"/recruiting/offers/{offer.id}")
     db.commit()
-    return _offer_outs(db, [offer])[0]
+    return _offer_outs(db, [offer], user)[0]
 
 
 @router.post("/offers/{offer_id}/status", response_model=OfferOut)
@@ -661,22 +909,26 @@ def set_offer_status(offer_id: str, body: OfferStatusIn, request: Request, db: D
     if body.status not in rules.OFFER_TRANSITIONS[offer.status]:
         raise HTTPException(409, f"An offer cannot move from {offer.status} to {body.status}.")
     note = (body.note or "").strip()
-    before = _offer_snapshot(offer)
     if body.status in ("accepted", "declined"):
         if len(note) < 5:
             raise HTTPException(422, "Say how the candidate's answer was received.")
-        offer.response_note, offer.responded_on, offer.response_recorded_by = note, date.today(), user.employee_id
-    if body.status == "sent" and not offer.sent_on:
-        offer.sent_on = date.today()
+        with _rules():
+            record_offer_answer(db, offer, req, cand, body.status == "accepted", note, user, "recorded", client_ip(request))
+        db.commit()
+        return _offer_outs(db, [offer], user)[0]
+    before = _offer_snapshot(offer)
+    if body.status == "sent":
+        offer.sent_on = offer.sent_on or date.today()
+        offer.response_token = offer.response_token or rules.new_response_token()  # the candidate's answer link
     offer.status = body.status
     record_audit(db, actor_id=user.id, action=f"offer_{body.status}", entity="offer", entity_id=offer.id,
                  subject_id=req.hiring_manager_id, before=before, after=_offer_snapshot(offer) | {"note": note or None},
                  ip=client_ip(request))
-    if body.status in ("accepted", "declined"):
-        notify(db, recipient_id=req.hiring_manager_id, title=f"{cand.name} {body.status} the offer", body=note,
-               href=f"/recruiting/offers/{offer.id}")
+    if body.status == "sent" and req.hiring_manager_id != user.employee_id:
+        notify(db, recipient_id=req.hiring_manager_id, title=f"Offer sent to {cand.name}",
+               body=f"{req.title}, start {offer.start_date}. Waiting for the answer.", href=f"/recruiting/candidates/{cand.id}")
     db.commit()
-    return _offer_outs(db, [offer])[0]
+    return _offer_outs(db, [offer], user)[0]
 
 
 # ---------- my activity ----------

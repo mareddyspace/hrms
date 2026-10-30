@@ -1466,7 +1466,7 @@
       {
         "heading": "Pay",
         "rules": [
-          "Paid in CAD by TimeZ Canada Inc.",
+          "Paid in CAD by TimeZ Canada Ltd.",
           "Income tax on your payslip: Federal income tax.",
           "Tax year starts 1 January.",
           "Only you and Compensation can see your payslips."
@@ -1717,7 +1717,7 @@
       {
         "heading": "Pay",
         "rules": [
-          "Paid in AED by TimeZ Middle East FZ.",
+          "Paid in AED by TimeZ UAE LLC.",
           "No personal income tax is deducted.",
           "Tax year starts 1 January.",
           "Only you and Compensation can see your payslips."
@@ -1963,7 +1963,7 @@
       {
         "heading": "Pay",
         "rules": [
-          "Paid in SAR by TimeZ Saudi LLC.",
+          "Paid in SAR by TimeZ Saudi Arabia Ltd.",
           "No personal income tax is deducted.",
           "Tax year starts 1 January.",
           "Only you and Compensation can see your payslips."

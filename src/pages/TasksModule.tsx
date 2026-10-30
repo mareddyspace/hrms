@@ -93,27 +93,28 @@ export function TasksPage() {
     canDecideFor,
   } = usePortal();
   // Team task tools only for people who actually have someone below them (not an admin with no reports).
-  const isManager = isManagerRole && taskTeamFor(employee.id).length > 0;
+  // The CEO's role is not a "manager" role, but his summary already counts his line's tasks, so he gets the team view too.
+  const isManager = (isManagerRole || managementChain(employee.id).length === 0) && taskTeamFor(employee.id).length > 0;
   const today = todayISO();
   // The CEO has nobody above him, so task wording doesn't mention "your manager".
   const hasManager = managementChain(employee.id).length > 0;
   const [autoMode, setAutoMode] = useTaskAutoMode(employee.id);
   useTaskAutoReminders();
-  // Own tasks plus tasks of people below you in the reporting line (or anyone, for HR).
-  const scopeTasks = useMemo(
-    () =>
-      state.tasks
-        .filter(
-          (task) =>
-            task.employeeId === employee.id ||
-            canApproveLeaveFor(task.employeeId) ||
-            task.ccIds?.includes(employee.id) ||
-            task.peopleIds?.includes(employee.id),
-        )
-        .map(ensureTaskExtras),
-    [state.tasks, employee.id, canApproveLeaveFor],
-  );
   const myTeam = useMemo(() => taskTeamFor(employee.id), [employee.id]);
+  // Own tasks plus tasks of people below you in your own reporting line (HR's leave rights don't make
+  // other managers' teams yours).
+  const scopeTasks = useMemo(() => {
+    const below = new Set(myTeam.map((p) => p.id));
+    return state.tasks
+      .filter(
+        (task) =>
+          task.employeeId === employee.id ||
+          below.has(task.employeeId) ||
+          task.ccIds?.includes(employee.id) ||
+          task.peopleIds?.includes(employee.id),
+      )
+      .map(ensureTaskExtras);
+  }, [state.tasks, employee.id, myTeam]);
 
   const [tab, setTab] = useState<TaskTab>(isManager ? "dashboard" : "mine");
   const [view, setView] = useState<ViewMode>("list");
@@ -349,9 +350,10 @@ export function TasksPage() {
       if (task.status === "done") {
         row.completed += 1;
         if (task.due && task.lastActivityAt.slice(0, 10) <= task.due) row.onTime += 1;
-      } else {
+      } else if (task.status !== "scheduled") {
+        // Same rule as the person's own Tasks page: scheduled (not yet started) tasks aren't open or overdue.
         row.open += 1;
-        if (task.due && task.due < today) row.overdue += 1;
+        if (isTaskOverdue(task, today)) row.overdue += 1;
       }
       map.set(task.employeeId, row);
     }
@@ -438,7 +440,7 @@ export function TasksPage() {
     <Page
       title={isManager ? "Team tasks" : "My tasks"}
       action={
-        isManager ? (
+        isManager && isManagerRole ? (
           <button type="button" className="btn" onClick={() => setShowCreate((v) => !v)}>
             {showCreate ? "Cancel" : "Add task"}
           </button>

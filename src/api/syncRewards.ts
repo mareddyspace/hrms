@@ -735,6 +735,7 @@ interface LetterRequestOut {
   note: string;
   details: string | null;
   effective_date: string | null;
+  custom_text?: string | null;
   approval_instance_id: string | null;
   approval_status: string | null;
   document_id: string | null;
@@ -785,6 +786,7 @@ function toLetter(r: LetterRequestOut, me: MeOut, waiting: Set<string>): LetterR
     previewBody: "",
     details: r.details ?? undefined,
     effectiveDate: r.effective_date ?? undefined,
+    customText: r.custom_text ?? undefined,
     api: info,
   };
 }
@@ -804,16 +806,42 @@ export async function loadApiLetters(accountId: string): Promise<LetterRequest[]
   return [...byId.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).map((r) => toLetter(r, me, waiting));
 }
 
-export function apiRequestLetter(input: { employeeId: string; type: string; note: string; details?: string; effectiveDate?: string }): Promise<Outcome> {
-  return attempt(() =>
-    api.post("/letters/requests", {
-      employee_id: input.employeeId,
-      letter_type: input.type,
-      note: input.note.trim(),
-      details: input.details?.trim() || null,
-      effective_date: input.effectiveDate || null,
-    }),
-  );
+type LetterInput = { employeeId: string; type: string; note: string; details?: string; effectiveDate?: string; customText?: string };
+
+const letterBody = (input: LetterInput) => ({
+  employee_id: input.employeeId,
+  letter_type: input.type,
+  note: input.note.trim(),
+  details: input.details?.trim() || null,
+  effective_date: input.effectiveDate || null,
+  custom_text: input.customText?.trim() || null,
+});
+
+export function apiRequestLetter(input: LetterInput): Promise<Outcome> {
+  return attempt(() => api.post("/letters/requests", letterBody(input)));
+}
+
+/** The letter as it would read if requested now (nothing is saved). Own text is left out; the portal adds it. */
+export async function fetchDraftLetterPreview(input: LetterInput): Promise<{ data: LetterPreviewOut | null; error: string | null }> {
+  try {
+    return { data: await api.post<LetterPreviewOut>("/letters/draft-preview", { ...letterBody(input), custom_text: null }), error: null };
+  } catch (error) {
+    return { data: null, error: (error as Error).message || "Preview not available." };
+  }
+}
+
+/** "Add your own text" worded by the Copilot model; null when no AI is available (the portal words it itself). */
+export async function apiWordLetterText(type: string, employeeId: string, text: string): Promise<string | null> {
+  try {
+    const out = await api.post<{ paragraph: string | null; used_ai: boolean }>("/letters/word-text", {
+      letter_type: type,
+      employee_id: employeeId,
+      text: text.trim().slice(0, 600),
+    });
+    return out.paragraph?.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 export function apiDecideLetter(id: string, decision: "approve" | "reject", note?: string): Promise<Outcome> {

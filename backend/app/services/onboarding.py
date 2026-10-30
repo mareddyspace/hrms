@@ -121,8 +121,12 @@ def _hr_ids(db: Session, country: str) -> list[str]:
     return _accounts_with_roles(db, set(HR_ROLES), country)
 
 
-def create_joiner(db: Session, cand: Candidate, req: Requisition, actor: CurrentUser) -> Joiner:
-    """Hired: directory record (Onboarding) + joiner + checklist. HR and the hiring manager are told."""
+def create_joiner(db: Session, cand: Candidate, req: Requisition, actor: CurrentUser | None) -> Joiner:
+    """Hired: directory record (Onboarding) + joiner + checklist. HR and the hiring manager are told.
+
+    actor is None when the candidate accepted through their offer link (no sign-in)."""
+    actor_id = actor.id if actor else None
+    actor_emp = actor.employee_id if actor else None
     offer = db.scalar(select(Offer).where(Offer.candidate_id == cand.id, Offer.status == "accepted").order_by(Offer.created_at.desc()))
     if offer is None:
         raise RuleError("A candidate can only be hired after accepting an offer.")
@@ -172,12 +176,12 @@ def create_joiner(db: Session, cand: Candidate, req: Requisition, actor: Current
         ))
     db.flush()
     refresh_status(db, joiner)
-    record_audit(db, actor_id=actor.id, action="employee_created", entity="employee", entity_id=emp.id, subject_id=emp.id,
+    record_audit(db, actor_id=actor_id, action="employee_created", entity="employee", entity_id=emp.id, subject_id=emp.id,
                  after={"full_name": emp.full_name, "employment_status": "Onboarding", "joining_date": emp.joining_date,
                         "candidate_id": cand.id, "requisition_id": req.id})
-    record_audit(db, actor_id=actor.id, action="joiner_created", entity="joiner", entity_id=joiner.id, subject_id=emp.id,
+    record_audit(db, actor_id=actor_id, action="joiner_created", entity="joiner", entity_id=joiner.id, subject_id=emp.id,
                  after={"start_date": joiner.start_date, "tasks": len(tasks_of(db, joiner))})
-    for rid in {req.hiring_manager_id, *_hr_ids(db, req.country_code)} - {actor.employee_id, None}:
+    for rid in {req.hiring_manager_id, *_hr_ids(db, req.country_code)} - {actor_emp, None}:
         notify(db, recipient_id=rid, title=f"New joiner: {cand.name}",
                body=f"{cand.name} joins as {req.title} on {offer.start_date}. Onboarding checklist created.",
                href=f"/onboarding/joiners/{joiner.id}")

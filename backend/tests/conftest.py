@@ -42,6 +42,16 @@ def database():
     yield
 
 
+@pytest.fixture(autouse=True)
+def any_timesheet_day(monkeypatch):
+    """Most tests log time on fixed dates; test_timesheet_today_only switches the today-only rule back on and
+    the attendance tests switch the check-out-before-submit rule back on."""
+    from app.routers import timesheets
+
+    monkeypatch.setattr(timesheets, "TODAY_ONLY", False)
+    monkeypatch.setattr(timesheets, "ATTENDANCE_REQUIRED", False)
+
+
 @pytest.fixture(scope="session")
 def client(database) -> TestClient:
     return TestClient(app)

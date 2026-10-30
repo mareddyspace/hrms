@@ -1,9 +1,13 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router-dom";
 import { MessageCircle, UserRound } from "lucide-react";
 import { startDirectChat } from "../data/collabLocal.ts";
 import { buildDemoOrgTree, type DemoOrgNode } from "../demoAccounts.ts";
 import { usePortal } from "../store.tsx";
+import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
+import type { PersonRecord } from "../data/peopleData.ts";
+import { directReportsOf } from "../data/workforceStats.ts";
+import { formatShortDate } from "../model.ts";
 
 export function initials(name: string) {
   return name
@@ -138,10 +142,38 @@ function OrgBranch({
   );
 }
 
+/**
+ * Adds your direct reports from the directory (directReportsOf — the same list Home, Analytics and Team use)
+ * under your own card, so the chart shows your real team; joiners who haven't started are tagged "Joining soon".
+ */
+function withMyReports(roots: DemoOrgNode[], selfId: string, people: readonly PersonRecord[]): DemoOrgNode[] {
+  const find = (nodes: DemoOrgNode[]): DemoOrgNode | undefined => {
+    for (const n of nodes) {
+      if (n.id === selfId) return n;
+      const hit = find(n.children);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  const me = find(roots);
+  if (!me) return roots;
+  const { active, joiningSoon } = directReportsOf(selfId, people);
+  // A joiner already in the tree is re-added below with the "Joining soon" tag.
+  me.children = me.children.filter((c) => !joiningSoon.some((p) => p.id === c.id));
+  const toNode = (p: PersonRecord, label: string): DemoOrgNode =>
+    ({ id: p.id, fullName: p.fullName, designation: p.designation, personaLabel: label, photo: undefined, children: [] }) as unknown as DemoOrgNode;
+  for (const p of active) if (!me.children.some((c) => c.id === p.id)) me.children.push(toNode(p, p.department));
+  for (const p of joiningSoon) {
+    if (!me.children.some((c) => c.id === p.id)) me.children.push(toNode(p, `Joining soon · starts ${formatShortDate(p.dateOfJoining)}`));
+  }
+  return roots;
+}
+
 /** Top-down org chart for the 8 demo personas — shown in every role's sidebar. */
 export function OrgChart() {
   const { employee } = usePortal();
-  const roots = useMemo(() => buildDemoOrgTree(), []);
+  const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
+  const roots = useMemo(() => withMyReports(buildDemoOrgTree(), employee.id, people), [employee.id, people]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   return (

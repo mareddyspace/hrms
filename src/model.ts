@@ -1,6 +1,6 @@
 import { maskAddress as maskAddressValue, maskEmail as maskEmailValue, maskPhone } from "./utils/mask.ts";
 
-export type LeaveCode = "comp_off" | "pto" | "wfh" | "emergency_wfh" | "sick" | "casual" | "unpaid" | "bereavement";
+export type LeaveCode = "comp_off" | "pto" | "wfh" | "emergency_wfh" | "sick" | "casual" | "unpaid" | "bereavement" | "optional";
 export type RequestStatus = "pending" | "approved" | "rejected" | "withdrawn";
 
 /** Who decided a request, when, and what they said — shown to the requester. */
@@ -25,6 +25,9 @@ export interface OrgTimesheetRecord {
   projectSummary: string;
   /** Backend mode: "Step 2 of 2 · HR" while a multi-step approval is pending. */
   approvalProgress?: string;
+  /** The manager's comment when the week was approved or sent back. */
+  decisionNote?: string;
+  decidedBy?: string;
 }
 export type TaskStatus = "open" | "progress" | "done" | "scheduled";
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
@@ -197,6 +200,12 @@ export function localPolicy(policy: LeavePolicy, country: CountryCode | undefine
     quota: local.quota,
     carryForwardMax: local.carryForwardMax ?? policy.carryForwardMax,
   };
+}
+
+/** A leave type's name for the person who took it (Sophie's "pto" is "Paid time off" in the US, whoever looks at it). */
+export function leaveNameFor(policies: LeavePolicy[], code: string, employeeId: string): string | undefined {
+  const policy = policies.find((p) => p.code === code);
+  return policy ? localPolicy(policy, personCountry(employeeId)).name : undefined;
 }
 
 /** Days of a monthly-accruing quota earned by `today` in `year` (whole year for past years). */
@@ -872,6 +881,14 @@ export function formatShortDate(iso: string): string {
   });
 }
 
+/** Plain ISO days inside text ("was due 2026-10-20") shown as "20 Oct 2026"; timestamps and ids are left alone. */
+export function readableDates(text: string): string {
+  return text.replace(/(?<![\w-])\d{4}-\d{2}-\d{2}(?![\w-]|T\d)/g, (iso) => {
+    const d = parseISODate(iso);
+    return Number.isNaN(d.getTime()) ? iso : formatShortDate(iso);
+  });
+}
+
 /** Mask mobile for on-screen display ("+91 ••••• 22110"); full value stays in profile edit only. */
 export function maskMobile(mobile: string): string {
   return maskPhone(mobile) || "—";
@@ -899,7 +916,7 @@ export function formatStamp(iso: string): string {
 export function payslipLabel(month: string): string {
   const name = parseISODate(`${month}-01`).toLocaleDateString("en-US", { month: "long" });
   const year = month.slice(0, 4);
-  return `Payslip ${name}-${year}`;
+  return `Payslip ${name} ${year}`;
 }
 
 export function inr(amount: number): string {
@@ -1232,8 +1249,8 @@ export function halfDayLeave(requests: LeaveRequest[], employeeId: string, date:
   );
 }
 
-/** Most hours one person can log in a day across all projects. */
-export const MAX_DAILY_HOURS = 9;
+/** Most hours one person can log in a day across all projects (same as the API). A day needs at least 9 h to submit. */
+export const MAX_DAILY_HOURS = 24;
 
 export function validateTimesheet(
   state: PortalState,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { Card, EmptyState, Page, SubmitButton, Tabs, notify as toast, useAction } from "../components/ui.tsx";
 import { usePortal } from "../store.tsx";
 import { managementChain } from "../demoAccounts.ts";
@@ -67,6 +67,7 @@ export function MailPage() {
   const leadsOthers =
     demoProfile.role !== "employee" || allReportIds(me).length > 0 || demoAccounts.some((a) => a.reportsToId === me);
   const templates = leadsOthers ? LEAD_TEMPLATES : TEMPLATES;
+  const [picked, setPicked] = useState("");
 
   /** Reporting line above, HR, and (for managers) the people below. Not the whole company. */
   const recipients = useMemo<Recipient[]>(() => {
@@ -239,8 +240,17 @@ export function MailPage() {
           <form className="mail-compose" onSubmit={sendAction.submit(onSend)}>
             <div className="mail-templates" aria-label="Quick templates">
               {templates.map((t) => (
-                <button key={t.label} type="button" className="btn-ghost mail-chip" onClick={() => startCompose(undefined, t)}>
-                  {t.label}
+                <button
+                  key={t.label}
+                  type="button"
+                  className={picked === t.label ? "mail-chip picked" : "mail-chip"}
+                  aria-pressed={picked === t.label}
+                  onClick={() => {
+                    setPicked(t.label);
+                    startCompose(undefined, t);
+                  }}
+                >
+                  {picked === t.label ? `✓ ${t.label}` : t.label}
                 </button>
               ))}
             </div>
@@ -336,9 +346,6 @@ export function MailPage() {
                 Open in email app
               </a>
             </div>
-            <p className="note">
-              For anyone else in the company, use <Link to="/chat">Messages</Link>.
-            </p>
           </form>
         </Card>
       ) : (

@@ -5,6 +5,7 @@ import {
   addCandidate,
   canActOnRequisition,
   canRunPipeline,
+  canSubmitInterviewFeedback,
   candidateIntakeRequisitions,
   candidateHistory,
   getTalentState,
@@ -13,7 +14,6 @@ import {
   myPipelineRequisitions,
   nowStamp,
   requisitionSteps,
-  scheduleInterview,
   setCandidateStage,
   stageMovesFor,
   talentAction,
@@ -32,6 +32,7 @@ import { apiCompareCandidates, apiFeedbackSummary, type CompareOut, type Feedbac
 import { MaskedValue } from "../../components/MaskedValue.tsx";
 import { candidateRevealer } from "../../data/piiReveal.ts";
 import { maskPhone } from "../../utils/mask.ts";
+import { CandidateChain, OfferAnswerLink, OfferLetterButton, ScheduleInterview, ScorecardForm, ScorecardSummary, ScreenPanel } from "./HiringChain.tsx";
 import "./candidatePipeline.css";
 
 type Talent = ReturnType<typeof getTalentState>;
@@ -310,17 +311,17 @@ export function CandidatePipelineView({
   const nextInterview = interviews.find((i) => i.when.replace(" ", "T") >= now);
   const offer = [...talent.offers].reverse().find((o) => o.candidateId === candidate.id);
   const moves = stageMovesFor(actor, candidate, talent.offers, req);
-  const canSchedule = !!req && canRunPipeline(actor, req) && isRequisitionOpen(req) && candidate.stage === "Interview";
+  const myScorecards = interviews.filter((i) => i.feedbackStatus === "Pending" && canSubmitInterviewFeedback(actor, i));
 
   const [target, setTarget] = useState("");
   const [note, setNote] = useState("");
   const matchOn = useAiOn("cv");
-  const [iv, setIv] = useState({ when: "", panel: req?.hiringManager ?? "", type: "Interview" });
 
   const log = [...info.history].reverse();
 
   return (
     <div>
+      <CandidateChain candidate={candidate} talent={talent} />
       <CandidateStepper candidate={candidate} req={req} now={now} />
       {info.exit && (
         <p className="cp-exit">
@@ -365,7 +366,9 @@ export function CandidatePipelineView({
       )}
       {candidate.resumeNote && <p className="muted">{candidate.resumeNote}</p>}
       {API_ENABLED && <CandidateCvFile candidate={candidate} canUpload={!!req && canRunPipeline(actor, req)} onResult={onResult} />}
+      {candidate.coverNote && !(req && canRunPipeline(actor, req) && ["Applied", "Screening"].includes(candidate.stage)) && <p className="note">Cover note: {candidate.coverNote}</p>}
       {matchOn && <CandidateMatchCard candidate={candidate} req={req} />}
+      {req && <ScreenPanel candidate={candidate} req={req} actor={actor} onResult={onResult} />}
 
       <h3 className="cp-section-title">Progress</h3>
       <dl className="cp-facts">
@@ -391,45 +394,19 @@ export function CandidatePipelineView({
       {interviews.length === 0 ? (
         <p className="muted">None scheduled.</p>
       ) : (
-        <ul className="todo">
-          {interviews.map((i) => (
-            <li key={i.id}>
-              {i === nextInterview ? <strong>Next: </strong> : null}
-              {fmtDateTime(i.when)} · {i.type} · {i.panel} · {i.feedbackStatus === "Submitted" ? `Feedback ${i.score}/5` : "Feedback pending"}
-            </li>
-          ))}
-        </ul>
+        <>
+          {nextInterview && <p><strong>Next:</strong> {fmtDateTime(nextInterview.when)} · {nextInterview.type} · {nextInterview.panel}</p>}
+          <ScorecardSummary interviews={interviews} now={now} />
+        </>
       )}
-      {API_ENABLED && !!req && canActOnRequisition(actor, req) && interviews.length > 0 && <FeedbackSummaryButton candidateId={candidate.id} />}
-      {canSchedule && (
-        <div className="cp-actions">
-          <Field label="Date and time">
-            <input type="datetime-local" min={now} value={iv.when} onChange={(e) => setIv((f) => ({ ...f, when: e.target.value }))} />
-          </Field>
-          <Field label="Panel">
-            <input value={iv.panel} onChange={(e) => setIv((f) => ({ ...f, panel: e.target.value }))} placeholder="Names" />
-          </Field>
-          <Field label="Type">
-            <input value={iv.type} onChange={(e) => setIv((f) => ({ ...f, type: e.target.value }))} />
-          </Field>
-          <ActionButton
-            className="btn btn-tiny"
-            disabled={!iv.when || !iv.panel.trim()}
-            onAction={() => {
-              const input = iv;
-              return talentRun(() => scheduleInterview(actor, candidate.id, input), (error) => {
-                onResult(error, `Interview booked for ${fmtDateTime(input.when)}.`);
-                if (!error) {
-                  setIv((f) => ({ ...f, when: "" }));
-                  notify(`Interview with ${candidate.name} scheduled for ${fmtDateTime(input.when)}.`);
-                }
-              });
-            }}
-          >
-            Schedule
-          </ActionButton>
+      {myScorecards.map((i) => (
+        <div key={i.id} className="stack">
+          <h3 className="cp-section-title">Your scorecard · {i.type}, {fmtDateTime(i.when)}</h3>
+          <ScorecardForm interview={i} actor={actor} onResult={onResult} />
         </div>
-      )}
+      ))}
+      {API_ENABLED && !!req && canActOnRequisition(actor, req) && interviews.length > 0 && <FeedbackSummaryButton candidateId={candidate.id} />}
+      {req && <ScheduleInterview candidate={candidate} req={req} actor={actor} onResult={onResult} />}
 
       {offer && (
         <>
@@ -445,10 +422,15 @@ export function CandidatePipelineView({
             {offer.sentOn && <li>Sent {fmtDate(offer.sentOn)}</li>}
             {offer.respondedOn && (
               <li>
-                {offer.status === "Declined" ? "Declined" : "Accepted"} {fmtDate(offer.respondedOn)} · start {fmtDate(offer.startDate)}
+                {offer.status === "Declined" ? "Declined" : "Accepted"} {fmtDate(offer.respondedOn)}
+                {offer.respondedVia === "link" ? " by the candidate (answer link)" : ""} · start {fmtDate(offer.startDate)}
               </li>
             )}
           </ul>
+          <div className="row-gap">
+            <OfferLetterButton offer={offer} />
+          </div>
+          {req && canRunPipeline(actor, req) && <OfferAnswerLink offer={offer} />}
         </>
       )}
 
@@ -973,7 +955,7 @@ export function MyPipeline({
         <MetricCard label="Active candidates" value={active.length} />
         <MetricCard label="Overdue" value={overdue.length} hint={`Over ${STUCK_DAYS} days in a stage`} />
         <MetricCard label="Interviews this week" value={weekInterviews.length} hint={`${todayInterviews.length} today`} />
-        <MetricCard label="My actions" value={actions.length} hint={`${hires} hire${hires === 1 ? "" : "s"}`} />
+        <MetricCard label="Actions taken" value={actions.length} hint={`${hires} hire${hires === 1 ? "" : "s"}`} />
       </MetricGrid>
 
       <div>

@@ -1,0 +1,108 @@
+/* Daily timesheets: today's progress next to Submit, day status in the week view, the manager's team table. */
+.ts-today {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+.ts-today-meter { display: grid; gap: 4px; min-width: 180px; }
+.ts-today-meter strong { font-size: 14px; }
+.ts-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+  min-width: 120px;
+}
+.ts-progress > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width 0.2s; }
+.ts-progress.full > i { background: #2f9e5b; }
+.ts-why { font-size: 12px; color: var(--muted); }
+.ts-sent-back-list { display: grid; gap: 6px; margin: 0 0 12px; padding: 0; list-style: none; }
+.ts-sent-back-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid #f2c4bd;
+  border-radius: 8px;
+  background: #fdf0ee;
+}
+html[data-theme="night"] .ts-sent-back-list li { background: #3a1f1b; border-color: #5c2f28; }
+.ts-day-status { display: block; margin-top: 4px; }
+.ts-day-status .status-badge { font-size: 11px; }
+.ts-day-note { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); white-space: normal; }
+
+.ts-tabs .ts-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #d9473b;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.ts-team-table td { vertical-align: top; }
+.ts-team-table .ts-hours-cell { min-width: 120px; }
+.ts-team-table .ts-hours-cell strong { display: block; }
+.ts-proj-split { display: grid; gap: 2px; font-size: 12px; }
+.ts-proj-split span { color: var(--muted); }
+.ts-day-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ts-day-chip {
+  display: grid;
+  gap: 1px;
+  min-width: 54px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+  font-size: 11px;
+  text-align: center;
+  cursor: pointer;
+  color: inherit;
+}
+.ts-day-chip strong { font-size: 12px; }
+.ts-day-chip.submitted { border-color: #f0d48a; background: #fff4d6; }
+.ts-day-chip.approved { border-color: #b9e0c4; background: #e5f6ea; }
+.ts-day-chip.rejected { border-color: #f2c4bd; background: #fdf0ee; }
+.ts-day-chip.open { outline: 2px solid var(--accent); }
+.ts-day-chip:disabled { cursor: default; opacity: 0.6; }
+html[data-theme="night"] .ts-day-chip.submitted { background: #3a2d14; border-color: #5a4520; }
+html[data-theme="night"] .ts-day-chip.approved { background: #163526; border-color: #1f4a34; }
+html[data-theme="night"] .ts-day-chip.rejected { background: #3a1f1b; border-color: #5c2f28; }
+.ts-decide { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ts-decide input { min-width: 200px; flex: 1 1 200px; }
+.ts-entries { margin: 6px 0; }
+.ts-entries td, .ts-entries th { font-size: 12px; }
+.ts-time-pair { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 560px) {
+  .ts-time-pair { grid-template-columns: 1fr 1fr; }
+}
+.ts-fix-title { margin: 0 0 6px; font-size: 14px; }
+.ts-day-chip.reopened { border-color: #b8c7f0; background: #edf2fd; }
+html[data-theme="night"] .ts-day-chip.reopened { background: #1c2740; border-color: #2c3b60; }
+.ts-reopen { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.ts-reopen input[type="text"] { min-width: 180px; flex: 1 1 180px; }
+/* Today's check-in / check-out above the timesheet (AttendanceStrip). */
+.ts-att-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 14px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px dashed var(--line);
+  font-size: 13.5px;
+}
+.ts-att-strip.compact { padding: 6px 0; margin: 6px 0; border: 0; font-size: 13px; }
+.ts-att-strip.checked_in, .ts-att-strip.on_break { border-style: solid; }
+.ts-att-actions { display: inline-flex; align-items: center; gap: 10px; }
+.ts-att-link { font-size: 12.5px; }
+.ts-att-warn { font-size: 12px; color: var(--warn, #9a6700); }

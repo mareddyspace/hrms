@@ -27,6 +27,7 @@ import {
   type PortalState,
 } from "../../model.ts";
 import type { getTalentState } from "../../data/talentLocal.ts";
+import { dayStatusOf, waitingDays } from "../../data/timesheetDays.ts";
 
 type TalentState = ReturnType<typeof getTalentState>;
 
@@ -123,6 +124,7 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
   for (const row of state.orgTimesheets) {
     if (row.status === "submitted" && mine(row.personId)) approvals.push({ who: name(row.personId), kind: "Timesheet", detail: `${row.hours} h`, date: row.weekStart });
   }
+  for (const d of waitingDays(mine)) approvals.push({ who: name(d.personId), kind: "Timesheet", detail: `${d.hours} h (day)`, date: d.date });
   if (src.canVerifyProofs) {
     for (const p of state.investmentProofs) {
       if (p.status === "submitted" && p.employeeId !== me) approvals.push({ who: name(p.employeeId), kind: "Tax proof", detail: p.section, date: p.submittedOn });
@@ -204,7 +206,10 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
         : rows.some((t) => t.status === "draft")
           ? "draft"
           : "submitted";
-    return { weekStart, hours, status };
+    // Daily timesheets: what happened to each day of the week (approved / submitted / sent back / reopened).
+    const dates = [...new Set(rows.flatMap((t) => Object.keys(t.hours)))].sort();
+    const dayStatuses = dates.map((d) => `${d}: ${dayStatusOf(me, d) ?? "draft"}`).join(", ");
+    return { weekStart, hours, status: dayStatuses ? `${status} (days: ${dayStatuses})` : status };
   };
 
   return {

@@ -13,9 +13,11 @@ from app.models import (
     AttendanceCorrection,
     CompProposal,
     Employee,
+    ExitCase,
     LeaveRequest,
     LetterRequest,
     LifecycleAction,
+    TimesheetDay,
     TimesheetWeek,
 )
 from app.schemas import (
@@ -55,6 +57,13 @@ def _instance_summary(db: DbSession, inst: ApprovalInstance) -> str:
         return f"Pay increase of {cp.increase_pct:g}% for {name(cp.employee_id)}{step}"
     if inst.type == "lifecycle" and (la := db.get(LifecycleAction, inst.entity_id)):
         return f"{la.action_type.replace('_', ' ').capitalize()} for {name(la.employee_id)}{step}"
+    if inst.type == "exit" and (ec := db.get(ExitCase, inst.entity_id)):
+        return (f"{ec.exit_type.replace('_', ' ').capitalize()} of {name(ec.employee_id)}, "
+                f"last day {ec.requested_last_day:%d %b %Y}{step}")
+    from app.services.self_service import summary_for
+
+    if text := summary_for(db, inst):
+        return f"{text}{step}"
     return (f"{inst.type.replace('_', ' ').capitalize()} {inst.entity_id}"
             + (f", amount {inst.amount:g}" if inst.amount is not None else "") + f" (step {inst.current_step + 1})")
 
@@ -116,6 +125,19 @@ def pending(db: DbSession, user: CurrentUserDep) -> list[PendingItemOut]:
             kind="timesheet_week", type="timesheet", id=w.id, employee_id=w.employee_id, employee_name=name,
             summary=f"Timesheet for the week of {w.week_start}" + step_text(chain.TIMESHEET, w.id),
             submitted_at=w.submitted_at, href=f"/timesheets/weeks/{w.id}",
+        ))
+    # daily timesheets: same "timesheet" chain; someone with no one above them has no chain and goes to HR in scope
+    from app.services.timesheets import day_total
+
+    for d, name in db.execute(
+        select(TimesheetDay, Employee.full_name).join(Employee, Employee.id == TimesheetDay.employee_id)
+        .where(TimesheetDay.status == "submitted", area_filter(TimesheetDay.id, chain.TIMESHEET))
+    ).all():
+        items.append(PendingItemOut(
+            kind="timesheet_day", type="timesheet", id=d.id, employee_id=d.employee_id, employee_name=name,
+            summary=f"Timesheet for {d.work_date:%a %d %b %Y}, {day_total(db, d.employee_id, d.work_date):g} h"
+            + step_text(chain.TIMESHEET, d.id),
+            submitted_at=d.submitted_at, href=f"/timesheets/days/{d.id}",
         ))
     for inst in mine:
         if inst.type in chain.AREA_TYPES:

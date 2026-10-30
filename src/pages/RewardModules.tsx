@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { API_ENABLED } from "../api/client.ts";
+import { Link } from "react-router-dom";
+import { money } from "../countryPay.ts";
+import { asDetailView } from "../data/payslipGenerator.ts";
+import { PLAN_PAY_LINES } from "../data/taxRules.ts";
 import {
   apiSetDocumentExpiry,
   apiSetNominees,
@@ -137,9 +141,13 @@ export function CompensationPage() {
   const leadsPeople = demoAccountsBelow(me.id);
   const showStructures = STRUCTURE_ROLES.includes(me.role);
   const showCycles = compTeam || leadsPeople;
+  // Open on something readable: the ranges first only for people who see their amounts, else pay history first.
+  const structuresTab = showStructures ? [{ id: "structures", label: "Structures & ranges" }] : [];
+  const rangesReadable = access.ranges === "full";
   const tabs = [
-    ...(showStructures ? [{ id: "structures", label: "Structures & ranges" }] : []),
+    ...(rangesReadable ? structuresTab : []),
     { id: "history", label: compTeam ? "Compensation history" : "My pay history" },
+    ...(rangesReadable ? [] : structuresTab),
     ...(showCycles ? [{ id: "cycles", label: "Review cycles" }] : []),
     { id: "bonuses", label: compTeam ? "Bonus & incentives" : "My bonuses" },
     ...(API_ENABLED ? [{ id: "statement", label: "Total rewards" }] : []),
@@ -262,7 +270,7 @@ export function CompensationPage() {
         <Card title={compTeam ? "Compensation history" : "My pay history"}>
           <DataTable
             headers={[...(compTeam ? ["Employee"] : []), "Effective", "Event", "Grade", "Base"]}
-            rows={visibleHistory.map((row) => [...(compTeam ? [row.employeeName] : []), row.effective, row.event, row.grade, row.base])}
+            rows={visibleHistory.map((row) => [...(compTeam ? [row.employeeName] : []), /^\d{4}-\d{2}-\d{2}$/.test(row.effective) ? formatShortDate(row.effective) : row.effective, row.event, row.grade, row.base])}
             empty={<EmptyState title="No pay changes" description="Nothing recorded yet." />}
           />
         </Card>
@@ -666,7 +674,7 @@ function ChangeRequestButton({ onSend }: { onSend: (note: string) => RewardOutco
 }
 
 export function BenefitsPage() {
-  const { demoProfile, employee, demoAccounts } = usePortal();
+  const { demoProfile, employee, demoAccounts, payslipViews } = usePortal();
   const reward = useReward();
   const [tab, setTab] = useState("plans");
   const [planId, setPlanId] = useState("");
@@ -704,6 +712,20 @@ export function BenefitsPage() {
   const allPlans = benefitPlans(reward);
   const plans = allPlans.filter((p) => (canSeeOthers ? !country || p.country === country : p.country === ownCountry));
   const selectedPlan = plans.find((p) => p.id === planId) ?? plans[0];
+
+  // Plans paid through payroll (PF, 401(k), pension, super): this month's amounts from your latest payslip.
+  const latestSlip = payslipViews[0] ? asDetailView(payslipViews[0]) : null;
+  function payslipAmounts(planIdToCheck: string, planCountry: string): string | null {
+    const map = PLAN_PAY_LINES[planIdToCheck];
+    if (!map || !latestSlip || planCountry !== ownCountry) return null;
+    const pick = (lines: { name: string; amount: number }[], names: string[]) =>
+      lines.filter((l) => names.includes(l.name)).reduce((acc, l) => acc + l.amount, 0);
+    const you = pick(latestSlip.deductions, map.employee);
+    const company = pick(latestSlip.employerContributions, map.employer);
+    if (!you && !company) return null;
+    const c = latestSlip.currency;
+    return [you ? `You ${money(you, c)}` : "", company ? `company ${money(company, c)}` : ""].filter(Boolean).join(" · ") + " a month";
+  }
 
   // HR's own pending requests go to their line manager, who sees just those rows.
   const decidesFor = (employeeId: string) =>
@@ -899,12 +921,15 @@ export function BenefitsPage() {
               headers={["Plan", "Category", "Provider", "Employee cost", "Your eligibility", ""]}
               rows={plans.map((p) => [
                 <>
-                  {p.name}
+                  {p.name}{" "}
                   {p.mandatory ? <span className="reward-tag">Mandatory</span> : p.autoEnrolled ? <span className="reward-tag">Automatic</span> : null}
                 </>,
                 p.category,
                 p.provider,
-                p.employeeCost,
+                <>
+                  {p.employeeCost}
+                  {payslipAmounts(p.id, p.country) && <div className="note">{payslipAmounts(p.id, p.country)}</div>}
+                </>,
                 eligibilityCell(p.id),
                 <button key={p.id} type="button" className="quiet-link" onClick={() => setPlanId(p.id)}>
                   Details
@@ -917,6 +942,12 @@ export function BenefitsPage() {
             <Card title={selectedPlan.name}>
               <p>{selectedPlan.summary}</p>
               <p className="note">Provider: {selectedPlan.provider}</p>
+              {payslipAmounts(selectedPlan.id, selectedPlan.country) && (
+                <p className="note">
+                  On your {latestSlip?.label} payslip: {payslipAmounts(selectedPlan.id, selectedPlan.country)}.{" "}
+                  <Link to="/payslips">Payslips</Link>
+                </p>
+              )}
               {selectedPlan.mandatory ? (
                 <p className="note">Statutory. Enrollment is automatic and can't be waived.</p>
               ) : selectedPlan.autoEnrolled ? (
@@ -1292,7 +1323,7 @@ function ApiDocumentsLibrary({ actor }: { actor: { id: string; fullName: string;
                   {!sortedPeople.some((p) => p.id === actor.id) && <option value={actor.id}>{actor.fullName}</option>}
                   {sortedPeople.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.id === actor.id ? `${p.fullName} (you)` : p.fullName}
+                      {p.id === actor.id ? `${p.fullName} (you)` : `${p.fullName} · ${p.employeeCode}`}
                     </option>
                   ))}
                 </select>
@@ -1317,7 +1348,7 @@ function ApiDocumentsLibrary({ actor }: { actor: { id: string; fullName: string;
               d.category,
               `v${d.currentVersion}`,
               expiryText(d),
-              d.updatedOn,
+              d.updatedOn ? formatShortDate(d.updatedOn.slice(0, 10)) : "—",
               <span key={d.id} className="reward-actions">
                 <button type="button" className="quiet-link" onClick={() => void openDoc(d.id)}>
                   Details
@@ -1432,7 +1463,7 @@ function ApiDocumentDetail({
           v.version === doc.currentVersion ? `v${v.version} (current)` : `v${v.version}`,
           v.fileName,
           KB(v.sizeBytes),
-          `${v.on}${v.uploadedBy ? ` · ${v.uploadedBy}` : ""}`,
+          `${v.on ? formatShortDate(v.on.slice(0, 10)) : "—"}${v.uploadedBy ? ` · ${v.uploadedBy}` : ""}`,
           <button key={v.id} type="button" className="quiet-link" onClick={() => onDownload(v.version)}>
             Download
           </button>,
@@ -1709,7 +1740,7 @@ export function DocumentsLettersPage() {
                 d.employeeName,
                 d.category,
                 d.docType,
-                d.uploadedAt.slice(0, 10),
+                formatShortDate(d.uploadedAt.slice(0, 10)),
                 d.sizeLabel,
                 <button key={d.id} type="button" className="quiet-link" onClick={() => setPreviewId(d.id)}>
                   Preview

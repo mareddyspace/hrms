@@ -21,6 +21,7 @@ import {
   buildOrgTree,
   buildPositions,
   familyForDepartment,
+  inHeadcount,
   type JobProfile,
   type OrgNode,
   type PositionRecord,
@@ -304,7 +305,8 @@ export function OrganizationPage() {
   const overlay = useOrgOverlay();
   const history = useSyncExternalStore(subscribeLifecycleHistory, getLifecycleHistory, getLifecycleHistory);
   const scopedPeople = useMemo(
-    () => people.filter((p) => matchesRegion(String(p.countryCode), p.countryName)),
+    // Same headcount as HR home: people who have started (a joiner starting next week is not counted yet).
+    () => people.filter((p) => inHeadcount(p) && matchesRegion(String(p.countryCode), p.countryName)),
     [people, matchesRegion],
   );
   const treePeople = scopedPeople.length ? scopedPeople : people;
@@ -870,7 +872,7 @@ export function JobsPage() {
             <button type="button" className="btn-ghost" onClick={() => setProfileDialog({ id: null })}>
               Add job profile
             </button>
-            <button type="button" className="btn" onClick={() => setPositionDialog({ id: null })}>
+            <button type="button" className="btn-ghost" onClick={() => setPositionDialog({ id: null })}>
               Add position
             </button>
           </div>

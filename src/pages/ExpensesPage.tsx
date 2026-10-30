@@ -183,7 +183,7 @@ export function ExpensesPage() {
         </div>
         <div className="summary lilac">
           <span>Amount claimed</span>
-          <strong className="summary-text">{moneyTotals(mine.map((item) => ({ amount: item.amount, currency: itemCurrency(item) })))}</strong>
+          <strong className="summary-text">{moneyTotals(mine.map((item) => ({ amount: item.amount, currency: itemCurrency(item) })), currency)}</strong>
         </div>
       </section>
       <Banner message={message} />
@@ -376,7 +376,7 @@ export function ExpensesPage() {
                     const open = openId === expense.id;
                     return (
                       <tr key={expense.id}>
-                        <td>{expense.date}</td>
+                        <td>{formatShortDate(expense.date)}</td>
                         <td>
                           {expense.category}
                           <div className="muted" style={{ whiteSpace: "pre-line" }}>{expense.description}</div>

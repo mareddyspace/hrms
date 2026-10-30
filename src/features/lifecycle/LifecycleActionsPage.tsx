@@ -404,7 +404,7 @@ function ActionDetail({ action, onDone }: { action: LifecycleAction; onDone: (m:
         <div>
           <dt>Raised by</dt>
           <dd>
-            {action.raisedBy} · {formatShortDate(action.raisedOn)}
+            {getPerson(action.raisedById)?.fullName ?? action.raisedBy} · {formatShortDate(action.raisedOn)}
           </dd>
         </div>
         {action.appliedOn && (
@@ -613,7 +613,7 @@ export function LifecycleActionsPage() {
               <ChangeSummary key={`c-${a.id}`} action={a} />,
               formatShortDate(a.effectiveDate),
               <StatusCell key={`s-${a.id}`} action={a} />,
-              a.raisedBy,
+              getPerson(a.raisedById)?.fullName ?? a.raisedBy, // the mirror may have loaded before the people list
               <button key={`o-${a.id}`} className="btn-ghost btn-tiny" type="button" onClick={() => setOpenId(a.id)}>
                 {canDecide(actor, a) ? "Review" : "View"}
               </button>,

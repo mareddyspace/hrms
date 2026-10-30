@@ -114,7 +114,8 @@ def _snapshot(case: ExitCase) -> dict[str, Any]:
 
 
 def create_case(db: Session, emp: Employee, raiser: Employee, exit_type: str, requested_last_day: date, reason: str,
-                note: str | None, early_release: bool, actor_id: str, ip: str | None = None) -> ExitCase:
+                note: str | None, early_release: bool, actor_id: str, ip: str | None = None,
+                details: dict[str, Any] | None = None) -> ExitCase:
     if exit_type not in EXIT_TYPES:
         raise ExitError(f"Exit type must be one of: {', '.join(EXIT_TYPES)}.")
     self_raised = emp.id == raiser.id
@@ -146,6 +147,7 @@ def create_case(db: Session, emp: Employee, raiser: Employee, exit_type: str, re
         requested_last_day=requested_last_day, standard_last_day=standard, notice_days=notice,
         early_release=bool(early_release), reason=reason[:500], note=(note or "").strip()[:1000] or None,
         status="Submitted", raised_by=raiser.id, clearance=[], settlement={"status": "Pending"},
+        details={k: str(v).strip()[:2000] for k, v in (details or {}).items() if v and str(v).strip()} or None,
     )
     db.add(case)
     db.flush()
@@ -358,6 +360,28 @@ def set_settlement(db: Session, case: ExitCase, status: str, actor: Employee, ac
     record_audit(db, actor_id=actor_id, action="exit_settlement_updated", entity="exit_case", entity_id=case.id,
                  subject_id=case.employee_id, before=before, after=after, ip=ip)
     notify(db, recipient_id=case.employee_id, title=f"Final settlement: {status.lower()}", body="", href="/me/exit")
+
+
+def add_retention_note(db: Session, case: ExitCase, actor: Employee, note: str, meet_on: date | None, actor_id: str,
+                       ip: str | None) -> None:
+    """Someone above the leaver (or an approver) offers a retention conversation while the resignation waits."""
+    if case.status not in PENDING:
+        raise ExitError("A retention conversation can only be offered while the resignation is waiting.")
+    if not is_self_raised(case):
+        raise ExitError("Retention notes are for resignations.")
+    text = (note or "").strip()
+    if not text:
+        raise ExitError("Write a short note for the conversation.")
+    details = dict(case.details or {})
+    entries = list(details.get("retention") or [])
+    entries.append({"by_id": actor.id, "by": actor.full_name, "note": text[:1000], "on": today_for(actor).isoformat(),
+                    **({"meet_on": meet_on.isoformat()} if meet_on else {})})
+    details["retention"] = entries
+    case.details = details
+    record_audit(db, actor_id=actor_id, action="exit_retention_note", entity="exit_case", entity_id=case.id,
+                 subject_id=case.employee_id, after={"by": actor.id}, ip=ip)
+    notify(db, recipient_id=case.employee_id, title=f"{actor.full_name} would like to talk",
+           body=f"About your resignation{f' on {meet_on.isoformat()}' if meet_on else ''}.", href="/me/exit")
 
 
 engine.NOTICE_LABELS[TYPE] = "Exit request"

@@ -112,6 +112,8 @@ export interface PersonRecord {
   confirmationDate?: string;
   /** Last working day of an approved exit (backend mode: from the server). */
   lastWorkingDay?: string;
+  /** India tax regime the person chose (backend mode: from the server). */
+  taxRegime?: "new" | "old";
   /** Latest rehire date, when the person left and came back. */
   rehireDate?: string;
   /** Current leave of absence, while the person is on one. */
@@ -263,12 +265,12 @@ export interface PositionRecord {
 
 export const LEGAL_BY_COUNTRY: Record<string, string> = {
   IN: "TimeZ India Pvt Ltd",
-  US: "TimeZ Inc",
+  US: "TimeZ USA Inc",
   GB: "TimeZ UK Ltd",
-  AU: "TimeZ Australia Pty",
-  CA: "TimeZ Canada Inc",
-  AE: "TimeZ Middle East FZ",
-  SA: "TimeZ Saudi LLC",
+  AU: "TimeZ Australia Pty Ltd",
+  CA: "TimeZ Canada Ltd",
+  AE: "TimeZ UAE LLC",
+  SA: "TimeZ Saudi Arabia Ltd",
   DE: "TimeZ Germany GmbH",
 };
 

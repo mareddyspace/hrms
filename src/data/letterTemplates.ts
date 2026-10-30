@@ -86,6 +86,8 @@ export interface LetterFields {
   nationality: string;
   /** End of an internship or contract. */
   endDate: string;
+  /** "Add your own text": a paragraph the requester asked to include. */
+  customText: string;
 }
 
 export const FIELD_LABELS: Record<keyof LetterFields, string> = {
@@ -107,6 +109,7 @@ export const FIELD_LABELS: Record<keyof LetterFields, string> = {
   details: "Details",
   nationality: "Nationality",
   endDate: "End date",
+  customText: "Your own text",
 };
 
 const BASE_REQUIRED: (keyof LetterFields)[] = ["employeeName", "employeeCode", "title", "department", "countryName", "legalEntity", "joiningDate"];
@@ -127,6 +130,8 @@ const EXTRA_REQUIRED: Record<FullLetterType, (keyof LetterFields)[]> = {
   NOC: ["details"],
   "Visa/Travel": ["details"],
   "Address proof": ["address"],
+  "Salary certificate": ["salary"],
+  Bonafide: [],
 };
 
 /** Labels of required fields that are missing. Generation is blocked while this is non-empty. */
@@ -169,11 +174,13 @@ const TYPE_CODE: Record<FullLetterType, string> = {
   Appointment: "APT",
   Confirmation: "CNF",
   Promotion: "PRM",
-  "Salary revision": "SAL",
+  "Salary revision": "INC",
   Transfer: "TRF",
   NOC: "NOC",
   "Visa/Travel": "VIS",
   "Address proof": "ADR",
+  "Salary certificate": "SLC",
+  Bonafide: "BON",
 };
 
 export function entityFor(countryCode: string): string {
@@ -308,7 +315,7 @@ function body(type: FullLetterType, f: LetterFields): Body {
       };
     case "Salary revision":
       return {
-        title: "Salary Revision Letter",
+        title: "Increment Letter",
         toWhom: false,
         paragraphs: [
           f.previousSalary
@@ -355,6 +362,22 @@ function body(type: FullLetterType, f: LetterFields): Body {
           `As per company records, the employee's residential address is: <strong>${esc(f.address)}</strong>.`,
           noLiability,
         ],
+      };
+    case "Salary certificate":
+      return {
+        title: "Salary Certificate",
+        toWhom: true,
+        paragraphs: [
+          `This is to certify that ${name} is employed with ${entity} as ${role} since ${d(f.joiningDate)}.`,
+          `Their current annual base salary is <strong>${esc(f.salary)}</strong>, paid monthly, before statutory deductions.`,
+          noLiability,
+        ],
+      };
+    case "Bonafide":
+      return {
+        title: "Bonafide Certificate",
+        toWhom: true,
+        paragraphs: [`This is to certify that ${name} is a bonafide employee of ${entity}, working as ${role} since ${d(f.joiningDate)}.`, noLiability],
       };
     case "Internship":
       return {
@@ -405,6 +428,42 @@ function body(type: FullLetterType, f: LetterFields): Body {
   }
 }
 
+/** Puts the requester's own paragraph before the closing "issued at the employee's request" line. */
+export function withOwnParagraph(paragraphs: string[], own: string | undefined): string[] {
+  const text = (own ?? "").trim();
+  if (!text) return paragraphs;
+  const last = paragraphs[paragraphs.length - 1] ?? "";
+  const at = paragraphs.length > 1 && last.includes("request") ? paragraphs.length - 1 : paragraphs.length;
+  return [...paragraphs.slice(0, at), text, ...paragraphs.slice(at)];
+}
+
+/**
+ * Words "Add your own text" as a plain letter sentence when no AI is available:
+ * drops "mention / please add…", turns first person into third person, capitalises and ends with a full stop.
+ */
+export function plainOwnParagraph(text: string, employeeName: string): string {
+  let t = text.trim().replace(/\s+/g, " ");
+  if (!t) return "";
+  t = t.replace(/^(please\s+)?(mention|add|include|state|say|write|note)\s+(that\s+)?/i, "");
+  const swaps: [RegExp, string][] = [
+    [/\bI'm\b|\bI am\b/gi, "the employee is"],
+    [/\bI've\b|\bI have\b/gi, "the employee has"],
+    [/\bI'll\b|\bI will\b/gi, "the employee will"],
+    [/\bI'd\b/gi, "the employee would"],
+    [/\bI\b/g, "the employee"],
+    [/\bmy\b/gi, "their"],
+    [/\bme\b/gi, "them"],
+    [/\bmine\b/gi, "theirs"],
+    [/\bmyself\b/gi, "themselves"],
+  ];
+  for (const [re, to] of swaps) t = t.replace(re, to);
+  // The first mention reads better with the name.
+  if (employeeName) t = t.replace(/^the employee\b/i, employeeName);
+  t = t.charAt(0).toUpperCase() + t.slice(1);
+  if (!/[.!?]$/.test(t)) t += ".";
+  return t.slice(0, 1200);
+}
+
 export interface LetterRenderMeta {
   type: FullLetterType;
   /** ISO date printed on the letter. */
@@ -425,22 +484,81 @@ export function renderLetterBody(fields: LetterFields, meta: LetterRenderMeta): 
     ? `Approved by ${esc(meta.approval.by)} on ${esc(letterDate(meta.approval.on, c))}`
     : "Pending approval";
   const footer = meta.docId ? `Document ${esc(meta.docId)} · version ${meta.version ?? 1}` : "Draft preview — not valid until approved";
-  return `<header class="lh">
-  <div class="lh-name">${entity}</div>
-  <div class="lh-addr">${esc(ENTITY_ADDRESS[c] ?? ENTITY_ADDRESS.IN)}</div>
-</header>
-<div class="meta"><span>Ref: ${esc(meta.referenceNo)}</span><span>${esc(letterDate(meta.date, c))}</span></div>
-<h1>${esc(b.title)}</h1>
-<p class="salute">${b.toWhom ? "To whom it may concern," : `Dear ${esc(fields.employeeName)},`}</p>
-${b.paragraphs.map((p) => `<p>${p}</p>`).join("\n")}
-<div class="sign">
-  <p>For ${entity}</p>
-  <div class="sign-line"></div>
-  <p><strong>Authorised Signatory</strong><br>Human Resources</p>
-  <p class="approval">${approval}</p>
-</div>
-<footer class="foot">${footer}</footer>`;
+  const paragraphs = withOwnParagraph(b.paragraphs, fields.customText ? esc(fields.customText) : "");
+  return letterShell({
+    entity,
+    address: esc(ENTITY_ADDRESS[c] ?? ENTITY_ADDRESS.IN),
+    referenceNo: esc(meta.referenceNo),
+    date: esc(letterDate(meta.date, c)),
+    title: esc(b.title),
+    addressee: b.toWhom ? "" : `${esc(fields.employeeName)}<br>${esc(fields.title)}, ${esc(fields.department)}<br>Employee ID ${esc(fields.employeeCode)}`,
+    salute: b.toWhom ? "To whom it may concern," : `Dear ${esc(fields.employeeName)},`,
+    paragraphs,
+    approval,
+    footer,
+  });
 }
+
+/** The letter layout: TimeZ letterhead, ref and date, addressee, title, body, signatory. All parts are trusted markup. */
+export function letterShell(p: {
+  entity: string;
+  address: string;
+  referenceNo: string;
+  date: string;
+  title: string;
+  addressee: string;
+  salute: string;
+  paragraphs: string[];
+  approval: string;
+  footer: string;
+}): string {
+  return `<header class="lh">
+  <div class="lh-name">TimeZ</div>
+  <div class="lh-addr">${p.entity} · ${p.address}</div>
+</header>
+<div class="meta"><span>Ref: ${p.referenceNo}</span><span>${p.date}</span></div>
+${p.addressee ? `<p class="to">${p.addressee}</p>` : ""}
+<h1>${p.title}</h1>
+<p class="salute">${p.salute}</p>
+${p.paragraphs.map((x) => `<p>${x}</p>`).join("\n")}
+<div class="sign">
+  <p>For ${p.entity}</p>
+  <div class="sign-line"></div>
+  <p><strong>Authorised Signatory</strong><br>Human Resources, TimeZ</p>
+  <p class="approval">${p.approval}</p>
+</div>
+<footer class="foot">${p.footer}</footer>`;
+}
+
+/** Backend preview: server paragraphs carry escaped values and <b> markup only; anything else is escaped. */
+export function serverParagraph(p: string): string {
+  return p.replace(/<(?!\/?b>|br\s*\/?>)/gi, "&lt;").replace(/<(\/?)b>/gi, "<$1strong>");
+}
+
+/** A full letter from the server's preview (fields + paragraphs), in the same layout as the PDF. */
+export function serverLetterBody(
+  preview: { title: string; paragraphs: string[]; fields: Record<string, string>; letter_type: string },
+  meta: { referenceNo: string; date: string; approval: string; footer: string; ownText?: string },
+): string {
+  const f = preview.fields;
+  const c = f.country_code ?? "";
+  const toWhom = TO_WHOM_TYPES.has(preview.letter_type);
+  return letterShell({
+    entity: esc(f.legal_entity ?? ""),
+    address: esc(ENTITY_ADDRESS[c] ?? ENTITY_ADDRESS.IN),
+    referenceNo: esc(meta.referenceNo),
+    date: esc(letterDate(meta.date, c)),
+    title: esc(preview.title),
+    addressee: toWhom ? "" : `${esc(f.employee_name ?? "")}<br>${esc(f.title ?? "")}, ${esc(f.department ?? "")}<br>Employee ID ${esc(f.employee_code ?? "")}`,
+    salute: toWhom ? "To whom it may concern," : `Dear ${esc(f.employee_name ?? "")},`,
+    paragraphs: withOwnParagraph(preview.paragraphs.map(serverParagraph), meta.ownText ? esc(meta.ownText) : ""),
+    approval: esc(meta.approval),
+    footer: esc(meta.footer),
+  });
+}
+
+/** Letters addressed "To whom it may concern" (the rest are addressed to the employee). */
+const TO_WHOM_TYPES = new Set(["Employment", "Experience", "NOC", "Visa/Travel", "Address proof", "Internship", "Salary certificate", "Bonafide"]);
 
 const PRINT_CSS = `
 @page { size: A4; margin: 18mm 18mm 20mm; }
@@ -455,6 +573,7 @@ body { font: 11pt/1.55 Georgia, "Times New Roman", serif; }
 h1 { font: 700 14pt Arial, Helvetica, sans-serif; text-align: center; text-transform: uppercase; letter-spacing: .06em; margin: 6px 0 18px; }
 p { margin: 0 0 10px; }
 .salute { margin-bottom: 12px; }
+.to { margin: 0 0 14px; font-size: 10.5pt; }
 .sign { margin-top: 28px; }
 .sign-line { width: 55mm; border-bottom: 1px solid #333; height: 14mm; margin-bottom: 4px; }
 .approval { font: 9pt Arial, Helvetica, sans-serif; color: #1d3d6e; margin-top: 6px; }
@@ -487,4 +606,34 @@ ${bodyHtml}
 export function letterFileName(type: FullLetterType, employeeCode: string, version?: number): string {
   const label = letterInfo(type).label.replace(/[^A-Za-z0-9]+/g, "-");
   return `${label}-${employeeCode || "employee"}${version ? `-v${version}` : "-DRAFT"}`;
+}
+
+/* ───────────── Offer letter for a candidate (hiring chain) ───────────── */
+
+/** The Offer template filled for a candidate: title and paragraphs (trusted markup, values escaped). */
+export function offerLetterContent(fields: LetterFields): { title: string; paragraphs: string[] } {
+  const b = body("Offer", fields);
+  return { title: b.title, paragraphs: withOwnParagraph(b.paragraphs, fields.customText ? esc(fields.customText) : "") };
+}
+
+/**
+ * The candidate's offer letter in the letter layout. `paragraphs` come from offerLetterContent or from the server
+ * (escaped values with <b> markup only).
+ */
+export function offerLetterHtml(letter: { title: string; paragraphs: string[]; date: string; fields: Record<string, string> }, fromServer: boolean): string {
+  const f = letter.fields;
+  const c = f.country_code ?? f.countryCode ?? "";
+  const name = f.employee_name ?? f.employeeName ?? "";
+  return letterShell({
+    entity: esc(f.legal_entity ?? f.legalEntity ?? ""),
+    address: esc(ENTITY_ADDRESS[c] ?? ENTITY_ADDRESS.IN),
+    referenceNo: "Offer",
+    date: esc(letterDate(letter.date, c)),
+    title: esc(letter.title),
+    addressee: `${esc(name)}<br>${esc(f.title ?? "")}, ${esc(f.department ?? "")}`,
+    salute: `Dear ${esc(name)},`,
+    paragraphs: fromServer ? letter.paragraphs.map(serverParagraph) : letter.paragraphs,
+    approval: "Approved by the hiring manager and HR",
+    footer: "Accept or decline using the link you received.",
+  });
 }

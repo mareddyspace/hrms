@@ -10,10 +10,12 @@ import {
   StatusBadge,
   Tabs,
 } from "../components/ui.tsx";
-import { allReportIds, directReportIds, getPerson, listPeople, managerChainIds, subscribePeople } from "../data/peopleLocal.ts";
+import { getPerson, listPeople, managerChainIds, subscribePeople } from "../data/peopleLocal.ts";
+import { directReportsOf, teamBelow } from "../data/workforceStats.ts";
 import { managementChain } from "../demoAccounts.ts";
-import { parseISODate, plural, todayISO } from "../model.ts";
+import { formatShortDate, leaveNameFor, parseISODate, plural, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { canDecideTravel, useTravelRequests } from "../data/travelStore.ts";
 
 export {
   AdminPage,
@@ -42,26 +44,46 @@ function approverOf(employeeId: string): string | undefined {
 }
 
 export function MyTeamPage() {
-  const { employee, state } = usePortal();
+  const { employee, state, canDecideFor } = usePortal();
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
   const [view, setView] = useState("direct");
-  const { direct, everyone } = useMemo(() => {
-    const directIds = new Set(directReportIds(employee.id));
-    const all = allReportIds(employee.id);
+  // Same sources as Home and Analytics: direct reports from the directory, the whole team from teamBelow.
+  const { direct, everyone, joiningSoon } = useMemo(() => {
     const byId = new Map(people.map((p) => [p.id, p]));
-    const rows = all.map((id) => byId.get(id)).filter((p): p is NonNullable<typeof p> => Boolean(p));
-    return { direct: rows.filter((p) => directIds.has(p.id)), everyone: rows };
-  }, [employee.id, people]);
+    const mine = directReportsOf(employee.id, people);
+    const rows = teamBelow(employee.id, people, canDecideFor)
+      .map((m) => byId.get(m.id))
+      .filter((p): p is NonNullable<typeof p> => Boolean(p))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName));
+    return { direct: mine.active, everyone: rows, joiningSoon: mine.joiningSoon };
+  }, [employee.id, people, canDecideFor]);
 
   const teamIds = useMemo(() => new Set(everyone.map((p) => p.id)), [everyone]);
   const pendingLeave = state.leaveRequests.filter((l) => l.status === "pending" && teamIds.has(l.employeeId)).length;
   const openTasks = state.tasks.filter((t) => (t.status === "open" || t.status === "progress") && teamIds.has(t.employeeId)).length;
   const onLeave = everyone.filter((p) => p.availability === "On Leave" || p.employmentStatus === "On Leave").length;
 
+  const joiningCard =
+    joiningSoon.length > 0 ? (
+      <Card title={`Joining soon · ${joiningSoon.length}`}>
+        <DataTable
+          headers={["Name", "Title", "Department", "Starts"]}
+          rows={joiningSoon.map((person) => [
+            <Link key={person.id} to={`/people/${person.id}`}>{person.fullName}</Link>,
+            person.designation,
+            person.department,
+            formatShortDate(person.dateOfJoining),
+          ])}
+        />
+        <p className="muted">Joiners count in your team from their start date.</p>
+      </Card>
+    ) : null;
+
   if (everyone.length === 0) {
     return (
       <Page title="Team overview">
-        <EmptyState title="No team" description="No one reports to you." />
+        <EmptyState title="No team" description={joiningSoon.length ? "No one reports to you yet." : "No one reports to you."} />
+        {joiningCard}
       </Page>
     );
   }
@@ -99,6 +121,7 @@ export function MyTeamPage() {
         />
         {rows.length > 200 && <p className="muted">Showing 200 of {rows.length}.</p>}
       </Card>
+      {joiningCard}
     </Page>
   );
 }
@@ -109,30 +132,40 @@ type TrackedRequest = {
   employeeId: string;
   detail: string;
   submittedOn: string;
+  /** Stepped requests (expense, travel): whether the current step is the viewer's, as on the Approvals page. */
+  mineToDecide?: boolean;
 };
 
 /** Read-only tracker of open requests: your own, and the ones waiting for your decision. */
 export function WorkflowsPage() {
-  const { employee, state, canDecideFor } = usePortal();
+  const { employee, state, canDecideFor, canDecideExpense } = usePortal();
   const [view, setView] = useState("mine-to-decide");
+  const travel = useTravelRequests();
   const today = todayISO();
+  const leaveName = (code: string, employeeId: string) => leaveNameFor(state.leavePolicies, code, employeeId) ?? code;
 
   const open: TrackedRequest[] = [
     ...state.leaveRequests
       .filter((r) => r.status === "pending")
-      .map((r) => ({ id: r.id, type: "Leave", employeeId: r.employeeId, detail: `${r.code} · ${r.from}${r.to !== r.from ? ` to ${r.to}` : ""}`, submittedOn: r.appliedOn })),
+      .map((r) => ({ id: r.id, type: "Leave", employeeId: r.employeeId, detail: `${leaveName(r.code, r.employeeId)} · ${formatShortDate(r.from)}${r.to !== r.from ? ` to ${formatShortDate(r.to)}` : ""}`, submittedOn: r.appliedOn })),
     ...state.expenses
       .filter((r) => r.status === "submitted")
-      .map((r) => ({ id: r.id, type: "Expense", employeeId: r.employeeId, detail: `${r.category} · ${r.description}`, submittedOn: r.date })),
+      .map((r) => ({ id: r.id, type: "Expense", employeeId: r.employeeId, detail: `${r.category} · ${r.description}`, submittedOn: r.submittedOn ?? r.date, mineToDecide: canDecideExpense(r) })),
+    ...travel
+      .filter((r) => r.status === "pending")
+      .map((r) => ({ id: r.id, type: "Travel", employeeId: r.employeeId, detail: `${r.fromCity} → ${r.toCity} · ${r.purpose}`, submittedOn: r.submittedOn, mineToDecide: canDecideTravel(r, employee.id, (id) => canDecideFor(id, "expenses")) })),
+    ...state.reimbursements
+      .filter((r) => r.status === "submitted")
+      .map((r) => ({ id: r.id, type: "Reimbursement", employeeId: r.employeeId, detail: `${r.category} · ${r.description}`, submittedOn: r.date })),
     ...state.encashments
       .filter((r) => r.status === "pending")
-      .map((r) => ({ id: r.id, type: "Leave encashment", employeeId: r.employeeId, detail: `${plural(r.days, "day")} of ${r.code}`, submittedOn: r.appliedOn })),
+      .map((r) => ({ id: r.id, type: "Leave encashment", employeeId: r.employeeId, detail: `${plural(r.days, "day")} of ${leaveName(r.code, r.employeeId)}`, submittedOn: r.appliedOn })),
     ...state.backdatedPermissions
       .filter((r) => r.status === "pending")
-      .map((r) => ({ id: r.id, type: "Past-dated leave", employeeId: r.employeeId, detail: `${r.code} · ${r.from}`, submittedOn: r.requestedOn })),
+      .map((r) => ({ id: r.id, type: "Past-dated leave", employeeId: r.employeeId, detail: `${leaveName(r.code, r.employeeId)} · ${formatShortDate(r.from)}`, submittedOn: r.requestedOn })),
   ];
 
-  const toDecide = open.filter((r) => r.employeeId !== employee.id && canDecideFor(r.employeeId));
+  const toDecide = open.filter((r) => r.employeeId !== employee.id && (r.mineToDecide ?? canDecideFor(r.employeeId)));
   const mine = open.filter((r) => r.employeeId === employee.id);
   const rows = (view === "mine-to-decide" ? toDecide : mine)
     .map((r) => ({ ...r, age: ageInDays(r.submittedOn, today), approverId: approverOf(r.employeeId) }))
@@ -161,7 +194,7 @@ export function WorkflowsPage() {
           nameOf(r.employeeId),
           r.detail,
           r.approverId ? nameOf(r.approverId) : "No approver needed",
-          `${r.age} day${r.age === 1 ? "" : "s"}`,
+          r.age === 0 ? "Today" : `${r.age} day${r.age === 1 ? "" : "s"}`,
           r.age > 3 ? <StatusBadge key={r.id} status="Overdue" tone="danger" literal /> : "",
         ])}
         empty={<EmptyState title="Nothing open" description={view === "mine" ? "You have no open requests." : "Nothing is waiting for you."} />}

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { parseISODate, todayISO } from "../model.ts";
+import { formatShortDate, parseISODate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { pushManagerTaskAlert, pushPersonTaskAlert } from "./collabLocal.ts";
 import { isTaskAutoMode, readSentReminders, writeSentReminders } from "./taskAutoMode.ts";
@@ -33,13 +33,13 @@ export function useTaskAutoReminders() {
           pushPersonTaskAlert({
             recipientId: task.employeeId,
             title: `Overdue · ${task.code}`,
-            body: `“${task.subject}” was due ${task.due}.`,
+            body: `“${task.subject}” was due ${formatShortDate(task.due)}.`,
           }),
         );
         alerts.push(() =>
           pushManagerTaskAlert({
             title: `Overdue · ${task.code}`,
-            body: `${task.owner}'s task “${task.subject}” was due ${task.due}.`,
+            body: `${task.owner}'s task “${task.subject}” was due ${formatShortDate(task.due)}.`,
             employeeId: task.employeeId,
           }),
         );

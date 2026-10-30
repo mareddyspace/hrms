@@ -9,6 +9,7 @@ import { leaveRows, todayISO, type CountryCode, type PortalState } from "../mode
 import { finalSettlementFor, type FinalSettlementSummary } from "./payslipGenerator.ts";
 import { getPerson } from "./peopleLocal.ts";
 import { getTaxRegime } from "./taxRegime.ts";
+import { payslipAnnualBase } from "./annualPay.ts";
 
 /** Unused privilege leave: from the server in backend mode, else the browser's leave records. */
 export function unusedLeaveFor(row: ExitCase, state?: Pick<PortalState, "leavePolicies" | "leaveRequests" | "encashments" | "holidays">): number {
@@ -36,6 +37,7 @@ export function finalSettlementForCase(
     location: person?.location ?? demo?.location,
     nationality: person?.nationality,
     employmentStatus: person?.employmentStatus,
+    annualBase: payslipAnnualBase(row.employeeId, (person?.countryCode ?? demo?.countryCode ?? "IN") as CountryCode),
     regime: getTaxRegime(row.employeeId),
     investmentProofs: state?.investmentProofs,
     timesheets: state?.timesheets,

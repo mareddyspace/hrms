@@ -60,6 +60,19 @@ class Holiday(TimestampMixin, Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
 
 
+class OptionalHoliday(TimestampMixin, Base):
+    """Optional (restricted) holiday people can pick, booked as leave type "optional" (migration 0017)."""
+
+    __tablename__ = "optional_holidays"
+    __table_args__ = (UniqueConstraint("country_code", "date", name="uq_optional_holiday_country_date"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    country_code: Mapped[str] = mapped_column(ForeignKey("countries.code"), index=True)
+    date: Mapped[dt.date] = mapped_column(Date)
+    name: Mapped[str] = mapped_column(String(200))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+
+
 class LeaveRequest(TimestampMixin, Base):
     __tablename__ = "leave_requests"
     __table_args__ = (Index("ix_leave_employee_from", "employee_id", "from_date"),)

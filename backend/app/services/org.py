@@ -15,7 +15,7 @@ from collections import Counter, defaultdict
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Employee, JobFamily, JobProfile, OrgUnit, Position
+from app.models import Employee, EmployeeAssignment, JobFamily, JobProfile, OrgUnit, Position
 
 COMPANY_CODE = "TIMEZ"
 COMPANY_NAME = "TimeZ"
@@ -51,7 +51,50 @@ def _most_common(values: list) -> object:
     return Counter(v for v in values if v).most_common(1)[0][0] if any(values) else None
 
 
+# Two names were used for the same job family (sign-in people vs the HCM sample): one family each.
+FAMILY_ALIASES = {"Information Technology": "IT", "People": "Human Resources"}
+
+
+# Older seeds named the US legal entity "TimeZ Inc" while the HCM data uses "TimeZ USA Inc": one name everywhere.
+ENTITY_ALIASES = {"TimeZ Inc": "TimeZ USA Inc"}
+
+
+def _merge_entity_aliases(db: Session) -> None:
+    for alias, main in ENTITY_ALIASES.items():
+        for emp in db.scalars(select(Employee).where(Employee.legal_entity == alias)):
+            emp.legal_entity = main
+        for row in db.scalars(select(EmployeeAssignment).where(EmployeeAssignment.legal_entity == alias)):
+            row.legal_entity = main
+        old = db.scalar(select(OrgUnit).where(OrgUnit.type == "legal_entity", OrgUnit.name == alias))
+        new = db.scalar(select(OrgUnit).where(OrgUnit.type == "legal_entity", OrgUnit.name == main))
+        if old is not None and new is not None:
+            for child in db.scalars(select(OrgUnit).where(OrgUnit.parent_id == old.id)):
+                child.parent_id = new.id
+            old.active = False
+    db.flush()
+
+
+def _merge_family_aliases(db: Session) -> None:
+    """Moves people and job profiles from an alias family (e.g. "People") to its main one and removes the alias."""
+    for alias, main in FAMILY_ALIASES.items():
+        for emp in db.scalars(select(Employee).where(Employee.job_family == alias)):
+            emp.job_family = main
+        dup = db.scalar(select(JobFamily).where(JobFamily.name == alias))
+        if dup is None:
+            continue
+        keep = db.scalar(select(JobFamily).where(JobFamily.name == main))
+        if keep is None:
+            dup.name, dup.code = main, "JF-" + slug(main)
+            continue
+        for profile in db.scalars(select(JobProfile).where(JobProfile.family_id == dup.id)):
+            profile.family_id = keep.id
+        db.flush()
+        db.delete(dup)
+    db.flush()
+
+
 def seed_org_from_employees(db: Session) -> dict[str, int]:
+    _merge_entity_aliases(db)
     existing_units = {u.code: u for u in db.scalars(select(OrgUnit))}
     added = Counter()
 
@@ -101,9 +144,10 @@ def seed_org_from_employees(db: Session) -> dict[str, int]:
     for loc, ents in sorted(location_entity.items()):
         unit("location", loc, entities.get(_most_common(ents)), _most_common(location_country[loc]))
 
+    _merge_family_aliases(db)
     families = {f.name: f for f in db.scalars(select(JobFamily))}
     family_codes = {f.code for f in families.values()}
-    for name in sorted({p.job_family or p.department for p in people}):
+    for name in sorted({FAMILY_ALIASES.get(p.job_family or p.department, p.job_family or p.department) for p in people}):
         code = "JF-" + slug(name)
         if name not in families and code not in family_codes:
             families[name] = JobFamily(id="jf-" + code[3:].lower(), code=code, name=name, active=True)
@@ -120,7 +164,7 @@ def seed_org_from_employees(db: Session) -> dict[str, int]:
         code = "JP-" + slug(title)
         if code in profile_codes:
             continue
-        family = families.get(_most_common([h.job_family or h.department for h in holders]))  # type: ignore[arg-type]
+        family = families.get(FAMILY_ALIASES.get(fam, fam) if (fam := _most_common([h.job_family or h.department for h in holders])) else None)  # type: ignore[arg-type]
         db.add(JobProfile(id="jp-" + code[3:].lower(), code=code, title=title, family_id=family.id if family else None,
                           grade=_most_common([h.grade for h in holders]), description=None,  # type: ignore[arg-type]
                           required_skills=[], preferred_skills=[], active=True))

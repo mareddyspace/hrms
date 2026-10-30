@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -49,7 +50,28 @@ def record_audit(
     return entry
 
 
+_ISO_DAY = re.compile(r"(?<![\w-])(\d{4})-(\d{2})-(\d{2})(?![\w-]|T\d)")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def short_date(value: date | str) -> str:
+    """"2026-10-20" (or a date) → "20 Oct 2026", the way the portal shows dates."""
+    d = value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+    return f"{d.day:02d} {_MONTHS[d.month - 1]} {d.year}"
+
+
+def readable_dates(text: str) -> str:
+    """Rewrites plain ISO days in user-facing text ("was due 2026-10-20" → "was due 20 Oct 2026")."""
+    def repl(m: re.Match[str]) -> str:
+        try:
+            return short_date(m.group(0))
+        except ValueError:
+            return m.group(0)
+    return _ISO_DAY.sub(repl, text) if text else text
+
+
 def notify(db: Session, *, recipient_id: str, title: str, body: str = "", href: str | None = None) -> Notification:
-    note = Notification(recipient_id=recipient_id, title=title, body=body, href=href)
+    # Notification text is read by people: dates are shown as "20 Oct 2026", not ISO.
+    note = Notification(recipient_id=recipient_id, title=readable_dates(title), body=readable_dates(body), href=href)
     db.add(note)
     return note

@@ -3,7 +3,7 @@ from app.models.approvals import ApprovalDecision, ApprovalInstance, WorkflowDef
 from app.models.attendance import AttendanceCorrection, AttendanceSession
 from app.models.leave import Holiday, LeavePolicy, LeaveRequest, LeaveType
 from app.models.people import AccessScope, Account, Country, Employee, EmployeeAssignment, RefreshToken
-from app.models.timesheets import Project, ProjectMember, TimesheetEntry, TimesheetWeek
+from app.models.timesheets import Project, ProjectMember, TimesheetDay, TimesheetEntry, TimesheetWeek
 
 __all__ = [
     "AccessScope",
@@ -24,6 +24,7 @@ __all__ = [
     "Project",
     "ProjectMember",
     "RefreshToken",
+    "TimesheetDay",
     "TimesheetEntry",
     "TimesheetWeek",
     "WorkflowDefinition",
@@ -38,14 +39,14 @@ from app.models.org import JobFamily, JobProfile, OrgUnit, Position  # noqa: E40
 __all__ += ["ExpenseClaim", "ExpenseReceipt", "JobFamily", "JobProfile", "LifecycleAction", "OrgUnit", "Position", "TravelRequest"]
 
 # Recruiting, onboarding, performance, learning (migration 0004)
-from app.models.recruiting import Candidate, CandidateStage, Interview, Offer, Requisition  # noqa: E402
+from app.models.recruiting import Candidate, CandidateStage, Interview, JobPosting, Offer, Requisition  # noqa: E402
 from app.models.onboarding import Joiner, OnboardingTask, OnboardingTemplateTask  # noqa: E402
 from app.models.performance import CheckIn, DevAction, Goal, PerfReview, Reviewer360, ReviewCycle  # noqa: E402
 from app.models.learning import Certification, Course, EmployeeSkill, Enrollment  # noqa: E402
 
 __all__ += [
     "Candidate", "CandidateStage", "Certification", "CheckIn", "Course", "DevAction", "EmployeeSkill", "Enrollment",
-    "Goal", "Interview", "Joiner", "Offer", "OnboardingTask", "OnboardingTemplateTask", "PerfReview", "Requisition",
+    "Goal", "Interview", "JobPosting", "Joiner", "Offer", "OnboardingTask", "OnboardingTemplateTask", "PerfReview", "Requisition",
     "Reviewer360", "ReviewCycle",
 ]
 
@@ -101,6 +102,8 @@ __all__ += ["ProfileCorrection"]
 
 # Leave rules: year-end carry-forward (migration 0011)
 from app.models.leave import LeaveCarryForward  # noqa: E402
+from app.models.leave import OptionalHoliday  # noqa: E402
+__all__ += ["OptionalHoliday"]
 
 __all__ += ["LeaveCarryForward"]
 
@@ -113,3 +116,18 @@ __all__ += ["ApprovalDelegation"]
 from app.models.exits import ExitCase  # noqa: E402
 
 __all__ += ["ExitCase"]
+
+# Cash advances, leave encashment, software catalogue and licences (migration 0015)
+from app.models.self_service import CashAdvance, EncashmentRequest, SoftwareRequest, SoftwareTitle  # noqa: E402
+
+__all__ += ["CashAdvance", "EncashmentRequest", "SoftwareRequest", "SoftwareTitle"]
+
+# Policies HR writes and publishes, with versions (migration 0018)
+from app.models.policies import HrPolicy, HrPolicyVersion  # noqa: E402
+
+__all__ += ["HrPolicy", "HrPolicyVersion"]
+
+# Work tickets shared between people: owner, sub-owner, deadline, tasks, activity (migration 0020)
+from app.models.tickets import Ticket, TicketEvent, TicketTask  # noqa: E402
+
+__all__ += ["Ticket", "TicketEvent", "TicketTask"]

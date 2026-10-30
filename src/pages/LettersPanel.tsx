@@ -6,7 +6,9 @@ import {
   apiDecideLetter,
   apiIssueLetter,
   apiRequestLetter,
+  apiWordLetterText,
   downloadLetterPdf,
+  fetchDraftLetterPreview,
   fetchLetterPreview,
   type LetterPreviewOut,
 } from "../api/syncRewards.ts";
@@ -35,6 +37,8 @@ import {
   letterFileName,
   letterInfo,
   missingFields,
+  plainOwnParagraph,
+  serverLetterBody,
   type FullLetterType,
 } from "../data/letterTemplates.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
@@ -149,9 +153,13 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
   const [note, setNote] = useState("");
   const [details, setDetails] = useState("");
   const [effectiveDate, setEffectiveDate] = useState("");
+  const [ownText, setOwnText] = useState("");
   const [msg, setMsg] = useState<Msg>(null);
+  /** The preview dialog: the wording of "Add your own text" (editable) and, in backend mode, the server's draft. */
+  const [draft, setDraft] = useState<{ wording: string; usedAi: boolean; server: LetterPreviewOut | null; error: string | null } | null>(null);
 
   const subjectId = hr ? employeeId : actor.id;
+  const subjectName = people.find((p) => p.id === subjectId)?.fullName ?? actor.fullName;
   const template = letterInfo(type);
   const blocked = canRequestType(actor, type, subjectId);
   const missing = useMemo(() => {
@@ -182,13 +190,71 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
   }
 
   const requestAction = useAction();
+  const previewAction = useAction();
 
-  async function submitRequest() {
+  /** Words the own text (AI when the server has it, else plainly) and opens the preview. */
+  async function openPreview() {
+    if (blocked) return blocked;
+    if (template.detailsLabel && !details.trim()) return `Enter ${template.detailsLabel.toLowerCase()}.`;
+    const own = ownText.trim();
+    let wording = "";
+    let usedAi = false;
+    if (own) {
+      const ai = API_ENABLED ? await apiWordLetterText(type, subjectId, own) : null;
+      usedAi = !!ai;
+      wording = ai ?? plainOwnParagraph(own, subjectName);
+    }
+    let server: LetterPreviewOut | null = null;
+    let error: string | null = null;
     if (API_ENABLED) {
-      const error = await runRewardApi(apiRequestLetter({ employeeId: subjectId, type, note, details, effectiveDate }), ["letters"]);
+      const out = await fetchDraftLetterPreview({ employeeId: subjectId, type, note, details, effectiveDate });
+      server = out.data;
+      error = out.error;
+      if (!server) return error ?? "Preview not available.";
+    }
+    setDraft({ wording, usedAi, server, error });
+    return null;
+  }
+
+  const draftHtml = useMemo(() => {
+    if (!draft) return "";
+    if (draft.server) {
+      return letterDocumentHtml(
+        serverLetterBody(draft.server, {
+          referenceNo: "DRAFT",
+          date: todayISO(),
+          approval: "Pending approval",
+          footer: "Draft preview — not valid until approved",
+          ownText: draft.wording,
+        }),
+        { title: `${template.label} (draft)`, draft: true },
+      );
+    }
+    const row = {
+      id: "draft",
+      employeeId: subjectId,
+      employeeName: subjectName,
+      type: type as LetterType,
+      status: "Draft",
+      requestedBy: actor.fullName,
+      requestedOn: todayISO(),
+      note,
+      previewBody: "",
+      details,
+      effectiveDate,
+      customText: draft.wording,
+    } satisfies LetterRequest;
+    return previewLetter(row, reward.history).html;
+  }, [draft, subjectId, subjectName, type, actor.fullName, note, details, effectiveDate, reward.history, template.label]);
+  const draftMissing = draft?.server ? draft.server.missing : draft ? missing : [];
+
+  async function submitRequest(): Promise<string | null> {
+    const customText = draft?.wording.trim() || undefined;
+    if (API_ENABLED) {
+      const error = await runRewardApi(apiRequestLetter({ employeeId: subjectId, type, note, details, effectiveDate, customText }), ["letters"]);
       if (error) {
         setMsg({ tone: "err", text: error });
-        return false;
+        return error;
       }
       setMsg({
         tone: "ok",
@@ -198,12 +264,14 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
       setNote("");
       setDetails("");
       setEffectiveDate("");
-      return true;
+      setOwnText("");
+      setDraft(null);
+      return null;
     }
-    const error = requestLetter(actor, { employeeId: subjectId, type, note, details, effectiveDate });
+    const error = requestLetter(actor, { employeeId: subjectId, type, note, details, effectiveDate, customText });
     if (error) {
       setMsg({ tone: "err", text: error });
-      return false;
+      return error;
     }
     const checker = needsChecker({ employeeId: subjectId, type, requestedById: actor.id });
     setMsg({
@@ -214,13 +282,15 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
     setNote("");
     setDetails("");
     setEffectiveDate("");
-    return true;
+    setOwnText("");
+    setDraft(null);
+    return null;
   }
 
   return (
     <div className="mgr-home-grid">
       <Card title="Request a letter">
-        <form className="stack" onSubmit={requestAction.submit(submitRequest)}>
+        <form className="stack" onSubmit={previewAction.submit(openPreview, { onError: (text) => setMsg({ tone: "err", text }) })}>
           {hr && (
             <Field label="Employee">
               <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
@@ -256,11 +326,54 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
           <Field label="Reason" wide>
             <input value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="e.g. bank loan, visa appointment" />
           </Field>
+          <Field label="Add your own text (optional)" wide>
+            <textarea
+              value={ownText}
+              rows={3}
+              maxLength={600}
+              onChange={(e) => setOwnText(e.target.value)}
+              placeholder="e.g. Mention I'm travelling to Germany for a conference, 10–15 Nov"
+            />
+          </Field>
           {blocked ? <Banner message={{ tone: "warn", text: blocked }} /> : hr && !API_ENABLED && <MissingList missing={missing} />}
-          <SubmitButton action={requestAction} className="btn" disabled={!!blocked}>
-            Request letter
+          <SubmitButton action={previewAction} className="btn" disabled={!!blocked} busyLabel="Preparing…" doneLabel="Ready">
+            Preview letter
           </SubmitButton>
         </form>
+        <Dialog
+          open={!!draft}
+          wide
+          title={`${template.label} — ${subjectName} (preview)`}
+          onClose={() => setDraft(null)}
+          actions={
+            <>
+              <button type="button" className="btn-ghost" onClick={() => setDraft(null)}>
+                Back
+              </button>
+              <ActionButton
+                className="btn"
+                disabled={!!blocked || (draftMissing.length > 0 && !hr)}
+                onAction={submitRequest}
+                toastError
+                action={requestAction}
+              >
+                Request letter
+              </ActionButton>
+            </>
+          }
+        >
+          {draft && (
+            <>
+              <MissingList missing={draftMissing} />
+              {draft.wording && (
+                <Field label={draft.usedAi ? "Your text, worded by AI (you can edit it)" : "Your text in the letter (you can edit it)"} wide>
+                  <textarea value={draft.wording} rows={3} maxLength={1200} onChange={(e) => setDraft({ ...draft, wording: e.target.value })} />
+                </Field>
+              )}
+              <LetterFrame html={draftHtml} title={`${template.label} preview`} />
+            </>
+          )}
+        </Dialog>
         <h3 style={{ fontSize: 14, marginTop: 16 }}>Templates</h3>
         <DataTable
           headers={["Letter", "Contents", "Requested by"]}
@@ -586,10 +699,6 @@ export function LetterViewerDialog({ actor, open, onClose }: { actor: DemoAccoun
 
 /* ───────────── Backend-mode viewer ───────────── */
 
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
-}
-
 /** The wording the server puts in the letter, plus PDF downloads for issued versions. */
 function ApiLetterViewer({ row, onClose }: { row: LetterRequest; onClose: () => void }) {
   const info = row.api!;
@@ -616,9 +725,15 @@ function ApiLetterViewer({ row, onClose }: { row: LetterRequest; onClose: () => 
 
   const template = letterInfo(row.type);
   const issued = row.status === "Issued" && info.issues.length > 0;
+  const shown = issued ? info.issues.find((i) => i.version === version) ?? info.issues.at(-1) : undefined;
   const html = preview
     ? letterDocumentHtml(
-        `<h1>${escapeHtml(preview.title)}</h1>${preview.paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("")}`,
+        serverLetterBody(preview, {
+          referenceNo: shown?.referenceNo ?? "DRAFT",
+          date: shown?.on ?? todayISO(),
+          approval: issued ? `Approved${row.approver ? ` by ${row.approver}` : ""}` : "Pending approval",
+          footer: issued ? `${shown?.referenceNo ?? ""} · version ${shown?.version ?? 1}` : "Draft preview — not valid until approved",
+        }),
         { title: `${template.label}${issued ? "" : " (draft)"}`, draft: !issued },
       )
     : "";

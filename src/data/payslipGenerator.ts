@@ -52,6 +52,12 @@ export interface PayslipInput {
   nationality?: string;
   /** Directory employment status; contractors are paid hourly. */
   employmentStatus?: string;
+  /**
+   * Annual base pay on the person's compensation record (src/data/annualPay.ts), in the country's currency.
+   * When set, the monthly package is scaled to it so payslips match Compensation; otherwise the country's
+   * standard package for the role is used.
+   */
+  annualBase?: number;
   /** India: the employee's chosen regime (new by default). */
   regime?: IndiaRegime;
   /** All declarations; only this person's verified ones for the slip's tax year count. */
@@ -103,9 +109,11 @@ type YtdRunning = Map<string, { gross: number; tax: number; net: number; fromMon
 
 function contextFor(input: PayslipInput): SlipContext {
   const basis = payBasisFor(input.employeeId, input.employmentStatus);
+  const rules = payRulesFor(input.countryCode);
+  const standardAnnual = rules.earnings.reduce((acc, line) => acc + line.amount, 0) * 12;
   return {
-    rules: payRulesFor(input.countryCode),
-    scale: payScaleFor(input.role),
+    rules,
+    scale: input.annualBase && input.annualBase > 0 && standardAnnual > 0 ? input.annualBase / standardAnnual : payScaleFor(input.role),
     basis,
     rate: basis === "hourly" ? hourlyRateFor(input.countryCode, input.role) : undefined,
   };
@@ -201,6 +209,8 @@ function buildSlip(
       })
       .filter((item) => item.amount > 0 || withExtras.taxLines.includes(item.name));
   const deductions = regular + oneOff > 0 ? monthly((a) => a.deductions) : [];
+  // Other modules' after-tax lines (e.g. cash advance recovery), only on real payslips.
+  if (withOneOffs && regular + oneOff > 0) deductions.push(...extraDeductions(input.employeeId, month));
   const employerContributions = regular + oneOff > 0 ? monthly((a) => a.employer) : [];
   const monthTax = sum(deductions.filter((l) => withExtras.taxLines.includes(l.name)));
   const gross = sum(earnings);
@@ -374,10 +384,97 @@ export function finalSettlementFor(input: PayslipInput): FinalSettlementSummary 
   };
 }
 
+export interface TaxYearSummary {
+  taxYear: string;
+  currency: string;
+  /** Regime or allowance used, e.g. "New regime". */
+  basis: string;
+  /** False in the UAE and Saudi Arabia (no personal income tax). */
+  hasIncomeTax: boolean;
+  ytdGross: number;
+  ytdTax: number;
+  /** Tax for a full month at today's pay. */
+  monthTax: number;
+  /** Months still to be paid in this tax year, this month included. */
+  monthsLeft: number;
+  /** Tax paid so far plus the months still to come. */
+  projectedTax: number;
+}
+
+/** Months of the current tax year still to be paid: this month to the year end (or the last working day). */
+function monthsLeftInTaxYear(input: PayslipInput, rules: ReturnType<typeof payRulesFor>): number {
+  const lwd = input.lastWorkingDay;
+  if (lwd && lwd <= input.today) return 0;
+  const yearStart = taxYearStartFor(rules, input.today);
+  let n = 0;
+  for (let d = new Date(Number(input.today.slice(0, 4)), Number(input.today.slice(5, 7)) - 1, 1); n < 13; d.setMonth(d.getMonth() + 1)) {
+    const month = monthKey(d);
+    if (taxYearStartFor(rules, `${month}-28`) !== yearStart) break;
+    if (lwd && month > lwd.slice(0, 7)) break;
+    n += 1;
+  }
+  return n;
+}
+
+/** A full month at today's pay (regular pay only), worked out as the payslips are. */
+function fullMonthSlip(input: PayslipInput): GeneratedPayslip {
+  const month = input.today.slice(0, 7);
+  const startDay = input.joiningDate && input.joiningDate.slice(0, 7) === month ? Number(input.joiningDate.slice(8, 10)) : 1;
+  return buildSlip(input, contextFor(input), month, startDay, daysInMonth(month), false, false, new Map());
+}
+
+/** "Tax this year": paid so far (payslips in the current tax year) and projected to the year end. */
+export function taxYearSummary(input: PayslipInput, slips: PayslipView[]): TaxYearSummary {
+  const rules = payRulesFor(input.countryCode);
+  const taxYear = rules.taxYearLabel(taxYearStartFor(rules, input.today));
+  const inYear = slips.map(asDetailView).filter((s): s is PayslipDetailView => Boolean(s && s.tax.taxYear === taxYear));
+  const ytdTax = inYear.reduce((acc, s) => acc + s.tax.monthTax, 0);
+  const ytdGross = inYear.reduce((acc, s) => acc + s.gross, 0);
+  const latest = slips.map(asDetailView).find(Boolean) ?? null;
+  // Hourly staff: the last payslip's tax stands in for a month (this month's hours are not all in yet).
+  const current = payBasisFor(input.employeeId, input.employmentStatus) === "hourly" ? null : fullMonthSlip(input);
+  const monthTax = current ? current.tax.monthTax : (latest?.tax.monthTax ?? 0);
+  const monthsLeft = monthsLeftInTaxYear(input, rules);
+  return {
+    taxYear,
+    currency: rules.currency,
+    basis: current?.tax.basis ?? latest?.tax.basis ?? "",
+    hasIncomeTax: rules.incomeTaxName !== null,
+    ytdGross,
+    ytdTax,
+    monthTax,
+    monthsLeft,
+    projectedTax: ytdTax + monthTax * monthsLeft,
+  };
+}
+
+/** India: a full month's tax and the year's tax under each regime, at today's pay and verified declarations. */
+export function compareRegimes(input: PayslipInput): Record<IndiaRegime, { monthTax: number; annualTax: number }> {
+  const pick = (regime: IndiaRegime) => {
+    const slip = fullMonthSlip({ ...input, regime });
+    return { monthTax: slip.tax.monthTax, annualTax: slip.tax.annualTax };
+  };
+  return { new: pick("new"), old: pick("old") };
+}
+
 /** Payslips cached per portal state and inputs, so repeated reads don't recompute. */
 const cache = new WeakMap<object, Map<string, PayslipView[]>>();
 
-export function cachedPayslips(owner: object, key: string, build: () => PayslipView[]): PayslipView[] {
+/* After-tax deduction lines from other modules (cash advance recovery: src/features/payrequests/cashStore.ts). */
+type DeductionSource = { lines: (employeeId: string, month: string) => PayLine[]; version: () => string };
+let deductionSource: DeductionSource | null = null;
+
+function extraDeductions(employeeId: string, month: string): PayLine[] {
+  return deductionSource?.lines(employeeId, month) ?? [];
+}
+
+/** Registers extra deduction lines on payslips; `version` changes whenever the lines change (clears the cache key). */
+export function setPayslipDeductionSource(source: DeductionSource | null): void {
+  deductionSource = source;
+}
+
+export function cachedPayslips(owner: object, rawKey: string, build: () => PayslipView[]): PayslipView[] {
+  const key = deductionSource ? `${rawKey}|${deductionSource.version()}` : rawKey;
   let byKey = cache.get(owner);
   if (!byKey) {
     byKey = new Map();

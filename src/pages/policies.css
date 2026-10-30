@@ -23,3 +23,31 @@
 .pol-meter span { display: block; height: 100%; background: var(--accent); }
 .pol-person { display: inline-block; margin: 0 8px 2px 0; font-size: var(--text-sm); }
 .pol-person em { color: var(--muted); font-style: normal; }
+.pol-due-card { border-left: 3px solid var(--warn, var(--accent)); }
+.pol-due-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.pol-due-list li { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.pol-due-list p { margin: 2px 0 0; font-size: var(--text-sm); }
+.pol-change { margin: 12px 0; padding: 10px 12px; border-radius: var(--radius-md); background: var(--accent-soft); }
+.pol-change p { margin: 4px 0 0; }
+.pol-summary { margin: 12px 0 0; line-height: 1.5; }
+.pol-history ul { list-style: none; padding-left: 0; }
+.pol-history .quiet-link.active { font-weight: 700; text-decoration: underline; }
+.pol-ack-form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; width: 100%; }
+.pol-ack-form .field, .pol-ack-form textarea { width: 100%; }
+.pol-audience { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 6px 16px; max-height: 180px; overflow: auto; }
+.pol-audience legend { font-size: var(--text-sm); color: var(--muted); padding: 0 4px; }
+.pol-check { display: inline-flex; gap: 6px; align-items: center; font-size: var(--text-sm); }
+.pol-section-edit { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pol-section-head { display: flex; gap: 10px; align-items: flex-end; }
+.pol-section-head > :first-child { flex: 1; }
+.pol-section-edit textarea { width: 100%; box-sizing: border-box; }
+.pol-status { display: inline-flex; flex-direction: column; gap: 2px; }
+.pol-status .muted { font-size: var(--text-xs); }
+.pol-track { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.pol-track h3 { font-size: var(--text-md); margin: 0 0 6px; }
+.pol-track ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: var(--text-sm); max-height: 320px; overflow: auto; }
+.pol-comment { color: var(--ink); font-style: italic; margin-top: 2px; }
+.pol-home-banner { margin-bottom: 16px; border-left: 3px solid var(--warn, var(--accent)); }
+.pol-home-banner ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.pol-home-banner li { display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.pol-home-banner p { margin: 2px 0 0; font-size: var(--text-sm); color: var(--muted); }

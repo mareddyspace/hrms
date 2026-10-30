@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   ActionButton,
@@ -23,11 +23,20 @@ import {
   TICKET_TYPES,
   assignTicket,
   canViewTicket,
+  ticketViewCounts,
   commentOnTicket,
   createTicket,
   isOpenTicket,
   nextStatuses,
+  addTicketTask,
+  canPlanTicket,
+  deadlineLabel,
+  removeTicketTask,
+  setTicketDue,
+  setTicketSubOwner,
+  toggleTicketTask,
   personName,
+  refreshTickets,
   setTicketStatus,
   toggleWatch,
   useTickets,
@@ -69,15 +78,37 @@ export function TicketsPage() {
   const [type, setType] = useState<"all" | TicketType>("all");
   const [priority, setPriority] = useState<"all" | TicketPriority>("all");
   const [query, setQuery] = useState("");
+  const [when, setWhen] = useState<"any" | "today" | "week" | "month" | "pick" | "range">("any");
+  const [month, setMonth] = useState(() => todayISO().slice(0, 7));
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
 
+  // Backend mode: pick up other people's changes when the page opens, when the tab comes back, and every 30 seconds.
+  useEffect(() => {
+    void refreshTickets();
+    const onFocus = () => void refreshTickets();
+    window.addEventListener("focus", onFocus);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshTickets();
+    }, 30_000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(timer);
+    };
+  }, []);
+
   const visible = tickets.filter((t) => canViewTicket(t, actor));
-  const counts = {
-    mine: visible.filter((t) => t.requesterId === employee.id && t.status !== "Closed").length,
-    assigned: visible.filter((t) => t.assigneeId === employee.id && isOpenTicket(t)).length,
-    team: visible.filter((t) => (teamIds.has(t.requesterId) || (t.assigneeId && teamIds.has(t.assigneeId))) && isOpenTicket(t)).length,
-  };
+  const counts = ticketViewCounts(actor, tickets, teamIds);
+  // Open on the first tab with something in it (managers: Team first when it has open tickets), once tickets load.
+  const picked = useRef(false);
+  useEffect(() => {
+    if (picked.current || tickets.length === 0) return;
+    picked.current = true;
+    const order: View[] = isManager ? ["assigned", "team", "mine"] : ["assigned", "mine"];
+    setView(order.find((v) => counts[v] > 0) ?? "assigned");
+  }, [tickets.length, isManager, counts]);
 
   const rows = visible
     .filter((t) =>
@@ -90,6 +121,7 @@ export function TicketsPage() {
     .filter((t) => (status === "all" ? true : status === "active" ? t.status !== "Closed" : t.status === status))
     .filter((t) => type === "all" || t.type === type)
     .filter((t) => priority === "all" || t.priority === priority)
+    .filter((t) => inPeriod(t.createdAt.slice(0, 10), when, month, from, to))
     .filter((t) => {
       const q = query.trim().toLowerCase();
       if (!q) return true;
@@ -173,6 +205,23 @@ export function TicketsPage() {
             </option>
           ))}
         </select>
+        <select value={when} onChange={(e) => setWhen(e.target.value as typeof when)} aria-label="Raised">
+          <option value="any">Any date</option>
+          <option value="today">Today</option>
+          <option value="week">Last 7 days</option>
+          <option value="month">This month</option>
+          <option value="pick">Pick a month</option>
+          <option value="range">Date range</option>
+        </select>
+        {when === "pick" && (
+          <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" />
+        )}
+        {when === "range" && (
+          <>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
+            <input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+          </>
+        )}
       </FilterBar>
 
       <Banner message={message} />
@@ -199,7 +248,9 @@ export function TicketsPage() {
                     <span className="muted">
                       {t.type}
                       {t.projectName ? ` · ${t.projectName}` : ""} · {personName(t.assigneeId)}
-                      {t.due ? ` · due ${formatShortDate(t.due)}` : ""}
+                      {t.subOwnerId ? ` + ${personName(t.subOwnerId)}` : ""}
+                      {t.due ? ` · due ${formatShortDate(t.due)}${isOpenTicket(t) ? ` (${deadlineLabel(t.due, todayISO())})` : ""}` : ""}
+                      {t.tasks?.length ? ` · tasks ${t.tasks.filter((k) => k.done).length}/${t.tasks.length}` : ""}
                     </span>
                   </button>
                 </li>
@@ -253,6 +304,23 @@ function TicketDetail({
 }) {
   const [note, setNote] = useState("");
   const [assignee, setAssignee] = useState("");
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskOwner, setTaskOwner] = useState("");
+  const [taskDue, setTaskDue] = useState("");
+  const canPlan = canPlanTicket(t, actor);
+  const tasks = t.tasks ?? [];
+  const doneCount = tasks.filter((k) => k.done).length;
+  // People who can be sub-owner or own a task: the team, the people on the ticket, and me.
+  const people = [
+    ...new Map(
+      [
+        ...team,
+        ...[t.assigneeId, t.subOwnerId, t.requesterId, actor.id]
+          .filter((id): id is string => !!id)
+          .map((id) => ({ id, fullName: personName(id) })),
+      ].map((p) => [p.id, p] as const),
+    ).values(),
+  ];
   const moves = nextStatuses(t, actor);
   const canAssign = isOpenTicket(t) && team.length > 0;
   const overdue = t.due && isOpenTicket(t) && t.due < todayISO();
@@ -283,20 +351,145 @@ function TicketDetail({
         <dd>{t.projectName ?? "—"}</dd>
         <dt>Requester</dt>
         <dd>{personName(t.requesterId)}</dd>
-        <dt>Assignee</dt>
+        <dt>Owner</dt>
         <dd>
           {personName(t.assigneeId)}
           {managerOfAssignee && <span className="muted"> · reports to {managerOfAssignee}</span>}
         </dd>
+        <dt>Sub-owner</dt>
+        <dd>
+          {canPlan ? (
+            <select
+              className="tk-mini"
+              value={t.subOwnerId ?? ""}
+              aria-label="Sub-owner"
+              onChange={async (e) => onResult(await setTicketSubOwner(t.id, e.target.value, actor), "Sub-owner updated.")}
+            >
+              <option value="">None</option>
+              {people
+                .filter((p) => p.id !== t.assigneeId)
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.fullName}
+                  </option>
+                ))}
+            </select>
+          ) : (
+            personName(t.subOwnerId)
+          )}
+        </dd>
         <dt>Watchers</dt>
         <dd>{t.watcherIds.length ? t.watcherIds.map(personName).join(", ") : "—"}</dd>
-        <dt>Due</dt>
-        <dd className={overdue ? "tk-overdue" : undefined}>{t.due ? formatShortDate(t.due) : "—"}{overdue ? " · overdue" : ""}</dd>
+        <dt>Deadline</dt>
+        <dd className={overdue ? "tk-overdue" : undefined}>
+          {canPlan ? (
+            <input
+              className="tk-mini"
+              type="date"
+              value={t.due ?? ""}
+              aria-label="Deadline"
+              onChange={async (e) => onResult(await setTicketDue(t.id, e.target.value, actor), e.target.value ? "Deadline updated." : "Deadline removed.")}
+            />
+          ) : t.due ? (
+            formatShortDate(t.due)
+          ) : (
+            "—"
+          )}
+          {t.due && isOpenTicket(t) && <span className="muted"> · {deadlineLabel(t.due, todayISO())}</span>}
+        </dd>
+        <dt>Tasks</dt>
+        <dd>{tasks.length ? `${doneCount} of ${tasks.length} done` : "—"}</dd>
         <dt>Created</dt>
         <dd>{stampLabel(t.createdAt)}</dd>
         <dt>Updated</dt>
         <dd>{stampLabel(t.updatedAt)}</dd>
       </dl>
+
+      <section className="tk-tasks" aria-label="Tasks">
+        <h4>Tasks</h4>
+        {tasks.length > 0 && (
+          <div className="tk-task-bar" aria-hidden="true">
+            <span style={{ width: `${Math.round((doneCount / tasks.length) * 100)}%` }} />
+          </div>
+        )}
+        {tasks.length === 0 ? (
+          <p className="muted">No tasks yet.</p>
+        ) : (
+          <ul className="tk-task-list">
+            {tasks.map((k) => {
+              const late = !k.done && !!k.due && k.due < todayISO();
+              const canTick = isOpenTicket(t) && (k.ownerId === actor.id || canPlan);
+              return (
+                <li key={k.id} className={k.done ? "done" : undefined}>
+                  <input
+                    type="checkbox"
+                    checked={k.done}
+                    disabled={!canTick}
+                    aria-label={`Mark "${k.title}" done`}
+                    onChange={async () => onResult(await toggleTicketTask(t.id, k.id, actor), k.done ? "Task reopened." : "Task done.")}
+                  />
+                  <span className="tk-task-title">{k.title}</span>
+                  <span className="muted">{k.ownerId ? personName(k.ownerId) : "No owner"}</span>
+                  <span className={late ? "tk-overdue" : "muted"}>
+                    {k.due ? `${formatShortDate(k.due)}${late ? " · overdue" : ""}` : "No date"}
+                  </span>
+                  {canPlan ? (
+                    <button
+                      type="button"
+                      className="btn-ghost btn-tiny"
+                      aria-label={`Remove "${k.title}"`}
+                      onClick={async () => onResult(await removeTicketTask(t.id, k.id, actor), "Task removed.")}
+                    >
+                      ×
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {canPlan && (
+          <div className="tk-task-add">
+            <input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="New task" aria-label="New task" />
+            <select value={taskOwner} onChange={(e) => setTaskOwner(e.target.value)} aria-label="Task owner">
+              <option value="">Owner…</option>
+              {people.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.fullName}
+                </option>
+              ))}
+            </select>
+            <input
+              type="date"
+              value={taskDue}
+              min={todayISO()}
+              max={t.due || undefined}
+              onChange={(e) => setTaskDue(e.target.value)}
+              aria-label="Task deadline"
+            />
+            <ActionButton
+              className="btn btn-tiny"
+              disabled={!taskTitle.trim()}
+              busyLabel="Adding…"
+              doneLabel="Added"
+              onAction={async () => {
+                const error = await addTicketTask(t.id, { title: taskTitle, ownerId: taskOwner, due: taskDue }, actor);
+                onResult(error, "Task added.");
+                if (!error) {
+                  setTaskTitle("");
+                  setTaskOwner("");
+                  setTaskDue("");
+                }
+                return error;
+              }}
+            >
+              Add
+            </ActionButton>
+          </div>
+        )}
+      </section>
 
       <div className="form-actions tk-actions">
         {isMineToWork && (
@@ -304,13 +497,18 @@ function TicketDetail({
             Log time
           </Link>
         )}
-        <button
+        <ActionButton
           className="btn-ghost btn-tiny"
-          type="button"
-          onClick={() => onResult(toggleWatch(t.id, actor.id, actor), watching ? "Stopped watching." : "Watching.")}
+          busyLabel="Saving…"
+          doneLabel={watching ? "Watching" : "Stopped"}
+          onAction={async () => {
+            const error = await toggleWatch(t.id, actor.id, actor);
+            onResult(error, watching ? "Stopped watching." : "Watching.");
+            return error;
+          }}
         >
           {watching ? "Unwatch" : "Watch"}
-        </button>
+        </ActionButton>
       </div>
 
       {canAssign && (
@@ -328,8 +526,10 @@ function TicketDetail({
           <ActionButton
             className="btn-ghost btn-tiny"
             disabled={!assignee}
-            onAction={() => {
-              const error = assignTicket(t.id, assignee, actor);
+            busyLabel="Assigning…"
+            doneLabel="Assigned"
+            onAction={async () => {
+              const error = await assignTicket(t.id, assignee, actor);
               onResult(error, `Assigned to ${personName(assignee)}.`);
               if (!error) setAssignee("");
               return error;
@@ -349,8 +549,8 @@ function TicketDetail({
           disabled={!note.trim()}
           busyLabel="Posting…"
           doneLabel="Posted"
-          onAction={() => {
-            const error = commentOnTicket(t.id, note, actor);
+          onAction={async () => {
+            const error = await commentOnTicket(t.id, note, actor);
             onResult(error, "Comment added.");
             if (!error) setNote("");
             return error;
@@ -364,8 +564,8 @@ function TicketDetail({
             className={s === "Resolved" || s === "Closed" ? "btn btn-tiny" : "btn-ghost btn-tiny"}
             busyLabel="Updating…"
             doneLabel="Updated"
-            onAction={() => {
-              const error = setTicketStatus(t.id, s, actor, note);
+            onAction={async () => {
+              const error = await setTicketStatus(t.id, s, actor, note);
               onResult(error, `${t.id} → ${s}.`);
               if (!error) setNote("");
               return error;
@@ -416,8 +616,8 @@ function CreateTicketDialog({
 
   const raiseAction = useAction();
 
-  function submit() {
-    const result = createTicket(
+  async function submit() {
+    const result = await createTicket(
       {
         title,
         description,
@@ -509,4 +709,19 @@ function CreateTicketDialog({
       </div>
     </div>
   );
+}
+
+/** True when a ticket raised on `day` (YYYY-MM-DD) falls in the chosen period. */
+function inPeriod(day: string, when: string, month: string, from: string, to: string): boolean {
+  const today = todayISO();
+  if (when === "today") return day === today;
+  if (when === "week") {
+    const start = new Date(`${today}T00:00:00`);
+    start.setDate(start.getDate() - 6);
+    return day >= start.toLocaleDateString("en-CA") && day <= today;
+  }
+  if (when === "month") return day.slice(0, 7) === today.slice(0, 7);
+  if (when === "pick") return !month || day.slice(0, 7) === month;
+  if (when === "range") return (!from || day >= from) && (!to || day <= to);
+  return true;
 }

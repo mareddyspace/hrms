@@ -43,7 +43,7 @@ from app.services import leave_rules
 
 SEED_DIR = BACKEND_DIR / "seed"
 POLICY_EFFECTIVE_FROM = date(2026, 1, 1)
-NO_HALF_DAY = {"wfh", "emergency_wfh"}
+NO_HALF_DAY = {"wfh", "emergency_wfh", "optional"}
 
 
 def _load(name: str) -> Any:
@@ -268,6 +268,7 @@ def run(reset_passwords: bool = False) -> dict[str, int]:
         stats["leave_policies"] = seed_leave_policies(db)
         stats.update(leave_rules.seed_defaults(db))  # eligibility defaults, new leave types, country config (0011)
         stats["holidays"] = seed_holidays(db)
+        stats["optional_holidays_added"] = _seed_optional_holidays(db)  # optional holiday list (0017)
         db.flush()
         stats["leave_requests_added"] = seed_leave_requests(db)
         stats["projects"] = seed_projects(db)
@@ -277,6 +278,8 @@ def run(reset_passwords: bool = False) -> dict[str, int]:
         stats.update(seed_rewards(db))
         stats.update(_seed_career(db))  # skills library, career paths, starter career profiles (0012)
         stats.update(_seed_demo_requests(db))  # a few open requests per demo sign-in (app/seed_demo.py)
+        stats.update(_seed_hr_content(db))  # Babu's documents and a policy change to acknowledge (app/seed_hr_content.py)
+        stats["tickets_added"] = _seed_tickets(db)  # sample work tickets (0020)
         db.commit()
         del cache
     return stats
@@ -400,12 +403,33 @@ def _seed_career(db: Session) -> dict[str, int]:
     return seed_career(db)
 
 
+def _seed_hr_content(db: Session) -> dict[str, int]:
+    from app.seed_hr_content import seed
+
+    db.flush()
+    return seed(db)
+
+
 def _seed_demo_requests(db: Session) -> dict[str, int]:
     """Open expense / travel / lifecycle / swap requests, a joiner, interviews and an offer. Insert-once by id."""
     from app.seed_demo import seed
 
     db.flush()
     return seed(db)
+
+
+def _seed_tickets(db: Session) -> int:
+    """Sample work tickets from src/data/ticketStore.ts (app/services/tickets.py). Insert-once by id."""
+    from app.services.tickets import seed_samples
+
+    db.flush()
+    return seed_samples(db)
+
+
+def _seed_optional_holidays(db: Session) -> int:
+    from app.services.optional_holidays import seed_defaults
+
+    return seed_defaults(db)
 
 
 if __name__ == "__main__":

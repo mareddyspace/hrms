@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Date, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import JSON, Boolean, Date, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, TimestampMixin, UTCDateTime, utcnow
@@ -32,6 +32,31 @@ class Requisition(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     raised_on: Mapped[date] = mapped_column(Date)
     decided_on: Mapped[date | None] = mapped_column(Date)
+    # Hiring chain (migration 0021): budget and reason given when raised; who raised it (a recruiter may raise for a manager).
+    budget: Mapped[float | None] = mapped_column(Numeric(14, 2, asdecimal=False))
+    budget_currency: Mapped[str | None] = mapped_column(String(3))
+    reason: Mapped[str | None] = mapped_column(String(24))  # new_role | replacement
+    justification: Mapped[str | None] = mapped_column(Text)
+    raised_by: Mapped[str | None] = mapped_column(String(64))  # employee id
+
+
+class JobPosting(TimestampMixin, Base):
+    """The recruiter publishes an approved requisition: internal jobs board, and the public careers page when on_careers_site."""
+
+    __tablename__ = "job_postings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)  # post-<hex>
+    requisition_id: Mapped[str] = mapped_column(ForeignKey("requisitions.id"), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text)
+    location: Mapped[str] = mapped_column(String(200))
+    employment_type: Mapped[str] = mapped_column(String(32), default="Full-time")
+    closing_date: Mapped[date] = mapped_column(Date)
+    on_careers_site: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)  # open | closed
+    published_by: Mapped[str | None] = mapped_column(String(64))
+    published_on: Mapped[date] = mapped_column(Date)
+    closed_on: Mapped[date | None] = mapped_column(Date)
 
 
 class Candidate(TimestampMixin, Base):
@@ -54,6 +79,11 @@ class Candidate(TimestampMixin, Base):
     # Applied | Screening | Shortlisted | Interview | Assessment | Final Review | Offer | Hired | Rejected | Withdrawn
     stage: Mapped[str] = mapped_column(String(24))
     created_by: Mapped[str | None] = mapped_column(String(64))
+    # Hiring chain (migration 0021): applications from the careers page / internal jobs board, screening score.
+    posting_id: Mapped[str | None] = mapped_column(String(32))
+    employee_id: Mapped[str | None] = mapped_column(String(64), index=True)  # internal applicant
+    cover_note: Mapped[str | None] = mapped_column(Text)
+    match_score: Mapped[int | None] = mapped_column(Integer)
 
 
 class CandidateStage(Base):
@@ -85,6 +115,9 @@ class Interview(TimestampMixin, Base):
     feedback_by: Mapped[str | None] = mapped_column(String(64))
     feedback_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_by: Mapped[str | None] = mapped_column(String(64))
+    # Scorecard (migration 0021): {"Skills": 4, "Experience": 3, ...}; recommendation strong_yes | yes | no | strong_no
+    ratings: Mapped[dict[str, int] | None] = mapped_column(JSON)
+    recommendation: Mapped[str | None] = mapped_column(String(16))
 
 
 class Offer(TimestampMixin, Base):
@@ -111,3 +144,7 @@ class Offer(TimestampMixin, Base):
     response_note: Mapped[str | None] = mapped_column(Text)
     responded_on: Mapped[date | None] = mapped_column(Date)
     response_recorded_by: Mapped[str | None] = mapped_column(String(64))
+    # Hiring chain (migration 0021): the offer letter (Offer template, rendered when created) and the candidate's link.
+    letter: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    response_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    responded_via: Mapped[str | None] = mapped_column(String(16))  # link | recorded

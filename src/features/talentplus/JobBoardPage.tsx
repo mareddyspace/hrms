@@ -1,7 +1,10 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { API_ENABLED } from "../../api/client.ts";
+import { Link } from "react-router-dom";
 import { ActionButton, notify, Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { formatShortDate } from "../../model.ts";
-import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
+import { candidateHref, getTalentState, subscribeTalent, talentAction } from "../../data/talentLocal.ts";
+import { myApplicationsMirror } from "../../api/syncTalent.ts";
 import type { Requisition } from "../../data/talentData.ts";
 import { isHr } from "./shared.ts";
 import { useActor } from "./useActor.ts";
@@ -14,14 +17,14 @@ import {
   gradeFor,
   isOpenPosting,
   isRecruitingDesk,
+  allInternalApplications,
   markBonusPaid,
-  moveApplication,
   moveReferral,
+  myInternalApplications,
   nextStages,
   postingById,
   submitReferral,
   subscribeJobBoard,
-  withdrawApplication,
   type Referral,
   type Stage,
 } from "./jobBoardStore.ts";
@@ -88,12 +91,14 @@ function OpenRoles() {
             return (
               <li key={req.id} className="approval-item">
                 <div className="row-between">
-                  <strong>{req.title}</strong>
+                  <strong>{req.posting?.title ?? req.title}</strong>
                   <span className="pill">{gradeFor(req)}</span>
                 </div>
                 <p className="muted">
-                  {req.department} · {req.location}, {req.country} · {req.openings} {req.openings === 1 ? "opening" : "openings"} · {req.id}
+                  {req.department} · {req.posting?.location ?? `${req.location}, ${req.country}`} · {req.posting?.employmentType ?? "Full-time"} · {req.openings} {req.openings === 1 ? "opening" : "openings"} ·
+                  apply by {req.posting ? formatShortDate(req.posting.closingDate) : "—"}
                 </p>
+                {req.posting?.description && <p className="jb-desc">{req.posting.description.length > 280 ? `${req.posting.description.slice(0, 280)}…` : req.posting.description}</p>}
                 <div className="approval-actions">
                   <button type="button" className="btn btn-tiny" disabled={!!blocker} onClick={() => setApplyFor(req)}>
                     Apply
@@ -141,11 +146,17 @@ function ApplyDialog({ req, onClose }: { req: Requisition; onClose: (message?: s
   // Nobody above the CEO to tell.
   const hasManager = managementChain(actor.id).length > 0;
   const told = hasManager ? " Your manager has been notified." : "";
-  function submit() {
-    const error = applyInternally(actor, req.id, note);
-    if (error) setMsg({ tone: "err", text: error });
-    else onClose(`Applied for ${req.title}.${told}`);
-    return error;
+  function submit(): Promise<string | null> {
+    return new Promise((resolve) =>
+      talentAction(
+        () => applyInternally(actor, req.id, note),
+        (error) => {
+          if (error) setMsg({ tone: "err", text: error });
+          else onClose(`Applied for ${req.title}. It is in the recruiter's pipeline.${told}`);
+          resolve(error);
+        },
+      ),
+    );
   }
   return (
     <Dialog
@@ -165,7 +176,7 @@ function ApplyDialog({ req, onClose }: { req: Requisition; onClose: (message?: s
     >
       {hasManager && <p className="note">Your manager will be told that you applied.</p>}
       <Field label="Why are you interested? (optional)">
-        <textarea rows={4} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
+        <textarea rows={4} maxLength={3000} value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
       <Banner message={msg} />
     </Dialog>
@@ -248,8 +259,11 @@ function MyActivity() {
   const actor = useActor();
   const state = useSyncExternalStore(subscribeJobBoard, getJobBoardState);
   useSyncExternalStore(subscribeTalent, getTalentState);
-  const [msg, setMsg] = useState<Msg>(null);
-  const apps = state.applications.filter((a) => a.employeeId === actor.id);
+  useSyncExternalStore(myApplicationsMirror.subscribe, myApplicationsMirror.get);
+  useEffect(() => {
+    if (API_ENABLED) void myApplicationsMirror.reload(); // stages move in the recruiter's pipeline
+  }, []);
+  const apps = myInternalApplications(actor.id);
   const refs = state.referrals.filter((r) => r.referrerId === actor.id);
   const hired = refs.filter((r) => r.status === "Hired").length;
 
@@ -260,31 +274,10 @@ function MyActivity() {
         <MetricCard label="Referrals" value={refs.length} />
         <MetricCard label="Referrals hired" value={hired} />
       </MetricGrid>
-      <Banner message={msg} />
       <Card title="My applications">
         <DataTable
-          headers={["Role", "Applied", "Status", ""]}
-          rows={apps.map((a) => [
-            postingTitle(a.postingId),
-            formatShortDate(a.submittedOn),
-            <StageBadge key="s" stage={a.status} />,
-            a.status === "Submitted" ? (
-              <ActionButton
-                key="w"
-                className="btn btn-ghost btn-tiny"
-                success={`Application for ${postingTitle(a.postingId)} withdrawn.`}
-                onAction={() => {
-                  const e = withdrawApplication(actor, a.id);
-                  setMsg(e ? { tone: "err", text: e } : { tone: "ok", text: "Application withdrawn." });
-                  return e;
-                }}
-              >
-                Withdraw
-              </ActionButton>
-            ) : (
-              ""
-            ),
-          ])}
+          headers={["Role", "Applied", "Status"]}
+          rows={apps.map((a) => [postingTitle(a.postingId), formatShortDate(a.submittedOn), <StageBadge key="s" stage={a.status} />])}
           empty={<EmptyState title="No applications" description="Apply from Open roles." />}
         />
       </Card>
@@ -339,30 +332,32 @@ function Review() {
     return e;
   };
   const hr = isHr(actor.role);
+  const internal = allInternalApplications();
 
   return (
     <div className="stack">
       <MetricGrid>
-        <MetricCard label="Internal applications" value={state.applications.length} />
+        <MetricCard label="Internal applications" value={internal.length} />
         <MetricCard label="Referrals" value={state.referrals.length} />
-        <MetricCard label="In interview" value={[...state.applications, ...state.referrals].filter((x) => x.status === "Interview").length} />
+        <MetricCard label="In interview" value={[...internal, ...state.referrals].filter((x) => x.status === "Interview").length} />
       </MetricGrid>
       <Banner message={msg} />
       <Card title="Internal applications">
         <DataTable
-          headers={["Employee", "Role", "Applied", "Status", "Note", "Update"]}
-          rows={state.applications.map((a) => [
+          headers={["Employee", "Role", "Applied", "Status", "Note", ""]}
+          rows={internal.map((a) => [
             a.employeeName,
             postingTitle(a.postingId),
             formatShortDate(a.submittedOn),
             <StageBadge key="s" stage={a.status} />,
             a.note || <span className="muted">—</span>,
-            <MoveButtons
-              key="m"
-              current={a.status}
-              disabled={a.employeeId === actor.id ? "Your own application" : undefined}
-              onMove={(s) => report(moveApplication(actor, a.id, s), `${a.employeeName} moved to ${s.toLowerCase()}.`)}
-            />,
+            a.employeeId === actor.id ? (
+              <span key="m" className="muted">Your own application</span>
+            ) : (
+              <Link key="m" className="quiet-link" to={candidateHref(a.id)}>
+                Open in pipeline
+              </Link>
+            ),
           ])}
           empty={<EmptyState title="No internal applications" />}
         />

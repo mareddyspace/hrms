@@ -1,0 +1,124 @@
+/* Cash advance, leave encashment, software, resignation: guided forms and status trackers. */
+
+.pr-tracker {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+.pr-tracker li { min-width: 0; display: grid; gap: 4px; align-content: start; }
+.pr-tracker .pr-dot-row { display: flex; align-items: center; gap: 6px; }
+.pr-tracker .pr-dot {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  border: 2px solid var(--line);
+  background: var(--card);
+  color: var(--muted);
+}
+.pr-tracker .pr-bar { flex: 1 1 auto; height: 2px; background: var(--line); border-radius: 2px; }
+.pr-tracker li:last-child .pr-bar { display: none; }
+.pr-tracker strong { font-size: 13px; overflow-wrap: anywhere; }
+.pr-tracker small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.pr-tracker .done .pr-dot { background: var(--ok); border-color: var(--ok); color: #fff; }
+.pr-tracker .done .pr-bar { background: var(--ok); }
+.pr-tracker .current .pr-dot { border-color: var(--accent-fill); color: var(--accent-fill); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pr-tracker .declined .pr-dot { background: var(--danger); border-color: var(--danger); color: #fff; }
+.pr-tracker .skipped { opacity: 0.55; }
+.pr-tracker .todo strong { color: var(--muted); font-weight: 600; }
+
+@media (max-width: 720px) {
+  .pr-tracker { grid-auto-flow: row; grid-auto-columns: auto; }
+  .pr-tracker li { grid-template-columns: 22px minmax(0, 1fr); column-gap: 10px; }
+  .pr-tracker .pr-dot-row { grid-row: span 2; flex-direction: column; align-items: center; }
+  .pr-tracker .pr-bar { width: 2px; height: auto; min-height: 14px; }
+}
+
+.pr-wizard-steps { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.pr-wizard-steps button {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--muted);
+  border-radius: 99px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pr-wizard-steps button[aria-current="step"] { background: var(--accent-fill); color: #fff; border-color: transparent; }
+.pr-wizard-steps button.done { color: var(--ok); border-color: var(--ok); }
+.pr-wizard-steps button:disabled { cursor: default; opacity: 0.6; }
+
+.pr-form { display: grid; gap: 14px; }
+.pr-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.pr-grid > * { min-width: 0; }
+.pr-grid .field.wide { grid-column: 1 / -1; }
+.pr-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pr-actions .spacer { flex: 1 1 auto; }
+
+.pr-choice-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.pr-choice {
+  border: 1px solid var(--chip-border, var(--line));
+  background: var(--card);
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+}
+.pr-choice[aria-pressed="true"] { border-color: var(--accent-fill); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent-fill) inset; }
+.pr-choice small { display: block; color: var(--muted); font-size: 12px; }
+
+.pr-note {
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface-tint, var(--soft));
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+.pr-note.warn { border-color: var(--warn); }
+.pr-note.err { border-color: var(--danger); color: var(--danger); }
+
+.pr-calc { display: grid; gap: 4px; padding: 12px; border-radius: 10px; background: var(--surface-tint, var(--soft)); border: 1px solid var(--line); }
+.pr-calc .row { display: flex; justify-content: space-between; gap: 12px; }
+.pr-calc .row.total { font-weight: 700; font-size: 16px; border-top: 1px solid var(--line); padding-top: 6px; margin-top: 2px; }
+.pr-calc .muted { font-size: 12.5px; }
+
+.pr-schedule { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pr-schedule th, .pr-schedule td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.pr-schedule td.num, .pr-schedule th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.pr-schedule tr.recovered td { color: var(--muted); }
+
+.pr-list { display: grid; gap: 10px; }
+.pr-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--card); display: grid; gap: 10px; }
+.pr-item-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.pr-item-head h3 { margin: 0; font-size: 15px; }
+.pr-item-head p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+.pr-amount { font-size: 18px; font-weight: 700; }
+
+.pr-catalogue { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.pr-app { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--card); display: grid; gap: 6px; align-content: start; }
+.pr-app h3 { margin: 0; font-size: 14.5px; }
+.pr-app .meta { color: var(--muted); font-size: 12.5px; }
+.pr-app .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.pr-app.picked { border-color: var(--accent-fill); box-shadow: 0 0 0 1px var(--accent-fill) inset; }
+
+.pr-meter { height: 6px; border-radius: 99px; background: var(--soft); overflow: hidden; }
+.pr-meter > span { display: block; height: 100%; background: var(--accent-fill); }
+.pr-meter.full > span { background: var(--danger); }
+
+.pr-days { display: flex; align-items: center; gap: 8px; }
+.pr-days input[type="range"] { flex: 1 1 auto; }
+.pr-days input[type="number"] { width: 84px; }
+
+@media (max-width: 720px) {
+  .pr-grid { grid-template-columns: minmax(0, 1fr); }
+}

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 LetterTypeName = Literal["Offer", "Appointment", "Employment", "Promotion", "Transfer", "Salary revision", "Experience",
                          "Relieving", "Confirmation", "NOC", "Visa/Travel", "Address proof", "Internship", "Warning",
-                         "Termination"]
+                         "Termination", "Salary certificate", "Bonafide"]
 
 
 class _DocORM(BaseModel):
@@ -94,6 +94,22 @@ class LetterRequestIn(BaseModel):
     note: str = Field(default="", max_length=2000)
     details: str | None = Field(default=None, max_length=200)
     effective_date: date | None = None  # HR only
+    custom_text: str | None = Field(default=None, max_length=1200)  # "Add your own text": one paragraph in the letter
+
+
+class LetterDraftIn(LetterRequestIn):
+    """Preview a letter before requesting it (nothing is saved)."""
+
+
+class LetterWordIn(BaseModel):
+    letter_type: LetterTypeName
+    employee_id: str | None = Field(default=None, max_length=64)
+    text: str = Field(min_length=3, max_length=600)
+
+
+class LetterWordOut(BaseModel):
+    paragraph: str | None  # None = no AI available; the portal words it itself
+    used_ai: bool
 
 
 class LetterIssueOut(_DocORM):
@@ -115,6 +131,7 @@ class LetterRequestOut(_DocORM):
     note: str
     details: str | None
     effective_date: date | None
+    custom_text: str | None = None
     approval_instance_id: str | None
     approval_status: str | None = None
     document_id: str | None
@@ -135,6 +152,7 @@ class LetterPreviewOut(BaseModel):
 class PolicyAckIn(BaseModel):
     policy_id: str = Field(min_length=1, max_length=64)
     policy_version: str = Field(min_length=1, max_length=32)
+    comment: str | None = Field(default=None, max_length=1000)
 
 
 class PolicyAckOut(_DocORM):
@@ -143,3 +161,4 @@ class PolicyAckOut(_DocORM):
     policy_id: str
     policy_version: str
     acknowledged_at: datetime
+    comment: str | None = None

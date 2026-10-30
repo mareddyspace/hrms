@@ -121,5 +121,18 @@
     "code": "unpaid",
     "name": "Leave without pay",
     "quota": 12
+  },
+  {
+    "code": "optional",
+    "name": "Optional holiday",
+    "quota": 0,
+    "byCountry": {
+      "IN": {
+        "quota": 2
+      },
+      "US": {
+        "quota": 1
+      }
+    }
   }
 ]

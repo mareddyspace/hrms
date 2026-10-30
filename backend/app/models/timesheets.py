@@ -54,3 +54,21 @@ class TimesheetEntry(TimestampMixin, Base):
     hours: Mapped[float] = mapped_column(Numeric(5, 2, asdecimal=False))
     billable: Mapped[bool] = mapped_column(Boolean, default=True)
     comment: Mapped[str | None] = mapped_column(Text)
+
+
+class TimesheetDay(TimestampMixin, Base):
+    """One person's day of time, submitted on its own for approval (daily timesheets).
+
+    No row = draft. submitted -> approved | rejected (sent back: can be corrected and submitted again later)."""
+
+    __tablename__ = "timesheet_days"
+    __table_args__ = (UniqueConstraint("employee_id", "work_date", name="uq_timesheet_day_employee_date"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), index=True)
+    work_date: Mapped[date] = mapped_column(Date, index=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)  # draft | submitted | approved | rejected
+    submitted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    decided_by: Mapped[str | None] = mapped_column(ForeignKey("employees.id"))
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    decision_note: Mapped[str | None] = mapped_column(Text)

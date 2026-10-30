@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ActionButton, Banner, Card, Field, Page, StatusPill, SubmitButton, notify, useAction } from "../components/ui.tsx";
+import { DAY_TARGET, HALF_DAY_TARGET, dayRecordFor, isFixable, legacyLockedDate, shortfallText, useDayRecords } from "../data/timesheetDays.ts";
+import { DayStatusBadge, HoursMeter, TimesheetTeamDays } from "./TimesheetTeamDays.tsx";
+import { pendingMirror } from "../api/syncTimeApprovals.ts";
 import { managementChain } from "../demoAccounts.ts";
 import {
   blockingLeave,
@@ -9,6 +12,7 @@ import {
   formatHourLabel,
   formatHoursAmount,
   formatShortDate,
+  halfDayLeave,
   mondayOf,
   parseISODate,
   shiftWeek,
@@ -22,10 +26,10 @@ import type { Project, Task } from "../model.ts";
 import { addDaysISO } from "../model.ts";
 import { API_ENABLED } from "../api/client.ts";
 import { loadApiUtilization, timeMirror, type UtilizationOut } from "../api/syncTimeSheets.ts";
-import { nameOf as apiNameOf } from "../api/syncShared.ts";
+import { TimesheetTeamDetail } from "./TimesheetTeamDetail.tsx";
+import { AttendanceStrip, durationText, useTodayAttendance } from "../components/AttendanceStrip.tsx";
 import "./tickets.css";
 
-const DAY_TARGET = 8;
 const GRID_START = 8;
 const GRID_END = 20;
 const HOUR_PX = 56;
@@ -46,6 +50,20 @@ type CalendarBlock = {
 type WorkType = "project" | "ticket" | "task";
 type LogKind = WorkType | "leave";
 
+/** 9.5 -> "09:30" (for time inputs) and back. */
+function toHHMM(hour: number): string {
+  const total = Math.round(hour * 60);
+  const h = Math.floor(total / 60) % 24;
+  const m = total % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function fromHHMM(value: string): number | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  return Number(match[1]) + Number(match[2]) / 60;
+}
+
 /** Internal clients are non-billable by default; client work is billable. */
 function billableFor(project: Project | undefined): boolean {
   return !!project && !/alderline|internal/i.test(project.client);
@@ -65,7 +83,6 @@ function weekRangeLabel(weekStart: string): string {
 }
 
 type TimesheetView = "mine" | "company";
-type OrgFilter = "all" | "submitted" | "approved" | "missing" | "draft";
 
 export function TimesheetPage() {
   const {
@@ -75,13 +92,16 @@ export function TimesheetPage() {
     isManager,
     addTimeEntry,
     removeTimeEntry,
-    submitWeekTimesheets,
-    setOrgTimesheetStatus,
+    submitDayTimesheet,
     canDecideFor,
+    demoProfile,
   } = usePortal();
   const projects = currentProjects;
-  const [view, setView] = useState<TimesheetView>("mine");
-  const [orgFilter, setOrgFilter] = useState<OrgFilter>("all");
+  const [params, setParams] = useSearchParams();
+  // /timesheet?view=team (from an approval notification) opens the team tab.
+  const [view, setView] = useState<TimesheetView>(() => (params.get("view") === "team" ? "company" : "mine"));
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  const teamLabel = "Team timesheets";
   const [weekStart, setWeekStart] = useState(() => mondayOf(todayISO()));
   const [logOpen, setLogOpen] = useState(false);
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
@@ -93,7 +113,20 @@ export function TimesheetPage() {
   const [billable, setBillable] = useState(true);
   const [logKind, setLogKind] = useState<LogKind>("project");
   const [workId, setWorkId] = useState("");
-  const [params, setParams] = useSearchParams();
+  const viewParam = params.get("view");
+  useEffect(() => {
+    if (viewParam === "team") setView("company");
+    else if (viewParam === "mine") setView("mine");
+  }, [viewParam]);
+  function chooseView(next: TimesheetView) {
+    setView(next);
+    const nextParams = new URLSearchParams(params);
+    nextParams.set("view", next === "company" ? "team" : "mine");
+    setParams(nextParams, { replace: true });
+  }
+  const dayRecords = useDayRecords();
+  const myDay = (day: string) => dayRecordFor(dayRecords, employee.id, day);
+  const pending = useSyncExternalStore(pendingMirror.subscribe, pendingMirror.get, pendingMirror.get);
   const tickets = useTickets();
   const myTickets = useMemo(() => ticketsAssignedTo(employee.id, tickets), [employee.id, tickets]);
   const myTasks = useMemo(
@@ -104,6 +137,17 @@ export function TimesheetPage() {
   // Backend mode: the API lists only the weeks this user decides, and knows why a week was sent back.
   const apiTime = useSyncExternalStore(timeMirror.subscribe, timeMirror.get, timeMirror.get);
   const decides = (personId: string) => API_ENABLED || canDecideFor(personId);
+  // Waiting count for the Team timesheets tab: submitted days (and older submitted weeks) I can decide now.
+  const isHr = demoProfile.role === "hr" || demoProfile.role === "hr_admin";
+  const waitingCount = API_ENABLED
+    ? pending.items.filter((i) => i.kind === "timesheet_day" || i.kind === "timesheet_week").length
+    : dayRecords.filter(
+        (r) =>
+          r.status === "submitted" &&
+          r.personId !== employee.id &&
+          (canDecideFor(r.personId, "timesheets") || (isHr && managementChain(r.personId).length === 0)),
+      ).length +
+      state.orgTimesheets.filter((row) => row.status === "submitted" && row.personId !== employee.id && canDecideFor(row.personId, "timesheets")).length;
   const [utilization, setUtilization] = useState<UtilizationOut | null>(null);
   useEffect(() => {
     if (!API_ENABLED || view !== "company") return;
@@ -181,14 +225,28 @@ export function TimesheetPage() {
   const billableTotal = blocks.filter((block) => block.billable).reduce((sum, block) => sum + block.hours, 0);
   const nonBillableTotal = weekTotal - billableTotal;
   // Capacity follows the person's own working days this week.
-  const weekCapacity = DAY_TARGET * workDates.length;
+  const weekCapacity = workDates.reduce((sum, d) => sum + (offDays[d] ? 0 : DAY_TARGET), 0);
   const weekStatus = weekSheets.some((sheet) => sheet.status === "approved")
     ? "approved"
     : weekSheets.some((sheet) => sheet.status === "submitted")
       ? "submitted"
       : "draft";
-  // The API also keeps a submitted week closed until the manager decides it.
-  const locked = weekStatus === "approved" || (API_ENABLED && weekStatus === "submitted");
+  // A week submitted the old (weekly) way only locks the days it covered; other days are logged day by day.
+  const legacyDay = (day: string) => legacyLockedDate(weekStatus !== "draft", day, (dayTotals[day] ?? 0) > 0, myDay(day));
+  // Time is logged on the day itself; a week the manager sent back can be fixed on any of its days.
+  const weekSentBack = API_ENABLED
+    ? apiTime.weeks[weekStart]?.status === "rejected"
+    : state.orgTimesheets.some(
+        (row) => row.personId === employee.id && row.weekStart === weekStart && row.status === "draft" && !!row.decidedBy,
+      );
+  const daySentBack = (day: string) => isFixable(myDay(day)?.status);
+  const dayLocked = (day: string) => {
+    const status = myDay(day)?.status;
+    return status === "submitted" || status === "approved";
+  };
+  const canLogOn = (day: string) =>
+    !offDays[day] && !dayLocked(day) && !legacyDay(day) && (day === todayISO() || weekSentBack || daySentBack(day));
+  const canLogThisWeek = workDates.some(canLogOn);
 
   /** Tickets carry a project id; tasks a project or client name. Unmatched work goes to the internal project. */
   function projectForWork(type: WorkType, id: string): Project | undefined {
@@ -223,15 +281,17 @@ export function TimesheetPage() {
   }
 
   function openLog(forDate?: string, work?: { type: WorkType; id: string }) {
-    const free = (d: string) => workDates.includes(d) && !offDays[d];
+    const free = (d: string) => workDates.includes(d) && canLogOn(d);
     setDate(
       forDate && free(forDate)
         ? forDate
         : free(todayISO())
           ? todayISO()
-          : workDates.filter((d) => !offDays[d] && d <= todayISO()).pop() ?? workDates.find((d) => !offDays[d]) ?? workDates[0] ?? todayISO(),
+          : workDates.filter((d) => free(d) && d <= todayISO()).pop() ?? workDates.find(free) ?? todayISO(),
     );
-    setStartHour("9.5");
+    const chosen = forDate && free(forDate) ? forDate : todayISO();
+    const lastEnd = blocks.filter((b) => b.date === chosen).reduce((max, b) => Math.max(max, b.startHour + b.hours), 0);
+    setStartHour(String(lastEnd > 0 && lastEnd < 23 ? lastEnd : 9.5));
     setHours("1");
     setNote("");
     chooseWork(work?.type ?? "project", work?.id ?? projects[0]?.id ?? "");
@@ -257,8 +317,8 @@ export function TimesheetPage() {
       });
       return;
     }
-    if (locked) {
-      setMessage({ tone: "err", text: "This week is approved and locked." });
+    if (!canLogThisWeek) {
+      setMessage({ tone: "err", text: "Time can only be logged for today." });
       return;
     }
     openLog(undefined, work);
@@ -323,38 +383,80 @@ export function TimesheetPage() {
     };
   }, [blocks]);
 
-  async function onSubmitWeek() {
-    const error = await submitWeekTimesheets(weekStart);
-    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Week submitted for approval." });
+  /** Minimum hours to submit a day: 9, 4.5 on half-day leave, 0 on leave, holidays and weekly offs. */
+  function targetFor(day: string): number {
+    if (offDays[day] || !workDates.includes(day)) return 0;
+    return halfDayLeave(state.leaveRequests, employee.id, day) ? HALF_DAY_TARGET : DAY_TARGET;
+  }
+  const approverName = managementChain(employee.id)[0]?.fullName ?? "HR";
+
+  async function onSubmitDay(day: string) {
+    const error = await submitDayTimesheet(day);
+    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: `${formatShortDate(day)} submitted for approval.` });
     if (error) return false;
-    notify(`Timesheet submitted to ${managementChain(employee.id)[0]?.fullName ?? "your manager"}.`);
+    notify(`Timesheet for ${formatShortDate(day)} sent to ${approverName}.`);
     return true;
   }
 
+  const today = todayISO();
+  const todayInWeek = weekDates(weekStart).includes(today) || (today >= weekStart && today <= addDaysISO(weekStart, 6));
+  const todayTotal = blocks.filter((b) => b.date === today).reduce((sum, b) => sum + b.hours, 0);
+  const todayTarget = targetFor(today);
+  const todayRecord = myDay(today);
+  const todayStatus = todayRecord?.status ?? "draft";
+  const todayShort = shortfallText(todayTotal, todayTarget);
+  // Today's timesheet goes in after checking out (a day sent back doesn't need attendance).
+  const att = useTodayAttendance();
+  const needCheckOut = todayStatus === "draft" && todayTarget > 0 && !att.checkedOut;
+  const todayToGo = Math.round((todayTarget - todayTotal) * 100) / 100;
+  const todayBlocked = needCheckOut ? "Check out first" : todayShort ? `Log at least ${todayTarget} h (${todayToGo} h to go)` : null;
+  const overLogged = att.checkedOut && todayTotal * 60 > att.minutes + 30;
+  const legacyWeek = weekStatus === "approved" || weekStatus === "submitted";
+  // Days to fix: sent back or reopened by the manager (any week), oldest first.
+  const daysToFix = dayRecords
+    .filter((r) => r.personId === employee.id && r.date !== today && isFixable(r.status))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const hoursOn = (day: string) =>
+    state.timesheets
+      .filter((sheet) => sheet.employeeId === employee.id)
+      .flatMap((sheet) => sheet.entries ?? [])
+      .filter((entry) => entry.date === day)
+      .reduce((sum, entry) => sum + entry.hours, 0);
+  const managerFirstName = approverName.split(" ")[0] || "your manager";
+  // One short reason next to "Log time" when nothing can be logged in the week shown.
+  const logBlockedReason = canLogThisWeek
+    ? null
+    : !todayInWeek
+          ? "Today only"
+          : todayStatus === "submitted"
+            ? `Today submitted · waiting on ${todayRecord?.approvalLabel ?? approverName}`
+            : todayStatus === "approved"
+              ? "Today approved"
+              : offDays[today]
+                ? `Today: ${offDays[today].split(" · ")[0]}`
+                : !workDates.includes(today)
+                  ? "Day off today"
+                  : "Today only";
+
+
   const hourMarks = Array.from({ length: GRID_END - GRID_START + 1 }, (_, index) => GRID_START + index);
 
+  // Weeks submitted before daily timesheets stay readable and decidable here: every week still waiting (any date),
+  // plus the weeks shown that were approved or sent back.
   const orgRows = useMemo(() => {
     return state.orgTimesheets
-      .filter((row) => row.weekStart === weekStart)
-      .filter((row) => (orgFilter === "all" ? true : row.status === orgFilter))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [orgFilter, state.orgTimesheets, weekStart]);
-
-  const orgCounts = useMemo(() => {
-    const weekRows = state.orgTimesheets.filter((row) => row.weekStart === weekStart);
-    return {
-      total: weekRows.length,
-      submitted: weekRows.filter((row) => row.status === "submitted").length,
-      approved: weekRows.filter((row) => row.status === "approved").length,
-      missing: weekRows.filter((row) => row.status === "missing").length,
-      draft: weekRows.filter((row) => row.status === "draft").length,
-    };
-  }, [state.orgTimesheets, weekStart]);
+      .filter(
+        (row) =>
+          row.personId !== employee.id &&
+          (row.status === "submitted" || (row.weekStart === weekStart && (row.status === "approved" || (row.status === "draft" && !!row.decidedBy)))),
+      )
+      .sort((a, b) => b.weekStart.localeCompare(a.weekStart) || a.name.localeCompare(b.name));
+  }, [employee.id, state.orgTimesheets, weekStart]);
 
   return (
     <Page
-      title={view === "mine" ? "My timesheet" : "Company timesheet"}
-      action={view === "mine" ? <StatusPill status={weekStatus} /> : undefined}
+      title={view === "mine" ? "My timesheet" : teamLabel}
+      action={view === "mine" && todayInWeek ? <DayStatusBadge status={todayStatus} /> : undefined}
     >
       <div className="ts-toolbar">
         <div className="ts-tabs" role="tablist" aria-label="Timesheet views">
@@ -363,7 +465,7 @@ export function TimesheetPage() {
             className={view === "mine" ? "active" : undefined}
             role="tab"
             aria-selected={view === "mine"}
-            onClick={() => setView("mine")}
+            onClick={() => chooseView("mine")}
           >
             My timesheet
           </button>
@@ -373,9 +475,14 @@ export function TimesheetPage() {
               className={view === "company" ? "active" : undefined}
               role="tab"
               aria-selected={view === "company"}
-              onClick={() => setView("company")}
+              onClick={() => chooseView("company")}
             >
-              Company timesheet
+              {teamLabel}
+              {waitingCount > 0 && (
+                <span className="ts-count" aria-label={`${waitingCount} waiting`}>
+                  {waitingCount}
+                </span>
+              )}
             </button>
           )}
         </div>
@@ -394,9 +501,18 @@ export function TimesheetPage() {
           </div>
           {view === "mine" && (
             <div className="form-actions">
-              <button className="btn" type="button" disabled={locked} onClick={() => openLog()}>
+              <button
+                className="btn"
+                type="button"
+                disabled={!canLogThisWeek}
+                title={logBlockedReason ?? undefined}
+                onClick={() => openLog()}
+              >
                 Log time
               </button>
+              <span className="muted">
+                {logBlockedReason ?? (weekSentBack || daysToFix.length ? "Fix the days below, or log today." : `Today only. Missed a day? Ask ${managerFirstName} to reopen it.`)}
+              </span>
             </div>
           )}
         </div>
@@ -404,46 +520,7 @@ export function TimesheetPage() {
 
       {view === "company" ? (
         <>
-          <section className="summary-row" aria-label="Company timesheet summary">
-            <div className="summary">
-              <span>People</span>
-              <strong>{orgCounts.total}</strong>
-            </div>
-            <div className="summary">
-              <span>Submitted</span>
-              <strong>{orgCounts.submitted}</strong>
-            </div>
-            <div className="summary">
-              <span>Approved</span>
-              <strong>{orgCounts.approved}</strong>
-            </div>
-            <div className="summary">
-              <span>Missing</span>
-              <strong>{orgCounts.missing}</strong>
-            </div>
-          </section>
-          <div className="year-bar" role="tablist" aria-label="Company timesheet filter">
-            {(
-              [
-                ["all", "All"],
-                ["submitted", "Submitted"],
-                ["approved", "Approved"],
-                ["missing", "Missing"],
-                ["draft", "Draft"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={orgFilter === value}
-                className={orgFilter === value ? "year-chip active" : "year-chip"}
-                onClick={() => setOrgFilter(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <TimesheetTeamDays weekStart={weekStart} />
           {API_ENABLED && utilization && (
             <Card title="Utilization this week" action={<span className="muted">Everyone in your scope</span>}>
               <section className="summary-row" aria-label="Utilization">
@@ -486,13 +563,17 @@ export function TimesheetPage() {
               )}
             </Card>
           )}
-          <Card title="Organization timesheets">
+          {orgRows.length > 0 && (
+          <Card
+            title={`Weekly timesheets · ${orgRows.filter((r) => r.status === "submitted" && decides(r.personId)).length} waiting`}
+            action={<span className="muted">Submitted as whole weeks before daily timesheets</span>}
+          >
             <div className="table-scroll">
               <table className="data">
                 <thead>
                   <tr>
                     <th>Employee</th>
-                    <th>Code</th>
+                    <th>Week</th>
                     <th>Department</th>
                     <th>Projects</th>
                     <th>Hours</th>
@@ -501,21 +582,14 @@ export function TimesheetPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {orgRows.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="muted">
-                        No timesheet records for this week and filter.
-                      </td>
-                    </tr>
-                  )}
-                  {orgRows.map((row) => (
+                  {orgRows.flatMap((row) => [
                     <tr key={row.id}>
                       <td>
                         <strong>{row.name}</strong>
                       </td>
-                      <td>{row.employeeCode}</td>
+                      <td>{weekRangeLabel(row.weekStart)}</td>
                       <td>{row.department}</td>
-                      <td>{row.projectSummary}</td>
+                      <td>{row.projectSummary || <span className="muted">Open to see</span>}</td>
                       <td>{row.status === "missing" ? "—" : formatHoursAmount(row.hours)}</td>
                       <td>
                         <StatusPill status={row.status} />
@@ -525,40 +599,16 @@ export function TimesheetPage() {
                       </td>
                       <td>
                         {/* Only the person's reporting line decides — never their own row. */}
-                        {row.status === "submitted" && decides(row.personId) && (
-                          <span className="form-actions">
-                            <ActionButton
-                              className="btn btn-tiny"
-                              success={`${row.name}'s timesheet approved.`}
-                              onAction={async () => {
-                                const error = await setOrgTimesheetStatus(row.id, "approved");
-                                setMessage(
-                                  error
-                                    ? { tone: "err", text: error }
-                                    : { tone: "ok", text: `${row.name}'s timesheet approved.` },
-                                );
-                                return error ? false : true;
-                              }}
-                            >
-                              Approve
-                            </ActionButton>
-                            <ActionButton
-                              className="btn-ghost btn-tiny"
-                              success={`${row.name}'s timesheet sent back for changes.`}
-                              onAction={async () => {
-                                const error = await setOrgTimesheetStatus(row.id, "draft");
-                                setMessage(
-                                  error
-                                    ? { tone: "err", text: error }
-                                    : { tone: "ok", text: `${row.name}'s timesheet sent back for changes.` },
-                                );
-                                return error ? false : true;
-                              }}
-                            >
-                              Send back
-                            </ActionButton>
-                          </span>
-                        )}
+                        {row.status !== "missing" && (
+                          <button
+                            type="button"
+                            className={row.status === "submitted" && decides(row.personId) ? "btn btn-tiny" : "btn-ghost btn-tiny"}
+                            aria-expanded={openRow === row.id}
+                            onClick={() => setOpenRow(openRow === row.id ? null : row.id)}
+                          >
+                            {openRow === row.id ? "Hide" : row.status === "submitted" && decides(row.personId) ? "Review" : "View"}
+                          </button>
+                        )}{" "}
                         {row.status === "submitted" && !decides(row.personId) && (
                           <span className="muted">Waiting for their manager</span>
                         )}
@@ -566,37 +616,106 @@ export function TimesheetPage() {
                         {row.status === "draft" && <span className="muted">Not submitted</span>}
                         {row.status === "approved" && <span className="muted">Locked</span>}
                       </td>
-                    </tr>
-                  ))}
+                    </tr>,
+                    openRow === row.id && (
+                      <tr key={`${row.id}-detail`}>
+                        <td colSpan={7}>
+                          <TimesheetTeamDetail row={row} canDecide={decides(row.personId)} />
+                        </td>
+                      </tr>
+                    ),
+                  ])}
                 </tbody>
               </table>
             </div>
             <Banner message={message} />
           </Card>
+          )}
         </>
       ) : (
         <>
-      <div className={`ts-submit-bar ${weekStatus}`}>
-        <span>
+      {legacyWeek && (
+        <p className="muted">
           {weekStatus === "approved"
-            ? "Timesheet approved"
-            : weekStatus === "submitted"
-              ? `Timesheet submitted — waiting on ${(API_ENABLED && apiTime.weeks[weekStart]?.approval?.current_label?.toLowerCase()) || "manager"}`
-              : "Timesheet unsubmitted"}
-          {API_ENABLED && apiTime.weeks[weekStart]?.status === "rejected" && (
-            <>
-              {" "}
-              · sent back by {apiNameOf(apiTime.weeks[weekStart]?.decided_by)}
-              {apiTime.weeks[weekStart]?.decision_note ? `: “${apiTime.weeks[weekStart]?.decision_note}”` : ""}
-            </>
+            ? "Days logged before today were approved as a weekly timesheet."
+            : `Days logged before today were submitted as a weekly timesheet — waiting on ${(API_ENABLED && apiTime.weeks[weekStart]?.approval?.current_label?.toLowerCase()) || "manager"}.`}
+        </p>
+      )}
+      <AttendanceStrip main={!att.checkedOut && todayStatus === "draft"} />
+      {todayInWeek ? (
+        <div className={`ts-submit-bar ${todayStatus === "rejected" ? "" : todayStatus}`}>
+          <div className="ts-today">
+            <span>Today</span>
+            <HoursMeter total={todayTotal} target={todayTarget} />
+            {att.session.checkIn && <span className="muted">Attended {durationText(att.minutes)}</span>}
+            <DayStatusBadge status={todayStatus} />
+            <span className="ts-why">
+              {todayStatus === "submitted"
+                ? `Waiting on ${todayRecord?.approvalLabel ?? approverName}. Locked until it's decided.`
+                : todayStatus === "approved"
+                  ? `Approved${todayRecord?.decidedByName ? ` by ${todayRecord.decidedByName}` : ""}. Locked.`
+                  : todayTarget === 0
+                    ? offDays[today] ?? "Day off — nothing to submit."
+                    : todayStatus === "rejected"
+                      ? `Sent back${todayRecord?.decidedByName ? ` by ${todayRecord.decidedByName}` : ""}${todayRecord?.decisionNote ? `: “${todayRecord.decisionNote}”` : ""}. Fix it and submit again.`
+                      : todayBlocked ?? "Ready to submit."}
+            </span>
+            {overLogged && todayStatus === "draft" && (
+              <span className="ts-att-warn">
+                You logged {Math.round(todayTotal * 100) / 100} h but were checked in for {durationText(att.minutes)}
+              </span>
+            )}
+          </div>
+          {(todayStatus === "draft" || todayStatus === "rejected") && todayTarget > 0 && (
+            <ActionButton
+              className={needCheckOut ? "btn-ghost btn-tiny" : "btn btn-tiny"}
+              disabled={!!todayBlocked}
+              title={todayBlocked ?? undefined}
+              onAction={() => onSubmitDay(today)}
+            >
+              {todayStatus === "rejected" ? "Submit again" : "Submit for approval"}
+            </ActionButton>
           )}
-        </span>
-        {weekStatus !== "approved" && weekStatus !== "submitted" && (
-          <ActionButton className="btn btn-tiny" onAction={onSubmitWeek}>
-            Submit for approval
-          </ActionButton>
-        )}
-      </div>
+        </div>
+      ) : null}
+      {daysToFix.length > 0 && (
+        <section aria-label="Days to fix">
+          <h3 className="ts-fix-title">Days to fix · {daysToFix.length}</h3>
+          <ul className="ts-sent-back-list">
+            {daysToFix.map((record) => {
+              const d = record.date;
+              const total = hoursOn(d);
+              const target = halfDayLeave(state.leaveRequests, employee.id, d) ? HALF_DAY_TARGET : DAY_TARGET;
+              const short = shortfallText(total, target);
+              const inWeek = mondayOf(d) === weekStart;
+              return (
+                <li key={d}>
+                  <span>
+                    <strong>{formatShortDate(d)}</strong> {record.status === "reopened" ? "reopened" : "sent back"}
+                    {record.decidedByName ? ` by ${record.decidedByName}` : ""}
+                    {record.decisionNote ? `: “${record.decisionNote}”` : ""} · {formatHoursAmount(total)} of {target} h
+                    {short ? <span className="ts-why"> · {short}</span> : null}
+                  </span>
+                  <span className="form-actions" style={{ marginTop: 0 }}>
+                    {inWeek ? (
+                      <button className="btn-ghost btn-tiny" type="button" onClick={() => openLog(d)}>
+                        Log time
+                      </button>
+                    ) : (
+                      <button className="btn-ghost btn-tiny" type="button" onClick={() => setWeekStart(mondayOf(d))}>
+                        Open week
+                      </button>
+                    )}
+                    <ActionButton className="btn btn-tiny" disabled={!!short} title={short ?? undefined} onAction={() => onSubmitDay(d)}>
+                      {record.status === "reopened" ? "Submit" : "Submit again"}
+                    </ActionButton>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <Card title="Assigned to you" action={<span className="muted">Tickets and accepted tasks</span>}>
         {myTickets.length + myTasks.length === 0 ? (
@@ -619,9 +738,11 @@ export function TimesheetPage() {
                   <Link className="btn-ghost btn-tiny" to={`/tickets?id=${t.id}`}>
                     Open
                   </Link>
-                  <button className="btn btn-tiny" type="button" disabled={locked} onClick={() => openLog(undefined, { type: "ticket", id: t.id })}>
-                    Log time
-                  </button>
+                  {canLogThisWeek && (
+                    <button className="btn btn-tiny" type="button" onClick={() => openLog(undefined, { type: "ticket", id: t.id })}>
+                      Log time
+                    </button>
+                  )}
                 </span>
               </li>
             ))}
@@ -638,9 +759,11 @@ export function TimesheetPage() {
                   </span>
                 </div>
                 {t.accepted ? (
-                  <button className="btn btn-tiny" type="button" disabled={locked} onClick={() => openLog(undefined, { type: "task", id: t.id })}>
-                    Log time
-                  </button>
+                  canLogThisWeek && (
+                    <button className="btn btn-tiny" type="button" onClick={() => openLog(undefined, { type: "task", id: t.id })}>
+                      Log time
+                    </button>
+                  )
                 ) : (
                   <Link className="btn-ghost btn-tiny" to="/tasks">
                     Accept first
@@ -664,9 +787,17 @@ export function TimesheetPage() {
                 <div key={day} className="ts-day-head">
                   <strong>{label}</strong>
                   <span>
-                    {offDays[day] ? offDays[day].split(" · ")[0] : `${formatHoursAmount(total)} / ${DAY_TARGET}h`}
+                    {offDays[day] ? offDays[day].split(" · ")[0] : `${formatHoursAmount(total)} / ${targetFor(day)}h`}
                   </span>
-                  {!locked && !offDays[day] && (
+                  {!offDays[day] && !legacyWeek && (myDay(day) || (day <= today && total > 0)) && (
+                    <span className="ts-day-status" title={myDay(day)?.decisionNote ?? undefined}>
+                      <DayStatusBadge status={myDay(day)?.status ?? "draft"} />
+                    </span>
+                  )}
+                  {isFixable(myDay(day)?.status) && myDay(day)?.decisionNote && (
+                    <span className="ts-day-note">“{myDay(day)?.decisionNote}”</span>
+                  )}
+                  {canLogOn(day) && (
                     <button className="ts-add-day" type="button" onClick={() => openLog(day)} aria-label={`Log time on ${label}`}>
                       +
                     </button>
@@ -723,7 +854,7 @@ export function TimesheetPage() {
                           {formatHourCompact(block.startHour)} – {formatHourCompact(block.startHour + block.hours)}
                         </span>
                         <em>{block.projectName}</em>
-                        {!locked && (
+                        {canLogOn(block.date) && (
                           <button
                             type="button"
                             className="ts-block-x"
@@ -752,7 +883,7 @@ export function TimesheetPage() {
               return (
                 <div key={day} className="ts-day-total-cell">
                   <strong>{formatHoursAmount(total)}</strong>
-                  <span>of {DAY_TARGET}h</span>
+                  <span>{offDays[day] ? "day off" : `of ${targetFor(day)}h`}</span>
                 </div>
               );
             })}
@@ -921,25 +1052,47 @@ export function TimesheetPage() {
                 <Field label="Date">
                   <select value={date} onChange={(event) => setDate(event.target.value)}>
                     {workDates.map((day) => (
-                      <option key={day} value={day} disabled={!!offDays[day]}>
+                      <option key={day} value={day} disabled={!canLogOn(day)}>
                         {formatShortDate(day)}
                         {offDays[day] ? ` — ${offDays[day].split(" · ")[0]}` : ""}
                       </option>
                     ))}
                   </select>
                 </Field>
-                <Field label="Start time">
-                  <select value={startHour} onChange={(event) => setStartHour(event.target.value)}>
-                    {Array.from({ length: 22 }, (_, index) => index * 0.5 + 8).map((value) => (
-                      <option key={value} value={String(value)}>
-                        {formatHourCompact(value)}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Hours">
-                  <input type="number" min={0.5} max={12} step={0.5} value={hours} onChange={(event) => setHours(event.target.value)} />
-                </Field>
+                <div className="ts-time-pair">
+                  <Field label="Start">
+                    <input
+                      type="time"
+                      step={900}
+                      value={toHHMM(Number(startHour) || 0)}
+                      onChange={(event) => {
+                        const value = fromHHMM(event.target.value);
+                        if (value !== null) setStartHour(String(value));
+                      }}
+                    />
+                  </Field>
+                  <Field label="End">
+                    <input
+                      type="time"
+                      step={900}
+                      value={toHHMM((Number(startHour) || 0) + (Number(hours) || 0))}
+                      onChange={(event) => {
+                        const value = fromHHMM(event.target.value);
+                        const start = Number(startHour) || 0;
+                        if (value !== null && value > start) setHours(String(Math.round((value - start) * 4) / 4));
+                      }}
+                    />
+                  </Field>
+                  <Field label="Hours">
+                    <input type="number" min={0.25} max={24} step={0.25} value={hours} onChange={(event) => setHours(event.target.value)} />
+                  </Field>
+                </div>
+                {date && (
+                  <p className="muted" style={{ margin: 0 }}>
+                    {formatShortDate(date)}: {formatHoursAmount(dayTotals[date] ?? 0)} logged
+                    {Number(hours) > 0 ? ` → ${formatHoursAmount((dayTotals[date] ?? 0) + Number(hours))} with this block` : ""} of {targetFor(date)} h
+                  </p>
+                )}
                 <Field label="What did you work on?">
                   <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. Invoice export polish" />
                 </Field>

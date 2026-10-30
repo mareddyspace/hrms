@@ -276,15 +276,20 @@ def save_my_skill(body: SkillIn, request: Request, db: DbSession, user: CurrentU
     emp = me(user)
     name = body.skill.strip()
     row = db.scalar(select(EmployeeSkill).where(EmployeeSkill.employee_id == emp.id, func.lower(EmployeeSkill.skill) == name.lower()))
-    before = {"level": row.level, "target_level": row.target_level} if row else None
+    before = {"level": row.level, "target_level": row.target_level, "years": row.years, "last_used": row.last_used,
+              "evidence_url": row.evidence_url} if row else None
     if row is None:
         row = EmployeeSkill(employee_id=emp.id, skill=name, level=body.level, target_level=body.target_level)
         db.add(row)
     else:
         row.level, row.target_level = body.level, body.target_level
+    row.years, row.last_used = body.years, body.last_used
+    row.evidence_url = (body.evidence_url or "").strip() or None
     db.flush()
     record_audit(db, actor_id=user.id, action="skill_saved", entity="employee_skill", entity_id=str(row.id), subject_id=emp.id,
-                 before=before, after={"skill": row.skill, "level": row.level, "target_level": row.target_level}, ip=client_ip(request))
+                 before=before, after={"skill": row.skill, "level": row.level, "target_level": row.target_level,
+                                       "years": row.years, "last_used": row.last_used, "evidence_url": row.evidence_url},
+                 ip=client_ip(request))
     db.commit()
     return row
 

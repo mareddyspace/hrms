@@ -18,6 +18,7 @@ from app.deps import CurrentUserDep, DbSession, client_ip
 from app.models import Country, Employee, IntegrationConnector, PlatformSetting
 from app.schemas.onboarding_payroll import PayrollEntityStatusOut, PayrollStatusOut
 from app.services.activity import record_audit
+from app.services.headcount import started_clause
 from app.services.scope import HR_ROLES
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
@@ -65,7 +66,8 @@ def payroll_status(db: DbSession, user: CurrentUserDep) -> PayrollStatusOut:
     health_base = _health(connection, conn.failed_count if conn else 0, conn.records_processed if conn else 0)
     countries = {c.code: c.name for c in db.scalars(select(Country))}
     stmt = (select(Employee.country_code, Employee.legal_entity, Employee.payroll_status, func.count())
-            .where(user.scope.employee_filter())
+            .where(user.scope.employee_filter(), Employee.employment_status.not_in(("Terminated", "Exited")),
+                   started_clause(today))  # people on the payroll now: started, not left (same as headcount)
             .group_by(Employee.country_code, Employee.legal_entity, Employee.payroll_status))
     groups: dict[tuple[str, str], dict[str, int]] = {}
     for cc, entity, status, n in db.execute(stmt):
@@ -96,6 +98,32 @@ def payroll_status(db: DbSession, user: CurrentUserDep) -> PayrollStatusOut:
             employees=sum(counts.values()), payroll_status_counts=counts,
         ))
     return PayrollStatusOut(period=period, period_label=label, connector_status=connection, rows=rows, totals=totals)
+
+
+class TaxRegimeIn(BaseModel):
+    regime: str = Field(pattern="^(new|old)$")
+
+
+class TaxRegimeOut(BaseModel):
+    employee_id: str
+    regime: str
+
+
+@router.post("/me/tax-regime", response_model=TaxRegimeOut)
+def set_tax_regime(body: TaxRegimeIn, request: Request, db: DbSession, user: CurrentUserDep) -> TaxRegimeOut:
+    """India: the employee picks the new or old income tax regime for their own payslips (TDS)."""
+    emp = db.get(Employee, user.employee_id) if user.employee_id else None
+    if emp is None:
+        raise HTTPException(404, "No employee record on this account.")
+    if emp.country_code != "IN":
+        raise HTTPException(422, "Tax regimes apply to India only.")
+    before = emp.tax_regime or "new"
+    if before != body.regime:
+        emp.tax_regime = body.regime
+        record_audit(db, actor_id=user.id, action="changed tax regime", entity="employee", entity_id=emp.id,
+                     before={"tax_regime": before}, after={"tax_regime": body.regime}, ip=client_ip(request))
+        db.commit()
+    return TaxRegimeOut(employee_id=emp.id, regime=body.regime)
 
 
 @router.get("/providers", response_model=PayrollProvidersOut)

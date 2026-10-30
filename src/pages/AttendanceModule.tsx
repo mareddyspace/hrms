@@ -446,7 +446,7 @@ export function AttendancePage() {
       <>
           {tab === "overview" && (
             <>
-              <Card title="Today's attendance" action={<StatusBadge status={phaseLabel(session.phase)} />}>
+              <Card title="Today's attendance" action={<StatusBadge status={phaseLabel(session.phase)} literal keepCase />}>
                 <div className="att-today-grid">
                   <div>
                     <span className="muted">Status</span>
@@ -732,7 +732,7 @@ export function AttendancePage() {
                       <ul className="todo">
                         {regionHolidays.map((h) => (
                           <li key={h.date}>
-                            {h.date} · {h.name}
+                            {formatShortDate(h.date)} · {h.name}
                           </li>
                         ))}
                       </ul>

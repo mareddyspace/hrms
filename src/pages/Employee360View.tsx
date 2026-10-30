@@ -17,7 +17,7 @@ import { COURSES, PERF_CYCLES } from "../data/talentData.ts";
 import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
-import { leaveRows, parseISODate, toISO, todayISO, type CountryCode } from "../model.ts";
+import { formatShortDate, leaveRows, parseISODate, toISO, todayISO, type CountryCode } from "../model.ts";
 import { MaskedValue } from "../components/MaskedValue.tsx";
 import { canRevealPersonal, personRevealer } from "../data/piiReveal.ts";
 import { isMasked } from "../utils/mask.ts";
@@ -336,8 +336,8 @@ export function Employee360View({
     bullets.push({
       label: "Tenure",
       text: terminated
-        ? `Joined ${person.dateOfJoining}; left${exit.exitDate ? ` on ${exit.exitDate}` : ""}.`
-        : `${tenure} since ${person.dateOfJoining}${recent ? `; last change was a ${recent.type.toLowerCase()} on ${recent.effectiveDate}` : ""}.`,
+        ? `Joined ${formatShortDate(person.dateOfJoining)}; left${exit.exitDate ? ` on ${formatShortDate(exit.exitDate)}` : ""}.`
+        : `${tenure} since ${formatShortDate(person.dateOfJoining)}${recent ? `; last change was a ${recent.type.toLowerCase()} on ${formatShortDate(recent.effectiveDate)}` : ""}.`,
     });
 
     const openers = terminated
@@ -443,7 +443,7 @@ export function Employee360View({
                 <h2>{person.fullName}</h2>
                 {terminated && (
                   <p className="profile-left-chip">
-                    No longer with the company{exit.exitDate ? ` · left ${exit.exitDate}` : ""}
+                    No longer with the company{exit.exitDate ? ` · left ${formatShortDate(exit.exitDate)}` : ""}
                   </p>
                 )}
                 <p className="role">{person.designation}</p>
@@ -619,7 +619,7 @@ export function Employee360View({
             {terminated && <Fact label="Exit date" value={exit.exitDate ?? ""} />}
             {terminated && access.isHr && <Fact label="Exit reason" value={exit.exitReason ?? ""} />}
             <Fact label="Employment type" value={person.employmentType} />
-            <Fact label="Joining date" value={`${person.dateOfJoining} · ${tenureText(person.dateOfJoining, today)}`} />
+            <Fact label="Joining date" value={`${formatShortDate(person.dateOfJoining)} · ${tenureText(person.dateOfJoining, today)}`} />
             <Fact label="Work location" value={`${person.location}, ${person.countryName}`} />
             <Fact label="Work arrangement" value={person.workArrangement} />
             {person.company && <Fact label="Company" value={person.company} />}
@@ -708,7 +708,7 @@ export function Employee360View({
           <DataTable
             headers={["Date", "Status", "In", "Out", "Note"]}
             rows={attendanceExceptions.map((d) => [
-              d.date,
+              formatShortDate(d.date),
               kindLabel(d.kind) + (d.lateMinutes > 0 && d.kind === "present" ? ` · late ${d.lateMinutes} min` : ""),
               d.checkIn ? formatHm(d.checkIn) : "—",
               d.checkOut ? formatHm(d.checkOut) : "—",
@@ -735,8 +735,8 @@ export function Employee360View({
               <ul className="todo">
                 {leaveRequests.map((l) => (
                   <li key={l.id}>
-                    {l.code} · {l.from}
-                    {l.to !== l.from ? ` to ${l.to}` : ""} · <StatusBadge status={l.status} />
+                    {l.code} · {formatShortDate(l.from)}
+                    {l.to !== l.from ? ` to ${formatShortDate(l.to)}` : ""} · <StatusBadge status={l.status} />
                   </li>
                 ))}
               </ul>
@@ -805,7 +805,7 @@ export function Employee360View({
                 {learning.map((l) => (
                   <li key={l.id}>
                     {COURSES.find((c) => c.id === l.courseId)?.title ?? "Course"} · <StatusBadge status={l.status} literal />
-                    {l.completedOn ? ` · ${l.completedOn}` : ` · ${l.progress}%`}
+                    {l.completedOn ? ` · ${formatShortDate(l.completedOn)}` : ` · ${l.progress}%`}
                   </li>
                 ))}
               </ul>
@@ -818,8 +818,8 @@ export function Employee360View({
               <ul className="todo">
                 {certifications.map((c) => (
                   <li key={c.id}>
-                    {c.name} · {c.issuer} · {c.earnedOn}
-                    {c.expiresOn ? ` · expires ${c.expiresOn}` : ""}
+                    {c.name} · {c.issuer} · {formatShortDate(c.earnedOn)}
+                    {c.expiresOn ? ` · expires ${formatShortDate(c.expiresOn)}` : ""}
                   </li>
                 ))}
               </ul>
@@ -869,7 +869,7 @@ export function Employee360View({
           >
             <DataTable
               headers={["Effective", "Change", "Grade", "Base pay"]}
-              rows={compHistory.map((h) => [h.effective, h.event, h.grade, showPay ? h.base : MASK])}
+              rows={compHistory.map((h) => [formatShortDate(h.effective), h.event, h.grade, showPay ? h.base : MASK])}
               empty={<EmptyState title="No changes on file" />}
             />
           </Card>
@@ -904,7 +904,7 @@ export function Employee360View({
           <Card title="Enrolments" to={isSelf ? "/benefits" : undefined}>
             <DataTable
               headers={["Plan", "Status", "Effective"]}
-              rows={enrolments.map((e) => [e.planName, <StatusBadge key={e.id} status={e.status} literal />, e.effective])}
+              rows={enrolments.map((e) => [e.planName, <StatusBadge key={e.id} status={e.status} literal />, formatShortDate(e.effective)])}
               empty={<EmptyState title="No enrolments" />}
             />
           </Card>
@@ -950,7 +950,7 @@ export function Employee360View({
             headers={["Effective", "Change", "From", "To", "By"]}
             rows={timeline.map((e) => [
               <span key={e.id}>
-                {e.effectiveDate}
+                {formatShortDate(e.effectiveDate)}
                 {isScheduled(e, today) ? (
                   <>
                     {" "}

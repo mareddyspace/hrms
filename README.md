@@ -19,7 +19,7 @@ managers, HR, recruiters, admins and executives do all their HR work. The sample
 - Profile with masked personal data, self-edits and HR-approved corrections
 - Company directory and Employee 360 view with an AI summary
 - Attendance (check-in/out, corrections), leave (balances, eligibility rules, Manager → HR approvals), timesheets,
-  shift rosters with coverage checks and swaps
+  manager timesheet review, project details, shift rosters with coverage checks and swaps, optional holidays
 - Travel requests and expense claims with receipts and multi-step approval
 
 **Talent**
@@ -29,6 +29,9 @@ managers, HR, recruiters, admins and executives do all their HR work. The sample
 - Performance (cycles, goals, 1:1s, 360 feedback, ratings, development plans), learning, skills library and career paths
 
 **Rewards, documents and services**
+- Payslips with country income tax, "Tax this year", pay so far this month and final settlement
+- Cash advances, leave encashment and software requests with approvals
+- Editable, versioned policies that employees acknowledge
 - Compensation (restricted access, review cycles), benefits, dependents and nominees
 - Documents and letters with approval and PDF generation
 - Confidential HR cases, HR helpdesk with SLAs, surveys, recognition with points
@@ -51,7 +54,7 @@ managers, HR, recruiters, admins and executives do all their HR work. The sample
 | File storage | S3-compatible object storage | Backblaze B2 |
 | AI | LLMs via OpenRouter (permission-filtered context, policy retrieval) | — |
 
-- 243 automated back-end tests (pytest)
+- 266 automated back-end tests (pytest)
 - Security: argon2 password hashing, JWT with refresh rotation, TOTP MFA, account lockout, PII masking,
   security headers, per-request permission checks
 

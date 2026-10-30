@@ -80,6 +80,9 @@ class PersonBasicOut(ORM):
     manager_name: str | None = None
     photo: str | None
     company: str = "TimeZ"
+    # Lets everyone tell a pre-boarding joiner (not started yet) from a colleague: team lists and "Works with".
+    joining_date: date | None = None
+    started: bool = True
 
 
 class PersonFullOut(ORM):
@@ -122,6 +125,7 @@ class PersonFullOut(ORM):
     payroll_status: str | None
     ai_profile_status: str | None
     last_working_day: date | None = None  # set when an exit is approved (migration 0014)
+    tax_regime: str | None = None  # India: "new" (NULL) or "old" (migration 0015)
     # Profile details (migration 0008). address_line, address_postcode and emergency_phone are always masked.
     company: str = "TimeZ"
     nationality: str | None = None

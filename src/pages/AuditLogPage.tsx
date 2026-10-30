@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Card, EmptyState, Page } from "../components/ui.tsx";
-import { useAuditTrail } from "../data/auditTrail.ts";
+import { useAuditTrail, type AuditEntry } from "../data/auditTrail.ts";
+import { listAuditLog } from "../data/platformLocal.ts";
 import { downloadText } from "../components/ui.tsx";
 import { usePortal } from "../store.tsx";
 
@@ -28,7 +29,21 @@ function when(iso: string, timeZone: string): string {
 /** Who changed what and when, with the values before and after. */
 export function AuditLogPage() {
   const { employee, demoAccounts } = usePortal();
-  const entries = useAuditTrail();
+  const trail = useAuditTrail();
+  // Same events as the admin Home "Recent audit events" card: record changes plus platform events.
+  const entries = useMemo((): (Omit<AuditEntry, "action"> & { action: string })[] => {
+    const platform = listAuditLog().map((e) => ({
+      id: e.id,
+      at: e.at.includes("T") ? e.at : e.at.replace(" ", "T"),
+      actorId: "",
+      actorName: e.actor,
+      entity: "Platform",
+      entityId: e.target,
+      action: e.action,
+      changes: [],
+    }));
+    return [...trail, ...platform].sort((a, b) => b.at.localeCompare(a.at));
+  }, [trail]);
   const [query, setQuery] = useState("");
   const [entity, setEntity] = useState("all");
 

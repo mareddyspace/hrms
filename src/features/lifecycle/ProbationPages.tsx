@@ -79,7 +79,7 @@ export function MyProbationPage() {
 
   return (
     <Page title="My probation">
-      <Card title="Status">
+      <Card title="Probation details">
         <dl className="lc-facts">
           <div>
             <dt>Status</dt>

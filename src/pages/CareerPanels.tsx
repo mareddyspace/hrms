@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
-import { ActionButton, Banner, Card, DataTable, EmptyState, Field, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
-import { SKILL_LIBRARY, TARGET_ROLES, type Course } from "../data/talentData.ts";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
+import { SKILL_LIBRARY, TARGET_ROLES, type Course, type EmployeeSkill } from "../data/talentData.ts";
 import { API_ENABLED } from "../api/client.ts";
 import {
   apiAddSkill,
@@ -15,6 +15,10 @@ import {
 } from "../api/syncCareer.ts";
 import {
   addDevAction,
+  addEmployeeSkill,
+  removeEmployeeSkill,
+  SKILL_LEVELS,
+  updateEmployeeSkill,
   CAREER_FUNCTIONS,
   CAREER_TIMEFRAMES,
   careerInterestsFor,
@@ -502,5 +506,186 @@ export function SkillsLibraryPanel({ me }: { me: TalentActor }) {
         </Card>
       )}
     </div>
+  );
+}
+
+/* ───────────── My skills profile ───────────── */
+
+/** Runs a talent change and resolves with the result (the server's answer in backend mode). */
+function talentAsync(change: () => TalentResult): Promise<TalentResult> {
+  return new Promise((resolve) => talentAction(change, resolve));
+}
+
+const monthLabel = (ym?: string) => {
+  if (!ym) return "—";
+  const [y, m] = ym.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+};
+
+type SkillForm = { name: string; level: string; targetLevel: string; years: string; lastUsed: string; evidenceUrl: string };
+
+const EMPTY_SKILL_FORM: SkillForm = { name: "", level: "Working", targetLevel: "Intermediate", years: "", lastUsed: "", evidenceUrl: "" };
+
+/** My skills: add (library or new), edit and remove, with years, last used and evidence. */
+export function MySkillsPanel({ me }: { me: TalentActor }) {
+  const talent = useTalent();
+  const career = useCareer();
+  const skills = skillProfileFor(talent, me.id);
+  const [editing, setEditing] = useState<EmployeeSkill | "new" | null>(null);
+  const [form, setForm] = useState<SkillForm>(EMPTY_SKILL_FORM);
+  const [error, setError] = useState<string | null>(null);
+  const saveAct = useAction();
+
+  // The library to search: the server's list in backend mode, plus the built-in one.
+  const library = [...new Set([...(API_ENABLED ? career.skills.filter((s) => s.active).map((s) => s.name) : []), ...SKILL_LIBRARY.map((s) => s.name)])].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const inLibrary = library.some((n) => n.toLowerCase() === form.name.trim().toLowerCase());
+
+  function openNew() {
+    setForm(EMPTY_SKILL_FORM);
+    setError(null);
+    setEditing("new");
+  }
+  function openEdit(s: EmployeeSkill) {
+    setForm({
+      name: s.skillName,
+      level: s.level,
+      targetLevel: s.targetLevel,
+      years: s.years != null ? String(s.years) : "",
+      lastUsed: s.lastUsed ?? "",
+      evidenceUrl: s.evidenceUrl ?? "",
+    });
+    setError(null);
+    setEditing(s);
+  }
+
+  async function save() {
+    const years = form.years.trim() === "" ? undefined : Number(form.years);
+    const details = {
+      targetLevel: form.targetLevel,
+      years,
+      lastUsed: form.lastUsed || undefined,
+      evidenceUrl: form.evidenceUrl.trim() || undefined,
+    };
+    const current = editing;
+    const result =
+      current === "new"
+        ? await talentAsync(() => addEmployeeSkill(me, me.id, form.name, form.level, details))
+        : current
+          ? await talentAsync(() => updateEmployeeSkill(me, me.id, current.skillId, { level: form.level, ...details }))
+          : "Nothing to save.";
+    if (result) {
+      setError(result);
+      return result;
+    }
+    setEditing(null);
+    return null;
+  }
+
+  const set = (patch: Partial<SkillForm>) => setForm((f) => ({ ...f, ...patch }));
+  const isNew = editing === "new";
+
+  return (
+    <Card
+      title="My skills"
+      action={
+        <button type="button" className="btn" onClick={openNew}>
+          Add skill
+        </button>
+      }
+    >
+      <DataTable
+        headers={["Skill", "Level", "Target", "Years", "Last used", "Evidence", ""]}
+        rows={skills.map((s) => [
+          <strong key="n">{s.skillName}</strong>,
+          s.level,
+          s.targetLevel,
+          s.years != null ? String(s.years) : "—",
+          monthLabel(s.lastUsed),
+          s.evidenceUrl ? (
+            <a key="e" href={s.evidenceUrl} target="_blank" rel="noreferrer noopener" className="quiet-link">
+              Open
+            </a>
+          ) : (
+            "—"
+          ),
+          // Keyed by skill: rows are keyed by position, so a removed row's "Removed" state would pass to the next skill.
+          <span key={`a-${s.skillId}`} className="reward-actions">
+            <button type="button" className="quiet-link" onClick={() => openEdit(s)}>
+              Edit
+            </button>
+            <ActionButton
+              className="btn-ghost btn-tiny"
+              success={`${s.skillName} removed from your profile.`}
+              toastError
+              onAction={() => talentAsync(() => removeEmployeeSkill(me, me.id, s.skillId))}
+            >
+              Remove
+            </ActionButton>
+          </span>,
+        ])}
+        empty={<EmptyState title="No skills yet" description="Add the skills you use at work." />}
+      />
+      <Dialog open={editing !== null} title={isNew ? "Add skill" : `Edit ${form.name}`} onClose={() => setEditing(null)}>
+        <form className="stack" onSubmit={saveAct.submit(save, { success: isNew ? `${form.name.trim()} added to your profile.` : `${form.name} updated.` })}>
+          <Banner message={error ? { tone: "err", text: error } : null} />
+          {isNew && (
+            <Field label="Skill">
+              <input
+                list="my-skill-library"
+                value={form.name}
+                maxLength={40}
+                placeholder="Search the library or type a new skill"
+                onChange={(e) => set({ name: e.target.value })}
+                autoFocus
+                required
+              />
+              <datalist id="my-skill-library">
+                {library
+                  .filter((n) => !skills.some((s) => s.skillName.toLowerCase() === n.toLowerCase()))
+                  .map((n) => (
+                    <option key={n} value={n} />
+                  ))}
+              </datalist>
+              {form.name.trim().length >= 2 && <span className="muted">{inLibrary ? "From the skills library" : "New skill"}</span>}
+            </Field>
+          )}
+          <div className="form-grid-2">
+            <Field label="Level">
+              <select value={form.level} onChange={(e) => set({ level: e.target.value })}>
+                {SKILL_LEVELS.map((l) => (
+                  <option key={l}>{l}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Target level">
+              <select value={form.targetLevel} onChange={(e) => set({ targetLevel: e.target.value })}>
+                {SKILL_LEVELS.map((l) => (
+                  <option key={l}>{l}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Years">
+              <input type="number" min={0} max={50} step={0.5} value={form.years} onChange={(e) => set({ years: e.target.value })} />
+            </Field>
+            <Field label="Last used">
+              <input type="month" max={todayISO().slice(0, 7)} value={form.lastUsed} onChange={(e) => set({ lastUsed: e.target.value })} />
+            </Field>
+            <Field label="Evidence or certificate link" wide>
+              <input type="url" value={form.evidenceUrl} maxLength={500} placeholder="https://" onChange={(e) => set({ evidenceUrl: e.target.value })} />
+            </Field>
+          </div>
+          <div className="row-gap">
+            <SubmitButton action={saveAct} className="btn" disabled={isNew && form.name.trim().length < 2}>
+              {isNew ? "Add skill" : "Save"}
+            </SubmitButton>
+            <button type="button" className="btn-ghost" onClick={() => setEditing(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </Dialog>
+    </Card>
   );
 }

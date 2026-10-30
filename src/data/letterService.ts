@@ -95,6 +95,7 @@ export function collectLetterFields(row: LetterRequest, history: CompHistoryRow[
     details: row.details ?? "",
     nationality: record?.nationality ?? "",
     endDate,
+    customText: row.customText ?? "",
   };
 }
 
@@ -202,7 +203,7 @@ export function canRequestType(actor: DemoAccount, type: FullLetterType, employe
 
 export function requestLetter(
   actor: DemoAccount,
-  input: { employeeId: string; type: FullLetterType; note: string; details?: string; effectiveDate?: string },
+  input: { employeeId: string; type: FullLetterType; note: string; details?: string; effectiveDate?: string; customText?: string },
 ): RewardResult {
   const blocked = canRequestType(actor, input.type, input.employeeId);
   if (blocked) return blocked;
@@ -219,6 +220,7 @@ export function requestLetter(
     note: input.note.trim() || "No reason given",
     details: input.details?.trim().slice(0, 200),
     effectiveDate: canManageLetters(actor) ? input.effectiveDate : undefined,
+    customText: input.customText?.trim().slice(0, 1200) || undefined,
   });
   if (!error && needsChecker({ employeeId: input.employeeId, type: input.type, requestedById: actor.id })) {
     const draft = { employeeId: input.employeeId, type: input.type as LetterType, requestedById: actor.id } as LetterRequest;

@@ -33,6 +33,7 @@ const LEAVE_COLOURS: Record<LeaveCode, string> = {
   unpaid: "#64748b",
   wfh: "#0891b2",
   emergency_wfh: "#db2777",
+  optional: "#ca8a04",
 };
 /** Colour for teammates' leave when the viewer may only see that they're away. */
 const AWAY_COLOUR = "#64748b";

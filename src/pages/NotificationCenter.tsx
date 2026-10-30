@@ -15,6 +15,7 @@ import {
 import { buildNotificationFeed } from "../data/notificationFeed.ts";
 import { getTickets, subscribeTickets } from "../data/ticketStore.ts";
 import { usePortal } from "../store.tsx";
+import { readableDates } from "../model.ts";
 import "./notifications.css";
 
 const PAGE_SIZE = 50;
@@ -216,7 +217,7 @@ export function NotificationCenterPage() {
           <ActionButton className="btn-ghost" onAction={clearRead} disabled={clearable.length === 0} busyLabel="Clearing…" doneLabel="Cleared">
             Clear read
           </ActionButton>
-          <ActionButton className="btn" onAction={markAllRead} disabled={unreadTotal === 0}>
+          <ActionButton className="btn-ghost" onAction={markAllRead} disabled={unreadTotal === 0}>
             Mark all read
           </ActionButton>
         </div>
@@ -358,7 +359,7 @@ function NotificationRow({
         )}
         {item.done && <span className="nc-done">Done</span>}
         {item.unread && <span className="sr-only">Unread</span>}
-        {n.body && <p className="nc-body">{n.body}</p>}
+        {n.body && <p className="nc-body">{readableDates(n.body)}</p>}
         <div className="nc-meta">
           <span>{n.category}</span>
           <span aria-hidden>·</span>

@@ -60,6 +60,7 @@ import { CopilotPopup } from "./CopilotPopup.tsx";
 import { NotesButton } from "./NotesPanel.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { ToastHost } from "./Toast.tsx";
+import { SectionTabs } from "./SectionTabs.tsx";
 import { Banner, Dropdown, Field, SubmitButton, useAction } from "./ui.tsx";
 import { updatePreferences, useApplyPreferences } from "../data/preferences.ts";
 import { useApprovalReminders } from "../data/approvalReminders.ts";
@@ -165,9 +166,13 @@ function WelcomeLoginDialog() {
       )}
       {stale && <div className="modal-scrim modal-scrim-lock" aria-hidden />}
       <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="welcome-login-title">
-        <h2 id="welcome-login-title">{stale ? "Update password" : "Welcome back"}</h2>
+        <h2 id="welcome-login-title">{stale ? "Update password" : stamp ? "Welcome back" : `Welcome to ${COMPANY_NAME}`}</h2>
         <p className="modal-lede">
-          {stale ? "Please set a new password to continue." : "Here are your last sign-in details."}
+          {stale
+            ? "Please set a new password to continue."
+            : stamp
+              ? "Here are your last sign-in details."
+              : "This is your first sign-in. Your home page shows what needs your attention today."}
         </p>
         {stamp && (
           <dl className="login-facts">
@@ -185,7 +190,6 @@ function WelcomeLoginDialog() {
             </div>
           </dl>
         )}
-        {!stamp && !stale && <p className="note">No previous login recorded.</p>}
 
         {stale ? (
           <form onSubmit={passwordAction.submit(submitPassword, { success: "Password updated." })}>
@@ -352,7 +356,7 @@ export function Shell() {
       "/leave": leavePending,
       "/timesheet": counts.timesheet,
       "/tasks": counts.tasks,
-      "/tickets": ticketBadgeCount(employee.id, tickets),
+      "/tickets": ticketBadgeCount({ id: employee.id, fullName: employee.fullName, role: employee.role }, tickets),
       // Open course enrollments — the same list the Learning page and home page use.
       "/programs": talent.enrollments.filter((e) => e.employeeId === employee.id && e.status !== "Completed").length,
       "/evaluations": counts.evaluation,
@@ -523,7 +527,7 @@ export function Shell() {
             />
           </form>
 
-          <label className="topbar-locale" title={t("locale.region")}>
+          <label className="topbar-locale top-wide-only" title={t("locale.region")}>
             <span className="sr-only">{t("locale.region")}</span>
             <select
               value={regionCode}
@@ -538,7 +542,7 @@ export function Shell() {
               ))}
             </select>
           </label>
-          <label className="topbar-locale" title={t("locale.language")}>
+          <label className="topbar-locale top-wide-only" title={t("locale.language")}>
             <span className="sr-only">{t("locale.language")}</span>
             <select
               value={language}
@@ -568,7 +572,7 @@ export function Shell() {
               <Inbox size={18} strokeWidth={1.75} />
               {(badges["/approvals"] ?? 0) > 0 && <span className="dot" />}
             </Link>
-            <Link to="/help" className="top-icon-btn" aria-label="Help">
+            <Link to="/help" className="top-icon-btn top-wide-only" aria-label="Help">
               <CircleHelp size={18} strokeWidth={1.75} />
             </Link>
             <Link to="/chat" className="top-icon-btn" aria-label="Messages">
@@ -579,12 +583,12 @@ export function Shell() {
               <Mail size={18} strokeWidth={1.75} />
               {(badges["/mail"] ?? 0) > 0 && <span className="dot" />}
             </Link>
-            <Link to="/announcements" className="top-icon-btn" aria-label="Announcements">
+            <Link to="/announcements" className="top-icon-btn top-wide-only" aria-label="Announcements">
               <FileText size={18} strokeWidth={1.75} />
             </Link>
             <button
               type="button"
-              className="top-icon-btn"
+              className="top-icon-btn top-wide-only"
               aria-label={theme === "night" ? "Switch to light theme" : "Switch to night theme"}
               onClick={() => updatePreferences(employee.id, { theme: theme === "night" ? "light" : "night" })}
             >
@@ -617,6 +621,13 @@ export function Shell() {
                   label: `Region: ${regionCode === "ALL" ? "All" : activeCountry.name} · ${activeCountry.currency}`,
                 },
                 { id: "locale", label: t("nav.settings"), to: "/settings/locale" },
+                // On phones the region / language pickers, announcements and theme live here (top bar stays two rows).
+                { id: "announcements", label: "Announcements", to: "/announcements" },
+                {
+                  id: "theme",
+                  label: theme === "night" ? "Switch to light theme" : "Switch to night theme",
+                  onSelect: () => updatePreferences(employee.id, { theme: theme === "night" ? "light" : "night" }),
+                },
                 ...(["admin", "super_admin", "hr", "hr_admin"].includes(demoProfile.role)
                   ? [{ id: "countries-admin", label: t("admin.countries"), to: "/admin/countries" }]
                   : []),
@@ -633,7 +644,7 @@ export function Shell() {
               ]}
             />
             <button
-              className="top-icon-btn"
+              className="top-icon-btn top-wide-only"
               type="button"
               aria-label="Sign out"
               onClick={() => {
@@ -650,12 +661,16 @@ export function Shell() {
             const group = roleNav.find((g) => g.key === tabGroup);
             if (!group) return null;
             return (
-              <nav className="section-tabs" aria-label={group.label}>
-                <span className="section-tabs-title">
-                  {groupIcons[group.key]}
-                  {group.label}
-                </span>
-                <div className="section-tabs-row">
+              <SectionTabs
+                label={group.label}
+                title={
+                  <>
+                    {groupIcons[group.key]}
+                    {group.label}
+                  </>
+                }
+                watch={group.links.map((link) => `${link.id}:${link.badgeKey ? badges[link.badgeKey] ?? 0 : 0}`).join("|")}
+              >
                   {group.links.map((link) => (
                     <NavLink
                       key={link.id}
@@ -667,8 +682,7 @@ export function Shell() {
                       <Badge count={link.badgeKey ? badges[link.badgeKey] ?? 0 : 0} />
                     </NavLink>
                   ))}
-                </div>
-              </nav>
+              </SectionTabs>
             );
           })()}
 

@@ -84,7 +84,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   US: {
     currencyLocale: "en-US",
-    legalEntity: "TimeZ Inc",
+    legalEntity: "TimeZ USA Inc",
     languages: ["en"],
     holidays: [
       { date: "2026-01-01", name: "New Year's Day" },
@@ -146,7 +146,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   AU: {
     currencyLocale: "en-AU",
-    legalEntity: "TimeZ Australia Pty",
+    legalEntity: "TimeZ Australia Pty Ltd",
     languages: ["en"],
     holidays: [
       { date: "2026-01-26", name: "Australia Day" },
@@ -172,7 +172,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   CA: {
     currencyLocale: "en-CA",
-    legalEntity: "TimeZ Canada Inc",
+    legalEntity: "TimeZ Canada Ltd",
     languages: ["en"],
     holidays: [
       { date: "2026-07-01", name: "Canada Day" },
@@ -198,7 +198,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   AE: {
     currencyLocale: "en-AE",
-    legalEntity: "TimeZ Middle East FZ",
+    legalEntity: "TimeZ UAE LLC",
     languages: ["en", "ar"],
     holidays: [
       { date: "2026-01-01", name: "New Year's Day" },
@@ -223,7 +223,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   SA: {
     currencyLocale: "ar-SA",
-    legalEntity: "TimeZ Saudi LLC",
+    legalEntity: "TimeZ Saudi Arabia Ltd",
     languages: ["en", "ar"],
     holidays: [
       { date: "2026-02-20", name: "Founding Day" },

@@ -202,7 +202,9 @@ export type LetterType =
   | "Address proof"
   | "Internship"
   | "Warning"
-  | "Termination";
+  | "Termination"
+  | "Salary certificate"
+  | "Bonafide";
 
 export type LetterStatus = "Draft" | "Pending approval" | "Approved" | "Rejected" | "Issued" | "Cancelled";
 
@@ -241,6 +243,8 @@ export interface LetterRequest {
   details?: string;
   /** Effective date entered by HR (transfer, confirmation…). */
   effectiveDate?: string;
+  /** "Add your own text": one paragraph the requester asked to include. */
+  customText?: string;
   /** Account id of whoever approved or rejected. */
   approverId?: string;
   /** Generated versions, oldest first. The last one is current. */
@@ -483,13 +487,15 @@ export interface LetterTemplateInfo {
 
 export const LETTER_TEMPLATES: LetterTemplateInfo[] = [
   { type: "Employment", label: "Employment certificate", description: "Confirms current employment, role and joining date.", employeeCanRequest: true, payLetter: false },
+  { type: "Salary certificate", label: "Salary certificate", description: "Current role and annual base salary.", employeeCanRequest: true, payLetter: true },
+  { type: "Bonafide", label: "Bonafide letter", description: "Confirms you are a current employee.", employeeCanRequest: true, payLetter: false },
   { type: "Experience", label: "Experience letter", description: "Service period and role. Available after exit.", employeeCanRequest: true, payLetter: false },
   { type: "Relieving", label: "Relieving letter", description: "Confirms release from duties on the last working day.", employeeCanRequest: false, payLetter: false },
   { type: "Offer", label: "Offer letter", description: "Role, grade, start date and base salary.", employeeCanRequest: false, payLetter: true },
   { type: "Appointment", label: "Appointment letter", description: "Formal appointment with grade, manager and salary.", employeeCanRequest: false, payLetter: true },
   { type: "Confirmation", label: "Confirmation letter", description: "Confirms employment after probation.", employeeCanRequest: false, payLetter: false, effectiveInput: true },
   { type: "Promotion", label: "Promotion letter", description: "New grade and salary from the approved review.", employeeCanRequest: false, payLetter: true },
-  { type: "Salary revision", label: "Salary revision letter", description: "Revised base salary from compensation data.", employeeCanRequest: false, payLetter: true },
+  { type: "Salary revision", label: "Increment letter", description: "Revised base salary from compensation data.", employeeCanRequest: false, payLetter: true },
   { type: "Transfer", label: "Transfer letter", description: "Move to a new location or department.", employeeCanRequest: false, payLetter: false, detailsLabel: "New location / department", effectiveInput: true },
   { type: "NOC", label: "No objection certificate", description: "No objection for a stated purpose.", employeeCanRequest: true, payLetter: false, detailsLabel: "Purpose" },
   { type: "Visa/Travel", label: "Visa / travel letter", description: "Supports a visa or travel application.", employeeCanRequest: true, payLetter: false, detailsLabel: "Destination and travel dates" },
@@ -544,31 +550,110 @@ export const LETTER_REQUESTS: LetterRequest[] = [
   },
 ];
 
+const babuDoc = (id: string, name: string, category: string, docType: string, uploadedBy: string, uploadedAt: string, sizeLabel: string, preview: string): DocLibraryItem => ({
+  id,
+  employeeId: "emp-mahesh",
+  employeeName: "Babu Menon",
+  name,
+  category,
+  docType,
+  uploadedBy,
+  uploadedAt,
+  sizeLabel,
+  preview,
+  isDemoFile: true,
+});
+
+/** Babu's documents: ID proofs, joining papers, payslips and tax forms (sample data, masked where sensitive). */
 export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
-  {
-    id: "dl-1",
-    employeeId: "emp-mahesh",
-    employeeName: "Babu Menon",
-    name: "PAN card scan",
-    category: "Identity",
-    docType: "ID",
-    uploadedBy: "Babu Menon",
-    uploadedAt: "2024-11-05T10:00:00",
-    sizeLabel: "240 KB",
-    preview: "PAN card scan · metadata only. The original is held by HR.",
-    isDemoFile: true,
-  },
-  {
-    id: "dl-2",
-    employeeId: "emp-mahesh",
-    employeeName: "Babu Menon",
-    name: "Signed NDA",
-    category: "Compliance",
-    docType: "Agreement",
-    uploadedBy: "HR Ops",
-    uploadedAt: "2024-11-04T09:00:00",
-    sizeLabel: "110 KB",
-    preview: "NDA acknowledgement · signed copy held by HR.",
-    isDemoFile: true,
-  },
+  babuDoc(
+    "dl-1",
+    "PAN card",
+    "Identity",
+    "ID proof",
+    "Babu Menon",
+    "2024-11-05T10:00:00",
+    "240 KB",
+    "PERMANENT ACCOUNT NUMBER CARD\nIncome Tax Department, Government of India\n\nName: BABU MENON\nFather's name: RAGHAVAN MENON\nDate of birth: 14/03/1994\nPAN: ABCPM••••K\n\nVerified by HR on 6 Nov 2024.",
+  ),
+  babuDoc(
+    "dl-seed-aadhaar",
+    "Aadhaar card",
+    "Identity",
+    "ID proof",
+    "Babu Menon",
+    "2024-11-05T10:05:00",
+    "310 KB",
+    "AADHAAR\nUnique Identification Authority of India\n\nName: Babu Menon\nDate of birth: 14/03/1994\nGender: Male\nAadhaar no.: XXXX XXXX 4821\nAddress: 12 Lake View Road, Indiranagar, Bengaluru 560038, Karnataka\n\nVerified by HR on 6 Nov 2024.",
+  ),
+  babuDoc(
+    "dl-seed-passport",
+    "Passport",
+    "Identity",
+    "ID proof",
+    "Babu Menon",
+    "2025-02-12T09:30:00",
+    "420 KB",
+    "REPUBLIC OF INDIA — PASSPORT\n\nSurname: MENON\nGiven name: BABU\nNationality: Indian\nPassport no.: Z••••391\nDate of issue: 20/01/2022\nDate of expiry: 19/01/2032\nPlace of issue: Bengaluru",
+  ),
+  babuDoc(
+    "dl-seed-offer",
+    "Offer letter",
+    "Employment",
+    "Letter",
+    "HR Ops",
+    "2019-04-22T11:00:00",
+    "180 KB",
+    "TimeZ India Pvt Ltd\nPrestige Tech Park, Outer Ring Road, Bengaluru 560103\n\nRef: INF-IN/HR/OFR/2019/0112          22 April 2019\n\nBabu Menon\n\nOFFER OF EMPLOYMENT\n\nDear Babu,\n\nWe are pleased to offer you the position of Software Engineer (grade L4) in Engineering with TimeZ India Pvt Ltd, starting 13 May 2019.\n\nYour annual base salary will be INR 12,00,000, subject to applicable deductions.\n\nThis offer is subject to background verification and submission of joining documents.\n\nFor TimeZ India Pvt Ltd\nAuthorised Signatory, Human Resources\n\nAccepted: Babu Menon, 24 April 2019",
+  ),
+  babuDoc(
+    "dl-2",
+    "Signed NDA",
+    "Compliance",
+    "Agreement",
+    "HR Ops",
+    "2019-05-13T09:00:00",
+    "110 KB",
+    "NON-DISCLOSURE AGREEMENT\n\nBetween TimeZ India Pvt Ltd and Babu Menon (EMP1184).\nSigned on 13 May 2019.\n\nThe employee keeps company and client information confidential during and after employment.",
+  ),
+  babuDoc(
+    "dl-seed-payslip-sep",
+    "Payslip — September 2026",
+    "Payroll",
+    "Payslip",
+    "Payroll",
+    "2026-09-30T18:00:00",
+    "96 KB",
+    "TimeZ India Pvt Ltd — Payslip for September 2026\n\nEmployee: Babu Menon (EMP1184) · Software Engineer, Engineering\nPAN: ABCPM••••K · UAN: 1009••••4412 · Bank: HDFC ••••6620\nPaid days: 30 of 30\n\nEARNINGS                      INR\nBasic                       52,000\nHRA                         26,000\nSpecial allowance           26,000\nGross                     1,04,000\n\nDEDUCTIONS\nProvident Fund (12%)         6,240\nProfessional tax               200\nIncome tax (TDS)             8,450\nTotal deductions            14,890\n\nNET PAY                     89,110",
+  ),
+  babuDoc(
+    "dl-seed-payslip-aug",
+    "Payslip — August 2026",
+    "Payroll",
+    "Payslip",
+    "Payroll",
+    "2026-08-31T18:00:00",
+    "95 KB",
+    "TimeZ India Pvt Ltd — Payslip for August 2026\n\nEmployee: Babu Menon (EMP1184) · Software Engineer, Engineering\nPaid days: 31 of 31\n\nEARNINGS                      INR\nBasic                       52,000\nHRA                         26,000\nSpecial allowance           26,000\nGross                     1,04,000\n\nDEDUCTIONS\nProvident Fund (12%)         6,240\nProfessional tax               200\nIncome tax (TDS)             8,450\nTotal deductions            14,890\n\nNET PAY                     89,110",
+  ),
+  babuDoc(
+    "dl-seed-form16",
+    "Form 16 — FY 2025-26",
+    "Payroll",
+    "Tax form",
+    "Payroll",
+    "2026-06-12T10:00:00",
+    "210 KB",
+    "FORM 16 — Certificate under section 203 of the Income-tax Act, 1961\nAssessment year 2026-27 (FY 2025-26)\n\nEmployer: TimeZ India Pvt Ltd · TAN: BLRT••••2E\nEmployee: Babu Menon · PAN: ABCPM••••K\n\nPart A — Tax deducted and deposited\nQ1  25,350   Q2  25,350   Q3  25,350   Q4  25,350\nTotal TDS                 1,01,400\n\nPart B — Salary and deductions\nGross salary             12,48,000\nStandard deduction          75,000\nTaxable income           11,73,000",
+  ),
+  babuDoc(
+    "dl-seed-12bb",
+    "Form 12BB — FY 2026-27",
+    "Payroll",
+    "Tax form",
+    "Babu Menon",
+    "2026-04-18T15:20:00",
+    "64 KB",
+    "FORM 12BB — Investment declaration, FY 2026-27\n\nEmployee: Babu Menon (EMP1184)\n\nHouse rent: INR 25,000 a month · Landlord PAN: AKLPS••••R\nSection 80C: PPF 1,00,000 · ELSS 50,000\nSection 80D: Health insurance (self and family) 25,000\n\nDeclared on 18 April 2026.",
+  ),
 ];

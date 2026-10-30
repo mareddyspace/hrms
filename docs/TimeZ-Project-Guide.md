@@ -60,7 +60,7 @@ answers.
 ### Modules (pages)
 | Area | What people can do |
 |---|---|
-| Home | Role-based dashboard, "Today's summary", quick actions |
+| Home | Role-based dashboard, "Today's summary", earned so far this month, next payday, timesheet hours vs target, holidays, policies to acknowledge |
 | My profile | Personal, employment and background details; edit allowed fields; request corrections; masked personal data |
 | People / Employee 360 | Company directory, full record per permission, AI summary |
 | Organization, Jobs & positions | Org tree with history and "as of date", positions, job profiles, job-description writer |
@@ -68,13 +68,18 @@ answers.
 | Onboarding | Joiners, 10-step checklist, pre-boarding form, onboarding analytics |
 | Lifecycle actions | Transfer, promotion, manager/job/location change, leave of absence, rehire, probation completion |
 | Time & attendance | Check-in/out, corrections, monthly summary |
-| Leave | Apply, approve (Manager → HR when needed), balances, eligibility rules, holidays, encashment |
-| Timesheets | Log time to projects/tickets/tasks, submit week, manager approval, utilization |
-| Shifts | Roster, publish with coverage check, swaps |
+| Leave | Apply, approve (Manager → HR when needed), balances, eligibility rules, holidays, optional holidays (yearly picks per country), encashment with live amount |
+| Timesheets | Log time to projects/tickets/tasks, submit week; manager reviews hours per project and day, approves or sends back with a comment |
+| Projects | Project cards and a detail page: client, dates, progress, team, milestones, my tasks, hours vs budget |
+| Shifts | Week/month roster with colour-coded shifts, quick assign and drag, copy last week, night/weekend markers, hours per person, coverage warnings, swaps, My shifts |
 | Performance | Cycles, goals, 1:1s, 360 feedback, ratings, development actions |
-| Learning, Skills & career | Courses, certifications, skills library, career interests, role matches |
-| Compensation, Benefits | Pay history (restricted), review cycles, benefits, dependents, nominees |
-| Documents & letters | Upload documents, request letters, approval, PDF download |
+| Learning, Skills & career | Courses, certifications, skills library, add/edit/remove my skills, career interests, role matches |
+| Payslips | Monthly payslips with country tax (India regimes, PF, professional tax; US, UK, Australia, Canada, Germany, Saudi rules), "Tax this year", "This month so far", final settlement up to the last working day |
+| Compensation, Benefits | Pay history (restricted), review cycles, benefits with amounts from the payslip, dependents, nominees |
+| Cash advance, Software | Advance with repayment schedule and payslip recovery; software catalogue with seats, approvals and licence return |
+| Documents & letters | Documents, short letters on letterhead (experience, salary, address, visa, relieving, bonafide…) with "Add your own text", preview, approval, PDF |
+| Policies | HR creates, edits, versions and publishes policies by country/department; employees acknowledge; HR tracks and reminds |
+| Resignation & exits | 4-step resignation, progress tracker, withdraw, retention conversation, clearance, settlement, letters; HR can raise terminations |
 | Travel & expenses | Travel requests, expense claims with receipts, multi-step approval, paid status |
 | HR cases, Helpdesk | Confidential cases, HR requests with due times (SLA) |
 | Surveys, Recognition | Pulse surveys, kudos with points and rewards |
@@ -98,9 +103,9 @@ answers.
 | `app/models/` | Database tables (about 100) |
 | `app/routers/` | API endpoints (`/api/v1/...`) — see https://timez-hrms-api.onrender.com/docs |
 | `app/services/` | Business rules (leave counting, approvals, masking, AI context…) |
-| `migrations/versions/` | Database changes 0001 → 0013 (run automatically on start) |
+| `migrations/versions/` | Database changes 0001 → 0018 (run automatically on start) |
 | `app/seed*.py`, `seed/` | Starting data: the Excel employees, 6 logins, policies, holidays, sample requests |
-| `tests/` | 243 automatic tests |
+| `tests/` | 266 automatic tests |
 
 ### Main features
 - **Sign-in & security**: hashed passwords (argon2), lock after 5 wrong tries, 30-minute tokens with refresh,
@@ -124,6 +129,7 @@ answers.
 | Service | Used for | Where you got it | Key / value | Where it is kept |
 |---|---|---|---|---|
 | **GitHub** | Code storage | github.com/mareddyspace/hrms | — | — |
+| **GitHub Actions** | Calls `/health` every 5 minutes so the free Render server stays awake | `.github/workflows/keep-awake.yml` | — | — |
 | **Vercel** | Hosts the front end | vercel.com (project `hrms`) | `VITE_API_URL` = `https://timez-hrms-api.onrender.com` (not secret) | Vercel → Settings → Environment Variables |
 | **Render** | Runs the back end | render.com (signed up with GitHub), Blueprint `timez`, service `timez-hrms-api`, region **Ohio** | All back-end settings below | Render → timez-hrms-api → Environment |
 | **Neon** | PostgreSQL database | neon.tech, project `timez-hrms`, region AWS us-east-2 (Ohio) | `DATABASE_URL` (secret) | `backend/.env` on your PC + Render |
@@ -196,7 +202,7 @@ Then open http://localhost:5173. Your PC and the live site use the **same Neon d
 
 | Limit | Effect |
 |---|---|
-| Render free sleeps after 15 min idle | First request after that takes ~30–50 s. A free uptime pinger (e.g. uptimerobot.com → `/health` every 5 min) keeps it awake. |
+| Render free sleeps after 15 min idle | First request after that takes ~30–50 s. The GitHub Actions job "Keep server awake" pings `/health` every 5 min (GitHub can start runs a few minutes late). |
 | Free AI models | Usually 1–3 s; if all are busy, Copilot shows a "Built-in" answer. |
 | No email service yet | Notifications/verification codes are queued in the email outbox but not sent; phone/email changes need a code, so they can't be finished online yet. |
 | Neon free | Pauses when idle (adds ~1 s), enough storage for testing. |

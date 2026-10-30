@@ -28,7 +28,10 @@
 .mail-reply { margin-top: 12px; }
 .mail-reply textarea { width: 100%; box-sizing: border-box; min-height: 100px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-md); font: inherit; background: var(--card); color: var(--ink); }
 .mail-templates { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-.mail-chip { font-size: var(--text-sm); padding: 4px 10px; }
+/* Templates stand out until one is picked; the picked one goes plain with a tick. */
+.mail-chip { font-size: var(--text-sm); padding: 4px 12px; border-radius: 999px; border: 1px solid var(--accent-fill); background: var(--accent-fill); color: #fff; cursor: pointer; font-weight: 600; }
+.mail-chip:hover { background: var(--accent-deep); }
+.mail-chip.picked { background: var(--card); color: var(--accent); border-color: var(--chip-border); }
 .mail-cc-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .mail-cc { border: 1px solid var(--line); background: var(--soft); color: var(--ink); border-radius: 12px; padding: 2px 8px; font-size: var(--text-xs); cursor: pointer; }
 .mail-link { font-weight: 600; }

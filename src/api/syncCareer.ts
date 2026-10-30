@@ -93,7 +93,12 @@ const HR = new Set(["hr_admin", "hr", "hrbp"]);
 async function loadCareer(): Promise<CareerData> {
   const who = await apiSessionMe();
   const isHr = HR.has(who.role);
-  const seesTeam = isHr || who.scope !== "self";
+  // Same rule as the server (HR, or someone with reports): a recruiter or admin with no team would only get a 403.
+  const seesTeam =
+    isHr ||
+    (who.scope !== "self" &&
+      !!who.employee_id &&
+      ((await api.get<{ direct_report_count?: number }>(`/people/${encodeURIComponent(who.employee_id)}`).catch(() => null))?.direct_report_count ?? 0) > 0);
   const [skills, paths, me, team] = await Promise.all([
     api.get<CareerSkillOut[]>("/career/skills", isHr ? { include_inactive: true } : undefined),
     api.get<CareerPathOut[]>("/career/paths"),

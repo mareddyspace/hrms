@@ -118,7 +118,10 @@ def _used_and_pending(db: Session, employee_id: str, code: str, year: int) -> tu
     ).all()
     used = sum(float(d) for s, d in rows if s == "approved")
     pending = sum(float(d) for s, d in rows if s == "pending")
-    return used, pending
+    from app.services.self_service import encashed_days  # encashed days count as leave used / pending
+
+    encashed, encash_pending = encashed_days(db, employee_id, code, year)
+    return used + encashed, pending + encash_pending
 
 
 def balances(db: Session, employee: Employee, year: int | None = None) -> list[BalanceRow]:
@@ -189,6 +192,12 @@ def validate_new_request(
     if start < today and not (code == "sick" and start >= today - timedelta(days=SICK_LEAVE_GRACE_DAYS)):
         raise LeaveError("Leave for past dates needs approval from your manager first.")
 
+    if code == "optional":  # optional holidays: only the country's listed dates (app/services/optional_holidays.py)
+        from app.services.optional_holidays import request_problem
+
+        problem = request_problem(db, employee, start, end, half)
+        if problem:
+            raise LeaveError(problem)
     days = working_days(start, end, holiday_dates_for(db, employee, start, end), half)
     if days <= 0:
         raise LeaveError("That range has no working days (weekends and holidays are skipped).")
@@ -208,6 +217,8 @@ def validate_new_request(
     if days > row.available:
         raise LeaveError(f"Only {row.available:g} day(s) available for {row.name}.")
 
+    # One request at a time per person, so a double-click can't save the same leave twice (no-op on SQLite).
+    db.execute(select(Employee.id).where(Employee.id == employee.id).with_for_update())
     overlapping = db.scalars(
         select(LeaveRequest).where(
             LeaveRequest.employee_id == employee.id,

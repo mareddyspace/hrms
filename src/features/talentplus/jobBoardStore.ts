@@ -1,14 +1,16 @@
 import { todayISO } from "../../model.ts";
 import { DEMO_ACCOUNTS, mentionsRetiredAccount } from "../../demoAccounts.ts";
 import { getPerson } from "../../data/peopleLocal.ts";
-import { getTalentState } from "../../data/talentLocal.ts";
-import type { Requisition } from "../../data/talentData.ts";
+import { applyInternally as applyToPipeline, getTalentState, isPostingOpen } from "../../data/talentLocal.ts";
+import type { Candidate, PipelineStage, Requisition } from "../../data/talentData.ts";
+import { API_ENABLED } from "../../api/client.ts";
+import { myApplicationsMirror } from "../../api/syncTalent.ts";
 import { pushPersonTaskAlert } from "../../data/collabLocal.ts";
 import {
   addDays,
   arrayOr,
   createLocalStore,
-  directManagerId,
+
   isHr,
   newId,
   type PlusActor,
@@ -93,8 +95,45 @@ export const resetJobBoard = store.reset;
 
 const CLOSED_SUMMARIES = ["closed", "filled", "on hold", "cancelled", "draft"];
 
+/** On the board: the recruiter published a job post that is still taking applications. */
 export function isOpenPosting(req: Requisition): boolean {
-  return req.approvalStatus === "Approved" && !CLOSED_SUMMARIES.includes(req.stageSummary.trim().toLowerCase());
+  return isPostingOpen(req) && !CLOSED_SUMMARIES.includes(req.stageSummary.trim().toLowerCase());
+}
+
+/* Internal applications live in the job's pipeline (candidates with source Internal); the board shows their stage. */
+const BOARD_STAGE: Record<PipelineStage, Stage> = {
+  Applied: "Submitted",
+  Screening: "Screening",
+  Shortlisted: "Screening",
+  Interview: "Interview",
+  Assessment: "Interview",
+  "Final Review": "Interview",
+  Offer: "Interview",
+  Hired: "Hired",
+  Rejected: "Not selected",
+  Withdrawn: "Not selected",
+};
+
+function fromCandidate(c: Candidate): InternalApplication {
+  const applied = (c.history ?? []).find((h) => h.stage === "Applied")?.enteredOn.slice(0, 10) ?? todayISO();
+  const last = (c.history ?? []).at(-1)?.enteredOn.slice(0, 10) ?? applied;
+  return { id: c.id, postingId: c.requisitionId, employeeId: c.employeeId ?? "", employeeName: c.name, note: c.coverNote ?? "", status: BOARD_STAGE[c.stage], submittedOn: applied, updatedOn: last };
+}
+
+/** My internal applications (backend mode: from the server, as candidates are not visible to applicants). */
+export function myInternalApplications(actorId: string): InternalApplication[] {
+  if (API_ENABLED) {
+    return myApplicationsMirror.get().map((a) => ({
+      id: a.id, postingId: a.requisition_id, employeeId: actorId, employeeName: "", note: a.cover_note ?? "",
+      status: BOARD_STAGE[a.stage as PipelineStage] ?? "Submitted", submittedOn: a.applied_on, updatedOn: a.applied_on,
+    }));
+  }
+  return getTalentState().candidates.filter((c) => c.employeeId === actorId).map(fromCandidate);
+}
+
+/** Every internal application recruiting can see (the recruiter / HR review list). */
+export function allInternalApplications(): InternalApplication[] {
+  return getTalentState().candidates.filter((c) => !!c.employeeId).map(fromCandidate);
 }
 
 export function openPostings(): Requisition[] {
@@ -133,8 +172,8 @@ export function applyBlocker(actor: PlusActor, req: Requisition): string | null 
   if (!isOpenPosting(req)) return "This posting isn't open.";
   if (req.hiringManager.trim().toLowerCase() === actor.fullName.trim().toLowerCase())
     return "You're the hiring manager for this role.";
-  const state = getJobBoardState();
-  if (state.applications.some((a) => a.postingId === req.id && a.employeeId === actor.id)) return "You've already applied.";
+  if (req.recruiterId === actor.id) return "You run this role's pipeline.";
+  if (myInternalApplications(actor.id).some((a) => a.postingId === req.id)) return "You've already applied.";
   const joined = getPerson(actor.id)?.dateOfJoining;
   if (joined && /^\d{4}-\d{2}-\d{2}$/.test(joined) && monthsBetween(joined, todayISO()) < MIN_TENURE_MONTHS)
     return `You need ${MIN_TENURE_MONTHS} months in your current role to apply.`;
@@ -160,58 +199,18 @@ function accountIdByName(name: string): string | undefined {
 
 /* ───────────── Mutations ───────────── */
 
-export function applyInternally(actor: PlusActor, postingId: string, note: string): PlusResult {
-  const req = postingById(postingId);
-  if (!req) return "Posting not found.";
+/**
+ * An employee applies for a job post: the application lands in that job's pipeline (source Internal); the recruiter
+ * and the employee's manager are told. `reqId` is the requisition behind the post. Backend mode: the answer comes
+ * later (run it through talentAction).
+ */
+export function applyInternally(actor: PlusActor, reqId: string, note: string): PlusResult {
+  const req = postingById(reqId);
+  if (!req?.posting) return "Posting not found.";
   const blocker = applyBlocker(actor, req);
   if (blocker) return blocker;
-  if (note.trim().length > 500) return "Keep your note under 500 characters.";
-  const result = store.mutate((s) => {
-    if (s.applications.some((a) => a.postingId === postingId && a.employeeId === actor.id)) return "You've already applied.";
-    const today = todayISO();
-    s.applications.unshift({
-      id: newId("ia"),
-      postingId,
-      employeeId: actor.id,
-      employeeName: actor.fullName,
-      note: note.trim(),
-      status: "Submitted",
-      submittedOn: today,
-      updatedOn: today,
-    });
-    return null;
-  });
-  if (result) return result;
-  const managerId = directManagerId(actor.id);
-  if (managerId && managerId !== actor.id) {
-    pushPersonTaskAlert({
-      recipientId: managerId,
-      title: "Internal application",
-      body: `${actor.fullName} applied for ${req.title} (${req.id}).`,
-      href: "/internal-jobs",
-    });
-  }
-  const recruiterId = accountIdByName(req.recruiter);
-  if (recruiterId && recruiterId !== actor.id && recruiterId !== managerId) {
-    pushPersonTaskAlert({
-      recipientId: recruiterId,
-      title: "New internal applicant",
-      body: `${actor.fullName} applied for ${req.title} (${req.id}).`,
-      href: "/internal-jobs",
-    });
-  }
-  return null;
-}
-
-export function withdrawApplication(actor: PlusActor, applicationId: string): PlusResult {
-  return store.mutate((s) => {
-    const app = s.applications.find((a) => a.id === applicationId);
-    if (!app) return "Application not found.";
-    if (app.employeeId !== actor.id) return "You can only withdraw your own application.";
-    if (app.status !== "Submitted") return "You can only withdraw before screening starts.";
-    s.applications = s.applications.filter((a) => a.id !== applicationId);
-    return null;
-  });
+  if (note.trim().length > 3000) return "Keep your note under 3000 characters.";
+  return applyToPipeline(actor, req.posting.id, note);
 }
 
 export type ReferralInput = {

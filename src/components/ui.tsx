@@ -185,11 +185,14 @@ export function StatusBadge({
   status,
   tone,
   literal = false,
+  keepCase = false,
 }: {
   status: string;
   tone?: "ok" | "warn" | "danger" | "info" | "neutral";
   /** Show the status as written instead of mapping it to approval wording (e.g. "Completed" → "Approved"). */
   literal?: boolean;
+  /** Keep the label's own capitals (sentence case, e.g. "Not checked in") instead of capitalising every word. */
+  keepCase?: boolean;
 }) {
   const label = literal ? status : normalizeStatusLabel(status);
   const key = label.toLowerCase();
@@ -202,7 +205,11 @@ export function StatusBadge({
         : key === "rejected" || key === "withdrawn" || key === "missing"
           ? "danger"
           : "neutral");
-  return <span className={`status-badge ${resolved === "neutral" ? "" : resolved}`.trim()}>{label}</span>;
+  return (
+    <span className={`status-badge ${resolved === "neutral" ? "" : resolved}`.trim()} style={keepCase ? { textTransform: "none" } : undefined}>
+      {label}
+    </span>
+  );
 }
 
 export function Tabs({

@@ -33,7 +33,7 @@ def test_seeded_requisitions_and_visibility(client, babu, ram, farhan, sophie, a
     assert _req_ids(client, ram) == {"JOB-221", "JOB-230"}  # hiring manager: own
     assert _req_ids(client, sophie) == {"JOB-221", "JOB-218", "JOB-205", "JOB-230"}  # recruiter: assigned
     assert _req_ids(client, babu) == set()
-    assert "JOB-210" in _req_ids(client, admin)  # approver of the pending step
+    assert "JOB-210" in _req_ids(client, admin)  # admin approves its finance step (after HR)
     assert client.get(f"{R}/requisitions/JOB-221", headers=babu).status_code == 404
     cands = client.get(f"{R}/candidates", headers=sophie, params={"requisition_id": "JOB-221"}).json()
     assert {c["id"] for c in cands} >= {"cand-1", "cand-6", "cand-12"}
@@ -120,6 +120,11 @@ def test_candidate_rules_and_interviews(client, babu, ram, farhan, sophie):
     assert client.post(fb, headers=sophie, json={"score": 4, "notes": "Good"}).status_code == 403  # not on the panel
     assert client.post(fb, headers=babu, json={"score": 6, "notes": "Great"}).status_code == 422
     assert client.post(fb, headers=babu, json={"score": 4, "notes": ""}).status_code == 422
+    assert client.post(fb, headers=babu, json={"score": 4, "notes": "Too early"}).status_code == 409  # not held yet
+    with SessionLocal() as db:  # the interview took place
+        from app.models import Interview
+        db.get(Interview, iid).scheduled_at = datetime.now(UTC) - timedelta(hours=1)
+        db.commit()
     res = client.post(fb, headers=babu, json={"score": 4, "notes": "Solid React depth"})
     assert res.status_code == 200 and res.json()["score"] == 4 and res.json()["feedback_status"] == "submitted"
     assert client.post(fb, headers=babu, json={"score": 5, "notes": "Again"}).status_code == 409
@@ -247,3 +252,17 @@ Skills: React, TypeScript, Jest, AWS, stakeholder management
     other = client.get(f"{R}/candidates/cand-1/match", headers=sophie, params={"requisition_id": "JOB-218"}).json()
     assert other["requisition_id"] == "JOB-218" and other["band"] == "Weak"
     assert client.get(f"{R}/candidates/cand-1/match", headers=babu).status_code == 404
+
+
+def test_ceo_requisition_skips_skip_level_step_instead_of_admin(client, farhan, admin):
+    """The CEO has no one above them: the "Skip-level manager approval" step is skipped, never sent to admin."""
+    with SessionLocal() as db:
+        inst = db.scalar(select(ApprovalInstance).where(ApprovalInstance.type == "requisition",
+                                                        ApprovalInstance.entity_id == "JOB-210"))
+        assert inst is not None and inst.status == "pending"
+        assert inst.steps[0]["groups"].get("skip_manager") == [] and inst.steps[0]["skipped"] is True
+        assert inst.current_step >= 1 and not inst.steps[inst.current_step]["skipped"]
+        waiting = {i for ids in inst.steps[inst.current_step]["groups"].values() for i in ids}
+        assert "demo-admin" not in waiting and "demo-hr-admin" in waiting
+    pending = client.get("/api/v1/approvals/pending", headers=admin).json()
+    assert not any(p.get("id") == inst.id for p in pending)

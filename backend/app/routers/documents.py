@@ -31,6 +31,7 @@ from app.schemas.documents import (
     DocRulesOut,
     DocVersionOut,
     EmployeeDocumentOut,
+    LetterDraftIn,
     LetterIssueOut,
     LetterPreviewOut,
     LetterRequestIn,
@@ -39,6 +40,8 @@ from app.schemas.documents import (
     LetterTemplateNewIn,
     LetterTemplateOut,
     LetterTypeOut,
+    LetterWordIn,
+    LetterWordOut,
     PolicyAckIn,
     PolicyAckOut,
 )
@@ -245,7 +248,7 @@ def acknowledge_policy(body: PolicyAckIn, request: Request, db: DbSession, user:
                                                        PolicyAcknowledgment.policy_version == body.policy_version)):
         raise HTTPException(409, "You have already acknowledged this version of the policy.")
     ack = PolicyAcknowledgment(employee_id=emp.id, policy_id=body.policy_id.strip(), policy_version=body.policy_version.strip(),
-                               ip=client_ip(request))
+                               ip=client_ip(request), comment=(body.comment or "").strip() or None)
     db.add(ack)
     db.flush()
     record_audit(db, actor_id=user.id, action="policy_acknowledged", entity="policy", entity_id=ack.policy_id, subject_id=emp.id,
@@ -441,8 +444,8 @@ def list_letter_requests(
     return _letter_outs(db, rows)
 
 
-@letters_router.post("/requests", response_model=LetterRequestOut, status_code=status.HTTP_201_CREATED)
-def request_letter(body: LetterRequestIn, request: Request, db: DbSession, user: CurrentUserDep) -> LetterRequestOut:
+def _checked_request(db: DbSession, user: CurrentUser, body: LetterRequestIn) -> tuple[Employee, Employee, LetterRequest]:
+    """Who may raise this letter for whom; returns (requester, employee, an unsaved request)."""
     requester = me(user)
     emp = requester if not body.employee_id or body.employee_id == requester.id else db.get(Employee, body.employee_id)
     if emp is None or not can_view(db, user, emp):
@@ -467,19 +470,55 @@ def request_letter(body: LetterRequestIn, request: Request, db: DbSession, user:
     details = (body.details or "").strip()[:200] or None
     if info.get("details") and not details:
         raise HTTPException(422, f"Enter {info['details'].lower()}.")
+    custom = " ".join((body.custom_text or "").split())[:1200] or None
+    req = LetterRequest(id=f"ltr-{uuid.uuid4().hex[:12]}", employee_id=emp.id, letter_type=body.letter_type, status="pending",
+                        requested_by=requester.id, note=body.note.strip() or "No reason given", details=details,
+                        effective_date=body.effective_date if user.account.role in HR_ROLES else None, custom_text=custom)
+    return requester, emp, req
+
+
+@letters_router.post("/draft-preview", response_model=LetterPreviewOut)
+def draft_preview(body: LetterDraftIn, db: DbSession, user: CurrentUserDep) -> LetterPreviewOut:
+    """The letter as it would read if requested now, with the employee's data (nothing is saved)."""
+    _requester, emp, req = _checked_request(db, user, body)
+    fields = letters.collect_fields(db, req, emp)
+    try:
+        title, _to_whom, paragraphs = letters.render(db, req.letter_type, fields)
+    except letters.LetterError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return LetterPreviewOut(letter_type=req.letter_type, fields=fields, missing=letters.missing_fields(req.letter_type, fields),
+                            title=title, paragraphs=paragraphs)
+
+
+@letters_router.post("/word-text", response_model=LetterWordOut)
+def word_text(body: LetterWordIn, db: DbSession, user: CurrentUserDep) -> LetterWordOut:
+    """Words "Add your own text" as a letter paragraph with the Copilot model. paragraph=None: no AI right now."""
+    from app.services import ai_copilot
+
+    emp = me(user) if not body.employee_id or body.employee_id == user.employee_id else db.get(Employee, body.employee_id)
+    if emp is None or not can_view(db, user, emp):
+        raise NOT_FOUND
+    if not ai_copilot.allow_question(user.id):
+        raise HTTPException(429, "Too many requests. Try again in a minute.")
+    paragraph = letters.word_custom_text(body.letter_type, emp.full_name, body.text)
+    return LetterWordOut(paragraph=paragraph, used_ai=paragraph is not None)
+
+
+@letters_router.post("/requests", response_model=LetterRequestOut, status_code=status.HTTP_201_CREATED)
+def request_letter(body: LetterRequestIn, request: Request, db: DbSession, user: CurrentUserDep) -> LetterRequestOut:
+    requester, emp, req = _checked_request(db, user, body)
+    label = letters.LETTER_TYPES[req.letter_type]["label"]
     if db.scalar(select(LetterRequest.id).where(LetterRequest.employee_id == emp.id, LetterRequest.letter_type == body.letter_type,
                                                 LetterRequest.status == "pending")):
         raise HTTPException(409, f"A {label.lower()} request for {emp.full_name} is already waiting for approval.")
-    req = LetterRequest(id=f"ltr-{uuid.uuid4().hex[:12]}", employee_id=emp.id, letter_type=body.letter_type, status="pending",
-                        requested_by=requester.id, note=body.note.strip() or "No reason given", details=details,
-                        effective_date=body.effective_date if user.account.role in HR_ROLES else None)
     missing = letters.missing_fields(req.letter_type, letters.collect_fields(db, req, emp))
     if missing:
         raise HTTPException(422, letters.missing_message(missing))
     db.add(req)
     db.flush()
     record_audit(db, actor_id=user.id, action="letter_requested", entity="letter_request", entity_id=req.id, subject_id=emp.id,
-                 after={"type": req.letter_type, "details": req.details, "effective_date": req.effective_date},
+                 after={"type": req.letter_type, "details": req.details, "effective_date": req.effective_date,
+                        "custom_text": bool(req.custom_text)},
                  ip=client_ip(request))
     letters.ensure_workflow(db)
     try:

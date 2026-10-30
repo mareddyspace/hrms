@@ -1,0 +1,53 @@
+/* Public careers and offer pages (no sign-in, no portal shell). */
+.pub {
+  min-height: 100vh;
+  background: var(--bg, #f5f6f8);
+  color: var(--ink);
+}
+.pub-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+.pub-brand {
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.pub-main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.pub-title {
+  font-weight: 700;
+  font-size: 16px;
+}
+.pub-desc {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+.pub-letter {
+  width: 100%;
+  height: 70vh;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.pub-trap {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+}

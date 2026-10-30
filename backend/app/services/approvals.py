@@ -8,7 +8,8 @@ A workflow definition is a versioned list of steps; each step names role groups 
 Approvers are resolved when the request starts and stored on the instance (later org changes don't move it):
 manager, skip_manager (the manager's manager), hr (HR whose country scope covers the requester),
 finance (falls back to admin when nobody holds the finance role), admin, executive.
-The requester is never an approver; a group left empty by that falls back to admin, then executive.
+The requester is never an approver; a group left empty by that falls back to admin, then executive
+(except skip_manager: with no skip-level manager, e.g. the CEO's own request, that group stays empty).
 Nobody approves two steps of one request: whoever approved an earlier step (or is certain to, being its only
 approver) is dropped from the later steps, with the same admin -> executive fallback.
 A step whose groups are all empty is skipped; when no step is left the request is approved straight away.
@@ -36,7 +37,7 @@ from sqlalchemy.orm import Session
 
 from app.db import utcnow
 from app.models import (
-    AccessScope, Account, ApprovalDecision, ApprovalDelegation, ApprovalInstance, Employee, WorkflowDefinition,
+    AccessScope, Account, ApprovalDecision, ApprovalDelegation, ApprovalInstance, Employee, Notification, WorkflowDefinition,
 )
 from app.services.activity import notify, record_audit
 from app.services.scope import HR_ROLES
@@ -120,6 +121,9 @@ def resolve_group(
     if not fallback and not any(ids):
         return []
     ids = [i for i in ids if i and i != requester.id]
+    if role == "skip_manager" and not ids:
+        # Nobody above the line (e.g. the CEO's own request): the skip-level step is skipped, not sent to admin.
+        return []
     if not ids and role not in ("admin", "executive"):
         ids = [i for i in _accounts_with_roles(db, {"admin"}) if i != requester.id]
     if not ids and role != "executive":
@@ -339,7 +343,22 @@ def _label(instance: ApprovalInstance) -> str:
     return NOTICE_LABELS.get(instance.type) or f"{instance.type.replace('_', ' ').capitalize()} request"
 
 
+def _resolve_waiting(db: Session, instance: ApprovalInstance) -> None:
+    """Earlier "Waiting for your approval" notices for this request no longer need action: mark them read."""
+    db.flush()
+    stale = db.scalars(select(Notification).where(
+        Notification.href == _href(instance),
+        Notification.read_at.is_(None),
+        Notification.body.like("Waiting for your approval%"),
+        Notification.title.like(f"{_label(instance)} from %"),
+    ))
+    now = utcnow()
+    for note in stale:
+        note.read_at = now
+
+
 def _notify_step(db: Session, instance: ApprovalInstance, requester: Employee) -> None:
+    _resolve_waiting(db, instance)  # the previous step's approvers have nothing left to do
     sent: set[str] = set()
     for ids in open_groups(db, instance).values():
         for approver in ids:
@@ -353,7 +372,8 @@ def _notify_step(db: Session, instance: ApprovalInstance, requester: Employee) -
                     title=f"{_label(instance)} from {requester.full_name}",
                     body=f"Waiting for your approval (step {instance.current_step + 1})."
                     + (" You are covering for a colleague." if covering else "")
-                    + (f" Amount: {instance.amount:g}" if instance.amount is not None else ""),
+                    # 18000 -> "18,000", 450.5 -> "450.5" (":g" printed large amounts as 1.8e+06).
+                    + (f" Amount: {f'{instance.amount:,.2f}'.rstrip('0').rstrip('.')}" if instance.amount is not None else ""),
                     href=_href(instance),
                 )
 
@@ -369,6 +389,7 @@ def _mark_started(instance: ApprovalInstance) -> None:
 def _finish(db: Session, instance: ApprovalInstance, requester: Employee, outcome: str) -> None:
     instance.status = outcome
     instance.completed_at = utcnow()
+    _resolve_waiting(db, instance)
     if instance.type not in OWN_FINISH_NOTICE:
         notify(
             db,
@@ -404,6 +425,7 @@ def cancel(db: Session, instance: ApprovalInstance, actor_id: str | None = None,
     before = _snapshot(instance)
     instance.status = "cancelled"
     instance.completed_at = utcnow()
+    _resolve_waiting(db, instance)
     record_audit(db, actor_id=actor_id, action="approval_cancelled", entity="approval_instance", entity_id=instance.id,
                  subject_id=instance.requester_id, before=before, after=_snapshot(instance), ip=ip)
     return instance

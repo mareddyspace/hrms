@@ -3,7 +3,7 @@ import { getPerson } from "../data/peopleLocal.ts";
 import { hasStarted } from "../data/peopleData.ts";
 import { API_ENABLED } from "../api/client.ts";
 import { apiMyRecruitingActivity, type ActivityOut } from "../api/syncTalent.ts";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   ActionButton,
   Banner,
@@ -28,6 +28,7 @@ import {
   SKILL_LIBRARY,
   TARGET_ROLES,
   starterSkillsFor,
+  awaitingFeedback,
   type Certification,
   type Enrollment,
   type OfferRecord,
@@ -51,6 +52,10 @@ import {
   averageTimeToHire,
   bandFor,
   canRaiseRequisition,
+  canRaiseForOthers,
+  hiringManagerOptions,
+  interviewStarted,
+  canRunPipeline,
   myPipelineRequisitions,
   raiseRequisition,
   recruiterOptions,
@@ -114,10 +119,7 @@ import {
   setOfferStatus,
   setRequisitionApproval,
   skillProfileFor,
-  SKILL_LEVELS,
-  submitInterviewFeedback,
   subscribeTalent,
-  updateEmployeeSkill,
   updateEnrollmentProgress,
   updateGoalProgress,
   verifyCertificationRenewal,
@@ -126,7 +128,7 @@ import { accountHasNavAccess } from "../demoAccounts.ts";
 import { candidateAccess } from "../data/rbac.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
-import { TIMEZ_COUNTRIES, maskEmail, todayISO } from "../model.ts";
+import { TIMEZ_COUNTRIES, formatShortDate, maskEmail, plural, todayISO } from "../model.ts";
 import { money } from "../countryPay.ts";
 import { GRADE_BANDS } from "../data/rewardData.ts";
 import { usePortal } from "../store.tsx";
@@ -142,7 +144,8 @@ import {
 import { canManagePeople } from "../data/peoplePermissions.ts";
 import { DevPlanEditor, FeedbackPanel, OneOnOnePanel, Pending360Requests, Reviewers360 } from "./PerformanceCheckIns.tsx";
 import { CandidateCards, CandidatePipelineView, CompareCandidates, MyPipeline, PipelineByMonth, RequisitionTracker } from "./recruiting/CandidatePipeline.tsx";
-import { canSeeTeamInterests, CareerInterestsPanel, RoleMatchesPanel, SkillsLibraryPanel, TeamInterestsPanel } from "./CareerPanels.tsx";
+import { OfferAnswerLink, OfferLetterButton, PostingPanel, RequisitionChain, ScorecardForm, StageCounts } from "./recruiting/HiringChain.tsx";
+import { canSeeTeamInterests, CareerInterestsPanel, MySkillsPanel, RoleMatchesPanel, SkillsLibraryPanel, TeamInterestsPanel } from "./CareerPanels.tsx";
 import { apiTargetRoles } from "../api/syncCareer.ts";
 
 function useTalent() {
@@ -312,18 +315,34 @@ export function RecruitingPage() {
   const { demoProfile } = usePortal();
   const actor = demoProfile;
   const { matchesRegion, t } = useLocale();
-  const [tab, setTab] = useState(() => (actor.role === "recruiter" ? "mine" : "reqs"));
-  const [openCand, setOpenCand] = useState<string | null>(null);
+  // Links from notifications: ?candidate=, ?req=, ?tab=
+  const [params, setParams] = useSearchParams();
+  const [tab, setTab] = useState(() => params.get("tab") ?? (params.get("req") ? "reqs" : actor.role === "recruiter" ? "mine" : "reqs"));
+  const [openCand, setOpenCand] = useState<string | null>(() => params.get("candidate"));
   const [assignTo, setAssignTo] = useState(DEFAULT_RECRUITER_ID);
   const [raiseOpen, setRaiseOpen] = useState(false);
-  const [raiseForm, setRaiseForm] = useState({ title: "", department: "", country: "", location: "", openings: "1" });
+  const emptyRaise = { title: "", department: "", country: "", location: "", openings: "1", budget: "", reason: "New role", justification: "", hiringManagerId: "" };
+  const [raiseForm, setRaiseForm] = useState(emptyRaise);
+  useEffect(() => {
+    const cand = params.get("candidate");
+    const reqParam = params.get("req");
+    const tabParam = params.get("tab");
+    if (!cand && !reqParam && !tabParam) return;
+    if (cand) setOpenCand(cand);
+    if (reqParam) {
+      setSelectedReq(reqParam);
+      setTab("reqs");
+      setTimeout(() => document.getElementById("req-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+    }
+    if (tabParam) setTab(tabParam);
+    setParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
   const [q, setQ] = useState("");
   const [stageFilter, setStageFilter] = useState("");
   const [selectedCand, setSelectedCand] = useState(talent.candidates[0]?.id ?? "");
-  const [selectedReq, setSelectedReq] = useState(talent.requisitions[0]?.id ?? "");
+  const [selectedReq, setSelectedReq] = useState(() => params.get("req") ?? talent.requisitions[0]?.id ?? "");
   const [fbInterview, setFbInterview] = useState("");
-  const [fbScore, setFbScore] = useState("4");
-  const [fbText, setFbText] = useState("");
   const [offerForm, setOfferForm] = useState({ candidateId: "", grade: "", baseSalary: "", startDate: "", packageNote: "" });
   const [reqNote, setReqNote] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
@@ -381,8 +400,9 @@ export function RecruitingPage() {
   const requisition = scopeReqs.find((r) => r.id === selectedReq) ?? scopeReqs[0];
   const openCandidate = openCand ? talent.candidates.find((c) => c.id === openCand && accessFor(c) !== "hidden") : undefined;
   const reqMoves = requisition ? requisitionMoves(actor, requisition) : [];
+  // Scorecards are due only once the interview has started.
   const feedbackInterviews = talent.interviews.filter(
-    (i) => i.feedbackStatus === "Pending" && canSubmitInterviewFeedback(actor, i),
+    (i) => i.feedbackStatus === "Pending" && canSubmitInterviewFeedback(actor, i) && interviewStarted(i),
   );
   const offerCandidates = offerEligibleCandidates(talent, actor);
   const offerCandidate = offerCandidates.find((c) => c.id === offerForm.candidateId);
@@ -403,20 +423,9 @@ export function RecruitingPage() {
   );
   const awaitingReqs = scopeReqs.filter((r) => r.approvalStatus === "Pending approval");
   const onHoldReqs = scopeReqs.filter((r) => r.approvalStatus === "On hold");
-  const pendingFeedback = talent.interviews.filter((i) => i.feedbackStatus === "Pending").length;
+  const pendingFeedback = awaitingFeedback(talent.interviews).length;
   const offersOut = talent.offers.filter((o) => ["Preparing", "Pending approval", "Approved", "Sent"].includes(o.status)).length;
   const timeToHire = averageTimeToHire(talent);
-
-  function submitFeedback() {
-    const score = Number(fbScore);
-    return talentRun(() => submitInterviewFeedback(actor, fbInterview, score, fbText), (error) => {
-      setNotice(noticeFor(error, "Interview feedback submitted."));
-      if (!error) {
-        setFbInterview("");
-        setFbText("");
-      }
-    });
-  }
 
   function prepareOffer() {
     const input = {
@@ -450,9 +459,9 @@ export function RecruitingPage() {
         <MetricCard
           label="Awaiting approval"
           value={awaitingReqs.length}
-          hint={`${awaitingReqs.reduce((n, r) => n + r.openings, 0)} positions`}
+          hint={plural(awaitingReqs.reduce((n, r) => n + r.openings, 0), "position")}
         />
-        <MetricCard label="On hold" value={onHoldReqs.length} hint={`${onHoldReqs.reduce((n, r) => n + r.openings, 0)} positions`} />
+        <MetricCard label="On hold" value={onHoldReqs.length} hint={plural(onHoldReqs.reduce((n, r) => n + r.openings, 0), "position")} />
       </MetricGrid>
       <MetricGrid>
         <MetricCard label="Candidates (region)" value={candidates.length} />
@@ -549,20 +558,48 @@ export function RecruitingPage() {
                     <Field label="Location">
                       <input value={raiseForm.location} onChange={(e) => setRaiseForm((f) => ({ ...f, location: e.target.value }))} />
                     </Field>
-                    <Field label="Openings">
+                    <Field label="Headcount">
                       <input type="number" min={1} max={50} value={raiseForm.openings} onChange={(e) => setRaiseForm((f) => ({ ...f, openings: e.target.value }))} />
+                    </Field>
+                    <Field label={`Annual budget${TIMEZ_COUNTRIES.find((c) => c.name === raiseForm.country) ? ` (${TIMEZ_COUNTRIES.find((c) => c.name === raiseForm.country)!.currency})` : ""}`}>
+                      <input type="number" min={0} value={raiseForm.budget} onChange={(e) => setRaiseForm((f) => ({ ...f, budget: e.target.value }))} />
+                    </Field>
+                    <Field label="Reason">
+                      <select value={raiseForm.reason} onChange={(e) => setRaiseForm((f) => ({ ...f, reason: e.target.value }))}>
+                        <option value="New role">New role</option>
+                        <option value="Replacement">Replacement</option>
+                      </select>
+                    </Field>
+                    {canRaiseForOthers(actor) && (
+                      <Field label="Hiring manager">
+                        <select value={raiseForm.hiringManagerId} onChange={(e) => setRaiseForm((f) => ({ ...f, hiringManagerId: e.target.value }))}>
+                          <option value="">Select…</option>
+                          {hiringManagerOptions().map((a) => (
+                            <option key={a.id} value={a.id}>{a.fullName}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    )}
+                    <Field label="Why it's needed" wide>
+                      <input value={raiseForm.justification} maxLength={2000} onChange={(e) => setRaiseForm((f) => ({ ...f, justification: e.target.value }))} placeholder="e.g. New squad for the payroll product" />
                     </Field>
                     <div className="row-gap">
                       <ActionButton
                         className="btn btn-tiny"
                         success="Requisition raised and sent for approval."
                         onAction={() => {
-                          const input = { ...raiseForm, openings: Number(raiseForm.openings) };
+                          const input = {
+                            ...raiseForm,
+                            openings: Number(raiseForm.openings),
+                            budget: raiseForm.budget.trim() ? Number(raiseForm.budget) : undefined,
+                            reason: raiseForm.reason as "New role" | "Replacement",
+                            hiringManagerId: raiseForm.hiringManagerId || undefined,
+                          };
                           return talentRun(() => raiseRequisition(actor, input), (error) => {
                             setNotice(noticeFor(error, "Requisition raised. Sent for approval."));
                             if (!error) {
                               setRaiseOpen(false);
-                              setRaiseForm({ title: "", department: "", country: "", location: "", openings: "1" });
+                              setRaiseForm(emptyRaise);
                             }
                           });
                         }}
@@ -581,6 +618,9 @@ export function RecruitingPage() {
           {requisition && (
             <div id="req-detail">
             <Card title={`Requisition · ${requisition.id}`}>
+              <h3 className="cp-section-title">Hiring chain</h3>
+              <RequisitionChain req={requisition} talent={talent} />
+              <h3 className="cp-section-title">Approval</h3>
               <RequisitionTracker req={requisition} />
               <p className="muted">
                 Approval:{" "}
@@ -597,13 +637,18 @@ export function RecruitingPage() {
                 <div className="info-fact"><dt>Title</dt><dd>{requisition.title}</dd></div>
                 <div className="info-fact"><dt>Hiring manager</dt><dd>{requisition.hiringManager}</dd></div>
                 <div className="info-fact"><dt>Recruiter</dt><dd>{requisition.recruiter || "Not assigned"}</dd></div>
-                <div className="info-fact"><dt>Created</dt><dd>{requisition.created}</dd></div>
+                <div className="info-fact"><dt>Created</dt><dd>{formatShortDate(requisition.created.slice(0, 10))}{requisition.raisedBy && requisition.raisedById !== requisition.hiringManagerId ? ` by ${requisition.raisedBy}` : ""}</dd></div>
+                <div className="info-fact"><dt>Headcount</dt><dd>{requisition.openings}</dd></div>
+                {requisition.budget !== undefined && (isHrRole(actor.role) || canRunPipeline(actor, requisition) || isHiringManagerOf(actor, requisition) || requisitionApprovers(requisition).some((a) => a.id === actor.id)) && (
+                  <div className="info-fact"><dt>Budget</dt><dd>{money(requisition.budget, requisition.budgetCurrency ?? TIMEZ_COUNTRIES.find((c) => c.name === requisition.country)?.currency)}</dd></div>
+                )}
+                {requisition.reason && <div className="info-fact"><dt>Reason</dt><dd>{requisition.reason}{requisition.justification ? ` · ${requisition.justification}` : ""}</dd></div>}
                 <div className="info-fact"><dt>Status</dt><dd>{requisition.stageSummary}</dd></div>
                 <div className="info-fact">
                   <dt>Approval</dt>
                   <dd>
                     {requisition.approvalStatus}
-                    {requisition.approver ? ` · ${requisition.approver}, ${requisition.decidedOn ?? ""}` : ""}
+                    {requisition.approver ? ` · ${requisition.approver}${requisition.decidedOn ? `, ${formatShortDate(requisition.decidedOn.slice(0, 10))}` : ""}` : ""}
                   </dd>
                 </div>
               </dl>
@@ -659,13 +704,21 @@ export function RecruitingPage() {
                       : ""}
                 </p>
               )}
+              <h3 className="cp-section-title">Job post</h3>
+              <PostingPanel key={`${requisition.id}-${requisition.posting?.id ?? "none"}`} req={requisition} actor={actor} onResult={(error, okText) => setNotice(noticeFor(error, okText))} />
+              {requisition.approvalStatus === "Approved" && (
+                <>
+                  <h3 className="cp-section-title">Candidates</h3>
+                  <StageCounts talent={talent} req={requisition} />
+                </>
+              )}
               {(requisition.history ?? []).length > 0 && (
                 <>
                   <h3 style={{ fontSize: 14, marginTop: 12 }}>History</h3>
                   <ul className="todo">
                     {requisition.history.map((h, i) => (
                       <li key={i}>
-                        {h.on} · {h.action} by {h.by}
+                        {formatShortDate(h.on.slice(0, 10))} · {h.action} by {h.by}
                         {h.note ? ` · ${h.note}` : ""}
                       </li>
                     ))}
@@ -775,19 +828,25 @@ export function RecruitingPage() {
         <div className="mgr-home-grid">
           <Card title="Interview schedule">
             <DataTable
-              headers={["When", "Candidate", "Role", "Panel", "Feedback"]}
+              headers={["When", "Candidate", "Role", "Panel", "Scorecard"]}
               rows={talent.interviews.map((i) => [
-                i.when,
-                i.candidateName,
+                `${formatShortDate(i.when.slice(0, 10))} ${i.when.slice(11, 16)}`.trim(),
+                <button key={`${i.id}-c`} type="button" className="quiet-link" onClick={() => setOpenCand(i.candidateId)}>
+                  {i.candidateName}
+                </button>,
                 i.role,
                 i.panel,
-                <StatusBadge key={i.id} status={i.feedbackStatus} literal tone={i.feedbackStatus === "Submitted" ? "ok" : "warn"} />,
+                i.feedbackStatus === "Submitted" ? (
+                  <StatusBadge key={i.id} status={`${i.score ?? "—"}/5${i.recommendation ? ` · ${i.recommendation}` : ""}`} literal tone="ok" />
+                ) : (
+                  <StatusBadge key={i.id} status={interviewStarted(i) ? "Pending" : "Upcoming"} literal tone={interviewStarted(i) ? "warn" : "info"} />
+                ),
               ])}
             />
           </Card>
-          <Card title="Submit interview feedback">
+          <Card title="Your scorecards">
             {feedbackInterviews.length === 0 ? (
-              <EmptyState title="Nothing to submit" description="No pending interviews for you." />
+              <EmptyState title="Nothing to submit" description="Scorecards open once your interview has started." />
             ) : (
               <>
                 <Field label="Interview">
@@ -795,25 +854,20 @@ export function RecruitingPage() {
                     <option value="">Select…</option>
                     {feedbackInterviews.map((i) => (
                       <option key={i.id} value={i.id}>
-                        {i.candidateName} · {i.when}
+                        {i.candidateName} · {i.type} · {formatShortDate(i.when.slice(0, 10))} {i.when.slice(11, 16)}
                       </option>
                     ))}
                   </select>
                 </Field>
-                <Field label="Score (1–5)">
-                  <input type="number" min={1} max={5} step={1} value={fbScore} onChange={(e) => setFbScore(e.target.value)} />
-                </Field>
-                <Field label="Feedback notes" wide>
-                  <textarea rows={3} value={fbText} onChange={(e) => setFbText(e.target.value)} placeholder="Observations for the hiring panel…" />
-                </Field>
-                <ActionButton
-                  className="btn"
-                  disabled={!fbInterview || !fbText.trim()}
-                  success={`Interview feedback for ${feedbackInterviews.find((i) => i.id === fbInterview)?.candidateName ?? "the candidate"} submitted.`}
-                  onAction={submitFeedback}
-                >
-                  Submit feedback
-                </ActionButton>
+                {feedbackInterviews.find((i) => i.id === fbInterview) && (
+                  <ScorecardForm
+                    key={fbInterview}
+                    interview={feedbackInterviews.find((i) => i.id === fbInterview)!}
+                    actor={actor}
+                    onResult={(error, okText) => setNotice(noticeFor(error, okText))}
+                    onDone={() => setFbInterview("")}
+                  />
+                )}
               </>
             )}
           </Card>
@@ -832,7 +886,7 @@ export function RecruitingPage() {
                   o.role,
                   o.grade,
                   money(o.baseSalary, o.currency),
-                  o.startDate,
+                  o.startDate ? formatShortDate(o.startDate) : "—",
                   <span key={o.id} className="stack">
                     <StatusBadge status={o.status} literal />
                     {o.responseNote && (
@@ -841,7 +895,7 @@ export function RecruitingPage() {
                       </span>
                     )}
                   </span>,
-                  o.approvals.length ? o.approvals.map((a) => `${a.role}: ${a.by}, ${a.on}`).join(" · ") : "—",
+                  o.approvals.length ? o.approvals.map((a) => `${a.role}: ${a.by}, ${formatShortDate(a.on.slice(0, 10))}`).join(" · ") : "—",
                   <OfferActions key={`${o.id}-a`} offer={o} req={req} actor={actor} onResult={setNotice} />,
                 ];
               })}
@@ -985,10 +1039,18 @@ function OfferActions({
   const buttons = moves.filter((m) => m !== "Accepted" && m !== "Declined");
   const canRecord = moves.includes("Accepted");
   if (!canApprove && buttons.length === 0 && !canRecord) {
-    return <span className="muted">{step ? `Waiting for ${step === "Hiring manager" ? "hiring manager" : step} approval` : "—"}</span>;
+    return (
+      <span className="row-gap">
+        <span className="muted">{step ? `Waiting for ${step === "Hiring manager" ? "hiring manager" : step} approval` : offer.respondedVia === "link" ? "Answered by the candidate" : "—"}</span>
+        <OfferLetterButton offer={offer} />
+      </span>
+    );
   }
   return (
+    <span className="stack">
+    <OfferAnswerLink offer={offer} />
     <span className="row-gap">
+      <OfferLetterButton offer={offer} />
       {canApprove && (
         <ActionButton
           className="btn btn-tiny"
@@ -1019,6 +1081,7 @@ function OfferActions({
           </button>
         </>
       )}
+    </span>
     </span>
   );
 }
@@ -1183,8 +1246,16 @@ export function OnboardingPage() {
   const talent = useTalent();
   const { demoProfile } = usePortal();
   const actor = demoProfile;
-  const [selected, setSelected] = useState(talent.joiners[0]?.id ?? "");
+  const [joinerParams, setJoinerParams] = useSearchParams();
+  const [selected, setSelected] = useState(() => joinerParams.get("joiner") ?? talent.joiners[0]?.id ?? "");
   const [ownerFilter, setOwnerFilter] = useState("");
+  useEffect(() => {
+    const id = joinerParams.get("joiner");
+    if (!id) return;
+    setSelected(id);
+    setJoinerParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinerParams]);
   const [notice, setNotice] = useState<Notice>(null);
 
   const isStaff = canEditOnboarding(actor.role);
@@ -1214,7 +1285,7 @@ export function OnboardingPage() {
             rows={talent.joiners.map((j) => [
               j.name,
               j.role,
-              j.startDate,
+              formatShortDate(j.startDate),
               j.country,
               <StatusBadge key={j.id} status={j.overallStatus} literal />,
               <button key={`${j.id}-o`} type="button" className="quiet-link" onClick={() => setSelected(j.id)}>
@@ -1540,11 +1611,11 @@ export function PerformancePage() {
 
       {cycle && (
         <MetricGrid>
-          <MetricCard label="Cycle" value={cycle.name} hint={`${cycle.start} → ${cycle.end}`} />
+          <MetricCard label="Cycle" value={cycle.name} hint={`${formatShortDate(cycle.start)} → ${formatShortDate(cycle.end)}`} />
           <MetricCard
             label="Status"
             value={status}
-            hint={cycle.selfReviewDue ? `Self due ${cycle.selfReviewDue} · manager due ${cycle.managerReviewDue ?? "—"}` : undefined}
+            hint={cycle.selfReviewDue ? `Self due ${formatShortDate(cycle.selfReviewDue)} · manager due ${cycle.managerReviewDue ? formatShortDate(cycle.managerReviewDue) : "—"}` : undefined}
           />
           <MetricCard label="Completion" value={`${cycleCompletion(talent, cycleId)}%`} hint="Assessments submitted" />
           <MetricCard label="Reviews in view" value={reviews.length} />
@@ -1857,13 +1928,13 @@ function daysUntil(iso: string, today: string): number {
 
 /** Due-date status for an enrollment, the way compliance LMS tools flag mandatory training. */
 function dueStatus(e: Enrollment, today: string): { label: string; tone: "ok" | "warn" | "danger" | "neutral" } {
-  if (e.status === "Completed") return { label: e.completedOn ? `Done ${e.completedOn}` : "Done", tone: "ok" };
+  if (e.status === "Completed") return { label: e.completedOn ? `Done ${formatShortDate(e.completedOn)}` : "Done", tone: "ok" };
   if (!e.due) return { label: "No due date", tone: "neutral" };
   const days = daysUntil(e.due, today);
   if (days < 0) return { label: `Overdue by ${-days} day${days === -1 ? "" : "s"}`, tone: "danger" };
   if (days === 0) return { label: "Due today", tone: "warn" };
   if (days <= DUE_SOON_DAYS) return { label: `Due in ${days} day${days === 1 ? "" : "s"}`, tone: "warn" };
-  return { label: `Due ${e.due}`, tone: "neutral" };
+  return { label: `Due ${formatShortDate(e.due)}`, tone: "neutral" };
 }
 
 function certStatus(c: Certification, today: string): { label: string; tone: "ok" | "warn" | "danger" | "neutral" } {
@@ -2295,13 +2366,11 @@ export function SkillsCareerPage() {
   const { demoProfile } = usePortal();
   const talent = useTalent();
   const [tab, setTab] = useState("profile");
-  const [notice, setNotice] = useState<Notice>(null);
+  const [notice] = useState<Notice>(null);
   const track = starterSkillsFor(demoProfile.id).track;
   const roles = (apiTargetRoles() ?? TARGET_ROLES).filter((t) => t.track === track);
   const [targetId, setTargetId] = useState(roles[0]?.id ?? "");
   const skills = skillProfileFor(talent, demoProfile.id);
-  const setSkill = (skillId: string, patch: { level?: string; targetLevel?: string }) =>
-    talentAction(() => updateEmployeeSkill(demoProfile, demoProfile.id, skillId, patch), (res) => setNotice(noticeFor(res)));
   const target = roles.find((t) => t.id === targetId) ?? roles[0];
 
   const gaps = useMemo(() => {
@@ -2351,29 +2420,7 @@ export function SkillsCareerPage() {
 
       {tab === "library" && <SkillsLibraryPanel me={demoProfile} />}
 
-      {tab === "profile" && (
-        <Card title="My skills">
-          <DataTable
-            headers={["Skill", "Current level", "Personal target"]}
-            rows={skills.map((s) => {
-              const levels = SKILL_LIBRARY.find((x) => x.id === s.skillId)?.levels ?? SKILL_LEVELS;
-              return [
-                s.skillName,
-                <select aria-label="Current level" key={`${s.skillId}-c`} value={s.level} onChange={(e) => setSkill(s.skillId, { level: e.target.value })}>
-                  {levels.map((lvl) => (
-                    <option key={lvl} value={lvl}>{lvl}</option>
-                  ))}
-                </select>,
-                <select aria-label="Target level" key={`${s.skillId}-t`} value={s.targetLevel} onChange={(e) => setSkill(s.skillId, { targetLevel: e.target.value })}>
-                  {levels.map((lvl) => (
-                    <option key={lvl} value={lvl}>{lvl}</option>
-                  ))}
-                </select>,
-              ];
-            })}
-          />
-        </Card>
-      )}
+      {tab === "profile" && <MySkillsPanel me={demoProfile} />}
 
       {tab === "gap" &&
         (!target ? (

@@ -4,11 +4,11 @@ import { Link } from "react-router-dom";
 import { COMPANY_NAME } from "../../brand.ts";
 import { ActionButton, Card, DataTable, LeaveTable, MetricCard, MetricGrid, StatusBadge, StatusPill } from "../../components/ui.tsx";
 import { DEMO_ACCOUNTS, accountHasNavAccess, type DemoAccount } from "../../demoAccounts.ts";
-import { COURSES } from "../../data/talentData.ts";
+import { COURSES, awaitingFeedback } from "../../data/talentData.ts";
 import { getTalentState, requisitionApprovers, subscribeTalent } from "../../data/talentLocal.ts";
 import { useProfileCorrections } from "../../data/profileCorrections.ts";
 import { canDecide as canDecideLifecycle, getLifecycleActions, subscribeLifecycleActions } from "../../features/lifecycle/lifecycleActionsStore.ts";
-import { listPeople, subscribePeople, getExitDetails } from "../../data/peopleLocal.ts";
+import { getPerson, listPeople, subscribePeople, getExitDetails } from "../../data/peopleLocal.ts";
 import { TASK_TEAM } from "../../data/taskTeam.ts";
 import { inHeadcount } from "../../data/peopleData.ts";
 import { getPlatformVersion, listAuditLog, listIntegrations, subscribePlatform } from "../../data/platformLocal.ts";
@@ -41,9 +41,19 @@ import {
   weightedProgress,
 } from "../../data/homeInsights.ts";
 import { useHomeLayout } from "../../data/preferences.ts";
+import { money } from "../../countryPay.ts";
+import { estimateMonthSoFar, paydayFor } from "../../data/payslipGenerator.ts";
+import { workDatesInWeek } from "../../data/workSchedule.ts";
+import {
+  getOptionalHolidayState,
+  holidaysFor as optionalHolidaysFor,
+  optionalRequestsFor,
+  subscribeOptionalHolidays,
+} from "../../features/workforce/optionalHolidaysStore.ts";
 import { getRewardState, subscribeReward } from "../../data/rewardLocal.ts";
 import { canApproveCompReviews } from "../../data/rbac.ts";
 import { attendanceContextFor, formatHm, nonWorkingReason, phaseLabel } from "../../data/attendanceData.ts";
+import { AttendanceStrip } from "../../components/AttendanceStrip.tsx";
 import {
   attendanceActionAsync,
   getAttendanceState,
@@ -59,6 +69,9 @@ import {
 } from "../../data/collabLocal.ts";
 import { notifPrefKey } from "../../data/collabData.ts";
 import { getExitState, subscribeExits } from "../../features/lifecycle/exitStore.ts";
+import { cashViews, getCashSnapshot, subscribeCash } from "../../features/payrequests/cashStore.ts";
+import { getSoftwareSnapshot, softwareViews, subscribeSoftware } from "../../features/payrequests/softwareStore.ts";
+import { useTravelRequests } from "../../data/travelStore.ts";
 import { getProbationState, subscribeProbation, trackedProbations } from "../../features/lifecycle/probationStore.ts";
 import { getBgvState, overallResult, subscribeBgv } from "../../features/compliance/bgvStore.ts";
 import { docStatus, getImmigrationState, subscribeImmigration } from "../../features/compliance/immigrationStore.ts";
@@ -76,6 +89,8 @@ import {
 import { RegionalFilter } from "../../locale/RegionalFilter.tsx";
 import { useLocale } from "../../locale/LocaleContext.tsx";
 import { usePortal } from "../../store.tsx";
+import { DAY_STATUS_LABEL, DAY_TARGET, HALF_DAY_TARGET, dayRecordFor, useDayRecords } from "../../data/timesheetDays.ts";
+import { halfDayLeave as halfDayLeaveOn, plural } from "../../model.ts";
 import { countWaitingOnMe } from "../ApprovalsCenter.tsx";
 import { AuthShortcuts, DashGreeting, DateRangeFilter, MiniBars, ProgressBar, useDateRange } from "./widgets.tsx";
 import {
@@ -183,6 +198,12 @@ function useHomeData() {
   return { people, talent, attState, today, team, statuses, waitingCount, waiting, holidays, openReqs, teamReqs };
 }
 
+/** A teammate's name, linked only when they have a profile (sample task-team people have none in backend mode). */
+function PersonNameLink({ id, name }: { id: string; name: string }) {
+  const hasProfile = Boolean(getPerson(id)) || DEMO_ACCOUNTS.some((a) => a.id === id);
+  return hasProfile ? <Link to={`/people/${id}`}>{name}</Link> : <span>{name}</span>;
+}
+
 function MyApprovalsCard({ waiting, count, people }: { waiting: ReturnType<typeof waitingItems>; count: number; people: ReturnType<typeof listPeople> }) {
   const byKind = [...waiting.reduce((m, w) => m.set(w.kind, (m.get(w.kind) ?? 0) + 1), new Map<string, number>())];
   return (
@@ -219,7 +240,9 @@ function MyDayCard() {
   const session = getCurrentSession(employee.id, attState);
   const status = dayStatus(state, employee.id, employee.countryCode ?? "IN", today);
   const next = upcomingHolidays(state.holidays, employee.countryCode, today, 1)[0];
-  const rows = leaveTable.filter((r) => r.code !== "unpaid" && r.quota > 0).slice(0, 3);
+  // The everyday allowances first (annual / sick / casual), not the first three by name (bereavement) or by size (maternity).
+  const rank = (code: string) => { const i = ["pto", "sick", "casual", "wfh"].indexOf(code); return i < 0 ? 99 : i; };
+  const rows = leaveTable.filter((r) => r.code !== "unpaid" && r.quota > 0).sort((a, b) => rank(a.code) - rank(b.code)).slice(0, 3);
   return (
     <Card title="My day">
       <p>
@@ -229,7 +252,7 @@ function MyDayCard() {
       <ul className="todo">
         {rows.map((r) => (
           <li key={r.code}>
-            {r.name}: <strong>{r.available}</strong> days available
+            {r.name}: <strong>{r.available}</strong> {r.available === 1 ? "day" : "days"} available
           </li>
         ))}
         <li>Next holiday: {next ? `${next.name} · ${formatShortDate(next.date)}` : "None this year"}</li>
@@ -269,9 +292,7 @@ function TeamTodayCard({
       <DataTable
         headers={["Name", "Role", "Today"]}
         rows={shown.map(({ member, status }) => [
-          <Link key={member.id} to={`/people/${member.id}`}>
-            {member.name}
-          </Link>,
+          <PersonNameLink key={member.id} id={member.id} name={member.name} />,
           member.designation,
           <StatusBadge
             key={`${member.id}-s`}
@@ -287,12 +308,21 @@ function TeamTodayCard({
   );
 }
 
-function HolidaysCard({ holidays, countryName }: { holidays: { id: string; date: string; name: string }[]; countryName?: string }) {
+function HolidaysCard({
+  holidays,
+  countryName,
+  children,
+}: {
+  holidays: { id: string; date: string; name: string }[];
+  countryName?: string;
+  children?: ReactNode;
+}) {
   return (
     <Card title={`Upcoming holidays${countryName ? ` · ${countryName}` : ""}`} to={R.holidays}>
       <ul className="todo">
         {holidays.length ? holidays.map((h) => <li key={h.id}>{h.name} · {formatShortDate(h.date)}</li>) : <li>None this year</li>}
       </ul>
+      {children}
     </Card>
   );
 }
@@ -319,12 +349,16 @@ function countryNameOf(code: string | undefined): string | undefined {
 type OwnRequest = { id: string; type: string; detail: string; date: string; to: string };
 
 export function EmployeeHome() {
-  const { employee, leaveTable, counts, payslipViews, currentProjects, state, demoProfile } = usePortal();
+  const { employee, leaveTable, payslipViews, currentProjects, state, demoProfile, payInput } = usePortal();
   const data = useHomeData();
+  const optional = useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState, getOptionalHolidayState);
   const { talent, attState, today } = data;
   useSyncExternalStore(subscribeCollab, getCollabState, getCollabState);
+  useSyncExternalStore(subscribeCash, getCashSnapshot, getCashSnapshot);
+  useSyncExternalStore(subscribeSoftware, getSoftwareSnapshot, getSoftwareSnapshot);
+  const travel = useTravelRequests();
   const [punchError, setPunchError] = useState<string | null>(null);
-  const pto = leaveTable.find((row) => row.code === "pto");
+  const pto =leaveTable.find((row) => row.code === "pto");
   const wfh = leaveTable.find((row) => row.code === "wfh");
   const dayContext = useMemo(
     () => attendanceContextFor(employee, state.holidays, state.leaveRequests),
@@ -371,15 +405,19 @@ export function EmployeeHome() {
     ...mine(state.reimbursements)
       .filter((r) => r.status === "submitted")
       .map((r) => ({ id: r.id, type: "Reimbursement", detail: r.category, date: r.date, to: "/reimbursement" })),
-    ...mine(state.cashAdvances)
+    // Cash advances and software live in their own stores (the /cash and /software pages), not state.
+    ...mine(cashViews(demoProfile))
+      .filter((r) => r.status === "Submitted" || r.status === "Manager approved")
+      .map((r) => ({ id: r.id, type: "Cash advance", detail: r.category, date: r.submittedOn, to: "/cash" })),
+    ...mine(travel)
       .filter((r) => r.status === "pending")
-      .map((r) => ({ id: r.id, type: "Cash advance", detail: r.category, date: r.date, to: R.expenses })),
+      .map((r) => ({ id: r.id, type: "Travel", detail: `${r.fromCity} → ${r.toCity}`, date: r.submittedOn, to: "/travel" })),
     ...mine(state.assetRequests)
       .filter((r) => r.status === "pending")
       .map((r) => ({ id: r.id, type: "Asset", detail: r.item, date: r.date, to: R.help })),
-    ...mine(state.softwareRequests)
-      .filter((r) => r.status === "pending")
-      .map((r) => ({ id: r.id, type: "Software", detail: r.software, date: r.date, to: R.help })),
+    ...mine(softwareViews(demoProfile))
+      .filter((r) => r.status === "Submitted" || r.status === "Manager approved")
+      .map((r) => ({ id: r.id, type: "Software", detail: r.titleName, date: r.submittedOn, to: "/software" })),
     ...mine(state.cabBookings)
       .filter((r) => r.status === "pending")
       .map((r) => ({ id: r.id, type: "Cab", detail: r.to, date: r.date, to: R.help })),
@@ -389,6 +427,7 @@ export function EmployeeHome() {
   ].sort((a, b) => b.date.localeCompare(a.date));
 
   // This week's timesheet.
+  const dayRecords = useDayRecords();
   const week = mondayOf(today);
   const weekSheets = state.timesheets.filter((t) => t.employeeId === employee.id && t.weekStart === week);
   const weekHours = weekSheets.reduce((n, t) => n + Object.values(t.hours).reduce((a, b) => a + b, 0), 0);
@@ -399,7 +438,40 @@ export function EmployeeHome() {
       : weekSheets.every((t) => t.status === "approved")
         ? "Approved"
         : "Submitted";
-  const olderDrafts = state.timesheets.filter((t) => t.employeeId === employee.id && t.weekStart < week && t.status === "draft").length;
+  const olderDrafts = 0; // daily timesheets: each day is submitted on its own (see today's status below)
+  // Target: 9 h on each working day this week (weekly offs and holidays left out).
+  const holidayDates = new Set(dayContext.holidays.map((h) => h.date));
+  const weekWorkDates = workDatesInWeek(week, dayContext.weeklyOffDays).filter((d) => !holidayDates.has(d));
+  const weekTarget = weekWorkDates.length * DAY_TARGET;
+  // Today's timesheet (daily submission): hours vs 9 h (4.5 h on half-day leave) and its status.
+  const todayHours = weekSheets.reduce((n, t) => n + (t.hours[today] ?? 0), 0);
+  const todayTarget = !weekWorkDates.includes(today) ? 0 : halfDayLeaveOn(state.leaveRequests, employee.id, today) ? HALF_DAY_TARGET : DAY_TARGET;
+  const todayDay = dayRecordFor(dayRecords, employee.id, today);
+  const todayStatusLabel = DAY_STATUS_LABEL[todayDay?.status ?? "draft"];
+  const sentBackDays = dayRecords.filter((r) => r.personId === employee.id && (r.status === "rejected" || r.status === "reopened") && r.date !== today).length;
+
+  // Pay earned this month to today (same calc as the payslip estimate) and the next payday.
+  const earned = estimateMonthSoFar(payInput);
+  const left = Boolean(payInput.lastWorkingDay && payInput.lastWorkingDay < today);
+  const nextPayday = (() => {
+    const thisMonth = paydayFor(today.slice(0, 7), employee.countryCode);
+    if (thisMonth >= today) return thisMonth;
+    const d = new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 1);
+    return paydayFor(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, employee.countryCode);
+  })();
+  const daysToPayday = Math.round((new Date(`${nextPayday}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000);
+
+  // Optional holidays still ahead this year, and how many picks are left.
+  const year = Number(today.slice(0, 4));
+  // A pick is an "optional" leave request for that date; the balance is the optional-holiday leave row.
+  const pickedDates = new Map(
+    optionalRequestsFor(state.leaveRequests, employee.id, year)
+      .filter((r) => r.status === "pending" || r.status === "approved")
+      .map((r) => [r.from, r.status === "approved" ? "Picked" : "Requested"] as const),
+  );
+  const optionalAhead = optionalHolidaysFor(employee.countryCode ?? "IN", year, optional).filter((h) => h.date >= today).slice(0, 3);
+  const picksLeft = Math.max(0, leaveTable.find((row) => row.code === "optional")?.available ?? 0);
+  const canPickOptional = accountHasNavAccess(demoProfile, "optionalholidays");
 
   // Goals and learning.
   const cycle = currentCycle(talent);
@@ -472,6 +544,49 @@ export function EmployeeHome() {
     ...(data.team.length > 0 || data.waitingCount > 0
       ? [{ id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> }]
       : []),
+    ...(earned
+      ? [
+          {
+            id: "earned",
+            label: "Earned this month",
+            node: (
+              <Card title="Earned so far this month" to={R.payslips}>
+                <div className="home-pay-figures">
+                  <div>
+                    <span className="muted">Gross</span>
+                    <strong>{money(earned.gross, earned.currency)}</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Net (est.)</span>
+                    <strong>{money(earned.net, earned.currency)}</strong>
+                  </div>
+                </div>
+                <p className="muted">
+                  {earned.daysCounted} of {earned.totalDays} days · tax and deductions {money(earned.deductionTotal, earned.currency)}
+                </p>
+                <Link to={R.payslips}>Payslips</Link>
+              </Card>
+            ),
+          },
+        ]
+      : []),
+    ...(!left
+      ? [
+          {
+            id: "payday",
+            label: "Next payday",
+            node: (
+              <Card title="Next payday" to={R.payslips}>
+                <p className="home-countdown">
+                  <strong>{daysToPayday === 0 ? "Today" : `${daysToPayday} day${daysToPayday === 1 ? "" : "s"}`}</strong>
+                  <span className="muted"> · {formatShortDate(nextPayday)}</span>
+                </p>
+                <p className="muted">Paid on the last working day of the month.</p>
+              </Card>
+            ),
+          },
+        ]
+      : []),
     {
       id: "profile",
       label: "My profile",
@@ -507,7 +622,7 @@ export function EmployeeHome() {
       node: (
         <Card title="Today's attendance" to={R.attendance}>
           <p>
-            <StatusBadge status={attendanceLabel} tone={session.phase === "checked_in" ? "ok" : session.phase === "on_break" ? "warn" : undefined} literal />
+            <StatusBadge status={attendanceLabel} tone={session.phase === "checked_in" ? "ok" : session.phase === "on_break" ? "warn" : undefined} literal keepCase />
           </p>
           <p className="muted">
             {session.checkIn ? `In ${formatHm(session.checkIn)}` : "No check-in yet"}
@@ -559,7 +674,31 @@ export function EmployeeHome() {
         </Card>
       ),
     },
-    { id: "holidays", label: "Upcoming holidays", node: <HolidaysCard holidays={data.holidays} countryName={employee.countryName} /> },
+    {
+      id: "holidays",
+      label: "Upcoming holidays",
+      node: (
+        <HolidaysCard holidays={data.holidays} countryName={employee.countryName}>
+          {optionalAhead.length > 0 && (
+            <>
+              <p className="muted" style={{ margin: "10px 0 4px" }}>
+                Optional · {picksLeft} pick{picksLeft === 1 ? "" : "s"} left
+              </p>
+              <ul className="todo">
+                {optionalAhead.map((h) => (
+                  <li key={h.id}>
+                    {h.name} · {formatShortDate(h.date)} {pickedDates.has(h.date) && (
+                      <StatusBadge status={pickedDates.get(h.date) ?? ""} tone={pickedDates.get(h.date) === "Picked" ? "ok" : "warn"} literal />
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {canPickOptional && picksLeft > 0 && <Link to="/workforce/optional-holidays">Pick optional holidays</Link>}
+            </>
+          )}
+        </HolidaysCard>
+      ),
+    },
     {
       id: "requests",
       label: "Pending requests",
@@ -608,10 +747,22 @@ export function EmployeeHome() {
       node: (
         <Card title="Timesheet" to={R.timesheet}>
           <p>
-            Week of {formatShortDate(week)} · <strong>{weekHours} h</strong> <StatusBadge status={weekStatus} literal />
+            Today · <strong>{todayHours} h</strong>
+            {todayTarget > 0 && <span className="muted"> of {todayTarget} h</span>}{" "}
+            <StatusBadge
+              status={todayStatusLabel}
+              tone={todayDay?.status === "approved" ? "ok" : todayDay?.status === "rejected" ? "danger" : "warn"}
+              literal
+            />
+          </p>
+          {todayTarget > 0 && <ProgressBar value={(todayHours / todayTarget) * 100} label="Today vs 9 h" />}
+          {todayTarget > 0 && <AttendanceStrip compact main={false} />}
+          {todayDay?.status === "rejected" && todayDay.decisionNote && <p className="note warn">Sent back: “{todayDay.decisionNote}”</p>}
+          <p className="muted">
+            Week of {formatShortDate(week)} · {weekHours} h{weekTarget > 0 ? ` of ${weekTarget} h` : ""}
           </p>
           <p className="muted">Project: {currentProjects[0]?.name ?? "No active assignment"}</p>
-          {olderDrafts > 0 && <p className="note warn">{olderDrafts} earlier week{olderDrafts === 1 ? "" : "s"} still in draft.</p>}
+          {sentBackDays > 0 && <p className="note warn">{sentBackDays} day{sentBackDays === 1 ? "" : "s"} to fix (sent back or reopened).</p>}
           <Link to={R.timesheet} className="btn" style={{ marginTop: 10, display: "inline-flex" }}>
             Open timesheet
           </Link>
@@ -733,10 +884,10 @@ export function EmployeeHome() {
       <TodaySummaryCard lines={summaryLines} />
 
       <div className="emp-quick-actions" aria-label="Quick actions">
-        <Link className="btn" to={R.leave}>
+        <Link className="btn-ghost" to={R.leave}>
           Apply for leave
         </Link>
-        <Link className="btn" to={R.timesheet}>
+        <Link className="btn-ghost" to={R.timesheet}>
           Submit timesheet
         </Link>
         <Link className="btn-ghost" to={R.attendance}>
@@ -766,7 +917,7 @@ export function EmployeeHome() {
           <MetricCard label="Open tasks" value={myOpenTasks.length} hint={urgentTask ? urgentTask.subject : "You're all caught up"} />
         </Link>
         <Link to={R.timesheet} className="metric-card-link">
-          <MetricCard label="Timesheet" value={counts.timesheet > 0 ? "Action needed" : "Up to date"} hint={`This week · ${weekHours} h`} />
+          <MetricCard label="Timesheet" value={todayStatusLabel} hint={`Today · ${todayHours} of ${todayTarget || DAY_TARGET} h · week ${weekHours} h`} />
         </Link>
       </MetricGrid>
 
@@ -922,9 +1073,9 @@ export function ManagerHome() {
       id: "timesheets",
       label: "Timesheet approvals",
       node: (
-        <Card title={`Timesheet approvals · ${timesheetQueue.length}`} to={R.approvals}>
+        <Card title={`Timesheet approvals · ${timesheetQueue.length}`} to="/timesheet?view=team">
           <DataTable
-            headers={["Person", "Week of", "Hours"]}
+            headers={["Person", "Day / week of", "Hours"]}
             rows={timesheetQueue.slice(0, 5).map((w) => [personName(w.employeeId, data.people), formatShortDate(w.date), w.detail])}
             empty={<p className="note">No timesheets waiting on you.</p>}
           />
@@ -938,7 +1089,7 @@ export function ManagerHome() {
         <Card title="Team goal progress" to={R.performance}>
           {goals.people.length ? (
             <>
-              <ProgressBar value={goals.avg} label={`Average · ${goals.people.length} people with goals`} />
+              <ProgressBar value={goals.avg} label={`Average · ${plural(goals.people.length, "person", "people")} with goals`} />
               <p className="muted">
                 {cycle.name} is {goals.elapsed}% through · {goals.behind.length} behind
               </p>
@@ -1003,9 +1154,7 @@ export function ManagerHome() {
           <DataTable
             headers={["Name", "Role", "Joined"]}
             rows={joiners.slice(0, 5).map(({ member, doj }) => [
-              <Link key={member.id} to={`/people/${member.id}`}>
-                {member.name}
-              </Link>,
+              <PersonNameLink key={member.id} id={member.id} name={member.name} />,
               member.designation,
               formatShortDate(doj),
             ])}
@@ -1018,7 +1167,7 @@ export function ManagerHome() {
       id: "positions",
       label: "Open positions",
       node: (
-        <Card title={`Open positions · ${openings}`} to="/jobs">
+        <Card title={`Open positions · ${openings}`} to="/recruiting">
           <ul className="todo">
             {data.teamReqs.length ? (
               data.teamReqs.map((r) => (
@@ -1079,7 +1228,7 @@ export function ManagerHome() {
       <DashGreeting title="Manager home" subtitle={`${dayGreeting(employee.fullName)} · ${employee.designation} · ${formatLongDate(today)}`} />
       <TodaySummaryCard lines={summaryLines} />
       <MetricGrid>
-        <MetricCard label="Team headcount" value={data.team.length} hint={`${m.direct} direct reports`} />
+        <MetricCard label="Team headcount" value={data.team.length} hint={plural(m.direct, "direct report")} />
         <MetricCard label="Working today" value={m.working} hint={`${checkedIn.size} checked in · ${m.wfh} WFH · ${m.onLeave} on leave`} />
         <MetricCard label="Pending approvals" value={data.waitingCount} hint={overdue.length ? `${overdue.length} older than 3 days` : "Waiting on you"} />
         <MetricCard label="Team goal progress" value={`${goals.avg}%`} hint={`${goals.behind.length} behind · ${cycle.name}`} />
@@ -1272,7 +1421,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
       label: "Headcount by department",
       node: (
         <Card title="Headcount by department">
-          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name.slice(0, 10), value: d.count }))} />
+          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name, value: d.count }))} />
         </Card>
       ),
     },
@@ -1349,7 +1498,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
       node: (
         <Card title="Leave trends · days">
           <MiniBars items={leaveSeries.map((s) => ({ label: s.label, value: s.days }))} />
-          {onLeaveNow > 0 && <p className="note">{onLeaveNow} on leave today</p>}
+          {onLeaveNow > 0 && <p className="note">{onLeaveNow} {onLeaveNow === 1 ? "person has" : "people have"} the status On leave</p>}
         </Card>
       ),
     },
@@ -1475,7 +1624,7 @@ export function RecruiterHome() {
   const shown = active.filter(
     (c) => !query || c.name.toLowerCase().includes(query.toLowerCase()) || c.role.toLowerCase().includes(query.toLowerCase()),
   );
-  const pendingFeedback = talent.interviews.filter((i) => i.feedbackStatus === "Pending");
+  const pendingFeedback = awaitingFeedback(talent.interviews);
   const upcoming = talent.interviews.filter((i) => i.when.slice(0, 10) >= data.today);
   const byStage = [...active.reduce((m, c) => m.set(c.stage, (m.get(c.stage) ?? 0) + 1), new Map<string, number>())];
 
@@ -1519,7 +1668,7 @@ export function RecruiterHome() {
         <Card title="Pending interview feedback" to="/recruiting">
           <DataTable
             headers={["Candidate", "Role", "Interview"]}
-            rows={pendingFeedback.map((i) => [i.candidateName, i.role, i.when])}
+            rows={pendingFeedback.map((i) => [i.candidateName, i.role, `${formatShortDate(i.when.slice(0, 10))} ${i.when.slice(11, 16)}`.trim()])}
             empty={<p className="note">All feedback is in.</p>}
           />
         </Card>
@@ -1610,7 +1759,7 @@ export function ExecutiveHome() {
       label: "Departments",
       node: (
         <Card title="Departments">
-          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name.slice(0, 10), value: d.count }))} />
+          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name, value: d.count }))} />
         </Card>
       ),
     },
@@ -1673,6 +1822,11 @@ const ROLE_LABELS: Partial<Record<DemoAccount["role"], string>> = {
 };
 
 /** Modules shown in the admin permissions table, read from each account's access pack. */
+/** Page access as the sidebar grants it: Approvals is the team inbox ("inbox") or the Approvals menu ("approvalsmenu"). */
+function moduleAccess(a: (typeof DEMO_ACCOUNTS)[number], id: string): boolean {
+  return id === "inbox" ? accountHasNavAccess(a, "inbox") || accountHasNavAccess(a, "approvalsmenu") : accountHasNavAccess(a, id);
+}
+
 const PERMISSION_ROWS: [string, string][] = [
   ["team", "Team"],
   ["inbox", "Approvals"],
@@ -1719,7 +1873,7 @@ export function AdministrationHome() {
   const accessData = DEMO_ACCOUNTS.map((a) => ({
     label: ROLE_LABELS[a.role] ?? a.personaLabel,
     title: `${a.personaLabel} (${a.fullName})`,
-    value: PERMISSION_ROWS.filter(([id]) => accountHasNavAccess(a, id)).length,
+    value: PERMISSION_ROWS.filter(([id]) => moduleAccess(a, id)).length,
   }));
   const INTEGRATION_STATES = ["Connected", "Degraded", "Disconnected", "Not configured"] as const;
   const integrationData = countInto(INTEGRATION_STATES, integrations.map((i) => i.status))
@@ -1873,7 +2027,7 @@ export function AdministrationHome() {
         <Card title="Who can do what" to={R.admin}>
           <DataTable
             headers={["Module", ...DEMO_ACCOUNTS.map((a) => a.personaLabel)]}
-            rows={PERMISSION_ROWS.map(([id, label]) => [label, ...DEMO_ACCOUNTS.map((a) => (accountHasNavAccess(a, id) ? "Yes" : "—"))])}
+            rows={PERMISSION_ROWS.map(([id, label]) => [label, ...DEMO_ACCOUNTS.map((a) => (moduleAccess(a, id) ? "Yes" : "—"))])}
           />
         </Card>
       ),
@@ -1902,8 +2056,18 @@ export function AdministrationHome() {
       id: "audit",
       label: "Audit log",
       node: (
-        <Card title="Recent audit events" to={R.admin}>
-          <DataTable headers={["When", "Who", "Action", "Target"]} rows={audit.slice(0, 6).map((e) => [e.at, e.actor, e.action, e.target])} />
+        <Card title="Recent audit events" to="/admin/audit">
+          <DataTable
+            headers={["When", "Who", "Action", "Target"]}
+            rows={[
+              // Record changes (the Audit log page) and platform events, newest first.
+              ...auditTrail.map((e) => ({ at: e.at, actor: e.actorName, action: `${e.action} ${e.entity.toLowerCase()}`, target: e.entityId })),
+              ...audit,
+            ]
+              .sort((a, b) => b.at.localeCompare(a.at))
+              .slice(0, 6)
+              .map((e) => [`${formatShortDate(e.at.slice(0, 10))} ${e.at.slice(11, 16)}`.trim(), e.actor, e.action, e.target])}
+          />
         </Card>
       ),
     },

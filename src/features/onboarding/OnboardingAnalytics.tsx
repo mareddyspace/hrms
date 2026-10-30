@@ -134,10 +134,12 @@ export function OnboardingAnalyticsPanel({ country }: { country?: string }) {
 
 /** HR home: small onboarding summary. */
 export function OnboardingHomeCard() {
-  const { data } = useOnboardingAnalytics();
+  const { data, error } = useOnboardingAnalytics();
   return (
     <Card title="Onboarding" action={<Link to="/onboarding" className="quiet-link">Open</Link>}>
-      {!data ? (
+      {error ? (
+        <p className="muted">{error}</p>
+      ) : !data ? (
         <p className="muted">Loading…</p>
       ) : (
         <MetricGrid>

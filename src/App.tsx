@@ -94,6 +94,9 @@ const BulkDataPage = lazy(() => import("./features/datatools/BulkDataPage.tsx").
 const ReportBuilderPage = lazy(() => import("./features/datatools/ReportBuilderPage.tsx").then((m) => ({ default: m.ReportBuilderPage })));
 const ShiftRosterPage = lazy(() => import("./features/workforce/ShiftRosterPage.tsx").then((m) => ({ default: m.ShiftRosterPage })));
 const OptionalHolidaysPage = lazy(() => import("./features/workforce/OptionalHolidaysPage.tsx").then((m) => ({ default: m.OptionalHolidaysPage })));
+const CareersPage = lazy(() => import("./pages/PublicHiring.tsx").then((m) => ({ default: m.CareersPage })));
+const CareerPostPage = lazy(() => import("./pages/PublicHiring.tsx").then((m) => ({ default: m.CareerPostPage })));
+const OfferAnswerPage = lazy(() => import("./pages/PublicHiring.tsx").then((m) => ({ default: m.OfferAnswerPage })));
 const ContractorsPage = lazy(() => import("./features/workforce/ContractorsPage.tsx").then((m) => ({ default: m.ContractorsPage })));
 
 /** Pages are reachable only when the signed-in role has them in its access list — not just from the menu. */
@@ -130,6 +133,10 @@ export function App() {
     <Suspense fallback={<div className="page-loading" aria-busy="true" />}>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* Public, no sign-in: careers page and the candidate's offer link. */}
+      <Route path="/careers" element={<CareersPage />} />
+      <Route path="/careers/:postingId" element={<CareerPostPage />} />
+      <Route path="/offer/:token" element={<OfferAnswerPage />} />
       <Route element={<Guard />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/info" element={<MyInfo />} />

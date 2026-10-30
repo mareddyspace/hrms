@@ -1,7 +1,15 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { holidaysForPerson } from "../model.ts";
 import { OptionalHolidaysCard } from "../features/workforce/OptionalHolidaysPage.tsx";
-import { Card, Page, ProjectFacts } from "../components/ui.tsx";
+import {
+  countryOf,
+  getOptionalHolidayState,
+  holidaysFor as optionalHolidaysFor,
+  optionalRequestsFor,
+  requestOn,
+  subscribeOptionalHolidays,
+} from "../features/workforce/optionalHolidaysStore.ts";
+import { Card, Page } from "../components/ui.tsx";
 import {
   isPrimaryWeeklyOffLabel,
   isWeeklyOffDate,
@@ -19,42 +27,7 @@ export function MyInfo() {
   return <PersonProfilePage personId={employee.id} />;
 }
 
-export function ProjectsPage() {
-  const { currentProjects, previousProjects, hoursFor } = usePortal();
-  const [mode, setMode] = useState<"current" | "previous">("current");
-  const list = mode === "current" ? currentProjects : previousProjects;
-  const [selectedId, setSelectedId] = useState(currentProjects[0]?.id ?? "");
-  const selected = list.find((project) => project.id === selectedId) ?? list[0];
-  return (
-    <Page title="My projects" subtitle={`${currentProjects.length} current · ${previousProjects.length} previous`}>
-      <Card>
-        <div className="form-actions" style={{ marginTop: 0 }}>
-          <button className={mode === "current" ? "btn" : "btn-ghost"} type="button" onClick={() => setMode("current")}>
-            Current
-          </button>
-          <button className={mode === "previous" ? "btn" : "btn-ghost"} type="button" onClick={() => setMode("previous")}>
-            Previous
-          </button>
-        </div>
-        <div className="projects-layout" style={{ marginTop: 14 }}>
-          <div>
-            {list.map((project) => (
-              <button
-                key={project.id}
-                className={project.id === selected?.id ? "project-pill active" : "project-pill"}
-                onClick={() => setSelectedId(project.id)}
-              >
-                {project.name}
-              </button>
-            ))}
-            {list.length === 0 && <p className="empty">No projects in this list.</p>}
-          </div>
-          {selected && <ProjectFacts project={selected} hours={hoursFor(selected.id)} />}
-        </div>
-      </Card>
-    </Page>
-  );
-}
+export { ProjectsPage } from "./ProjectsPage.tsx";
 
 export function HolidaysPage() {
   const today = todayISO();
@@ -64,6 +37,9 @@ export function HolidaysPage() {
   const [cursor, setCursor] = useState({ year: initial.getFullYear(), month: initial.getMonth() });
   const cells = monthCells(cursor.year, cursor.month);
   const byDate = useMemo(() => new Map(holidays.map((holiday) => [holiday.date, holiday])), [holidays]);
+  const optionalState = useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState, getOptionalHolidayState);
+  const optionalByDate = new Map(optionalHolidaysFor(countryOf(employee.id), cursor.year, optionalState).map((h) => [h.date, h]));
+  const myOptional = optionalRequestsFor(state.leaveRequests, employee.id, cursor.year);
   const schedule = useMemo(
     () =>
       scheduleForEmployee({
@@ -104,18 +80,21 @@ export function HolidaysPage() {
           {cells.map((date, index) => {
             if (!date) return <div key={`blank-${index}`} />;
             const holiday = byDate.get(date);
+            const optional = holiday ? undefined : optionalByDate.get(date);
+            const pick = optional ? requestOn(myOptional, date) : undefined;
+            const pickText = pick?.status === "approved" ? " · picked" : pick?.status === "pending" ? " · waiting" : "";
             const weeklyOff = isWeeklyOffDate(date, schedule.weeklyOffDays);
             const showOff =
               !holiday && weeklyOff && isPrimaryWeeklyOffLabel(date, schedule.weeklyOffDays);
             return (
               <div
                 key={date}
-                className={`day ${holiday ? "holiday" : weeklyOff ? "weekend" : ""} ${date === today ? "today" : ""}`}
-                title={holiday ? holiday.name : weeklyOff ? "Weekly off" : undefined}
+                className={`day ${holiday || pick?.status === "approved" ? "holiday" : weeklyOff ? "weekend" : ""} ${date === today ? "today" : ""}`}
+                title={holiday ? holiday.name : optional ? `${optional.name} (optional)` : weeklyOff ? "Weekly off" : undefined}
               >
                 <strong>{Number(date.slice(-2))}</strong>
                 {date === today && <span className="day-today-tag">Today</span>}
-                {holiday ? holiday.name : showOff ? "Weekly off" : ""}
+                {holiday ? holiday.name : optional ? `${optional.name} (optional${pickText})` : showOff ? "Weekly off" : ""}
               </div>
             );
           })}

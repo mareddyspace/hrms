@@ -75,7 +75,7 @@ export function GrievancePage() {
   const byCode = codeCase ? findCaseByCode(actor, codeCase) : undefined;
 
   return (
-    <Page title="Grievances and POSH">
+    <Page title={window.location.pathname.startsWith("/people/cases") ? "HR cases" : "Raise a concern"} subtitle="Grievances and POSH">
       <Banner message={msg} />
       <Tabs
         tabs={tabs}

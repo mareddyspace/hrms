@@ -22,6 +22,8 @@ _SUBJECT_ROLES = ("manager", "skip_manager", "hr")
 def _ids_for(db: Session, role: str, subject: Employee, resolved: list[str], excluded: set[str]) -> list[str]:
     ids = engine.resolve_group(db, role, subject) if role in _SUBJECT_ROLES else list(resolved)
     ids = [i for i in ids if i not in excluded]
+    if not ids and role == "skip_manager":
+        return []  # no skip-level manager: that step is skipped (not sent to admin)
     if not ids and role not in ("admin", "executive"):
         ids = [i for i in engine.resolve_group(db, "admin", subject) if i not in excluded]
     if not ids and role != "executive":

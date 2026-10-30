@@ -297,3 +297,20 @@ def test_sla_escalation_uses_step_hours(client, admin):
         engine.decide(db, inst, "emp-ram", "approve")  # the HR step has no SLA
         assert engine.escalate_overdue_steps(db, utcnow() + timedelta(hours=50)) == 0
         db.commit()
+
+
+def test_skip_level_manager_cannot_approve_over_line_manager(client, babu):
+    """Babu's leave waits on Ram; Jordan (Ram's manager) can't decide it for him."""
+    from datetime import date, timedelta
+
+    from tests.conftest import login
+
+    day = date.today() + timedelta(days=60)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    res = client.post("/api/v1/leave/requests", headers=babu,
+                      json={"leave_code": "pto", "from": day.isoformat(), "to": day.isoformat(), "reason": "Skip-level check"})
+    assert res.status_code == 201, res.text
+    jordan = login(client, "jordan.blake@timez.com")
+    denied = client.post(f"/api/v1/leave/requests/{res.json()['id']}/decision", headers=jordan, json={"decision": "approve"})
+    assert denied.status_code in (403, 404), denied.text

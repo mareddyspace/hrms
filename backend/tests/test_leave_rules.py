@@ -106,7 +106,7 @@ def test_apply_checks_gender_notice_max_and_probation(client, babu, farhan):
     res = client.post("/api/v1/leave/requests", headers=babu, json={"leave_code": "rule_test", "from": start.isoformat(),
                                                                    "to": start.isoformat(), "half": "first", "reason": "x"})
     assert res.status_code == 422 and "half day" in res.json()["detail"]
-    res = _apply(client, babu, "rule_test", _workday(1))
+    res = _apply(client, babu, "rule_test", _workday(0))  # at most 2 calendar days ahead on any weekday
     assert res.status_code == 422 and "3 days' notice" in res.json()["detail"]
 
     # Probation: joined last month -> blocked (India probation is 6 months).

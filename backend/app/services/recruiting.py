@@ -1,15 +1,18 @@
 """Recruiting rules (same as the front end's src/data/talentLocal.ts).
 
-Hiring flow: the hiring manager raises a requisition -> the "requisition" approval workflow (department head, then HR,
-then finance by default) -> a recruiter is assigned when it is approved -> the recruiter (or HR) runs the pipeline ->
-the hiring manager decides at Final Review -> offer: recruiter prepares, hiring manager agrees, HR approves ->
-recruiter sends and records the answer -> Hired (only with an accepted offer) creates the joiner.
-Nobody approves their own step.
+Hiring flow: the hiring manager (or a recruiter / HR for them) raises a requisition -> the "requisition" approval
+workflow (department head, then HR, then finance by default) -> a recruiter is assigned when it is approved -> the
+recruiter publishes it as a job posting (internal jobs board, and the public careers page) -> people apply (careers
+page, or employees from the internal board) -> the recruiter screens (shortlist / reject with a reason) -> interviews
+-> the panel's scorecards -> the hiring manager decides at Final Review -> offer: recruiter prepares (the Offer
+letter template), hiring manager agrees, HR approves -> recruiter sends: the candidate answers through a link (or the
+recruiter records the answer) -> accepted: Hired, and the joiner is created. Nobody approves their own step.
 """
 
 from __future__ import annotations
 
 import re
+import secrets
 from datetime import date
 
 from sqlalchemy import select
@@ -17,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db import utcnow
 from app.deps import CurrentUser
-from app.models import Account, ApprovalInstance, Candidate, CandidateStage, Employee, Offer, Requisition
+from app.models import Account, ApprovalInstance, Candidate, CandidateStage, Country, Employee, JobPosting, Offer, Requisition
 from app.services import approvals as engine
 from app.services.activity import notify, record_audit
 
@@ -25,6 +28,9 @@ PIPELINE_STAGES = ["Applied", "Screening", "Shortlisted", "Interview", "Assessme
 EXIT_STAGES = ("Rejected", "Withdrawn")
 CLOSED_STAGES = ("Hired", "Rejected", "Withdrawn")
 RAISING_ROLES = frozenset({"manager", "executive"})
+# Raise for a named hiring manager (the manager who needs the role).
+RAISE_FOR_ROLES = frozenset({"recruiter"})
+SCREEN_STAGES = ("Applied", "Screening")
 OPEN_OFFER = ("preparing", "pending_approval", "approved", "sent", "accepted")
 
 REQUISITION_WORKFLOW = "requisition"
@@ -78,6 +84,11 @@ def can_act(user: CurrentUser, req: Requisition) -> bool:
 
 def can_raise(user: CurrentUser) -> bool:
     return user.employee_id is not None and (user.account.role in RAISING_ROLES or bool(user.scope.reports))
+
+
+def can_raise_for_others(user: CurrentUser) -> bool:
+    """A recruiter or HR raises a requisition on behalf of the hiring manager they name."""
+    return user.employee_id is not None and (user.account.role in RAISE_FOR_ROLES or user.scope.is_hr)
 
 
 def _approver_on(db: Session, user: CurrentUser, req: Requisition) -> bool:
@@ -185,6 +196,8 @@ def allowed_moves(db: Session, cand: Candidate, req: Requisition) -> list[str]:
     moves = []
     if nxt not in EXIT_STAGES and (nxt != "Hired" or has_accepted_offer(db, cand.id)):
         moves.append(nxt)
+    if cand.stage == "Interview":
+        moves.append("Final Review")  # the assessment is optional
     return [*moves, *EXIT_STAGES]
 
 
@@ -239,3 +252,54 @@ def check_offer_approver(user: CurrentUser, offer: Offer, req: Requisition) -> s
         return step
     raise Forbidden("The hiring manager agrees to the offer first, then HR approves it."
                     if step == "hiring_manager" else "HR approves the offer after the hiring manager.")
+
+
+# ---------- job postings ----------
+def posting_of(db: Session, req_id: str) -> JobPosting | None:
+    return db.scalar(select(JobPosting).where(JobPosting.requisition_id == req_id))
+
+
+def posting_is_open(posting: JobPosting | None, req: Requisition | None, today: date | None = None) -> bool:
+    """Taking applications: published, not past its closing date, and the requisition is open (approved, staffed)."""
+    return (posting is not None and req is not None and posting.status == "open" and is_open(req)
+            and posting.closing_date >= (today or date.today()))
+
+
+def new_posting_id() -> str:
+    return f"post-{secrets.token_hex(5)}"
+
+
+# ---------- screening ----------
+def check_screen(user: CurrentUser, cand: Candidate, req: Requisition) -> None:
+    if not can_run_pipeline(user, req):
+        raise Forbidden("Only the assigned recruiter or HR screens candidates.")
+    if not is_open(req):
+        raise RuleError(f"{req.id} is not open.")
+    if cand.stage not in SCREEN_STAGES:
+        raise RuleError(f"{cand.name} is already past screening ({cand.stage}).")
+
+
+# ---------- offer letter and answer link ----------
+def offer_letter(db: Session, offer: Offer, cand: Candidate, req: Requisition) -> dict:
+    """The Offer letter template (HR's wording for the country, else the default) filled for this candidate."""
+    from app.services import letters
+
+    country = db.get(Country, req.country_code)
+    manager = db.get(Employee, req.hiring_manager_id)
+    entity = (manager.legal_entity if manager and manager.country_code == req.country_code and manager.legal_entity
+              else f"TimeZ {country.name if country else req.country_code}")
+    fields = {
+        "employee_name": cand.name, "employee_code": "", "title": req.title, "department": req.department, "grade": offer.grade,
+        "joining_date": offer.start_date.isoformat(), "last_working_day": "", "manager": manager.full_name if manager else "",
+        "country_code": req.country_code, "country_name": country.name if country else req.country_code, "legal_entity": entity,
+        "address": "", "salary": letters.format_money(offer.base_salary, offer.currency), "previous_salary": "",
+        "effective_date": "", "details": "", "custom_text": (offer.package_note or "").strip(), "nationality": "", "end_date": "",
+    }
+    title, _to_whom, paragraphs = letters.render(db, "Offer", fields)
+    return {"type": "Offer", "title": title, "paragraphs": paragraphs, "date": date.today().isoformat(),
+            "fields": {k: fields[k] for k in ("employee_name", "title", "department", "grade", "joining_date", "manager",
+                                              "country_code", "country_name", "legal_entity", "salary")}}
+
+
+def new_response_token() -> str:
+    return secrets.token_urlsafe(24)

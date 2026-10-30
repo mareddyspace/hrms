@@ -7,18 +7,23 @@ import {
   TIMEZ_COUNTRIES,
   addDaysISO,
   holidaysForCountry,
+  leaveNameFor,
   parseISODate,
   type CountryCode,
   type Holiday,
   type PortalState,
 } from "../model.ts";
-import { inHeadcount, type PersonRecord } from "./peopleData.ts";
+import { hasStarted, inHeadcount, type PersonRecord } from "./peopleData.ts";
 import { getExitDetails } from "./peopleLocal.ts";
 import { taskPersonById } from "./taskTeam.ts";
 import { getAttendanceState } from "./attendanceLocal.ts";
 import { isWaitingOn } from "./expenseFlow.ts";
-import { getTravelRequests } from "./travelStore.ts";
+import { canDecideTravel, getTravelRequests } from "./travelStore.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { claimsMirror } from "../api/syncTimeExpenses.ts";
+import { pendingMirror } from "../api/syncTimeApprovals.ts";
 import { getShiftState } from "../features/workforce/shiftsStore.ts";
+import { waitingDays } from "./timesheetDays.ts";
 
 export type RangeKey = "7d" | "30d" | "90d" | "ytd";
 
@@ -194,6 +199,25 @@ function directManagerOf(id: string, people: Map<string, PersonRecord>): string 
 }
 
 /**
+ * "My direct reports" — one source for Home, Analytics, Team and the org chart: people in the directory whose
+ * manager is this person (in backend mode the server's reporting lines). People who left are dropped;
+ * pre-boarding joiners (not started yet) come back apart as `joiningSoon` and don't count as team.
+ */
+export function directReportsOf(
+  managerId: string,
+  people: readonly PersonRecord[],
+  today?: string,
+): { active: PersonRecord[]; joiningSoon: PersonRecord[] } {
+  const mine = people
+    .filter((p) => p.managerId === managerId && p.id !== managerId && p.employmentStatus !== "Terminated")
+    .sort((a, b) => a.fullName.localeCompare(b.fullName));
+  return {
+    active: mine.filter((p) => hasStarted(p, today)),
+    joiningSoon: mine.filter((p) => !hasStarted(p, today)).sort((a, b) => a.dateOfJoining.localeCompare(b.dateOfJoining)),
+  };
+}
+
+/**
  * Everyone below the viewer in the reporting line: anyone the viewer decides for (canDecideFor),
  * plus everyone whose directory manager chain reaches the viewer. Terminated people and pre-boarding joiners
  * (not started yet) are left out.
@@ -216,7 +240,10 @@ export function teamBelow(
     }
     return false;
   };
-  const candidates = new Set<string>([...people.map((p) => p.id), ...DEMO_ACCOUNTS.map((a) => a.id), ...extraIds]);
+  // Backend mode: only people in the server's directory — sample-only teammates (task-team ids) aren't reports.
+  const candidates = new Set<string>(
+    API_ENABLED ? people.map((p) => p.id) : [...people.map((p) => p.id), ...DEMO_ACCOUNTS.map((a) => a.id), ...extraIds],
+  );
   const out: TeamMember[] = [];
   for (const id of candidates) {
     if (id === viewerId || !reaches(id)) continue;
@@ -230,7 +257,8 @@ export function teamBelow(
       designation: demo?.designation ?? person?.designation ?? teammate?.role ?? "",
       department: demo?.department ?? person?.department ?? teammate?.department ?? "",
       countryCode: demo?.countryCode ?? String(person?.countryCode ?? "IN"),
-      direct: directManagerOf(id, byId) === viewerId,
+      // Same rule as directReportsOf: the directory's manager when the person is in it.
+      direct: (person ? person.managerId : directManagerOf(id, byId)) === viewerId,
     });
   }
   return out.sort((a, b) => Number(b.direct) - Number(a.direct) || a.name.localeCompare(b.name));
@@ -281,14 +309,16 @@ export function waitingItems(
     for (const x of list) if (open(x.status) && mine(x.employeeId)) items.push({ id: x.id, employeeId: x.employeeId, kind, detail: detail(x as never), date: date(x as never) });
   };
   add(state.backdatedPermissions, "Past-date leave", () => "Permission request", (x: { from?: string }) => x.from ?? "");
-  add(state.leaveRequests, "Leave", (x: { code: string }) => x.code.toUpperCase(), (x: { from: string }) => x.from);
+  add(state.leaveRequests, "Leave", (x: { code: string; employeeId: string }) => leaveNameFor(state.leavePolicies, x.code, x.employeeId) ?? x.code.toUpperCase(), (x: { from: string }) => x.from);
   add(state.encashments, "Encashment", (x: { days: number }) => `${x.days} days`, (x: { appliedOn: string }) => x.appliedOn);
   // Expense claims and travel follow their approval steps, like the Approvals count.
   for (const x of state.expenses) {
-    if (isWaitingOn(x, myId, canDecideFor)) items.push({ id: x.id, employeeId: x.employeeId, kind: "Expense", detail: x.category, date: x.date });
+    // Backend mode: the API says whose step it is (someone above the line is not "waiting" until it escalates).
+    const waitingOnMe = API_ENABLED ? x.status === "submitted" && claimsMirror.get().toDecide.has(x.id) : isWaitingOn(x, myId, canDecideFor);
+    if (waitingOnMe) items.push({ id: x.id, employeeId: x.employeeId, kind: "Expense", detail: x.category, date: x.date });
   }
   for (const x of getTravelRequests()) {
-    if (isWaitingOn(x, myId, canDecideFor)) items.push({ id: x.id, employeeId: x.employeeId, kind: "Travel", detail: x.toCity, date: x.departOn });
+    if (canDecideTravel(x, myId, canDecideFor)) items.push({ id: x.id, employeeId: x.employeeId, kind: "Travel", detail: x.toCity, date: x.departOn });
   }
   for (const c of getAttendanceState().corrections) {
     if (c.status === "Pending" && mine(c.employeeId)) items.push({ id: c.id, employeeId: c.employeeId, kind: "Attendance fix", detail: "Correction", date: c.date });
@@ -299,13 +329,24 @@ export function waitingItems(
     if (teammate || manager) items.push({ id: w.id, employeeId: w.requesterId, kind: "Shift swap", detail: teammate ? "Asked you to swap" : "Swap", date: w.date });
   }
   add(state.reimbursements, "Reimbursement", (x: { category: string }) => x.category, (x: { date: string }) => x.date);
-  add(state.cashAdvances, "Cash advance", (x: { category: string }) => x.category, (x: { date: string }) => x.date);
+  // Cash advances and software have their own stores; state.cashAdvances / softwareRequests are old sample rows.
   add(state.assetRequests, "Asset", (x: { item: string }) => x.item, (x: { date: string }) => x.date);
-  add(state.softwareRequests, "Software", (x: { software: string }) => x.software, (x: { date: string }) => x.date);
   add(state.cabBookings, "Cab", (x: { to: string }) => x.to, (x: { date: string }) => x.date);
   for (const row of state.orgTimesheets) {
     if (row.status === "submitted" && mine(row.personId)) {
       items.push({ id: row.id, employeeId: row.personId, kind: "Timesheet", detail: `${row.hours} h`, date: row.weekStart });
+    }
+  }
+  // Daily timesheets: submitted days waiting on me (old weekly submissions are listed above).
+  for (const d of waitingDays(mine)) {
+    items.push({ id: d.id, employeeId: d.personId, kind: "Timesheet", detail: `${d.hours} h · day`, date: d.date });
+  }
+  // Backend mode: approval types with no list of their own (e.g. lifecycle changes), as on the Approvals page.
+  if (API_ENABLED) {
+    for (const p of pendingMirror.get().items) {
+      if (p.kind !== "approval" || ["expense", "travel", "requisition"].includes(p.type)) continue;
+      const kind = p.type.replace(/_/g, " ").replace(/^./, (ch) => ch.toUpperCase());
+      items.push({ id: p.id, employeeId: p.employee_id, kind, detail: p.summary, date: p.submitted_at?.slice(0, 10) ?? "" });
     }
   }
   if (canVerifyProofs) {

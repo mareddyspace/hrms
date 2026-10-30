@@ -8,6 +8,7 @@ import {
   formatShortDate,
   holidaySet,
   holidaysForPerson,
+  leaveNameFor,
   leaveRows,
   needsBackdatedPermission,
   plural,
@@ -18,6 +19,7 @@ import {
 import { usePortal } from "../store.tsx";
 import { API_ENABLED } from "../api/client.ts";
 import { apiLeaveMeta } from "../api/portalSync.ts";
+import { OptionalHolidaysCard } from "../features/workforce/OptionalHolidaysPage.tsx";
 import { getPerson } from "../data/peopleLocal.ts";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
@@ -110,7 +112,7 @@ export function LeavePage() {
   );
   const requests = state.leaveRequests.filter(
     (request) => request.employeeId === employee.id && request.from.startsWith(String(year)),
-  );
+  ).sort((a, b) => b.from.localeCompare(a.from));
   // Past dates need permission from the reporting line before leave can be applied (recent sick leave excepted).
   // Backend mode: the server checks past dates itself (no separate permission step).
   const isBackdated = !API_ENABLED && hasApprover && Boolean(from) && needsBackdatedPermission(code, from, today);
@@ -126,7 +128,9 @@ export function LeavePage() {
     demoAccounts.find((a) => a.id === id)?.fullName ?? taskPersonById(id)?.fullName ?? getPerson(id)?.fullName ?? id;
   /** Working days of a request: the server's count in backend mode. */
   const daysOf = (id: string, local: () => number) => apiLeaveMeta.get(id)?.days ?? local();
-  const leaveName = (leaveCode: LeaveCode) => leaveTable.find((row) => row.code === leaveCode)?.name ?? leaveCode;
+  // A teammate's request is named for their country (a US "pto" is "Paid time off").
+  const leaveName = (leaveCode: LeaveCode, employeeId?: string) =>
+    (employeeId ? leaveNameFor(state.leavePolicies, leaveCode, employeeId) : undefined) ?? leaveTable.find((row) => row.code === leaveCode)?.name ?? leaveCode;
   const [notes, setNotes] = useState<Record<string, string>>({});
   // Past dates turn the form into a permission request, which has its own starter text.
   const reasonForm = needsPermission ? "leavePermission" : "leave";
@@ -249,7 +253,7 @@ export function LeavePage() {
                       <span className="pill pill-mandatory">Backdated leave permission</span>
                     </div>
                     <span>
-                      {leaveName(p.code)} · {formatShortDate(p.from)} – {formatShortDate(p.to)} ·{" "}
+                      {leaveName(p.code, p.employeeId)} · {formatShortDate(p.from)} – {formatShortDate(p.to)} ·{" "}
                       {plural(workingDays(p.from, p.to, holidaySet(holidaysForPerson(state.holidays, p.employeeId))), "day")} · asked {formatShortDate(p.requestedOn)}
                     </span>
                     <span className="muted">Reason: {p.reason}</span>
@@ -276,7 +280,7 @@ export function LeavePage() {
                       <span className="pill">Leave request</span>
                     </div>
                     <span>
-                      {leaveName(r.code)} · {formatShortDate(r.from)} – {formatShortDate(r.to)} ·{" "}
+                      {leaveName(r.code, r.employeeId)} · {r.from === r.to ? formatShortDate(r.from) : `${formatShortDate(r.from)} – ${formatShortDate(r.to)}`} ·{" "}
                       {plural(daysOf(r.id, () => workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half)), "day")}
                       {r.half ? ` · ${halfLabel(r.half)}` : ""}
                     </span>
@@ -382,7 +386,9 @@ export function LeavePage() {
                         <td>
                           {request.half
                             ? `${formatShortDate(request.from)} · ${halfLabel(request.half)}`
-                            : `${formatShortDate(request.from)} – ${formatShortDate(request.to)}`}
+                            : request.from === request.to
+                              ? formatShortDate(request.from)
+                              : `${formatShortDate(request.from)} – ${formatShortDate(request.to)}`}
                         </td>
                         <td>{count}</td>
                         <td>{request.reason}</td>
@@ -438,7 +444,8 @@ export function LeavePage() {
                   }}
                   title={lockedCode ? "Fixed by your approved permission" : undefined}
                 >
-                  {formRows.map((row) => (
+                  {/* Optional holidays are picked from their own list below. */}
+                  {formRows.filter((row) => row.code !== "optional").map((row) => (
                     <option key={row.code} value={row.code}>
                       {row.code === "unpaid" ? row.name : `${row.name} · ${row.available} available`}
                     </option>
@@ -505,6 +512,7 @@ export function LeavePage() {
             <Banner message={message} />
           </form>
         </Card>
+        {leaveTable.some((row) => row.code === "optional" && row.quota > 0) && <OptionalHolidaysCard />}
       </div>
     </Page>
   );

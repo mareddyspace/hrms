@@ -1,4 +1,5 @@
 import type { OrgTimesheetRecord, Timesheet } from "../model.ts";
+import { dayStatusOf } from "./timesheetDays.ts";
 
 export type PayBasisKind = "monthly" | "hourly";
 
@@ -34,16 +35,21 @@ function weekdays(weekStart: string, hours: number): Record<string, number> {
 }
 
 /**
- * Approved hours per day for one week. Sources, in order: the person's own timesheet entries,
+ * Approved hours per day for one week (approved days, or approved weeks). Sources, in order: the person's own entries,
  * the org timesheet row, and — for weeks before either exists — the approved history kept by
  * the payroll provider (a steady 40 h with some longer weeks).
  */
 function weekDays(personId: string, weekStart: string, sheets: Timesheet[], org: OrgTimesheetRecord[]): Record<string, number> {
   const own = sheets.filter((s) => s.employeeId === personId && s.weekStart === weekStart);
   if (own.length) {
+    // Daily timesheets: a day with its own record counts when that day is approved; other days follow their
+    // week (weeks submitted the old way).
     const out: Record<string, number> = {};
-    for (const sheet of own.filter((s) => s.status === "approved")) {
-      for (const [date, h] of Object.entries(sheet.hours)) out[date] = (out[date] ?? 0) + h;
+    for (const sheet of own) {
+      for (const [date, h] of Object.entries(sheet.hours)) {
+        const day = dayStatusOf(personId, date);
+        if (day ? day === "approved" : sheet.status === "approved") out[date] = (out[date] ?? 0) + h;
+      }
     }
     return out;
   }

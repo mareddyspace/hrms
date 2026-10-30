@@ -24,14 +24,17 @@ export interface ApiPendingState {
   items: PendingItemOut[];
   /** Ids waiting on me: leave request, correction, timesheet week and approval instance ids. */
   ids: Set<string>;
+  /** False until the first load from the server (an empty list then means nothing is waiting). */
+  loaded: boolean;
 }
 
 export const pendingMirror = createMirror<PendingItemOut[], ApiPendingState>(
-  () => ({ items: [], ids: new Set() }),
+  () => ({ items: [], ids: new Set(), loaded: false }),
   () => api.get<PendingItemOut[]>("/approvals/pending"),
   (items) => ({
     items: items.map((i) => ({ ...i, submitted_at: utcIso(i.submitted_at) ?? null })),
     ids: new Set(items.map((i) => i.id)),
+    loaded: true,
   }),
 );
 

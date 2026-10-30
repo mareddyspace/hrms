@@ -69,6 +69,35 @@ export interface Requisition {
   workflowVersion?: number;
   /** Skills and experience the role needs (backend mode: from the requisition). */
   requirements?: string[];
+  /** Annual budget for the role (in budgetCurrency) and why it is needed. */
+  budget?: number;
+  budgetCurrency?: string;
+  reason?: RequisitionReason;
+  justification?: string;
+  /** Who raised it (a recruiter or HR may raise it for the hiring manager). */
+  raisedById?: string;
+  raisedBy?: string;
+  /** The job post the recruiter published from it. */
+  posting?: JobPosting;
+  /** Candidates per stage (backend mode: from the server). */
+  stageCounts?: Partial<Record<PipelineStage, number>>;
+}
+
+export type RequisitionReason = "New role" | "Replacement";
+
+/** Published from an approved requisition: internal jobs board, and the public careers page when onCareersSite. */
+export interface JobPosting {
+  id: string;
+  title: string;
+  description: string;
+  location: string;
+  employmentType: string;
+  closingDate: string;
+  onCareersSite: boolean;
+  status: "Open" | "Closed";
+  publishedBy: string;
+  publishedOn: string;
+  closedOn?: string;
 }
 
 /** One stage move. enteredOn is local date + time, e.g. "2026-09-12T10:30". */
@@ -98,6 +127,13 @@ export interface Candidate {
   /** Backend mode: a CV file is stored for the candidate. */
   hasCv?: boolean;
   cvFilename?: string;
+  /** The job post they applied through (careers page or internal board). */
+  postingId?: string;
+  /** Internal applicant: their employee id. */
+  employeeId?: string;
+  coverNote?: string;
+  /** Rule-based match score saved at screening (a guide, not a decision). */
+  matchScore?: number;
 }
 
 export interface Interview {
@@ -113,6 +149,22 @@ export interface Interview {
   feedbackStatus: "Pending" | "Submitted";
   score?: number;
   feedback?: string;
+  /** Scorecard: 1–5 per criterion, and the interviewer's recommendation. */
+  ratings?: Partial<Record<ScorecardCriterion, number>>;
+  recommendation?: Recommendation;
+  feedbackBy?: string;
+}
+
+export const SCORECARD_CRITERIA = ["Skills", "Experience", "Problem solving", "Communication", "Team fit"] as const;
+export type ScorecardCriterion = (typeof SCORECARD_CRITERIA)[number];
+export const RECOMMENDATIONS = ["Strong yes", "Yes", "No", "Strong no"] as const;
+export type Recommendation = (typeof RECOMMENDATIONS)[number];
+
+/** Feedback is only due once the interview has happened: past interviews still waiting for feedback. */
+export function awaitingFeedback(interviews: readonly Interview[], now: Date = new Date()): Interview[] {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  return interviews.filter((i) => i.feedbackStatus === "Pending" && i.when.replace("T", " ").slice(0, 16) <= stamp);
 }
 
 export type OfferStatus = "Preparing" | "Pending approval" | "Approved" | "Sent" | "Accepted" | "Declined" | "Withdrawn";
@@ -147,6 +199,18 @@ export interface OfferRecord {
   responseNote?: string;
   responseRecordedBy?: string;
   respondedOn?: string;
+  /** The offer letter (Offer template) made when the offer was created. */
+  letter?: OfferLetter;
+  /** The candidate's answer link token (recruiter / HR see it while the offer is sent). */
+  responseToken?: string;
+  respondedVia?: "link" | "recorded";
+}
+
+export interface OfferLetter {
+  title: string;
+  paragraphs: string[];
+  date: string;
+  fields: Record<string, string>;
 }
 
 export interface OnboardingJoiner {
@@ -393,6 +457,12 @@ export interface EmployeeSkill {
   skillName: string;
   level: string;
   targetLevel: string;
+  /** Years of experience with the skill. */
+  years?: number;
+  /** Last used, YYYY-MM. */
+  lastUsed?: string;
+  /** Link to a certificate or work sample. */
+  evidenceUrl?: string;
 }
 
 export interface SkillProfile {

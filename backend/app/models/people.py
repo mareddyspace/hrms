@@ -88,6 +88,8 @@ class Employee(TimestampMixin, Base):
     career_goals: Mapped[str | None] = mapped_column(Text)
     # Set when an exit is approved (migration 0014); status goes "Notice period", then "Exited" after this day.
     last_working_day: Mapped[date | None] = mapped_column(Date)
+    # India income tax regime chosen by the employee: "new" (default when NULL) or "old" (migration 0015).
+    tax_regime: Mapped[str | None] = mapped_column(String(8))
 
 
 class EmployeeAssignment(TimestampMixin, Base):

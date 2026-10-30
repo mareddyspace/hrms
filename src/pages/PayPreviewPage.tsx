@@ -3,6 +3,7 @@ import { Card, Field, Page } from "../components/ui.tsx";
 import { legalEntityFor, money } from "../countryPay.ts";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import { unusedLeaveFor } from "../data/finalPay.ts";
+import { payslipAnnualBase } from "../data/annualPay.ts";
 import { asDetailView, finalSettlementFor, generatePayslips, type PayslipInput } from "../data/payslipGenerator.ts";
 import { getExitDetails, getPerson, listPeople } from "../data/peopleLocal.ts";
 import { getTaxRegime } from "../data/taxRegime.ts";
@@ -120,6 +121,7 @@ export function PayPreviewPage() {
       location: person.location,
       nationality: person.nationality,
       employmentStatus: person.employmentStatus,
+      annualBase: payslipAnnualBase(person.id, person.countryCode),
       regime: getTaxRegime(person.id),
       investmentProofs: state.investmentProofs,
       timesheets: state.timesheets,

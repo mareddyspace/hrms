@@ -340,6 +340,12 @@ export function MessagingPage() {
     () => listConversationsForUser(employee.id, demoProfile.role),
     [collab.conversations, employee.id, demoProfile.role],
   );
+  /** A one-to-one chat is named after the other person ("Farhan Ali" is Babu's chat with Farhan, not Farhan's own). */
+  const titleOf = (c: (typeof visibleConversations)[number]) => {
+    if (c.kind !== "direct" || !c.title.startsWith(employee.fullName)) return c.title;
+    const other = c.participantNames.find((_, i) => c.participantIds[i] !== employee.id);
+    return other ? other + c.title.slice(employee.fullName.length) : c.title;
+  };
 
   const conversations = useMemo(() => {
     const needle = convQ.trim().toLowerCase();
@@ -443,7 +449,7 @@ export function MessagingPage() {
     setError("");
     setText("");
     setAttachName(undefined);
-    notify(`Message sent to ${active.title}.`);
+    notify(`Message sent to ${titleOf(active)}.`);
     return true;
   }
 
@@ -595,7 +601,7 @@ export function MessagingPage() {
                         }}
                       >
                         <strong>
-                          {c.title}{" "}
+                          {titleOf(c)}{" "}
                           {unreadCount > 0 && <StatusBadge status={`${unreadCount} new`} tone="warn" />}
                           {c.restricted === "compensation" && (
                             <StatusBadge status="Pay confidential" tone="danger" />
@@ -660,7 +666,7 @@ export function MessagingPage() {
             </Card>
           ) : (
             <Card
-              title={active.title}
+              title={titleOf(active)}
               action={
                 <button type="button" className="quiet-link" onClick={() => setShowDetails((v) => !v)}>
                   {showDetails ? "Hide details" : "Details"}
@@ -1350,7 +1356,7 @@ export function HelpHrRequestsPage() {
   );
 
   return (
-    <Page title={hrView ? "HR requests" : "Helpdesk"}>
+    <Page title="Helpdesk" subtitle={hrView ? "HR requests from employees" : undefined}>
       <Tabs
         tabs={[
           ...(hrView ? [] : [{ id: "request", label: "New request" }, { id: "history", label: "Request history" }]),

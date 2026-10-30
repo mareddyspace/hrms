@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
+import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
 import { holidaysForPerson } from "../model.ts";
 import {
   Banner,
@@ -32,7 +33,7 @@ import {
   scheduleForEmployee,
   shortHolidayName,
 } from "../data/workSchedule.ts";
-import { formatLongDate, monthCells, monthLabel, parseISODate, todayISO } from "../model.ts";
+import { formatLongDate, formatShortDate, monthCells, monthLabel, parseISODate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { updateNote, useNotes } from "../data/notesStore.ts";
 import { NoteEditor } from "../components/NotesPanel.tsx";
@@ -137,17 +138,34 @@ export function CalendarPage() {
       }));
   }, [state.leaveRequests, employee.id]);
 
+  // Interviews I sit on (or run as the recruiter), from Recruiting.
+  const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+  const interviewEvents = useMemo((): CalendarEvent[] => {
+    const reqOf = (candidateId: string) => talent.requisitions.find((r) => r.id === talent.candidates.find((c) => c.id === candidateId)?.requisitionId);
+    return talent.interviews
+      .filter((i) => i.panelIds?.includes(employee.id) || i.panel.includes(employee.fullName) || reqOf(i.candidateId)?.recruiterId === employee.id)
+      .map((i) => ({
+        id: `cal-iv-${i.id}`,
+        date: i.when.slice(0, 10),
+        kind: "interview" as const,
+        title: `Interview: ${i.candidateName} (${i.role})`,
+        time: i.when.slice(11, 16),
+        description: `${i.type} · ${i.panel}${i.feedbackStatus === "Submitted" ? " · scorecard in" : ""}`,
+        audienceIds: [employee.id],
+      }));
+  }, [talent, employee.id, employee.fullName]);
+
   const allEvents = useMemo(() => {
     const base = eventsForPerson(employee.id, holidaySource);
     const ids = new Set(base.map((e) => e.id));
-    const extras = [...leaveEvents, ...notesToEvents(myNotes, employee.id)].filter((e) => !ids.has(e.id));
+    const extras = [...leaveEvents, ...interviewEvents, ...notesToEvents(myNotes, employee.id)].filter((e) => !ids.has(e.id));
     return [...base, ...extras].sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
       return (a.time ?? "").localeCompare(b.time ?? "");
     });
     // tick refreshes after local reminder add/remove
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employee.id, holidaySource, leaveEvents, myNotes, tick]);
+  }, [employee.id, holidaySource, leaveEvents, interviewEvents, myNotes, tick]);
 
   const cells = monthCells(cursor.year, cursor.month);
 
@@ -439,7 +457,7 @@ export function CalendarPage() {
             {upcoming.map((e) => (
               <li key={e.id}>
                 <button type="button" className="calendar-upcoming-btn" onClick={() => setSelected(e.date)}>
-                  <span className="muted">{e.date}</span>
+                  <span className="muted">{formatShortDate(e.date)}</span>
                   <strong>{e.title}</strong>
                   <StatusBadge status={CALENDAR_KIND_LABEL[e.kind]} tone={kindTone(e.kind)} />
                 </button>

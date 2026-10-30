@@ -19,3 +19,42 @@
 .note.wf-warn { color: var(--warn); display: grid; gap: 4px; }
 .wf-inline-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
 .wf-inline-form .field { flex: 1 1 140px; }
+/* Roster grid: colour-coded shifts, weekend shading, night marker, quick assign */
+.wf-chip { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; border: 1px solid transparent; }
+.wf-chip.c-amber, select.c-amber { background: color-mix(in srgb, #e2a23b 22%, transparent); color: #8a5a07; }
+.wf-chip.c-green, select.c-green { background: color-mix(in srgb, #3e9b6a 20%, transparent); color: #1f6b43; }
+.wf-chip.c-blue, select.c-blue { background: color-mix(in srgb, #3b7fd1 20%, transparent); color: #1d5296; }
+.wf-chip.c-violet, select.c-violet { background: color-mix(in srgb, #7457c7 22%, transparent); color: #4b2f9a; }
+.wf-chip.c-teal, select.c-teal { background: color-mix(in srgb, #1f9aa3 20%, transparent); color: #0f6970; }
+.wf-chip.c-rose, select.c-rose { background: color-mix(in srgb, #d0566f 20%, transparent); color: #9a2b42; }
+.wf-chip.c-slate, select.c-slate { background: color-mix(in srgb, #6b7a89 20%, transparent); color: #3c4855; }
+.wf-chip.c-clear { background: transparent; border-color: var(--chip-border); color: var(--muted); }
+.wf-chip.night { border-color: color-mix(in srgb, #4b2f9a 45%, transparent); }
+html[data-theme="night"] .wf-chip:not(.c-clear), html[data-theme="night"] .wf-roster select[class^="c-"] { color: var(--ink); }
+.wf-palette { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wf-brush { background: none; border: 2px solid transparent; border-radius: 8px; padding: 1px; cursor: grab; }
+.wf-brush.on { border-color: var(--accent); }
+.wf-roster { border-collapse: collapse; width: 100%; font-size: 13px; }
+.wf-roster th, .wf-roster td { border-bottom: 1px solid var(--line); padding: 6px; text-align: left; vertical-align: top; }
+.wf-roster thead th { white-space: nowrap; font-weight: 600; font-size: 12px; color: var(--muted); }
+.wf-roster thead th .wf-tag { display: block; }
+.wf-roster tbody th { white-space: nowrap; font-weight: 600; }
+.wf-roster .weekend { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.wf-roster td.wf-hours { white-space: nowrap; display: table-cell; }
+.wf-roster td.wf-hours .wf-tag { display: block; }
+.wf-roster select { border: 1px solid var(--chip-border); border-radius: 6px; padding: 4px 6px; background: var(--input-bg); color: inherit; font-size: 12.5px; min-width: 92px; }
+.wf-roster.month th, .wf-roster.month td { padding: 4px 2px; text-align: center; }
+.wf-roster.month tbody th { text-align: left; padding-right: 8px; }
+.wf-roster.month .wf-chip { padding: 1px 5px; }
+.wf-cellbtn { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.wf-cellbtn:disabled { cursor: default; opacity: 0.85; }
+.wf-rcell.paint { cursor: copy; outline: 1px dashed var(--chip-border); outline-offset: -3px; }
+.wf-rcell .wf-tag { display: block; }
+.wf-tag.info { color: var(--info); }
+.wf-tag.danger { color: var(--danger); }
+.wf-night-mark { font-weight: 400; }
+.wf-my-week { display: grid; grid-template-columns: repeat(7, minmax(84px, 1fr)); gap: 6px; }
+.wf-my-day { border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: grid; gap: 4px; min-height: 64px; }
+.wf-my-day.weekend { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.wf-my-day.today { border-color: var(--accent); }
+@media (max-width: 720px) { .wf-my-week { grid-template-columns: repeat(2, 1fr); } }

@@ -1,0 +1,11 @@
+.project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+.project-card { display: flex; flex-direction: column; gap: 6px; text-align: left; padding: 14px; border: 1px solid var(--line, #e3e7e5); border-radius: 10px; background: var(--card, #fff); color: inherit; font: inherit; cursor: pointer; }
+.project-card:hover, .project-card:focus-visible { border-color: var(--accent, #2d6a5a); }
+.project-card-head, .project-card-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.project-milestones, .project-team, .project-activity { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.project-milestones li { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: center; }
+.project-milestones li.done span:first-child { color: var(--ok, #2e7d4f); }
+.project-milestones li.late span:last-child { color: var(--danger, #b3261e); }
+.project-team li { display: flex; justify-content: space-between; gap: 8px; }
+.project-activity li { display: grid; grid-template-columns: 70px 1fr; gap: 8px; }
+.ts-team-detail { padding: 6px 0 10px; display: grid; gap: 8px; }

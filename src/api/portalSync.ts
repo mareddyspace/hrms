@@ -42,11 +42,13 @@ function toPerson(p: PersonOut): PersonRecord {
   const country = TIMEZ_COUNTRIES.find((c) => c.code === p.country_code);
   const full = p.view === "full" ? p : null;
   // The server says "Exited" once the last working day has passed; the portal calls a leaver "Terminated".
-  const raw = full?.employment_status ?? "Active";
+  // Basic card: only whether they have started (a pre-boarding joiner is "Onboarding", not a colleague yet).
+  const raw = full?.employment_status ?? (p.view === "basic" && p.started === false ? "Onboarding" : "Active");
   const status = (raw === "Exited" ? "Terminated" : raw) as EmploymentStatus;
   const lastWorkingDay = full?.last_working_day ?? undefined;
   return {
     ...(lastWorkingDay ? { lastWorkingDay, ...(raw === "Exited" ? { exitDate: lastWorkingDay } : {}) } : {}),
+    ...(full?.tax_regime === "old" || full?.tax_regime === "new" ? { taxRegime: full.tax_regime } : {}),
     id: p.id,
     employeeCode: full?.employee_code ?? "",
     fullName: p.full_name,
@@ -55,7 +57,7 @@ function toPerson(p: PersonOut): PersonRecord {
     mobile: full?.mobile ?? "",
     photo: p.photo || "/profile.svg",
     gender: full?.gender ?? "",
-    dateOfJoining: full?.joining_date ?? "",
+    dateOfJoining: full?.joining_date ?? (p.view === "basic" ? (p.joining_date ?? "") : ""),
     employmentType: full?.employment_type ?? "",
     employmentStatus: status,
     designation: p.job_title,
@@ -193,9 +195,12 @@ export async function loadApiLeave(
     apiLeaveMeta.set(r.id, {
       days: r.days,
       employeeName: r.employee_name ?? nameOf(r.employee_id) ?? r.employee_id,
-      // In an approval chain: the current step waits on this user (or on someone they cover for); HR and the
-      // reporting line may still decide any step, as before.
-      canDecide: r.status === "pending" && r.employee_id !== user.id && (teamIds.has(r.id) || isHr || Boolean(r.approval?.waiting_on_me)),
+      // In an approval chain: the current step waits on this user (or on someone they cover for), or HR steps in.
+      // A skip-level manager doesn't decide over the line manager's head.
+      canDecide:
+        r.status === "pending" &&
+        r.employee_id !== user.id &&
+        (isHr || (r.approval ? Boolean(r.approval.waiting_on_me) : teamIds.has(r.id))),
     });
   }
   return {

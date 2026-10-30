@@ -154,7 +154,8 @@ export function hrSummary(input: {
   startingSoon: number;
   leavingSoon: { name: string; date: string }[];
   resignationsOpen: number;
-  overdueActions: { kind: string }[];
+  /** Each with the page where it is handled (background checks, requisitions, exits …). */
+  overdueActions: { kind: string; to?: string }[];
   openActions: number;
   waiting: number;
   highRisks: number;
@@ -175,8 +176,17 @@ export function hrSummary(input: {
     });
   } else if (input.resignationsOpen) lines.push({ text: `${plural(input.resignationsOpen, "resignation is", "resignations are")} in progress.`, to: "/people/exits" });
   if (input.overdueActions.length) {
-    const kinds = [...input.overdueActions.reduce((m, a) => m.set(a.kind, (m.get(a.kind) ?? 0) + 1), new Map<string, number>())].map(([k, n]) => `${k.toLowerCase()} ${n}`);
-    lines.push({ text: `${plural(input.overdueActions.length, "HR action is", "HR actions are")} past due (${names(kinds)}).`, to: "/approvals" });
+    // Link each kind to the page where it is handled — most HR actions are not in Approvals.
+    const byKind = [...input.overdueActions.reduce((m, a) => m.set(a.kind, [...(m.get(a.kind) ?? []), a]), new Map<string, { kind: string; to?: string }[]>())];
+    const pages = new Set(input.overdueActions.map((a) => a.to ?? "/approvals"));
+    if (pages.size === 1) {
+      const kinds = byKind.map(([k, list]) => `${k.toLowerCase()} ${list.length}`);
+      lines.push({ text: `${plural(input.overdueActions.length, "HR action is", "HR actions are")} past due (${names(kinds)}).`, to: [...pages][0] });
+    } else {
+      for (const [kind, list] of byKind.slice(0, 3)) {
+        lines.push({ text: `${plural(list.length, `${kind.toLowerCase()} is`, `${kind.toLowerCase()}s are`)} past due.`, to: list[0].to ?? "/approvals" });
+      }
+    }
   } else if (input.openActions) lines.push({ text: `${plural(input.openActions, "HR action is", "HR actions are")} open, none past due.`, to: "/approvals" });
   lines.push({ text: input.waiting ? `${plural(input.waiting, "approval waits", "approvals wait")} on you.` : "No approvals are waiting on you.", to: input.waiting ? "/approvals" : undefined });
   if (input.highRisks) lines.push({ text: `${plural(input.highRisks, "team has", "teams have")} a high coverage risk this week.`, to: "/workforce/shifts" });

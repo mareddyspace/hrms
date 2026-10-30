@@ -7,7 +7,6 @@ import {
   HR_REQUEST_SLA,
   INBOX_SEED,
   NOTIFICATIONS_SEED,
-  canAccessRestrictedChat,
   canManageAnnouncement,
   defaultNotifActionLabel,
   hrDeskOwnerName,
@@ -426,9 +425,12 @@ export function markConversationRead(conversationId: string, userId: string) {
   });
 }
 
-export function conversationVisibleToUser(conv: Conversation, userId: string, role: string): boolean {
-  if (!conv.participantIds.includes(userId)) return false;
-  return canAccessRestrictedChat(conv.restricted, role);
+/**
+ * A conversation is visible to its participants — including a restricted (HR-confidential / compensation) thread:
+ * being added to it is the access grant. The role rule (canAccessRestrictedChat) only decides who may be added.
+ */
+export function conversationVisibleToUser(conv: Conversation, userId: string, _role: string): boolean {
+  return conv.participantIds.includes(userId);
 }
 
 export function listConversationsForUser(userId: string, role: string): Conversation[] {
@@ -593,6 +595,43 @@ export interface ApiNotificationInput {
  * Puts the backend's notifications for this user into the notification centre and bell.
  * They replace earlier backend copies; read state from either side is kept.
  */
+/** Server links name API records ("/expenses/clm-1"); these are the pages where people see or act on them. */
+const API_LINK_PAGES: [RegExp, string][] = [
+  [/^\/leave\/requests\//, "/leave"],
+  [/^\/attendance\//, "/attendance"],
+  [/^\/expenses\//, "/expenses"],
+  [/^\/travel\//, "/travel"],
+  [/^\/cases\//, "/people/cases"],
+  [/^\/compensation\//, "/compensation"],
+  [/^\/documents\//, "/documents"],
+  [/^\/letters\//, "/documents"],
+  [/^\/lifecycle\/actions\//, "/lifecycle/actions"],
+  [/^\/onboarding\//, "/onboarding"],
+  [/^\/performance(\/|$)/, "/evaluations"],
+  [/^\/learning(\/|$)/, "/programs"],
+  [/^\/recruiting\//, "/recruiting"],
+  [/^\/approvals\//, "/approvals"],
+];
+
+/** Server links that open one record on its page (hiring chain: candidate, requisition, interviews, offers, joiner). */
+const API_DEEP_LINKS: [RegExp, (m: RegExpMatchArray) => string][] = [
+  [/^\/recruiting\/candidates\/([^/?#]+)/, (m) => `/recruiting?candidate=${m[1]}`],
+  [/^\/recruiting\/requisitions\/([^/?#]+)/, (m) => `/recruiting?req=${m[1]}`],
+  [/^\/recruiting\/interviews\//, () => "/recruiting?tab=interviews"],
+  [/^\/recruiting\/offers\//, () => "/recruiting?tab=offers"],
+  [/^\/onboarding\/joiners\/([^/?#]+)/, (m) => `/onboarding?joiner=${m[1]}`],
+];
+
+/** Approvals open the inbox (timesheets open the manager's team view); everything else opens its own page. */
+function apiNotifLink(href: string | undefined, waitingOnMe: boolean): string | undefined {
+  if (href && /^\/timesheets\//.test(href)) return waitingOnMe ? "/timesheet?view=team" : "/timesheet";
+  if (waitingOnMe) return "/approvals";
+  if (!href) return undefined;
+  const deep = API_DEEP_LINKS.map(([pattern, to]) => href.match(pattern) && to(href.match(pattern)!)).find(Boolean);
+  if (deep) return deep;
+  return API_LINK_PAGES.find(([pattern]) => pattern.test(href))?.[1] ?? href;
+}
+
 export function syncApiNotifications(userId: string, items: ApiNotificationInput[]) {
   const current = getCollabState().notifications;
   const previous = new Map(
@@ -602,13 +641,13 @@ export function syncApiNotifications(userId: string, items: ApiNotificationInput
     const id = `${API_NOTIF_PREFIX}${item.id}`;
     const old = previous.get(id);
     const leaveId = item.href?.match(/^\/leave\/requests\/(.+)$/)?.[1];
-    // A request waiting on this user links to the leave item, so it counts as done once decided.
-    const waitingOnMe = Boolean(leaveId) && /^Leave request from /.test(item.title);
+    const waitingOnMe = /^Waiting for your approval/.test(item.body ?? "");
+    const link = apiNotifLink(item.href ?? undefined, waitingOnMe);
     const readBy = new Set(old?.readBy ?? []);
     if (item.readAt) readBy.add(userId);
     return {
       id,
-      category: "Leave",
+      category: waitingOnMe ? "Approvals" : inferNotifCategory(link, item.title),
       title: item.title,
       body: item.body,
       at: item.createdAt,
@@ -616,8 +655,10 @@ export function syncApiNotifications(userId: string, items: ApiNotificationInput
       hiddenFor: old?.hiddenFor ?? [],
       audience: "employee",
       recipientId: userId,
-      href: leaveId ? "/leave" : item.href ?? undefined,
-      actionLabel: waitingOnMe ? "Review" : "Open",
+      href: link,
+      // "Timesheet from Babu Menon" -> "Approve timesheet"
+      actionLabel: waitingOnMe ? (/^Timesheet /.test(item.title) ? "Approve timesheet" : "View request") : "Open",
+      // A leave request waiting on this user counts as done once decided.
       ref: waitingOnMe && leaveId ? { kind: "leave", id: leaveId } : undefined,
     };
   });
@@ -625,7 +666,7 @@ export function syncApiNotifications(userId: string, items: ApiNotificationInput
     next.length === previous.size &&
     next.every((n) => {
       const old = previous.get(n.id);
-      return old && old.readBy.length === n.readBy.length && old.recipientId === n.recipientId;
+      return old && old.readBy.length === n.readBy.length && old.recipientId === n.recipientId && old.href === n.href;
     });
   if (unchanged) return;
   updateCollab((s) => {

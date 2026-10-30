@@ -40,12 +40,26 @@ DEFAULT_WORKFLOWS: dict[str, list[dict[str, Any]]] = {
     ],
     "attendance_correction": [{"roles": ["manager"], "mode": "any", "min_amount": None, "label": "Manager"}],
     "timesheet": [{"roles": ["manager"], "mode": "any", "min_amount": None, "label": "Manager"}],
+    # cash advances, leave encashment, software (app/services/self_service.py)
+    "cash_advance": [
+        {"roles": ["manager"], "mode": "any", "min_amount": None, "label": "Manager", "only_if": "via_manager"},
+        {"roles": ["hr"], "mode": "any", "min_amount": None, "label": "Finance / HR"},
+    ],
+    "encashment": [
+        {"roles": ["manager"], "mode": "any", "min_amount": None, "label": "Manager", "only_if": "via_manager"},
+        {"roles": ["hr"], "mode": "any", "min_amount": None, "label": "HR"},
+    ],
+    "software": [
+        {"roles": ["manager"], "mode": "any", "min_amount": None, "label": "Manager", "only_if": "via_manager"},
+        {"roles": ["admin"], "mode": "any", "min_amount": None, "label": "IT"},
+    ],
 }
 
 WORKFLOW_LABELS = {
     "expense": "Expenses", "travel": "Travel", "lifecycle": "Job changes", "leave": "Leave",
     "attendance_correction": "Attendance corrections", "timesheet": "Timesheets",
     "exit": "Exits",
+    "cash_advance": "Cash advances", "encashment": "Leave encashment", "software": "Software",
 }
 
 

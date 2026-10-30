@@ -80,6 +80,8 @@ export function PeopleDirectoryPage() {
   const managers = useMemo(() => [...new Set(scoped.map((p) => p.managerName).filter(Boolean))].sort(), [scoped]);
   const locations = useMemo(() => [...new Set(scoped.map((p) => p.location))].sort(), [scoped]);
   const jobs = useMemo(() => [...new Set(scoped.map((p) => p.designation))].sort(), [scoped]);
+  // From the people loaded (backend departments differ from the local sample's), so every option finds someone.
+  const departments = useMemo(() => [...new Set(people.map((p) => p.department).filter(Boolean))].sort(), [people]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -204,7 +206,7 @@ export function PeopleDirectoryPage() {
             Department
             <select value={department} onChange={(e) => { setDepartment(e.target.value); setPage(0); }}>
               <option value="">All</option>
-              {FILTER_OPTIONS.departments.map((c) => (
+              {departments.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>

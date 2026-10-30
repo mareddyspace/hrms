@@ -28,6 +28,7 @@ import { initials } from "../components/OrgChart.tsx";
 import { saveLocalMeeting } from "../data/calendarData.ts";
 import { startDirectChat } from "../data/collabLocal.ts";
 import type { PersonRecord } from "../data/peopleData.ts";
+import { directReportsOf } from "../data/workforceStats.ts";
 import { approvedNameFor } from "../data/profileCorrections.ts";
 import { getLifecycleHistory, isScheduled, subscribeLifecycleHistory, timelineFor } from "../data/lifecycleHistory.ts";
 import { canOpenFullRecord, profileAccessFor } from "../data/profileAccess.ts";
@@ -48,7 +49,7 @@ import {
 import { SKILL_LIBRARY, type EmployeeSkill } from "../data/talentData.ts";
 import { getLinksState, setLinkedIn, subscribeLinks } from "../data/socialLinks.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
-import { todayISO } from "../model.ts";
+import { formatShortDate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { Employee360View } from "./Employee360View.tsx";
 import { EmployeeFormDialog, saveEmployee } from "./EmployeeFormDialog.tsx";
@@ -327,12 +328,9 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   const managerName = manager?.fullName ?? (managerId ? person.managerName : "");
   const managerTitle = manager?.designation ?? "";
 
-  const reports = people
-    .filter((p) => p.managerId === person.id && p.id !== person.id && !isTerminated(p))
-    .map((p) => ({ id: p.id, name: p.fullName, title: p.designation, photo: p.photo }));
-  const peers = manager
-    ? people.filter((p) => p.managerId === manager.id && p.id !== person.id && !isTerminated(p)).slice(0, 6)
-    : [];
+  // Same list as Team / Home (joiners who haven't started yet aren't colleagues yet).
+  const reports = directReportsOf(person.id, people).active.map((p) => ({ id: p.id, name: p.fullName, title: p.designation, photo: p.photo }));
+  const peers = manager ? directReportsOf(manager.id, people).active.filter((p) => p.id !== person.id).slice(0, 6) : [];
 
   const skills = person.record
     ? skillsFor(talent.skillProfiles, person.record)
@@ -472,7 +470,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
                     <CalendarDays size={14} aria-hidden /> Joined
                   </dt>
                   <dd>
-                    {person.dateOfJoining} · {tenure(person.dateOfJoining, today)}
+                    {formatShortDate(person.dateOfJoining)} · {tenure(person.dateOfJoining, today)}
                   </dd>
                 </div>
               )}
@@ -531,7 +529,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
                         {isScheduled(e) ? " · Scheduled" : ""}
                       </strong>
                       <span>
-                        {e.effectiveDate}
+                        {formatShortDate(e.effectiveDate)}
                         {e.type === "Hire" ? ` · ${e.after}` : ` · ${e.before} → ${e.after}`}
                       </span>
                     </li>
@@ -554,7 +552,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
                       {p.badge && <span className="praise-badge">{p.badge}</span>}
                     </div>
                     <p>{p.message}</p>
-                    <span className="muted">{p.createdOn}</span>
+                    <span className="muted">{formatShortDate(p.createdOn.slice(0, 10))}</span>
                   </li>
                 ))}
               </ul>
@@ -655,7 +653,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
                     <span>
                       <strong>{c.name}</strong>
                       <span className="muted">
-                        {c.issuer} · {c.when}
+                        {c.issuer} · {formatShortDate(c.when)}
                       </span>
                     </span>
                   </li>
@@ -691,7 +689,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
           onSave={(next, effectiveDate) => {
             const scheduled = saveEmployee(next, effectiveDate, person.record!, demoProfile);
             setHrEditOpen(false);
-            setBanner({ tone: "ok", text: scheduled ? `Change scheduled for ${effectiveDate}.` : "Employee record saved." });
+            setBanner({ tone: "ok", text: scheduled ? `Change scheduled for ${formatShortDate(effectiveDate)}.` : "Employee record saved." });
           }}
         />
       )}
@@ -856,7 +854,7 @@ function MeetDialog({
       attendeeIds: [meId, person.id],
     });
     setError("");
-    onBooked(`Meeting booked with ${person.fullName} on ${date} at ${time}. It's on both calendars.`);
+    onBooked(`Meeting booked with ${person.fullName} on ${formatShortDate(date)} at ${time}. It's on both calendars.`);
     return true;
   }
 

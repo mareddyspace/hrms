@@ -3,7 +3,7 @@
 Workflow types (defaults in app/services/workflow_defaults.py, editable by an administrator):
 - "leave": Manager, then HR when the leave needs it (only_if "needs_hr"): leave types set to need HR
   (LeaveType.needs_hr_approval; by default maternity, paternity and unpaid) or leave longer than 5 working days.
-- "attendance_correction": Manager.  "timesheet": Manager.
+- "attendance_correction": Manager.  "timesheet": Manager (timesheet weeks and, since daily timesheets, days: ids "tsd-...").
 
 Started with fallback=False: a person with no one above them is approved straight away (as before). The area
 endpoints (POST /leave/requests/{id}/decision, ...) and POST /approvals/{id}/decision both decide; the area
@@ -25,12 +25,11 @@ from app.db import utcnow
 from app.deps import CurrentUser
 from app.models import (
     Account, ApprovalDecision, ApprovalInstance, AttendanceCorrection, AttendanceSession, Employee, LeaveRequest, LeaveType,
-    TimesheetWeek,
+    TimesheetDay, TimesheetWeek,
 )
 from app.services import approvals as engine
 from app.services import attendance as attendance_rules
 from app.services.activity import notify, record_audit
-from app.services.decisions import can_decide
 from app.services.workflow_defaults import ensure_default
 
 LEAVE, CORRECTION, TIMESHEET = "leave", "attendance_correction", "timesheet"
@@ -88,8 +87,10 @@ def decide(db: Session, user: CurrentUser, instance: ApprovalInstance, emp: Empl
         raise HTTPException(403, "You can't decide this request.")
     token = _request_ip.set(ip)
     try:
-        engine.decide(db, instance, user.employee_id, decision, note, actor_id=user.id, ip=ip,
-                      authority=can_decide(db, user, emp))
+        # The people named in the current step (or their delegates) decide; HR in scope may step in. A skip-level
+        # manager can't approve over the line manager's head.
+        hr_in_scope = user.scope.is_hr and user.scope.can_see(emp) and user.employee_id != emp.id
+        engine.decide(db, instance, user.employee_id, decision, note, actor_id=user.id, ip=ip, authority=hr_in_scope)
     except engine.NotAllowed as exc:
         raise HTTPException(403, str(exc)) from exc
     except Conflict as exc:
@@ -260,8 +261,33 @@ def _correction_finished(db: Session, instance: ApprovalInstance) -> None:
            href=f"/attendance/corrections/{item.id}")
 
 
+def _timesheet_day_finished(db: Session, instance: ApprovalInstance) -> None:
+    """A daily timesheet (TimesheetDay, ids "tsd-...") through the same "timesheet" workflow as weeks."""
+    day = db.get(TimesheetDay, instance.entity_id)
+    emp = db.get(Employee, day.employee_id) if day else None
+    if day is None or emp is None or day.status != "submitted" or instance.status not in ("approved", "rejected"):
+        return
+    before = {"status": day.status, "work_date": day.work_date, "decided_by": day.decided_by, "decision_note": day.decision_note}
+    by, note, actor, name = _decider(db, instance, emp)
+    day.status, day.decided_by, day.decided_at, day.decision_note = instance.status, by, utcnow(), note
+    if _last_decision(db, instance) is None:
+        return
+    record_audit(db, actor_id=actor, action=f"timesheet_day_{day.status}", entity="timesheet_day", entity_id=day.id,
+                 subject_id=emp.id, before=before,
+                 after={"status": day.status, "work_date": day.work_date, "decided_by": by, "decision_note": note,
+                        "approval_instance": instance.id},
+                 ip=_request_ip.get())
+    verb = "approved" if day.status == "approved" else "sent back"
+    notify(db, recipient_id=emp.id, title=f"Timesheet {verb}",
+           body=f"{name} {verb} your timesheet for {day.work_date}." + (f" Note: {note}" if note else ""),
+           href=f"/timesheets/days/{day.id}")
+
+
 @engine.on_finish(TIMESHEET)
 def _timesheet_finished(db: Session, instance: ApprovalInstance) -> None:
+    if instance.entity_id.startswith("tsd-"):
+        _timesheet_day_finished(db, instance)
+        return
     week = db.get(TimesheetWeek, instance.entity_id)
     emp = db.get(Employee, week.employee_id) if week else None
     if week is None or emp is None or week.status != "submitted" or instance.status not in ("approved", "rejected"):

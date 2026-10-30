@@ -76,6 +76,7 @@ import { editedPerson, getPerson, isAccountActive, listPeople, managerChainIds, 
 import { delegatedAuthority, noteLeaves, type DelegationScope } from "./data/delegations.ts";
 import { cachedPayslips, generatePayslips, type PayslipInput } from "./data/payslipGenerator.ts";
 import { getTaxRegime } from "./data/taxRegime.ts";
+import { payslipAnnualBase, useAnnualPayRevision } from "./data/annualPay.ts";
 import { getExitState, subscribeExits } from "./features/lifecycle/exitStore.ts";
 import { getNavOverrides } from "./data/platformLocal.ts";
 import { createSeed, DEMO_PASSWORD, EMPLOYEE, findAccountByCode, findAccountById, sharedProjectsFor } from "./seed.ts";
@@ -99,7 +100,10 @@ import {
 } from "./api/portalSync.ts";
 import { setApiNotificationReadHandler } from "./data/collabLocal.ts";
 import type { LeaveRow } from "./model.ts";
-import { apiAddTimeEntry, apiDecideWeek, apiRemoveTimeEntry, apiSubmitWeek, timeMirror } from "./api/syncTimeSheets.ts";
+import { apiAddTimeEntry, apiDecideDay, apiDecideWeek, apiRemoveTimeEntry, apiReopenDay, apiSubmitDay, apiSubmitWeek, timeMirror } from "./api/syncTimeSheets.ts";
+import { checkOutNeededToSubmit } from "./data/attendanceLocal.ts";
+import { DAY_TARGET, HALF_DAY_TARGET, dayFromApi, dayRecordFor, getLocalDays, isFixable, legacyLockedDate, saveLocalDays, shortfallText } from "./data/timesheetDays.ts";
+import { halfDayLeave as halfDayLeaveOn, blockingLeave as fullDayLeaveOn, parseISODate } from "./model.ts";
 import { pendingMirror } from "./api/syncTimeApprovals.ts";
 import { apiAddExpense, apiDecideExpense, apiPayExpense, apiWithdrawExpense, claimsMirror } from "./api/syncTimeExpenses.ts";
 
@@ -237,6 +241,11 @@ function loadState(): PortalState {
     if (!Array.isArray(parsed.policies)) parsed.policies = seed.policies;
     if (!Array.isArray(parsed.documents)) parsed.documents = seed.documents;
     if (!Array.isArray(parsed.backdatedPermissions)) parsed.backdatedPermissions = [];
+    // Optional holiday picks are leave of type "optional" (added after version 25 data was saved).
+    const optionalPolicy = seed.leavePolicies.find((p) => p.code === "optional");
+    if (optionalPolicy && Array.isArray(parsed.leavePolicies) && !parsed.leavePolicies.some((p) => p.code === "optional")) {
+      parsed.leavePolicies = [...parsed.leavePolicies, optionalPolicy];
+    }
     if (localStorage.getItem(PHOTO_RESET_KEY) !== "1") {
       if (parsed.profilePhoto) {
         delete parsed.profilePhoto;
@@ -405,7 +414,13 @@ interface PortalApi {
   ) => Promise<string | null>;
   removeTimeEntry: (projectId: string, weekStart: string, entryId: string) => Promise<string | null>;
   submitWeekTimesheets: (weekStart: string) => Promise<string | null>;
-  setOrgTimesheetStatus: (id: string, status: OrgTimesheetStatus) => Promise<string | null>;
+  setOrgTimesheetStatus: (id: string, status: OrgTimesheetStatus, note?: string) => Promise<string | null>;
+  /** Daily timesheets: submit one day (9 h, 4.5 h on half-day leave) to the manager. */
+  submitDayTimesheet: (date: string) => Promise<string | null>;
+  /** Approve or send back (comment needed) someone's submitted day. */
+  decideTimesheetDay: (dayId: string, decision: "approved" | "rejected", note?: string) => Promise<string | null>;
+  /** Manager (HR for someone with no manager): open a missed past day so the person can log and submit it. */
+  reopenTimesheetDay: (personId: string, date: string, note: string) => Promise<string | null>;
   /** Whether the signed-in user may verify tax-saving proofs (payroll/HR). */
   canVerifyProofs: boolean;
   addExpense: (input: Omit<Expense, "id" | "employeeId" | "status">) => Promise<string | null>;
@@ -488,15 +503,6 @@ interface PortalApi {
 /** Yearly caps for common Indian tax-saving sections (income tax old regime). */
 const MAX_MEAL_ORDERS_PER_DAY = 3;
 
-/** Editing a week's time after submitting it takes it back out of the manager's queue. */
-function backToDraft(rows: PortalState["orgTimesheets"], weekStart: string, personId: string): PortalState["orgTimesheets"] {
-  return rows.map((row) =>
-    row.weekStart === weekStart && row.personId === personId && row.status === "submitted"
-      ? { ...row, status: "draft" as const }
-      : row,
-  );
-}
-
 const MAX_OTP_ATTEMPTS = 5;
 
 function withoutPhoto<T extends { photo?: string }>(override: T | undefined): Omit<T, "photo"> | null {
@@ -516,15 +522,11 @@ setDirectoryChainSource((employeeId) => {
 // Admin role-editor changes take effect on menus and page access.
 setNavOverrideSource((accountId) => getNavOverrides(accountId));
 
-// Holidays follow each person's country; optional holidays they picked count as days off too.
+// Holidays follow each person's country. Optional holidays are leave (type "optional"), not extra holidays,
+// so they count against the balance and show as approved leave.
 setHolidayContext(
   (employeeId) => findDemoById(employeeId)?.countryCode ?? (employeeId.startsWith("emp-") ? "IN" : undefined),
-  (employeeId) =>
-    getOptionalHolidayState()
-      .picks.filter((pick) => pick.employeeId === employeeId && pick.status === "picked")
-      .map((pick) => getOptionalHolidayState().holidays.find((h) => h.id === pick.holidayId))
-      .filter((h): h is NonNullable<typeof h> => Boolean(h))
-      .map((h) => ({ id: h.id, date: h.date, name: `${h.name} (optional)` })),
+  () => [],
 );
 // Comp-off days granted for working weekends or holidays add to the comp-off balance.
 // Latest leave requests, so comp-off credits used before they expired stay counted.
@@ -549,6 +551,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   // Approved name corrections change the signed-in person's own name everywhere.
   const corrections = useSyncExternalStore(subscribeCorrections, getCorrections);
   const people = useSyncExternalStore(subscribePeople, listPeople);
+  const payRevision = useAnnualPayRevision();
   const [state, setState] = useState<PortalState>(() => {
     ensureDemoLastLogin();
     return loadState();
@@ -859,6 +862,17 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       return delegatedAuthority(active.id, employeeId, scope) !== null;
     }
 
+    /** A day a week submitted the old (weekly) way still covers: it has entries from before today and no day record. */
+    function legacyLocked(weekStart: string, date: string): boolean {
+      const sheets = viewState.timesheets.filter((sheet) => sheet.employeeId === active.id && sheet.weekStart === weekStart);
+      const weekLocked = sheets.some((sheet) => sheet.status === "submitted" || sheet.status === "approved");
+      const hasEntries = sheets.some((sheet) => (sheet.entries ?? []).some((entry) => entry.date === date));
+      const record = API_ENABLED
+        ? (apiTime.days[date] ? dayFromApi(apiTime.days[date]!) ?? undefined : undefined)
+        : dayRecordFor(getLocalDays(), active.id, date);
+      return legacyLockedDate(weekLocked, date, hasEntries, record);
+    }
+
     /** People at the top of the organisation have no one to approve their requests. */
     const activeHasApprover = managementChain(active.id, TIMEZ_DEMOS).length > 0;
 
@@ -1073,6 +1087,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           location: active.location ?? person?.location,
           nationality: person?.nationality,
           employmentStatus: person?.employmentStatus,
+          // Pay follows the compensation record when there is one (same figure as Compensation).
+          annualBase: payslipAnnualBase(active.id, active.countryCode),
           regime: getTaxRegime(active.id),
           investmentProofs: state.investmentProofs,
           timesheets: state.timesheets,
@@ -1081,7 +1097,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       get payslipViews() {
         const input = this.payInput;
-        const key = [active.id, input.regime, input.lastWorkingDay ?? "", input.unusedLeaveDays, input.today, input.employmentStatus ?? ""].join("|");
+        const key = [active.id, input.regime, input.lastWorkingDay ?? "", input.unusedLeaveDays, input.today, input.employmentStatus ?? "", input.annualBase ?? ""].join("|");
         return cachedPayslips(state, key, () => generatePayslips(input).map((slip) => ({ ...slip, ...toPayslipView(slip) })));
       },
       currentProjects,
@@ -1510,6 +1526,17 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (input.startHour < 0 || input.startHour >= 24) return "Enter a valid start time.";
         if (input.startHour + input.hours > 24) return "A block can't run past midnight.";
         if (input.date < weekStart || input.date > addDaysISO(weekStart, 6)) return "That date isn't in this week.";
+        // The API checks this itself and knows which days were sent back or reopened.
+        if (!API_ENABLED) {
+          const day = dayRecordFor(getLocalDays(), active.id, input.date);
+          if (day && !isFixable(day.status)) return `This day is ${day.status} and can't be changed.`;
+          const weekSentBack = state.orgTimesheets.some(
+            (row) => row.personId === active.id && row.weekStart === weekStart && row.status === "draft" && !!row.decidedBy,
+          );
+          if (input.date !== todayISO() && !isFixable(day?.status) && !weekSentBack)
+            return "You can only log time for today. For a missed day, ask your manager to reopen it.";
+        }
+        if (legacyLocked(weekStart, input.date)) return "That day was submitted with the whole week and can't be changed.";
         // Ticket/task time only against open work assigned to you (tasks must be accepted).
         if (input.workType === "ticket") {
           const ticket = getTickets().find((t) => t.id === input.workId);
@@ -1534,27 +1561,23 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const existing = viewState.timesheets.find(
           (sheet) => sheet.employeeId === active.id && sheet.projectId === projectId && sheet.weekStart === weekStart,
         );
-        if (existing?.status === "approved") return "This week is already approved.";
         const entry: TimeEntry = { ...input, id: uid("te"), note: input.note.trim() };
         const entries = [...(existing?.entries ?? []), entry];
         const hours = hoursFromEntries(entries);
         const error = validateTimesheet(viewState, active.id, project, hours);
         if (error) return error;
         // Backend mode: the API keeps the entry (and checks the week is still editable).
-        if (API_ENABLED) {
-          if (existing?.status === "submitted") return "This week is submitted. It can be changed again if your manager sends it back.";
-          return apiAddTimeEntry(projectId, { ...input, note: input.note.trim() });
-        }
+        if (API_ENABLED) return apiAddTimeEntry(projectId, { ...input, note: input.note.trim() });
         setState((prev) => {
           const current = prev.timesheets.find(
             (sheet) => sheet.employeeId === active.id && sheet.projectId === projectId && sheet.weekStart === weekStart,
           );
+          // Daily timesheets: a week submitted the old way keeps its status (only the days it covered stay locked).
           const next = current
             ? {
                 ...current,
                 entries,
                 hours,
-                status: "draft" as TimesheetStatus,
               }
             : {
                 id: uid("ts"),
@@ -1568,7 +1591,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           const timesheets = current
             ? prev.timesheets.map((sheet) => (sheet.id === current.id ? next : sheet))
             : [next, ...prev.timesheets];
-          return { ...prev, timesheets, orgTimesheets: backToDraft(prev.orgTimesheets, weekStart, active.id) };
+          return { ...prev, timesheets };
         });
         return null;
       },
@@ -1577,19 +1600,20 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           (sheet) => sheet.employeeId === active.id && sheet.projectId === projectId && sheet.weekStart === weekStart,
         );
         if (!existing) return "Entry not found.";
-        if (existing.status === "approved") return "This week is already approved.";
-        if (API_ENABLED) {
-          if (existing.status === "submitted") return "This week is submitted. It can be changed again if your manager sends it back.";
-          return apiRemoveTimeEntry(entryId);
+        const entryDate = existing.entries.find((entry) => entry.id === entryId)?.date ?? "";
+        if (legacyLocked(weekStart, entryDate)) return "That day was submitted with the whole week and can't be changed.";
+        if (!API_ENABLED) {
+          const day = dayRecordFor(getLocalDays(), active.id, entryDate);
+          if (day && !isFixable(day.status)) return `This day is ${day.status} and can't be changed.`;
         }
+        if (API_ENABLED) return apiRemoveTimeEntry(entryId);
         setState((prev) => ({
           ...prev,
           timesheets: prev.timesheets.map((sheet) => {
             if (sheet.id !== existing.id) return sheet;
             const entries = sheet.entries.filter((entry) => entry.id !== entryId);
-            return { ...sheet, entries, hours: hoursFromEntries(entries), status: "draft" as TimesheetStatus };
+            return { ...sheet, entries, hours: hoursFromEntries(entries) };
           }),
-          orgTimesheets: backToDraft(prev.orgTimesheets, weekStart, active.id),
         }));
         return null;
       },
@@ -1639,7 +1663,99 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         });
         return null;
       },
-      setOrgTimesheetStatus: async (recordId, status) => {
+      submitDayTimesheet: async (date) => {
+        if (date > todayISO()) return "You can't submit a day that hasn't happened yet.";
+        // Backend mode: the API checks the hours (9 h, 4.5 h on half-day leave) and sends the day to the manager.
+        if (API_ENABLED) return apiSubmitDay(date);
+        const records = getLocalDays();
+        const existing = dayRecordFor(records, active.id, date);
+        if (existing && !isFixable(existing.status)) return `This day is already ${existing.status}.`;
+        if (date !== todayISO() && !existing) return "You can only submit today's timesheet.";
+        if (fullDayLeaveOn(state.leaveRequests, active.id, date)) return "You are on leave that day, so there is nothing to submit.";
+        // Same rule as the API: today's day goes in after checking out (days sent back or reopened don't need it).
+        if (!(existing && isFixable(existing.status)) && checkOutNeededToSubmit(active.id, date))
+          return "Check out before submitting today's timesheet.";
+        const entries = state.timesheets
+          .filter((sheet) => sheet.employeeId === active.id)
+          .flatMap((sheet) => sheet.entries ?? [])
+          .filter((entry) => entry.date === date);
+        const total = entries.reduce((sum, entry) => sum + entry.hours, 0);
+        if (total <= 0) return "Log your time for the day before submitting.";
+        const target = halfDayLeaveOn(state.leaveRequests, active.id, date) ? HALF_DAY_TARGET : DAY_TARGET;
+        const short = shortfallText(total, target);
+        if (short) return `${short}.`;
+        // No one above this person: HR decides (they see it in Team timesheets and Approvals).
+        const record = {
+          id: existing?.id ?? uid("tsd"),
+          personId: active.id,
+          name: active.fullName,
+          date,
+          status: "submitted" as const,
+          hours: total,
+          submittedAt: new Date().toISOString(),
+        };
+        return saveLocalDays([record, ...records.filter((r) => r.id !== record.id)]);
+      },
+      decideTimesheetDay: async (dayId, decision, note) => {
+        if (decision === "rejected" && !note?.trim()) return "Add a comment saying what to change.";
+        if (API_ENABLED) return apiDecideDay(dayId, decision === "approved" ? "approve" : "reject", note);
+        const records = getLocalDays();
+        const row = records.find((r) => r.id === dayId);
+        if (!row) return "Timesheet not found.";
+        if (row.personId === active.id) return "You cannot approve your own timesheet.";
+        if (row.status !== "submitted") return `This day is already ${row.status === "rejected" ? "sent back" : row.status}.`;
+        const hasManager = managementChain(row.personId, TIMEZ_DEMOS).length > 0;
+        const hr = activeDemo.role === "hr" || activeDemo.role === "hr_admin";
+        if (!(canDecideFor(row.personId, "timesheets") || (!hasManager && hr)))
+          return "Only someone above this person in their reporting line can decide this.";
+        return saveLocalDays(
+          records.map((r) =>
+            r.id === dayId
+              ? {
+                  ...r,
+                  status: decision,
+                  decidedBy: active.id,
+                  decidedByName: active.fullName,
+                  decidedOn: todayISO(),
+                  ...(note?.trim() ? { decisionNote: note.trim() } : { decisionNote: undefined }),
+                }
+              : r,
+          ),
+        );
+      },
+      reopenTimesheetDay: async (personId, date, note) => {
+        if (!note.trim()) return "Add a short reason.";
+        if (!date || date >= todayISO()) return "Choose a past day. Today is open already.";
+        if (personId === active.id) return "You can't reopen your own day.";
+        if (API_ENABLED) return apiReopenDay(personId, date, note.trim());
+        const hasManager = managementChain(personId, TIMEZ_DEMOS).length > 0;
+        const hr = activeDemo.role === "hr" || activeDemo.role === "hr_admin";
+        const allowed = hasManager ? canDecideFor(personId, "none") : hr;
+        if (!allowed) return "Only their manager can reopen a day (HR for someone with no manager).";
+        const weekday = parseISODate(date).getDay();
+        if (weekday === 0 || weekday === 6) return "That's a weekly off.";
+        if (holidaysForPerson(state.holidays, personId).some((h) => h.date === date)) return "That's a holiday.";
+        if (fullDayLeaveOn(state.leaveRequests, personId, date)) return "They were on leave that day.";
+        const records = getLocalDays();
+        const existing = dayRecordFor(records, personId, date);
+        if (existing && !isFixable(existing.status)) return `That day is already ${existing.status}.`;
+        const person = TIMEZ_DEMOS.find((a) => a.id === personId);
+        const record = {
+          id: existing?.id ?? uid("tsd"),
+          personId,
+          name: existing?.name ?? person?.fullName ?? personId,
+          date,
+          status: "reopened" as const,
+          hours: existing?.hours ?? 0,
+          submittedAt: existing?.submittedAt ?? "",
+          decidedBy: active.id,
+          decidedByName: active.fullName,
+          decidedOn: todayISO(),
+          decisionNote: note.trim(),
+        };
+        return saveLocalDays([record, ...records.filter((r) => r.id !== record.id)]);
+      },
+      setOrgTimesheetStatus: async (recordId, status, note) => {
         const row = viewState.orgTimesheets.find((item) => item.id === recordId);
         if (!row) return "Timesheet record not found.";
         if (row.personId === active.id) return "You cannot approve your own timesheet.";
@@ -1647,7 +1763,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (API_ENABLED) {
           if (row.status !== "submitted") return "Only submitted timesheets can be approved or sent back.";
           if (status !== "approved" && status !== "draft") return "That status change isn't allowed.";
-          return apiDecideWeek(recordId, status === "approved" ? "approve" : "reject");
+          return apiDecideWeek(recordId, status === "approved" ? "approve" : "reject", note);
         }
         if (!canDecideFor(row.personId)) return "Only someone above this person in their reporting line can decide this.";
         if (row.status === "missing") return "Missing timesheets must be filled by the employee first.";
@@ -1656,7 +1772,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         // "draft" = sent back to the employee for changes.
         setState((prev) => ({
           ...prev,
-          orgTimesheets: patchById(prev.orgTimesheets, recordId, { status }),
+          orgTimesheets: patchById(prev.orgTimesheets, recordId, {
+            status,
+            decisionNote: note?.trim() || (status === "draft" ? "Sent back for changes." : undefined),
+            decidedBy: active.id,
+          }),
           timesheets: prev.timesheets.map((sheet) =>
             sheet.employeeId === row.personId && sheet.weekStart === row.weekStart && sheet.status === "submitted"
               ? { ...sheet, status: status === "approved" ? "approved" : "draft" }
@@ -2727,7 +2847,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
     };
-  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState, exitState, corrections, people, apiLeave, apiTime, apiClaims]);
+  }, [signedIn, userId, state, loginNotice, profileOtp, resetOtp, passwordRevision, shiftState, optionalHolidayState, exitState, corrections, people, apiLeave, apiTime, apiClaims, payRevision]);
 
   return <PortalContext.Provider value={api}>{children}</PortalContext.Provider>;
 }

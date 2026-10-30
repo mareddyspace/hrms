@@ -1,7 +1,18 @@
 import { Link, useParams } from "react-router-dom";
 import { Card, Page, downloadText } from "../components/ui.tsx";
 import { legalEntityFor, money } from "../countryPay.ts";
-import { asDetailView, estimateMonthSoFar, type MonthSoFar, type PayslipDetailView } from "../data/payslipGenerator.ts";
+import { useState } from "react";
+import { notify } from "../components/Toast.tsx";
+import type { IndiaRegime } from "../countryPay.ts";
+import {
+  asDetailView,
+  compareRegimes,
+  estimateMonthSoFar,
+  taxYearSummary,
+  type MonthSoFar,
+  type PayslipDetailView,
+  type PayslipInput,
+} from "../data/payslipGenerator.ts";
 import { setTaxRegime, useTaxRegime } from "../data/taxRegime.ts";
 import { formatShortDate, parseISODate, toISO } from "../model.ts";
 import type { Employee, PayLine, PayslipView } from "../model.ts";
@@ -120,6 +131,12 @@ export function PayslipBody({ payslip }: { payslip: PayslipView }) {
             <span>Total deductions</span>
             <span>{money(payslip.deductionTotal, currency)}</span>
           </div>
+          {detail && detail.tax.monthTax > 0 && (
+            <div className="total-row muted">
+              <span>Of which income tax</span>
+              <span>{money(detail.tax.monthTax, currency)}</span>
+            </div>
+          )}
         </section>
       </div>
       <div className="pay-net">
@@ -197,16 +214,78 @@ export function PayslipBody({ payslip }: { payslip: PayslipView }) {
   );
 }
 
-function RegimePicker({ employeeId }: { employeeId: string }) {
-  const regime = useTaxRegime(employeeId);
+/** India: new / old regime, with a full year's tax under each. Saving changes the payslip TDS. */
+export function RegimePicker({ input, showLink = true }: { input: PayslipInput; showLink?: boolean }) {
+  const regime = useTaxRegime(input.employeeId);
+  const [saving, setSaving] = useState(false);
+  const both = compareRegimes({ ...input, regime });
+  const c = "INR";
+  const better: IndiaRegime = both.old.annualTax < both.new.annualTax ? "old" : "new";
+  async function choose(next: IndiaRegime) {
+    if (next === regime || saving) return;
+    setSaving(true);
+    const error = await setTaxRegime(input.employeeId, next);
+    setSaving(false);
+    notify(error ?? `${next === "new" ? "New" : "Old"} regime saved. Payslip tax updated.`, error ? "err" : "ok");
+  }
   return (
-    <label className="field" style={{ maxWidth: 280 }}>
-      <span>Tax regime</span>
-      <select value={regime} onChange={(event) => setTaxRegime(employeeId, event.target.value === "old" ? "old" : "new")}>
-        <option value="new">New regime (default)</option>
-        <option value="old">Old regime — uses verified declarations</option>
-      </select>
-    </label>
+    <div className="regime-pick">
+      <label className="field" style={{ maxWidth: 280, margin: 0 }}>
+        <span>Tax regime</span>
+        <select value={regime} disabled={saving} onChange={(event) => void choose(event.target.value === "old" ? "old" : "new")}>
+          <option value="new">New regime (default)</option>
+          <option value="old">Old regime</option>
+        </select>
+      </label>
+      <p className="muted" style={{ margin: "8px 0 0" }}>
+        Tax for the year · new {money(both.new.annualTax, c)} · old {money(both.old.annualTax, c)}
+        {both.new.annualTax !== both.old.annualTax && ` · ${better} is lower by ${money(Math.abs(both.new.annualTax - both.old.annualTax), c)}`}
+        {saving ? " · saving…" : ""}
+      </p>
+      <p className="muted" style={{ margin: "4px 0 0" }}>
+        Old regime counts verified declarations.{showLink && <> <Link to="/investment">Declarations</Link></>}
+      </p>
+    </div>
+  );
+}
+
+/** Tax paid so far this tax year, projected to the year end, and the regime (India: pick it here). */
+export function TaxYearCard({ input, slips }: { input: PayslipInput; slips: PayslipView[] }) {
+  useTaxRegime(input.employeeId);
+  const sum = taxYearSummary(input, slips);
+  const c = sum.currency;
+  if (!sum.hasIncomeTax) {
+    return (
+      <Card title="Tax this year">
+        <p className="muted" style={{ margin: 0 }}>
+          {sum.basis || "No personal income tax"} · {sum.taxYear}
+        </p>
+      </Card>
+    );
+  }
+  const stat = (label: string, value: string) => (
+    <div>
+      <div className="muted">{label}</div>
+      <strong>{value}</strong>
+    </div>
+  );
+  return (
+    <Card title="Tax this year">
+      <p className="muted" style={{ margin: "0 0 12px" }}>
+        {sum.taxYear} · {sum.basis}
+      </p>
+      <div className="pay-head" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "8px 16px" }}>
+        {stat("Tax paid so far", money(sum.ytdTax, c))}
+        {stat("Projected for the year", money(sum.projectedTax, c))}
+        {stat("Per month now", money(sum.monthTax, c))}
+        {stat("Months left", String(sum.monthsLeft))}
+      </div>
+      {input.countryCode === "IN" && (
+        <div style={{ marginTop: 16 }}>
+          <RegimePicker input={input} />
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -273,11 +352,7 @@ export function PayslipsPage() {
         </Card>
       )}
       {est && <MonthSoFarCard est={est} />}
-      {employee.countryCode === "IN" && (
-        <Card>
-          <RegimePicker employeeId={employee.id} />
-        </Card>
-      )}
+      <TaxYearCard input={payInput} slips={payslipViews} />
       <Card>
         <div className="doc-table-wrap">
           <table className="data doc-table pay-list">

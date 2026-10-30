@@ -31,7 +31,13 @@ import {
   type Enrollment,
   type FeedbackItem,
   type Interview,
+  type JobPosting,
   type OfferApproval,
+  type OfferLetter,
+  type Recommendation,
+  type RequisitionReason,
+  type ScorecardCriterion,
+  SCORECARD_CRITERIA,
   type OfferRecord,
   type OfferStatus,
   type OnboardingJoiner,
@@ -50,7 +56,8 @@ import {
 } from "./talentData.ts";
 import { DEMO_ACCOUNTS, managementChain, mentionsRetiredAccount, type DemoAccount } from "../demoAccounts.ts";
 import { TIMEZ_COUNTRIES, todayISO, type UserRole } from "../model.ts";
-import { legalEntityFor } from "../countryPay.ts";
+import { legalEntityFor, money } from "../countryPay.ts";
+import { offerLetterContent, type LetterFields } from "./letterTemplates.ts";
 import { TASK_TEAM } from "./taskTeam.ts";
 import { GRADE_BANDS, type GradeBand } from "./rewardData.ts";
 import { getPerson, upsertPerson, type LocalPersonRecord } from "./peopleLocal.ts";
@@ -95,6 +102,25 @@ type TalentState = {
   cycles: PerfCycle[];
 };
 
+/** Job posts for the open seeded requisitions (the backend seeds the same ones). */
+const SEED_POSTINGS: Record<string, JobPosting> = {
+  "JOB-221": {
+    id: "post-seed-221", title: "Senior React Engineer", location: "Bengaluru", employmentType: "Full-time", closingDate: "", onCareersSite: true,
+    status: "Open", publishedBy: "Sophie Clark", publishedOn: "2026-08-14",
+    description: "Build the React front end of our HR platform with a small product team in Bengaluru. You will own features end to end, review code and help shape the design system. We look for 5+ years of React, strong TypeScript and good system design sense.",
+  },
+  "JOB-218": {
+    id: "post-seed-218", title: "HR Business Partner", location: "London", employmentType: "Full-time", closingDate: "", onCareersSite: true,
+    status: "Open", publishedBy: "Sophie Clark", publishedOn: "2026-07-30",
+    description: "Partner with leaders in our London office on organisation design, employee relations and workforce planning. You will be the first people partner for a fast-growing UK team.",
+  },
+  "JOB-230": {
+    id: "post-seed-230", title: "Product Manager", location: "Bengaluru", employmentType: "Full-time", closingDate: "", onCareersSite: true,
+    status: "Open", publishedBy: "Sophie Clark", publishedOn: "2026-10-03",
+    description: "Lead product discovery and delivery for the people analytics area. Work with engineering, design and HR customers; run user research and own the roadmap.",
+  },
+};
+
 /** Who is performing a talent action — the signed-in persona. */
 export type TalentActor = Pick<DemoAccount, "id" | "fullName" | "role">;
 /** null when the change was applied, otherwise the reason it was refused. */
@@ -128,6 +154,10 @@ function clean(state: TalentState): TalentState {
     (state as Record<typeof key, unknown[]>)[key] = (state[key] as unknown[]).filter((row) => !mentionsRetiredAccount(row));
   }
   state.reviews = state.reviews.filter((r) => managementChain(r.employeeId, DEMO_ACCOUNTS).length > 0);
+  for (const r of state.requisitions) {
+    const seed = SEED_POSTINGS[r.id];
+    if (seed && r.posting === undefined && r.approvalStatus === "Approved") r.posting = { ...seed, closingDate: addDaysTo(todayISO(), 45) };
+  }
   return deriveJoiners(ensureHistory(state));
 }
 
@@ -348,9 +378,19 @@ export function canActOnRequisition(actor: TalentActor, req: Requisition): boole
 
 const RAISING_ROLES: readonly UserRole[] = ["manager", "executive", "founder", "cofounder"];
 
-/** The manager who needs the role raises the requisition. */
+/** The manager who needs the role raises the requisition (a recruiter or HR may raise it for them). */
 export function canRaiseRequisition(actor: TalentActor): boolean {
-  return RAISING_ROLES.includes(actor.role);
+  return RAISING_ROLES.includes(actor.role) || canRaiseForOthers(actor);
+}
+
+/** A recruiter or HR raises a requisition for the hiring manager they name. */
+export function canRaiseForOthers(actor: TalentActor): boolean {
+  return actor.role === "recruiter" || isHrRole(actor.role);
+}
+
+/** People who can be named hiring manager: managers and executives. */
+export function hiringManagerOptions(): DemoAccount[] {
+  return DEMO_ACCOUNTS.filter((a) => RAISING_ROLES.includes(a.role));
 }
 
 /* Requisition approval follows the "requisition" approval workflow (department head → HR → finance by default),
@@ -466,6 +506,7 @@ export function allowedStageMoves(candidate: Candidate, offers: OfferRecord[], r
   if (next && !EXIT_STAGES.includes(next)) {
     if (next !== "Hired" || hasAcceptedOffer(candidate.id, offers)) moves.push(next);
   }
+  if (candidate.stage === "Interview") moves.push("Final Review"); // the assessment is optional
   return [...moves, ...EXIT_STAGES];
 }
 
@@ -492,14 +533,19 @@ function pushStep(candidate: Candidate, actor: TalentActor, stage: PipelineStage
 }
 
 export function setCandidateStage(actor: TalentActor, id: string, stage: PipelineStage, note = ""): TalentResult {
-  if (API_ENABLED) return viaApi(() => talentApi.apiSetCandidateStage(id, stage, note));
-  return guarded((s) => {
+  if (API_ENABLED) {
+    if (stage === "Rejected" && note.trim().length < 3) return "Give a reason to reject.";
+    return viaApi(() => talentApi.apiSetCandidateStage(id, stage, note));
+  }
+  const alerts: Alert[] = [];
+  const result = guarded((s) => {
     const row = s.candidates.find((c) => c.id === id);
     if (!row) return "Candidate not found.";
     const req = reqFor(s, row.requisitionId);
     if (!req) return "Requisition not found.";
     if (!canActOnRequisition(actor, req)) return "Only the assigned recruiter, HR or the hiring manager can move candidates.";
     if (stage === row.stage) return null;
+    if (stage === "Rejected" && note.trim().length < 3) return "Give a reason to reject.";
     if (req.approvalStatus !== "Approved") return `${req.id} is ${req.approvalStatus.toLowerCase()}. Candidates can't move until HR approves it.`;
     if (!isRequisitionOpen(req)) return `${req.id} has no recruiter yet.`;
     if (stage === "Hired" && !hasAcceptedOffer(id, s.offers)) return "A candidate can only be hired after accepting an offer.";
@@ -515,8 +561,189 @@ export function setCandidateStage(actor: TalentActor, id: string, stage: Pipelin
     }
     pushStep(row, actor, stage, note);
     if (stage === "Hired") createJoiner(s, row, req, actor);
+    const hm = hiringManagerIdOf(req);
+    if (stage === "Final Review" && hm && hm !== actor.id) alerts.push({ to: [hm], title: `${row.name} is ready for your decision`, body: `Final Review for ${req.title} (${req.id}).`, href: candidateHref(row.id) });
+    if (stage === "Offer" && req.recruiterId && req.recruiterId !== actor.id) alerts.push({ to: [req.recruiterId], title: `Prepare an offer for ${row.name}`, body: `The hiring manager moved ${row.name} to Offer.`, href: candidateHref(row.id) });
+    if (row.employeeId && APPLICANT_TEXT[stage]) alerts.push({ to: [row.employeeId], title: `Your application: ${req.title}`, body: APPLICANT_TEXT[stage]!, href: "/internal-jobs" });
     return null;
   });
+  if (!result) sendAlerts(alerts);
+  return result;
+}
+
+/* ───────────── Hiring chain hand-offs ───────────── */
+
+type Alert = { to: string[]; title: string; body: string; href: string };
+
+function sendAlerts(alerts: Alert[]) {
+  for (const a of alerts) for (const recipientId of new Set(a.to)) if (recipientId) pushPersonTaskAlert({ recipientId, title: a.title, body: a.body, href: a.href });
+}
+
+/** Links that open the right place in Recruiting (the same pages server links map to). */
+export function candidateHref(id: string): string {
+  return `/recruiting?candidate=${encodeURIComponent(id)}`;
+}
+export function requisitionHref(id: string): string {
+  return `/recruiting?req=${encodeURIComponent(id)}`;
+}
+
+const APPLICANT_TEXT: Partial<Record<PipelineStage, string>> = {
+  Screening: "Recruiting is reviewing your application.",
+  Shortlisted: "You are shortlisted.",
+  Interview: "You are invited to interview.",
+  Offer: "An offer is being prepared.",
+  Rejected: "The team decided not to move forward this time.",
+  Hired: "Welcome to your new role.",
+};
+
+/** Taking applications: published, not past its closing date, and the requisition is open. */
+export function isPostingOpen(req: Requisition, today = todayISO()): boolean {
+  return !!req.posting && req.posting.status === "Open" && req.posting.closingDate >= today && isRequisitionOpen(req);
+}
+
+/** Job posts on the internal board (everyone) — and the public careers page (onCareersSite). */
+export function openPostings(reqs: Requisition[], careersOnly = false): Requisition[] {
+  return reqs.filter((r) => isPostingOpen(r) && (!careersOnly || r.posting!.onCareersSite));
+}
+
+export function requisitionByPosting(reqs: Requisition[], postingId: string): Requisition | undefined {
+  return reqs.find((r) => r.posting?.id === postingId);
+}
+
+export type PostingInput = { title: string; description: string; location: string; employmentType: string; closingDate: string; onCareersSite: boolean };
+
+/** The recruiter (or HR) publishes the approved requisition as a job post; publishing again updates (and reopens) it. */
+export function publishPosting(actor: TalentActor, reqId: string, input: PostingInput): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiPublishPosting(reqId, input));
+  let alerts: Alert[] = [];
+  const result = guarded((s) => {
+    const req = reqFor(s, reqId);
+    if (!req) return "Requisition not found.";
+    if (!canRunPipeline(actor, req)) return "Only the assigned recruiter or HR publishes job posts.";
+    if (!isRequisitionOpen(req)) return `${req.id} can be posted once it is approved and has a recruiter.`;
+    if (input.title.trim().length < 2) return "Enter the job title.";
+    if (input.description.trim().length < 20) return "Write a job description (at least 20 characters).";
+    if (!input.location.trim()) return "Enter a location.";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.closingDate) || input.closingDate < todayISO()) return "Choose a closing date that is not in the past.";
+    const first = !req.posting;
+    req.posting = {
+      id: req.posting?.id ?? newId("post"),
+      title: input.title.trim(),
+      description: input.description.trim(),
+      location: input.location.trim(),
+      employmentType: input.employmentType.trim() || "Full-time",
+      closingDate: input.closingDate,
+      onCareersSite: input.onCareersSite,
+      status: "Open",
+      publishedBy: actor.fullName,
+      publishedOn: req.posting?.publishedOn ?? todayISO(),
+    };
+    req.history = [...(req.history ?? []), { on: todayISO(), by: actor.fullName, byId: actor.id, action: first ? "Posted" : "Post updated" }];
+    const hm = hiringManagerIdOf(req);
+    if (first && hm && hm !== actor.id) alerts = [{ to: [hm], title: `${req.posting.title} is posted`, body: `Open for applications until ${input.closingDate}${input.onCareersSite ? " (careers page too)" : ""}.`, href: requisitionHref(req.id) }];
+    return null;
+  });
+  if (!result) sendAlerts(alerts);
+  return result;
+}
+
+export function closePosting(actor: TalentActor, reqId: string): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiClosePosting(reqId));
+  return guarded((s) => {
+    const req = reqFor(s, reqId);
+    if (!req) return "Requisition not found.";
+    if (!canRunPipeline(actor, req)) return "Only the assigned recruiter or HR closes job posts.";
+    if (!req.posting || req.posting.status !== "Open") return "This job post is not open.";
+    req.posting = { ...req.posting, status: "Closed", closedOn: todayISO() };
+    req.history = [...(req.history ?? []), { on: todayISO(), by: actor.fullName, byId: actor.id, action: "Post closed" }];
+    return null;
+  });
+}
+
+export type ApplicationInput = { name: string; email: string; phone: string; coverNote: string; cvFile: File | null };
+
+/** Without the backend, a careers-page application (same browser): the candidate lands at Applied. Returns an error or null. */
+export function applyFromCareers(postingId: string, input: ApplicationInput): TalentResult {
+  let alerts: Alert[] = [];
+  const result = guarded((s) => {
+    const req = requisitionByPosting(s.requisitions, postingId);
+    if (!req || !isPostingOpen(req) || !req.posting!.onCareersSite) return "This job is not open for applications.";
+    const name = input.name.trim();
+    const email = input.email.trim().toLowerCase();
+    if (name.length < 2) return "Enter your full name.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Enter a valid email.";
+    if (!input.cvFile) return "Attach your CV.";
+    if (!/\.(pdf|docx?|txt)$/i.test(input.cvFile.name)) return "Attach your CV as a PDF, DOC, DOCX or TXT file.";
+    if (input.cvFile.size > 5 * 1024 * 1024) return "The CV is larger than 5 MB.";
+    if (s.candidates.some((c) => c.requisitionId === req.id && c.email.toLowerCase() === email)) return "You've already applied for this job.";
+    const id = newId("cand");
+    s.candidates.push({
+      id, name, email, phone: input.phone.trim(), role: req.title, requisitionId: req.id, stage: "Applied", country: req.country,
+      source: "Careers site", experienceYears: 0, skills: [], resumeNote: "", postingId,
+      coverNote: input.coverNote.trim() || undefined, cvFilename: input.cvFile.name,
+      history: [{ stage: "Applied", enteredOn: nowStamp(), by: name, note: "Applied on the careers page" }],
+    });
+    if (req.recruiterId) alerts = [{ to: [req.recruiterId], title: `New application: ${name}`, body: `${req.posting!.title} (${req.id}) from the careers page.`, href: candidateHref(id) }];
+    return null;
+  });
+  if (!result) sendAlerts(alerts);
+  return result;
+}
+
+/** An employee applies from the internal jobs board; the application lands in the job's pipeline (source Internal). */
+export function applyInternally(actor: TalentActor, postingId: string, coverNote: string): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiApplyInternally(postingId, coverNote));
+  let alerts: Alert[] = [];
+  const result = guarded((s) => {
+    const req = requisitionByPosting(s.requisitions, postingId);
+    if (!req || !isPostingOpen(req)) return "This job is not open for applications.";
+    if (isHiringManagerOf(actor, req)) return "You're the hiring manager for this role.";
+    if (req.recruiterId === actor.id) return "You run this role's pipeline.";
+    if (coverNote.trim().length > 3000) return "Keep your note under 3000 characters.";
+    const person = getPerson(actor.id);
+    const email = (person?.email ?? `${actor.id}@timez.com`).toLowerCase();
+    if (s.candidates.some((c) => c.requisitionId === req.id && (c.employeeId === actor.id || c.email.toLowerCase() === email))) return "You've already applied.";
+    const id = newId("cand");
+    s.candidates.push({
+      id, name: actor.fullName, email, phone: person?.mobile ?? "", role: req.title, requisitionId: req.id, stage: "Applied",
+      country: req.country, source: "Internal", experienceYears: 0, skills: [], postingId, employeeId: actor.id,
+      resumeNote: person ? `Internal: ${person.designation}, ${person.department}` : "Internal applicant",
+      coverNote: coverNote.trim() || undefined,
+      history: [{ stage: "Applied", enteredOn: nowStamp(), by: actor.fullName, byId: actor.id, note: "Applied on the internal jobs board" }],
+    });
+    const manager = managementChain(actor.id, DEMO_ACCOUNTS)[0]?.id;
+    alerts = [
+      ...(req.recruiterId ? [{ to: [req.recruiterId], title: `Internal application: ${actor.fullName}`, body: `${req.posting!.title} (${req.id}).`, href: candidateHref(id) }] : []),
+      ...(manager && manager !== req.recruiterId ? [{ to: [manager], title: "Internal application", body: `${actor.fullName} applied for ${req.posting!.title}.`, href: "/internal-jobs" }] : []),
+    ];
+    return null;
+  });
+  if (!result) sendAlerts(alerts);
+  return result;
+}
+
+/** Screening decision: shortlist (Applied → Screening → Shortlisted) or reject with a reason; the match score is kept. */
+export function screenCandidate(actor: TalentActor, id: string, decision: "shortlist" | "reject", reason: string, matchScore?: number): TalentResult {
+  if (API_ENABLED) return viaApi(() => talentApi.apiScreenCandidate(id, decision, reason));
+  let alerts: Alert[] = [];
+  const result = guarded((s) => {
+    const row = s.candidates.find((c) => c.id === id);
+    if (!row) return "Candidate not found.";
+    const req = reqFor(s, row.requisitionId);
+    if (!req || !canRunPipeline(actor, req)) return "Only the assigned recruiter or HR screens candidates.";
+    if (!isRequisitionOpen(req)) return `${req.id} is not open.`;
+    if (row.stage !== "Applied" && row.stage !== "Screening") return `${row.name} is already past screening (${row.stage}).`;
+    if (decision === "reject" && reason.trim().length < 3) return "Give a reason to reject.";
+    if (matchScore !== undefined) row.matchScore = matchScore;
+    if (row.stage === "Applied") pushStep(row, actor, "Screening", matchScore !== undefined ? `Match ${matchScore}%` : "");
+    pushStep(row, actor, decision === "shortlist" ? "Shortlisted" : "Rejected", reason);
+    const hm = hiringManagerIdOf(req);
+    if (decision === "shortlist" && hm && hm !== actor.id) alerts.push({ to: [hm], title: `${row.name} shortlisted for ${req.title}`, body: matchScore !== undefined ? `Match ${matchScore}%. Interviews come next.` : "Interviews come next.", href: candidateHref(row.id) });
+    if (row.employeeId) alerts.push({ to: [row.employeeId], title: `Your application: ${req.title}`, body: APPLICANT_TEXT[decision === "shortlist" ? "Shortlisted" : "Rejected"]!, href: "/internal-jobs" });
+    return null;
+  });
+  if (!result) sendAlerts(alerts);
+  return result;
 }
 
 const REQ_TRANSITIONS: Record<ApprovalStatus, ApprovalStatus[]> = {
@@ -577,12 +804,12 @@ export function requisitionSteps(req: Requisition): ReqStep[] {
   ];
 }
 
-type ReqAlert = { to: string[]; title: string; body: string };
+type ReqAlert = { to: string[]; title: string; body: string; href?: string };
 
 function sendReqAlerts(alerts: ReqAlert[]) {
   for (const a of alerts) {
     for (const recipientId of new Set(a.to)) {
-      if (recipientId) pushPersonTaskAlert({ recipientId, title: a.title, body: a.body, href: a.title === "Requisition to approve" ? "/approvals" : "/recruiting" });
+      if (recipientId) pushPersonTaskAlert({ recipientId, title: a.title, body: a.body, href: a.title === "Requisition to approve" ? "/approvals" : a.href ?? "/recruiting" });
     }
   }
 }
@@ -716,18 +943,33 @@ export function setRequisitionApproval(actor: TalentActor, id: string, approvalS
   return result;
 }
 
-export type RequisitionInput = { title: string; department: string; country: string; location: string; openings: number };
+export type RequisitionInput = {
+  title: string;
+  department: string;
+  country: string;
+  location: string;
+  openings: number;
+  budget?: number;
+  reason?: RequisitionReason;
+  justification?: string;
+  /** A recruiter or HR raising it names the hiring manager. */
+  hiringManagerId?: string;
+};
 
 /** The hiring manager raises a requisition; it goes to the first approval step (no approvers: approved at once). */
 export function raiseRequisition(actor: TalentActor, input: RequisitionInput): TalentResult {
+  const forOther = !!input.hiringManagerId && input.hiringManagerId !== actor.id;
+  const hm = forOther ? DEMO_ACCOUNTS.find((a) => a.id === input.hiringManagerId) : actor;
+  if (forOther && !canRaiseForOthers(actor)) return "Only a recruiter or HR can raise a requisition for another manager.";
+  if (!forOther && !RAISING_ROLES.includes(actor.role)) return canRaiseForOthers(actor) ? "Choose the hiring manager." : "Only the manager who needs the role can raise a requisition.";
+  if (!hm) return "Choose the hiring manager.";
+  if (input.budget !== undefined && (!Number.isFinite(input.budget) || input.budget < 0)) return "Enter the budget as a number.";
   if (API_ENABLED) {
-    if (!canRaiseRequisition(actor)) return "Only the manager who needs the role can raise a requisition.";
     if (!TIMEZ_COUNTRIES.some((c) => c.name === input.country)) return "Choose a country.";
     return viaApi(() => talentApi.apiRaiseRequisition(input));
   }
   let alerts: ReqAlert[] = [];
   const result = guarded((s) => {
-    if (!canRaiseRequisition(actor)) return "Only the manager who needs the role can raise a requisition.";
     const title = input.title.trim();
     if (!title) return "Enter a job title.";
     if (!input.department.trim()) return "Enter a department.";
@@ -743,13 +985,19 @@ export function raiseRequisition(actor: TalentActor, input: RequisitionInput): T
       country: input.country,
       location: input.location.trim(),
       openings: input.openings,
-      hiringManager: actor.fullName,
-      hiringManagerId: actor.id,
-      recruiter: "",
+      hiringManager: hm.fullName,
+      hiringManagerId: hm.id,
+      recruiter: forOther && actor.role === "recruiter" ? actor.fullName : "",
+      ...(forOther && actor.role === "recruiter" ? { recruiterId: actor.id, recruiterAssignedOn: today } : {}),
       approvalStatus: "Pending approval",
       stageSummary: "Awaiting approval",
       created: today,
-      history: [{ on: today, by: actor.fullName, byId: actor.id, action: "Raised" }],
+      history: [{ on: today, by: actor.fullName, byId: actor.id, action: "Raised", ...(forOther ? { note: `for ${hm.fullName}` } : {}) }],
+      ...(input.budget !== undefined ? { budget: Math.round(input.budget), budgetCurrency: TIMEZ_COUNTRIES.find((c) => c.name === input.country)?.currency } : {}),
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.justification?.trim() ? { justification: input.justification.trim() } : {}),
+      raisedById: actor.id,
+      raisedBy: actor.fullName,
     };
     startReqApproval(row);
     if (!row.approvalSteps?.length) {
@@ -762,6 +1010,7 @@ export function raiseRequisition(actor: TalentActor, input: RequisitionInput): T
     } else {
       alerts = [{ to: waitingApproverIds(reqFlow(row)), title: "Requisition to approve", body: `${row.id} · ${title} · raised by ${actor.fullName}` }];
     }
+    if (forOther) alerts.push({ to: [hm.id], title: `Requisition ${row.id} raised for you`, body: `${title} (${row.location}). Raised by ${actor.fullName}.` });
     s.requisitions.unshift(row);
     return null;
   });
@@ -829,12 +1078,13 @@ export function addCandidate(actor: TalentActor, input: CandidateInput): TalentR
 
 /* ───────────── Interviews ───────────── */
 
-export type InterviewInput = { when: string; panel: string; type: string };
+export type InterviewInput = { when: string; panelIds: string[]; type: string };
 
 /** The assigned recruiter (or HR) schedules interviews for candidates at the Interview stage. */
 export function scheduleInterview(actor: TalentActor, candidateId: string, input: InterviewInput): TalentResult {
   if (API_ENABLED) return viaApi(() => talentApi.apiScheduleInterview(candidateId, input));
-  return guarded((s) => {
+  let alerts: Alert[] = [];
+  const result = guarded((s) => {
     const candidate = s.candidates.find((c) => c.id === candidateId);
     if (!candidate) return "Candidate not found.";
     const req = reqFor(s, candidate.requisitionId);
@@ -842,19 +1092,25 @@ export function scheduleInterview(actor: TalentActor, candidateId: string, input
     if (!isRequisitionOpen(req)) return `${req.id} is not open.`;
     if (candidate.stage !== "Interview") return "Move the candidate to Interview first.";
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(input.when) || input.when <= nowStamp()) return "Choose a future date and time.";
-    if (!input.panel.trim()) return "Add the panel.";
+    const panel = DEMO_ACCOUNTS.filter((a) => input.panelIds.includes(a.id));
+    if (!panel.length) return "Choose who interviews.";
+    const id = newId("int");
     s.interviews.push({
-      id: newId("int"),
+      id,
       candidateId,
       candidateName: candidate.name,
       role: candidate.role,
       when: input.when.replace("T", " "),
-      panel: input.panel.trim(),
+      panel: panel.map((a) => a.fullName).join(" · "),
+      panelIds: panel.map((a) => a.id),
       type: input.type.trim() || "Interview",
       feedbackStatus: "Pending",
     });
+    alerts = [{ to: panel.map((a) => a.id).filter((x) => x !== actor.id), title: `Interview: ${candidate.name}`, body: `${input.type.trim() || "Interview"} for ${req.title} on ${input.when.replace("T", " ")}.`, href: "/recruiting?tab=interviews" }];
     return null;
   });
+  if (!result) sendAlerts(alerts);
+  return result;
 }
 
 /* ───────────── Offers ───────────── */
@@ -949,7 +1205,9 @@ export function createOffer(actor: TalentActor, input: OfferInput): TalentResult
     if (!Number.isFinite(input.baseSalary) || input.baseSalary <= 0) return "Enter the annual base salary.";
     if (!input.startDate || input.startDate <= todayISO()) return "Choose a start date in the future.";
     const country = TIMEZ_COUNTRIES.find((c) => c.name === req.country);
+    const letter = makeOfferLetter(candidate, req, input, country?.currency ?? "USD", country?.code ?? "IN");
     s.offers.push({
+      letter,
       id: newId("off"),
       candidateId: candidate.id,
       candidateName: candidate.name,
@@ -975,9 +1233,93 @@ const APPROVAL_REFUSAL: Record<OfferApproval["role"], string> = {
   HR: "HR approves after the hiring manager (not the hiring manager themselves).",
 };
 
+/** The Offer letter template filled for the candidate (fields kept in the server's names). */
+function makeOfferLetter(candidate: Candidate, req: Requisition, input: OfferInput, currency: string, countryCode: string): OfferLetter {
+  const salary = money(Math.round(input.baseSalary), currency);
+  const fields: LetterFields = {
+    employeeName: candidate.name, employeeCode: "", title: req.title, department: req.department, grade: input.grade,
+    joiningDate: input.startDate, lastWorkingDay: "", manager: req.hiringManager, countryCode, countryName: req.country,
+    legalEntity: legalEntityFor(countryCode as Parameters<typeof legalEntityFor>[0]), address: "", salary, previousSalary: "",
+    effectiveDate: "", details: "", nationality: "", endDate: "", customText: input.packageNote.trim(),
+  };
+  const content = offerLetterContent(fields);
+  return {
+    ...content,
+    date: todayISO(),
+    fields: {
+      employee_name: fields.employeeName, title: fields.title, department: fields.department, grade: fields.grade,
+      joining_date: fields.joiningDate, manager: fields.manager, country_code: countryCode, country_name: fields.countryName,
+      legal_entity: fields.legalEntity, salary,
+    },
+  };
+}
+
+function offerToken(): string {
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Accepted: Hired and onboarding starts (an internal applicant's move goes to HR). Declined: nothing else moves. */
+function applyOfferAnswer(s: TalentState, row: OfferRecord, accepted: boolean, note: string, by: TalentActor | null, via: "link" | "recorded"): Alert[] {
+  row.status = accepted ? "Accepted" : "Declined";
+  row.responseNote = note.trim() || undefined;
+  row.respondedOn = todayISO();
+  row.responseRecordedBy = by?.fullName;
+  row.respondedVia = via;
+  const candidate = s.candidates.find((c) => c.id === row.candidateId);
+  const req = reqFor(s, row.requisitionId);
+  if (!candidate || !req) return [];
+  const actor: TalentActor = by ?? { id: "", fullName: candidate.name, role: "employee" };
+  const alerts: Alert[] = [];
+  const hr = DEMO_ACCOUNTS.filter((a) => isHrRole(a.role)).map((a) => a.id);
+  if (accepted && candidate.stage === "Offer") {
+    pushStep(candidate, actor, "Hired", via === "link" ? "Accepted the offer (answer link)" : "Accepted the offer");
+    if (candidate.employeeId) {
+      alerts.push({ to: [...hr, hiringManagerIdOf(req) ?? ""], title: `Internal move: ${candidate.name}`, body: `${candidate.name} accepted ${req.title}. Record the transfer in Lifecycle actions.`, href: candidateHref(candidate.id) });
+      alerts.push({ to: [candidate.employeeId], title: `Your application: ${req.title}`, body: APPLICANT_TEXT.Hired!, href: "/internal-jobs" });
+    } else createJoiner(s, candidate, req, actor);
+  }
+  alerts.push({
+    to: [hiringManagerIdOf(req) ?? "", req.recruiterId ?? ""].filter((x) => x && x !== by?.id),
+    title: `${candidate.name} ${accepted ? "accepted" : "declined"} the offer`,
+    body: note.trim() || (accepted ? "Onboarding has started." : ""),
+    href: candidateHref(candidate.id),
+  });
+  return alerts;
+}
+
+/** The candidate's offer, found by the token in their link (this browser's data without the backend). */
+export function offerByToken(token: string): { offer: OfferRecord; req?: Requisition; candidate?: Candidate } | undefined {
+  const s = getTalentState();
+  const offer = s.offers.find((o) => o.responseToken && o.responseToken === token);
+  if (!offer) return undefined;
+  return { offer, req: s.requisitions.find((r) => r.id === offer.requisitionId), candidate: s.candidates.find((c) => c.id === offer.candidateId) };
+}
+
+/** Without the backend: the candidate accepts or declines through their link. */
+export function answerOfferByToken(token: string, accept: boolean, note: string): TalentResult {
+  let alerts: Alert[] = [];
+  const result = guarded((s) => {
+    const row = s.offers.find((o) => o.responseToken && o.responseToken === token);
+    if (!row) return "This offer link is not valid.";
+    if (row.status !== "Sent") return "This offer is no longer waiting for an answer.";
+    alerts = applyOfferAnswer(s, row, accept, note, null, "link");
+    return null;
+  });
+  if (!result) sendAlerts(alerts);
+  return result;
+}
+
+/** Full link for the candidate's answer page. */
+export function offerLink(token: string): string {
+  return `${window.location.origin}/offer/${token}`;
+}
+
 export function approveOffer(actor: TalentActor, id: string): TalentResult {
   if (API_ENABLED) return viaApi(() => talentApi.apiApproveOffer(id));
-  return guarded((s) => {
+  let alerts: Alert[] = [];
+  const result = guarded((s) => {
     const row = s.offers.find((o) => o.id === id);
     if (!row) return "Offer not found.";
     const req = reqFor(s, row.requisitionId);
@@ -986,15 +1328,24 @@ export function approveOffer(actor: TalentActor, id: string): TalentResult {
     const step = offerApprovalNeeded(row, req);
     if (!step || !canApproveOffer(actor, row, req)) return step ? APPROVAL_REFUSAL[step] : "Nothing left to approve.";
     row.approvals.push({ role: step, by: actor.fullName, byId: actor.id, on: todayISO() });
-    if (!offerApprovalNeeded(row, req)) row.status = "Approved";
+    if (!offerApprovalNeeded(row, req)) {
+      row.status = "Approved";
+      alerts = [{ to: [row.createdById], title: `Offer for ${row.candidateName} approved`, body: "You can send it now.", href: "/recruiting?tab=offers" }];
+    } else {
+      const hm = req ? hiringManagerIdOf(req) : undefined;
+      alerts = [{ to: DEMO_ACCOUNTS.filter((a) => isHrRole(a.role) && a.id !== hm && a.id !== row.createdById).map((a) => a.id), title: `Offer for ${row.candidateName} needs HR approval`, body: `${row.role}, ${row.grade}.`, href: "/recruiting?tab=offers" }];
+    }
     return null;
   });
+  if (!result) sendAlerts(alerts);
+  return result;
 }
 
 /** Moves an offer. Accepted / Declined record the candidate's answer and need a note on how it was received. */
 export function setOfferStatus(actor: TalentActor, id: string, status: OfferStatus, note = ""): TalentResult {
   if (API_ENABLED) return viaApi(() => talentApi.apiSetOfferStatus(id, status, note));
-  return guarded((s) => {
+  let alerts: Alert[] = [];
+  const result = guarded((s) => {
     const row = s.offers.find((o) => o.id === id);
     if (!row) return "Offer not found.";
     const req = reqFor(s, row.requisitionId);
@@ -1004,15 +1355,22 @@ export function setOfferStatus(actor: TalentActor, id: string, status: OfferStat
     if (!offerMoves(actor, row, req).includes(status)) return "You can't make this change to the offer.";
     if (status === "Accepted" || status === "Declined") {
       if (note.trim().length < 5) return "Say how the candidate's answer was received.";
-      row.responseNote = note.trim();
-      row.responseRecordedBy = actor.fullName;
-      row.respondedOn = todayISO();
+      alerts = applyOfferAnswer(s, row, status === "Accepted", note, actor, "recorded");
+      return null;
     }
     if (status === "Preparing") row.approvals = [];
     row.status = status;
-    if (status === "Sent" && !row.sentOn) row.sentOn = todayISO();
+    const hm = req ? hiringManagerIdOf(req) : undefined;
+    if (status === "Pending approval" && hm) alerts = [{ to: [hm], title: `Offer for ${row.candidateName} needs your agreement`, body: `${row.grade}, start ${row.startDate}.`, href: "/recruiting?tab=offers" }];
+    if (status === "Sent") {
+      row.sentOn = row.sentOn ?? todayISO();
+      row.responseToken = row.responseToken ?? offerToken();
+      if (hm && hm !== actor.id) alerts = [{ to: [hm], title: `Offer sent to ${row.candidateName}`, body: `${row.role}, start ${row.startDate}. Waiting for the answer.`, href: candidateHref(row.candidateId) }];
+    }
     return null;
   });
+  if (!result) sendAlerts(alerts);
+  return result;
 }
 
 /** Average days from requisition approval to offer acceptance, or null with no hires yet. */
@@ -1037,24 +1395,50 @@ export function canSubmitInterviewFeedback(actor: TalentActor, interview: Interv
   return !!req && isHiringManagerOf(actor, req);
 }
 
-export function submitInterviewFeedback(actor: TalentActor, id: string, score: number, feedback: string): TalentResult {
-  if (API_ENABLED) {
-    if (!Number.isInteger(score) || score < 1 || score > 5) return "Score must be a whole number from 1 to 5.";
-    if (!feedback.trim()) return "Add feedback notes.";
-    return viaApi(() => talentApi.apiSubmitInterviewFeedback(id, score, feedback));
-  }
-  return guarded((s) => {
+export type Scorecard = { ratings: Partial<Record<ScorecardCriterion, number>>; recommendation: Recommendation | ""; notes: string };
+
+/** Overall score: the average of the ratings, rounded. */
+export function scorecardScore(ratings: Partial<Record<ScorecardCriterion, number>>): number | null {
+  const values = SCORECARD_CRITERIA.map((c) => ratings[c]).filter((v): v is number => typeof v === "number");
+  return values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : null;
+}
+
+/** The interview has started (scorecards open then; "pending feedback" counts only these). */
+export function interviewStarted(interview: Pick<Interview, "when">, now = nowStamp()): boolean {
+  return interview.when.replace(" ", "T").slice(0, 16) <= now;
+}
+
+function scorecardError(card: Scorecard): string | null {
+  if (SCORECARD_CRITERIA.some((c) => !card.ratings[c] || card.ratings[c]! < 1 || card.ratings[c]! > 5)) return `Rate ${SCORECARD_CRITERIA.join(", ")} from 1 to 5.`;
+  if (!card.recommendation) return "Choose a recommendation.";
+  if (!card.notes.trim()) return "Add notes for the hiring team.";
+  return null;
+}
+
+export function submitInterviewFeedback(actor: TalentActor, id: string, card: Scorecard): TalentResult {
+  const invalid = scorecardError(card);
+  if (invalid) return invalid;
+  if (API_ENABLED) return viaApi(() => talentApi.apiSubmitInterviewFeedback(id, card));
+  let alerts: Alert[] = [];
+  const result = guarded((s) => {
     const row = s.interviews.find((i) => i.id === id);
     if (!row) return "Interview not found.";
     if (!canSubmitInterviewFeedback(actor, row)) return "Only the panel or the hiring manager can submit feedback.";
     if (row.feedbackStatus === "Submitted") return "Feedback for this interview was already submitted.";
-    if (!Number.isInteger(score) || score < 1 || score > 5) return "Score must be a whole number from 1 to 5.";
-    if (!feedback.trim()) return "Add feedback notes.";
+    if (!interviewStarted(row)) return "The scorecard opens once the interview has started.";
     row.feedbackStatus = "Submitted";
-    row.score = score;
-    row.feedback = feedback.trim();
+    row.ratings = { ...card.ratings };
+    row.recommendation = card.recommendation as Recommendation;
+    row.score = scorecardScore(card.ratings) ?? undefined;
+    row.feedback = card.notes.trim();
+    row.feedbackBy = actor.fullName;
+    const candidate = s.candidates.find((c) => c.id === row.candidateId);
+    const req = candidate ? reqFor(s, candidate.requisitionId) : undefined;
+    if (req && candidate) alerts = [{ to: [req.recruiterId ?? "", hiringManagerIdOf(req) ?? ""].filter((x) => x && x !== actor.id), title: `Scorecard for ${candidate.name}`, body: `Score ${row.score}/5 · ${row.recommendation}.`, href: candidateHref(candidate.id) }];
     return null;
   });
+  if (!result) sendAlerts(alerts);
+  return result;
 }
 
 /* ───────────── Onboarding ───────────── */
@@ -1161,7 +1545,7 @@ function createJoiner(s: TalentState, candidate: Candidate, req: Requisition, ac
       recipientId,
       title: `${joiner.name} hired`,
       body: `${joiner.name} joins as ${joiner.role} on ${startDate}. Onboarding has started.`,
-      href: "/onboarding",
+      href: `/onboarding?joiner=${id}`,
     });
   }
 }
@@ -2170,8 +2554,10 @@ export function updateEmployeeSkill(
   actor: TalentActor,
   employeeId: string,
   skillId: string,
-  patch: Partial<Pick<EmployeeSkill, "level" | "targetLevel">>,
+  patch: Partial<Pick<EmployeeSkill, "level" | "targetLevel" | "years" | "lastUsed" | "evidenceUrl">>,
 ): TalentResult {
+  const detailError = skillDetailError(patch);
+  if (detailError) return detailError;
   if (API_ENABLED) {
     return saveSkillsViaApi(actor, employeeId, (skills) => {
       if (patch.level !== undefined && !SKILL_LEVELS.includes(patch.level)) return "Choose a level.";
@@ -2193,8 +2579,28 @@ export function updateEmployeeSkill(
   });
 }
 
+export type SkillDetails = Partial<Pick<EmployeeSkill, "targetLevel" | "years" | "lastUsed" | "evidenceUrl">>;
+
+/** Checks years, last used and the evidence link. */
+function skillDetailError(d: SkillDetails): string | null {
+  if (d.years !== undefined && (!Number.isFinite(d.years) || d.years < 0 || d.years > 50)) return "Years must be between 0 and 50.";
+  if (d.lastUsed && !/^\d{4}-(0[1-9]|1[0-2])$/.test(d.lastUsed)) return "Choose the month you last used it.";
+  if (d.lastUsed && d.lastUsed > new Date().toISOString().slice(0, 7)) return "Last used can't be in the future.";
+  if (d.evidenceUrl && !/^https?:\/\/\S+$/.test(d.evidenceUrl)) return "The evidence link must start with http:// or https://.";
+  if (d.targetLevel !== undefined && !SKILL_LEVELS.includes(d.targetLevel)) return "Choose a target level.";
+  return null;
+}
+
 /** Adds a skill to your own profile: a library skill by name, or a new one. */
-export function addEmployeeSkill(actor: TalentActor, employeeId: string, name: string, level: string): TalentResult {
+export function addEmployeeSkill(actor: TalentActor, employeeId: string, name: string, level: string, details: SkillDetails = {}): TalentResult {
+  const detailError = skillDetailError(details);
+  if (detailError) return detailError;
+  const extras = (rank: number): Pick<EmployeeSkill, "targetLevel"> & SkillDetails => ({
+    targetLevel: details.targetLevel ?? SKILL_LEVELS[Math.min(SKILL_LEVELS.length - 1, rank + 1)],
+    ...(details.years !== undefined ? { years: details.years } : {}),
+    ...(details.lastUsed ? { lastUsed: details.lastUsed } : {}),
+    ...(details.evidenceUrl ? { evidenceUrl: details.evidenceUrl } : {}),
+  });
   if (API_ENABLED) {
     return saveSkillsViaApi(actor, employeeId, (skills) => {
       const clean = name.trim().replace(/\s+/g, " ");
@@ -2205,7 +2611,7 @@ export function addEmployeeSkill(actor: TalentActor, employeeId: string, name: s
       const def = SKILL_LIBRARY.find((d) => sameName(d.name, clean));
       const rank = SKILL_LEVELS.indexOf(level);
       const skillName = def?.name ?? clean.slice(0, 40);
-      skills.push({ skillId: perfApi.skillIdFor(skillName), skillName, level, targetLevel: SKILL_LEVELS[Math.min(SKILL_LEVELS.length - 1, rank + 1)] });
+      skills.push({ skillId: perfApi.skillIdFor(skillName), skillName, level, ...extras(rank) });
       return null;
     });
   }
@@ -2223,7 +2629,7 @@ export function addEmployeeSkill(actor: TalentActor, employeeId: string, name: s
       skillId: def?.id ?? `sk-own-${clean.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
       skillName: def?.name ?? clean.slice(0, 40),
       level,
-      targetLevel: SKILL_LEVELS[Math.min(SKILL_LEVELS.length - 1, rank + 1)],
+      ...extras(rank),
     });
     return null;
   });

@@ -27,6 +27,68 @@ class RequisitionIn(BaseModel):
     openings: int = Field(ge=1, le=50)
     requirements: list[str] = Field(default_factory=list, max_length=20)
     description: str | None = Field(default=None, max_length=5000)
+    budget: float | None = Field(default=None, ge=0, le=1e10, description="Annual budget for the role, in the country currency")
+    reason: Literal["new_role", "replacement"] | None = None
+    justification: str | None = Field(default=None, max_length=2000)
+    hiring_manager_id: str | None = Field(default=None, description="A recruiter or HR raising it for a manager names them here")
+
+
+class PostingOut(_ORM):
+    id: str
+    requisition_id: str
+    title: str
+    description: str
+    location: str
+    employment_type: str
+    closing_date: date
+    on_careers_site: bool
+    status: str
+    published_by: str | None
+    published_on: date
+    closed_on: date | None
+    applications: int = 0
+
+
+class PostingIn(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    description: str = Field(min_length=20, max_length=10_000)
+    location: str = Field(min_length=1, max_length=200)
+    employment_type: str = Field(default="Full-time", min_length=1, max_length=32)
+    closing_date: date
+    on_careers_site: bool = True
+
+
+class PublicPostingOut(BaseModel):
+    """What the public careers page shows: no people, budget or pipeline details."""
+
+    id: str
+    title: str
+    department: str
+    location: str
+    country_name: str
+    employment_type: str
+    description: str
+    closing_date: date
+    openings: int
+
+
+class PublicApplyIn(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+    email: str = Field(pattern=EMAIL_PATTERN, max_length=255)
+    phone: str | None = Field(default=None, max_length=64)
+    cover_note: str | None = Field(default=None, max_length=3000)
+    cv_filename: str = Field(min_length=5, max_length=200)
+    cv_base64: str = Field(min_length=4, max_length=7_200_000)  # 5 MB file
+    website: str | None = Field(default=None, max_length=200, description="Left empty by people (spam trap)")
+
+
+class PublicApplyOut(BaseModel):
+    reference: str
+    title: str
+
+
+class InternalApplyIn(BaseModel):
+    cover_note: str | None = Field(default=None, max_length=3000)
 
 
 class RequisitionOut(_ORM):
@@ -48,6 +110,13 @@ class RequisitionOut(_ORM):
     raised_on: date
     decided_on: date | None
     candidate_count: int = 0
+    budget: float | None = None
+    budget_currency: str | None = None
+    reason: str | None = None
+    justification: str | None = None
+    raised_by: str | None = None
+    posting: PostingOut | None = None
+    stage_counts: dict[str, int] = {}
 
 
 class RequisitionDecisionIn(BaseModel):
@@ -106,6 +175,15 @@ class CandidateOut(_ORM):
     applied_on: date
     stage: str
     history: list[StageStepOut] = []
+    posting_id: str | None = None
+    employee_id: str | None = None
+    cover_note: str | None = None
+    match_score: int | None = None
+
+
+class ScreenIn(BaseModel):
+    decision: Literal["shortlist", "reject"]
+    reason: str | None = Field(default=None, max_length=1000)
 
 
 class StageMoveIn(BaseModel):
@@ -132,10 +210,20 @@ class InterviewOut(_ORM):
     feedback: str | None
     feedback_by: str | None
     feedback_at: datetime | None
+    ratings: dict[str, int] | None = None
+    recommendation: str | None = None
+
+
+SCORECARD_CRITERIA = ("Skills", "Experience", "Problem solving", "Communication", "Team fit")
+Recommendation = Literal["strong_yes", "yes", "no", "strong_no"]
 
 
 class FeedbackIn(BaseModel):
-    score: int = Field(ge=1, le=5)
+    """The interviewer's scorecard: a 1-5 rating per criterion (score = their average) or one overall score."""
+
+    score: int | None = Field(default=None, ge=1, le=5)
+    ratings: dict[str, int] | None = Field(default=None, description=f"1-5 for each of {', '.join(SCORECARD_CRITERIA)}")
+    recommendation: Recommendation | None = None
     notes: str = Field(min_length=1, max_length=5000)
 
 
@@ -165,6 +253,30 @@ class OfferOut(_ORM):
     response_note: str | None
     response_recorded_by: str | None = None
     responded_on: date | None
+    letter: dict[str, Any] | None = None
+    response_token: str | None = None  # recruiter / HR only: the candidate's answer link
+    responded_via: str | None = None
+
+
+class PublicOfferOut(BaseModel):
+    """The candidate's offer page (no sign-in): what they are offered and the letter."""
+
+    candidate_name: str
+    title: str
+    department: str
+    location: str
+    grade: str
+    base_salary: float
+    currency: str
+    start_date: date
+    status: Literal["sent", "accepted", "declined", "withdrawn"]
+    responded_on: date | None
+    letter: dict[str, Any] | None
+
+
+class PublicOfferAnswerIn(BaseModel):
+    decision: Literal["accept", "decline"]
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class OfferStatusIn(BaseModel):
@@ -476,6 +588,9 @@ class SkillIn(BaseModel):
     skill: str = Field(min_length=1, max_length=100)
     level: int = Field(ge=1, le=5)
     target_level: int | None = Field(default=None, ge=1, le=5)
+    years: float | None = Field(default=None, ge=0, le=50)
+    last_used: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    evidence_url: str | None = Field(default=None, max_length=500, pattern=r"^https?://\S+$")
 
 
 class SkillOut(_ORM):
@@ -484,6 +599,9 @@ class SkillOut(_ORM):
     skill: str
     level: int
     target_level: int | None
+    years: float | None = None
+    last_used: str | None = None
+    evidence_url: str | None = None
 
 
 __all__ = [

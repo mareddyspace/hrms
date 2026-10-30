@@ -114,7 +114,7 @@ def test_policy_acknowledgment(client, babu, farhan):
 # ---------- letters ----------
 def test_types_and_templates(client, babu):
     types = {t["type"]: t for t in client.get(f"{LETTERS}/types", headers=babu).json()}
-    assert len(types) == 15 and types["Warning"]["second_approval"] and types["Salary revision"]["sensitive"]
+    assert len(types) == 17 and types["Warning"]["second_approval"] and types["Salary revision"]["sensitive"]
     us = {t["letter_type"]: t for t in client.get(f"{LETTERS}/templates", headers=babu, params={"country": "US"}).json()}
     assert us["Employment"]["title"] == "Employment Verification"
     india = {t["letter_type"]: t for t in client.get(f"{LETTERS}/templates", headers=babu, params={"country": "IN"}).json()}

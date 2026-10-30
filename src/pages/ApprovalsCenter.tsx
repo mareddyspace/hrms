@@ -18,9 +18,10 @@ import { money } from "../countryPay.ts";
 import { ActionButton, Banner, Card, EmptyState, Page, StatusBadge, Tabs, notify } from "../components/ui.tsx";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
-import { addDaysISO, formatShortDate, plural, holidaySet, holidaysForPerson, parseISODate, todayISO, workingDays } from "../model.ts";
+import { addDaysISO, formatShortDate, plural, holidaySet, holidaysForPerson, leaveNameFor, parseISODate, todayISO, workingDays } from "../model.ts";
 import type { DecisionInfo, PortalState } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { getLocalDays, useDayRecords } from "../data/timesheetDays.ts";
 import {
   activeDelegationFor,
   chainIds,
@@ -40,6 +41,8 @@ import {
 import { DelegationSettings } from "./DelegationSettings.tsx";
 import { currentStepOf, isWaitingOn, stepText, waitingApproverIds } from "../data/expenseFlow.ts";
 import { decideTravel, getTravelRequests, subscribeTravel, withdrawTravel } from "../data/travelStore.ts";
+import { cashViews, cashWaitingOn, decideCash, getCashSnapshot, subscribeCash, withdrawCash } from "../features/payrequests/cashStore.ts";
+import { decideSoftware, endSoftware, getSoftwareSnapshot, softwareViews, softwareWaitingOn, subscribeSoftware } from "../features/payrequests/softwareStore.ts";
 import { getTalentState, hiringManagerIdOf, requisitionMoves, requisitionWaitingFor, setRequisitionApproval, subscribeTalent, talentAction } from "../data/talentLocal.ts";
 
 /** Which delegation scope (§25) a request kind falls under. */
@@ -128,9 +131,9 @@ export function countWaitingOnMe(
     ["leave", state.leaveRequests],
     ["leave", state.encashments],
     ["expenses", state.reimbursements],
-    ["expenses", state.cashAdvances],
+    // Cash advances and software are counted from their own stores (state.cashAdvances / softwareRequests are
+    // old sample rows no page creates or shows).
     ["others", state.assetRequests],
-    ["others", state.softwareRequests],
     ["others", state.cabBookings],
   ];
   const requests = lists.reduce(
@@ -143,7 +146,13 @@ export function countWaitingOnMe(
   const stepped = apiPending
     ? apiPending.length
     : [...state.expenses, ...getTravelRequests()].filter((item) => isWaitingOn(item, myId, (employeeId) => canApprove(employeeId, "expenses"))).length;
-  const timesheets = apiPending ? 0 : state.orgTimesheets.filter((row) => row.status === "submitted" && mine(row.personId, "timesheets")).length;
+  const myRole = DEMO_ACCOUNTS.find((a) => a.id === myId)?.role;
+  const hrDecides = (personId: string) => (myRole === "hr" || myRole === "hr_admin") && personId !== myId && managementChain(personId).length === 0;
+  const timesheets = apiPending
+    ? 0
+    : state.orgTimesheets.filter((row) => row.status === "submitted" && mine(row.personId, "timesheets")).length +
+      // daily timesheets (someone with no one above them goes to HR)
+      getLocalDays().filter((d) => d.status === "submitted" && (mine(d.personId, "timesheets") || hrDecides(d.personId))).length;
   const proofs = canVerifyProofs
     ? state.investmentProofs.filter((p) => p.status === "submitted" && p.employeeId !== myId).length
     : 0;
@@ -159,7 +168,10 @@ export function countWaitingOnMe(
   const reqs = getTalentState().requisitions.filter(
     (r) => r.approvalStatus === "Pending approval" && hiringManagerIdOf(r) !== myId && requisitionMoves({ id: myId, fullName: "", role: DEMO_ACCOUNTS.find((a) => a.id === myId)?.role ?? "employee" }, r).includes("Approved"),
   ).length;
-  return requests + stepped + timesheets + proofs + corrections + swaps + reqs;
+  // Cash advances and software (local mode; the backend inbox counts them in /approvals/pending).
+  const me = { id: myId, fullName: "", role: DEMO_ACCOUNTS.find((a) => a.id === myId)?.role ?? "employee" };
+  const selfService = cashWaitingOn(me).length + softwareWaitingOn(me).length;
+  return requests + stepped + timesheets + proofs + corrections + swaps + reqs + selfService;
 }
 
 /** Approvals inbox built from real requests: decide what's waiting on you, track what you've asked for. */
@@ -172,8 +184,11 @@ export function ApprovalsCenterPage() {
   const delegations = useSyncExternalStore(subscribeDelegations, getDelegationState, getDelegationState);
   const travel = useSyncExternalStore(subscribeTravel, getTravelRequests, getTravelRequests);
   const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+  const cashSnap = useSyncExternalStore(subscribeCash, getCashSnapshot, getCashSnapshot);
+  const softwareSnap = useSyncExternalStore(subscribeSoftware, getSoftwareSnapshot, getSoftwareSnapshot);
   // Backend mode: what the API says is waiting on me, and which claims/trips sit with me.
   const pending = useSyncExternalStore(pendingMirror.subscribe, pendingMirror.get, pendingMirror.get);
+  const timesheetDays = useDayRecords();
   const claims = useSyncExternalStore(claimsMirror.subscribe, claimsMirror.get, claimsMirror.get);
   useEffect(() => {
     if (API_ENABLED) reloadTimeArea();
@@ -196,7 +211,8 @@ export function ApprovalsCenterPage() {
     people.find((p) => p.id === id)?.fullName ??
     taskPersonById(id)?.fullName ??
     id;
-  const leaveName = (code: string) => leaveTable.find((row) => row.code === code)?.name ?? code;
+  // Named for the requester's country (a US "pto" is "Paid time off" even when an India HR looks at it).
+  const leaveName = (code: string, employeeId: string) => leaveNameFor(state.leavePolicies, code, employeeId) ?? leaveTable.find((row) => row.code === code)?.name ?? code;
   const actorRef = { id: employee.id, fullName: employee.fullName };
   /** "Finance approval (Alex Morgan)" for the open step of a multi-step request. */
   const withTextFor = (item: Parameters<typeof waitingApproverIds>[0]) => {
@@ -214,7 +230,7 @@ export function ApprovalsCenterPage() {
         key: `bdp-${p.id}`,
         kind: "Backdated leave permission",
         employeeId: p.employeeId,
-        title: `${leaveName(p.code)} · ${formatShortDate(p.from)} – ${formatShortDate(p.to)}`,
+        title: `${leaveName(p.code, p.employeeId)} · ${formatShortDate(p.from)} – ${formatShortDate(p.to)}`,
         detail: p.reason,
         raisedOn: p.requestedOn,
         status: p.status,
@@ -232,8 +248,8 @@ export function ApprovalsCenterPage() {
         title: (() => {
           const halfDay = r.half && r.from === r.to;
           const days = workingDays(r.from, r.to, holidaySet(holidaysForPerson(state.holidays, r.employeeId)), undefined, r.half);
-          const span = halfDay ? formatShortDate(r.from) : `${formatShortDate(r.from)} – ${formatShortDate(r.to)}`;
-          return `${leaveName(r.code)} · ${span} · ${halfDay ? `${days} day (${r.half} half)` : plural(days, "day")}`;
+          const span = r.from === r.to ? formatShortDate(r.from) : `${formatShortDate(r.from)} – ${formatShortDate(r.to)}`;
+          return `${leaveName(r.code, r.employeeId)} · ${span} · ${halfDay ? `${days} day (${r.half} half)` : plural(days, "day")}`;
         })(),
         detail: r.reason,
         raisedOn: r.appliedOn,
@@ -250,7 +266,7 @@ export function ApprovalsCenterPage() {
         key: `enc-${e.id}`,
         kind: "Leave encashment",
         employeeId: e.employeeId,
-        title: `${plural(e.days, "day")} of ${leaveName(e.code)}`,
+        title: `${plural(e.days, "day")} of ${leaveName(e.code, e.employeeId)}`,
         raisedOn: e.appliedOn,
         status: e.status,
         open: e.status === "pending",
@@ -321,6 +337,8 @@ export function ApprovalsCenterPage() {
         employeeId: x.employeeId,
         title: `${x.category} · ${money(x.amount, x.currency)} · ${formatShortDate(x.date)}`,
         detail: x.description,
+        // No separate submitted date is kept; the claim date stands in (as on Home), so age and "Raised" show.
+        raisedOn: x.date,
         status: x.status,
         open: isOpen(x.status),
         decided: x,
@@ -328,21 +346,8 @@ export function ApprovalsCenterPage() {
         withdraw: () => portal.setReimbursementStatus(x.id, "withdrawn"),
       });
     }
-    for (const x of state.cashAdvances) {
-      list.push({
-        key: `ca-${x.id}`,
-        kind: "Cash advance",
-        employeeId: x.employeeId,
-        title: `${money(x.amount, x.currency)} · ${x.category} · needed by ${formatShortDate(x.requiredBy)}`,
-        detail: x.purpose,
-        raisedOn: x.date,
-        status: x.status,
-        open: isOpen(x.status),
-        decided: x,
-        decide: (d, note) => portal.setCashStatus(x.id, d, note),
-        withdraw: () => portal.setCashStatus(x.id, "withdrawn"),
-      });
-    }
+    // state.cashAdvances / state.softwareRequests are old sample rows that no page creates or shows; the live
+    // requests come from the cash advance and software stores below (or /approvals/pending in backend mode).
     for (const x of state.assetRequests) {
       list.push({
         key: `ar-${x.id}`,
@@ -358,20 +363,40 @@ export function ApprovalsCenterPage() {
         withdraw: () => portal.setAssetStatus(x.id, "withdrawn"),
       });
     }
-    for (const x of state.softwareRequests) {
-      list.push({
-        key: `sw-${x.id}`,
-        kind: "Software request",
-        employeeId: x.employeeId,
-        title: x.software,
-        detail: x.justification,
-        raisedOn: x.date,
-        status: x.status,
-        open: isOpen(x.status),
-        decided: x,
-        decide: (d, note) => portal.setSoftwareStatus(x.id, d, note),
-        withdraw: () => portal.setSoftwareStatus(x.id, "withdrawn"),
-      });
+    // Guided cash advances and software requests (local mode; backend mode lists them from /approvals/pending).
+    if (!API_ENABLED) {
+      const me = portal.demoProfile;
+      for (const v of cashViews(me)) {
+        list.push({
+          key: `cav-${v.id}`,
+          kind: "Cash advance",
+          employeeId: v.employeeId,
+          title: `${money(v.amount, v.currency)} · ${v.category} · ${v.instalments === 1 ? "one payment" : `${v.instalments} instalments`}`,
+          detail: v.purpose,
+          raisedOn: v.submittedOn,
+          status: v.status === "Submitted" || v.status === "Manager approved" ? "pending" : v.status === "Rejected" ? "rejected" : v.status === "Withdrawn" ? "withdrawn" : v.status === "Paid" ? "paid" : "approved",
+          open: v.status === "Submitted" || v.status === "Manager approved",
+          decide: (d, note) => decideCash(me, v.id, d === "approved" ? "approve" : "reject", note ?? ""),
+          withdraw: () => withdrawCash(me, v.id),
+          canAct: v.canDecide,
+        });
+      }
+      for (const v of softwareViews(me)) {
+        if (!v.steps.length) continue; // granted straight away
+        list.push({
+          key: `swv-${v.id}`,
+          kind: "Software request",
+          employeeId: v.employeeId,
+          title: `${v.titleName} · ${v.durationMonths ? `${v.durationMonths} months` : "ongoing"}`,
+          detail: v.reason,
+          raisedOn: v.submittedOn,
+          status: v.status === "Submitted" || v.status === "Manager approved" ? "pending" : v.status === "Rejected" ? "rejected" : v.status === "Withdrawn" ? "withdrawn" : "approved",
+          open: v.status === "Submitted" || v.status === "Manager approved",
+          decide: (d, note) => decideSoftware(me, v.id, d === "approved" ? "approve" : "reject", note ?? ""),
+          withdraw: () => endSoftware(me, v.id, "Withdrawn"),
+          canAct: v.canDecide,
+        });
+      }
     }
     for (const x of state.cabBookings) {
       list.push({
@@ -412,9 +437,56 @@ export function ApprovalsCenterPage() {
         status: row.status,
         open: true,
         declineLabel: "Send back",
-        decide: (d) => portal.setOrgTimesheetStatus(row.id, d === "approved" ? "approved" : "draft"),
+        decide: (d, note) => portal.setOrgTimesheetStatus(row.id, d === "approved" ? "approved" : "draft", note),
         ...(API_ENABLED ? { canAct: pending.ids.has(row.id) } : {}),
       });
+    }
+    // Daily timesheets: backend mode from /approvals/pending, local mode from this browser's day records.
+    if (API_ENABLED) {
+      for (const p of pending.items as PendingItemOut[]) {
+        if (p.kind !== "timesheet_day") continue;
+        list.push({
+          key: `tsd-${p.id}`,
+          kind: "Timesheet",
+          employeeId: p.employee_id,
+          title: p.summary.replace(/^Timesheet for /, ""),
+          detail: "Entries by project: Timesheets › Team timesheets",
+          raisedOn: p.submitted_at?.slice(0, 10),
+          status: "submitted",
+          open: true,
+          declineLabel: "Send back",
+          decide: (d, note) => portal.decideTimesheetDay(p.id, d, note),
+          canAct: true,
+        });
+      }
+    } else {
+      const hr = portal.demoProfile.role === "hr" || portal.demoProfile.role === "hr_admin";
+      for (const day of timesheetDays) {
+        if (day.status !== "submitted") continue;
+        const projects = new Map<string, number>();
+        for (const sheet of state.timesheets) {
+          if (sheet.employeeId !== day.personId) continue;
+          const hours = (sheet.entries ?? []).filter((e) => e.date === day.date).reduce((a, e) => a + e.hours, 0);
+          if (!hours) continue;
+          const name = state.projects.find((p) => p.id === sheet.projectId)?.name ?? sheet.projectId;
+          projects.set(name, (projects.get(name) ?? 0) + hours);
+        }
+        list.push({
+          key: `tsd-${day.id}`,
+          kind: "Timesheet",
+          employeeId: day.personId,
+          title: `${formatShortDate(day.date)} · ${day.hours} h`,
+          detail: [...projects].map(([name, h]) => `${name} ${h} h`).join(", "),
+          raisedOn: day.submittedAt.slice(0, 10),
+          status: "submitted",
+          open: true,
+          declineLabel: "Send back",
+          decide: (d, note) => portal.decideTimesheetDay(day.id, d, note),
+          canAct:
+            day.personId !== employee.id &&
+            (canDecideFor(day.personId, "timesheets") || (hr && managementChain(day.personId, demoAccounts).length === 0)),
+        });
+      }
     }
     for (const c of attendance.corrections) {
       list.push({
@@ -466,6 +538,7 @@ export function ApprovalsCenterPage() {
           employeeId: w.requesterId,
           status: "pending",
           open: w.teammateId === employee.id,
+          withText: personLabel(w.teammateId),
           approveLabel: "Accept",
           decide: (d) => respondSwap(actor, w.id, d === "approved"),
         });
@@ -496,7 +569,7 @@ export function ApprovalsCenterPage() {
     }
     return list;
     // portal functions are recreated with state, so state is the real dependency
-  }, [state, portal, leaveTable, attendance, shifts, delegations, travel, talent, pending, claims]);
+  }, [state, portal, leaveTable, attendance, shifts, delegations, travel, talent, pending, claims, cashSnap, softwareSnap, timesheetDays]);
 
   const waiting = items.filter((item) => {
     if (!item.open || !item.decide || item.employeeId === employee.id) return false;
@@ -511,6 +584,9 @@ export function ApprovalsCenterPage() {
   });
   const mine = items
     .filter((item) => item.employeeId === employee.id && item.kind !== "Timesheet" && item.kind !== "Comp-off")
+    // `open` is the approver's view (a swap waiting on the teammate is not "open" for its requester); the requester
+    // counts anything still waiting.
+    .map((item) => (!item.open && (item.status === "pending" || item.status === "submitted") ? { ...item, open: true } : item))
     .sort((a, b) => Number(b.open) - Number(a.open) || (b.raisedOn ?? "").localeCompare(a.raisedOn ?? ""));
 
   // SLA: requests waiting more than SLA_DAYS are flagged overdue; overdue by more than ESCALATE_AFTER_WORKING_DAYS
@@ -600,7 +676,7 @@ export function ApprovalsCenterPage() {
                   {item.detail && <span className="muted">{item.detail}</span>}
                   {item.raisedOn && (
                     <span className="muted">
-                      Raised {formatShortDate(item.raisedOn)} · waiting {plural(ageOf(item), "day")}
+                      Raised {formatShortDate(item.raisedOn)} · {ageOf(item) === 0 ? "waiting since today" : `waiting ${plural(ageOf(item), "day")}`}
                       {ageOf(item) > SLA_DAYS && <span className="pill pill-mandatory"> Overdue</span>}
                     </span>
                   )}
