@@ -188,7 +188,15 @@ function MyPoliciesView({
   const [query, setQuery] = useState("");
   const [params] = useSearchParams();
   // Copilot source links and notifications open a policy directly: /policies?policy=<id>
-  const [openId, setOpenId] = useState(params.get("policy") ?? managedPending[0]?.id ?? "");
+  // Open something useful straight away: the linked policy, else the first one waiting on me, else the first listed.
+  const firstDue = entries.find((e) =>
+    e.kind === "managed"
+      ? needsMyAck(e.managed, userId)
+      : e.policy.mandatory && latestAck(acks, userId, e.policy.id)?.version !== e.policy.version,
+  );
+  const [openId, setOpenId] = useState(
+    params.get("policy") ?? managedPending[0]?.id ?? firstDue?.policy.id ?? entries[0]?.policy.id ?? "",
+  );
   useEffect(() => {
     const linked = params.get("policy");
     if (linked) setOpenId(linked);
@@ -222,9 +230,10 @@ function MyPoliciesView({
           </ul>
         </Card>
       )}
-      {builtinPending > 0 && (
+      {builtinPending + managedPending.length > 0 && (
         <p className="note warn pol-alert">
-          {builtinPending} mandatory {builtinPending === 1 ? "policy needs" : "policies need"} your acknowledgement.
+          {builtinPending + managedPending.length}{" "}
+          {builtinPending + managedPending.length === 1 ? "policy needs" : "policies need"} your acknowledgement.
         </p>
       )}
       <div className="pol-layout">
