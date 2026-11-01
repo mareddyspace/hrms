@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { mentionsRetiredAccount } from "../demoAccounts.ts";
-import { API_ENABLED, api, apiSessionAccount } from "../api/client.ts";
+import { API_ENABLED, api, apiRequest, apiSessionAccount } from "../api/client.ts";
 import { createApiMirror, errorText } from "../api/syncOps.ts";
 import { keepFresh } from "../api/syncShare.ts";
 
@@ -307,4 +307,132 @@ export function mailtoHref(toEmails: string[], ccEmails: string[], subject: stri
   if (subject) params.push(`subject=${encodeURIComponent(subject)}`);
   if (body) params.push(`body=${encodeURIComponent(body)}`);
   return `mailto:${toEmails.join(",")}${params.length ? `?${params.join("&")}` : ""}`;
+}
+
+/* ───────── Drafts ───────── */
+
+export interface MailDraft {
+  id: string;
+  ownerId: string;
+  toIds: string[];
+  ccIds: string[];
+  subject: string;
+  body: string;
+  category?: MailCategory;
+  threadId?: string;
+  updatedAt: string;
+}
+
+interface DraftOut {
+  id: string;
+  to_ids: string[];
+  cc_ids: string[];
+  subject: string;
+  body: string;
+  category: MailCategory | null;
+  thread_id: string | null;
+  updated_at: string;
+}
+
+const DRAFTS_KEY = "kastech.mail.drafts.v1";
+const draftListeners = new Set<() => void>();
+let draftCache: MailDraft[] | null = null;
+
+const draftFromApi = (d: DraftOut): MailDraft => ({
+  id: d.id,
+  ownerId: apiSessionAccount() ?? "",
+  toIds: d.to_ids,
+  ccIds: d.cc_ids,
+  subject: d.subject,
+  body: d.body,
+  category: d.category ?? undefined,
+  threadId: d.thread_id ?? undefined,
+  updatedAt: utc(d.updated_at),
+});
+
+const draftsMirror = createApiMirror<MailDraft[]>(() => [], async () => (await api.get<DraftOut[]>("/mail/drafts")).map(draftFromApi));
+
+function readDrafts(): MailDraft[] {
+  if (API_ENABLED) return draftsMirror.get();
+  if (draftCache) return draftCache;
+  try {
+    const raw = localStorage.getItem(DRAFTS_KEY);
+    draftCache = raw ? (JSON.parse(raw) as MailDraft[]) : [];
+  } catch {
+    draftCache = [];
+  }
+  return draftCache;
+}
+
+function writeDrafts(next: MailDraft[]) {
+  draftCache = next;
+  try {
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(next));
+  } catch {
+    /* keep in memory */
+  }
+  draftListeners.forEach((fn) => fn());
+}
+
+function subscribeDrafts(listener: () => void): () => void {
+  if (API_ENABLED) return draftsMirror.subscribe(listener);
+  draftListeners.add(listener);
+  return () => {
+    draftListeners.delete(listener);
+  };
+}
+
+/** This person's unsent drafts, newest first. */
+export function useDrafts(userId: string): MailDraft[] {
+  const all = useSyncExternalStore(subscribeDrafts, readDrafts, readDrafts);
+  return API_ENABLED ? all : all.filter((d) => d.ownerId === userId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export type DraftInput = Omit<MailDraft, "updatedAt" | "id"> & { id?: string };
+
+/** Creates or updates a draft. Resolves to the saved draft or an error message. */
+export async function saveDraft(input: DraftInput): Promise<MailDraft | string> {
+  if (!input.subject.trim() && !input.body.trim() && input.toIds.length === 0) return "Nothing to save yet.";
+  if (API_ENABLED) {
+    const body = {
+      to_ids: input.toIds,
+      cc_ids: input.ccIds,
+      subject: input.subject,
+      body: input.body,
+      category: input.category ?? null,
+      thread_id: input.threadId ?? null,
+    };
+    try {
+      const out = draftFromApi(
+        input.id
+          ? await apiRequest<DraftOut>(`/mail/drafts/${encodeURIComponent(input.id)}`, { method: "PUT", body })
+          : await api.post<DraftOut>("/mail/drafts", body),
+      );
+      draftsMirror.set([out, ...draftsMirror.get().filter((d) => d.id !== out.id)]);
+      return out;
+    } catch (e) {
+      return errorText(e);
+    }
+  }
+  const draft: MailDraft = {
+    ...input,
+    id: input.id ?? `dr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    updatedAt: new Date().toISOString(),
+  };
+  writeDrafts([draft, ...readDrafts().filter((d) => d.id !== draft.id)]);
+  return draft;
+}
+
+export async function deleteDraft(id: string): Promise<string | null> {
+  if (API_ENABLED) {
+    try {
+      await apiRequest(`/mail/drafts/${encodeURIComponent(id)}`, { method: "DELETE" });
+      draftsMirror.set(draftsMirror.get().filter((d) => d.id !== id));
+      return null;
+    } catch (e) {
+      return errorText(e);
+    }
+  }
+  writeDrafts(readDrafts().filter((d) => d.id !== id));
+  return null;
 }

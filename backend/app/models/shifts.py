@@ -19,6 +19,9 @@ class ShiftType(TimestampMixin, Base):
     end: Mapped[str] = mapped_column(String(5))
     weekend_only: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Migration 0025: unpaid break inside the shift and where it is worked.
+    break_minutes: Mapped[int] = mapped_column(Integer, default=60, server_default="60")
+    location: Mapped[str | None] = mapped_column(String(100))
 
 
 class RosterShift(TimestampMixin, Base):

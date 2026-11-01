@@ -4,6 +4,7 @@
  * reporting line, or — only when the viewer's access allows — company-wide figures.
  */
 import type { CopilotContext } from "../../data/platformData.ts";
+import { declarationsAsProofs } from "../taxdecl/taxDeclStore.ts";
 import { managementChain, type DemoAccount } from "../../demoAccounts.ts";
 import { inHeadcount, type PersonRecord } from "../../data/peopleData.ts";
 import { getExitDetails } from "../../data/peopleLocal.ts";
@@ -126,7 +127,7 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
   }
   for (const d of waitingDays(mine)) approvals.push({ who: name(d.personId), kind: "Timesheet", detail: `${d.hours} h (day)`, date: d.date });
   if (src.canVerifyProofs) {
-    for (const p of state.investmentProofs) {
+    for (const p of declarationsAsProofs(state.investmentProofs)) {
       if (p.status === "submitted" && p.employeeId !== me) approvals.push({ who: name(p.employeeId), kind: "Tax proof", detail: p.section, date: p.submittedOn });
     }
   }

@@ -88,7 +88,10 @@ def test_change_without_code_is_rejected_and_preferences_need_none(client, jorda
         res = client.patch(f"{P}/me", headers=jordan, json=body)
         assert res.status_code == 400 and "verification code" in res.json()["detail"], body
     assert _me(client, jordan).mobile != "+44 7700 900999"
-    assert client.patch(f"{P}/me", headers=jordan, json={"career_goals": "Grow.", "languages": ["English"]}).status_code == 200
+    assert client.patch(f"{P}/me", headers=jordan, json={"career_goals": "Grow."}).status_code == 200
+    # Languages are part of the Personal section, so they need a code too.
+    res = client.patch(f"{P}/me", headers=jordan, json={"languages": ["English", "Klingon"]})
+    assert res.status_code == 400 and "verification code" in res.json()["detail"]
     assert _send(client, jordan, {"career_goals": "Grow more."}) == {
         "required": False, "fields": [], "sent_to": "", "inbox_href": None, "expires_at": None, "resend_after": 0,
         "dev_code": None}

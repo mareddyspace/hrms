@@ -37,6 +37,8 @@ def _entry_snapshot(e: TimesheetEntry) -> dict:
         "hours": e.hours,
         "billable": e.billable,
         "comment": e.comment,
+        "start_minute": e.start_minute,
+        "break_minutes": e.break_minutes,
     }
 
 
@@ -107,6 +109,40 @@ def _check_day(db: DbSession, week: TimesheetWeek, employee_id: str, day: date) 
         raise HTTPException(422, "You can only log time for today. For a missed day, ask your manager to reopen it.")
 
 
+def _hhmm(minute: int) -> str:
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def _entry_times(db: DbSession, emp_id: str, body: TimesheetEntryIn, exclude_id: str | None = None) -> tuple[float, int | None, int]:
+    """(hours, start minute, break minutes). With a start and end time the hours are end - start - break, and the
+    block may not overlap another block the person logged that day; without them, hours are given in quarter hours."""
+    if body.start_minute is None or body.end_minute is None:
+        if body.start_minute is not None or body.end_minute is not None:
+            raise HTTPException(422, "Enter both a start and an end time.")
+        if body.hours is None:
+            raise HTTPException(422, "Enter the hours, or a start and end time.")
+        if round(body.hours * 4) != body.hours * 4:
+            raise HTTPException(422, "Hours go in quarter hours (0.25).")
+        return body.hours, None, 0
+    start, end, brk = body.start_minute, body.end_minute, body.break_minutes
+    if end <= start:
+        raise HTTPException(422, "The end time must be after the start time.")
+    worked = end - start - brk
+    if worked <= 0:
+        raise HTTPException(422, "The break is as long as the block. Shorten the break or extend the end time.")
+    others = db.scalars(select(TimesheetEntry).where(
+        TimesheetEntry.employee_id == emp_id, TimesheetEntry.work_date == body.work_date,
+        TimesheetEntry.start_minute.is_not(None)))
+    for other in others:
+        if other.id == exclude_id or other.start_minute is None:
+            continue
+        o_start = other.start_minute
+        o_end = o_start + round(float(other.hours) * 60) + (other.break_minutes or 0)
+        if start < o_end and o_start < end:
+            raise HTTPException(409, f"That block overlaps {_hhmm(o_start)}–{_hhmm(o_end)} ({other.task}) on {body.work_date}.")
+    return round(worked / 60, 2), start, brk
+
+
 def _own_entry(db: DbSession, user: CurrentUser, entry_id: str) -> TimesheetEntry:
     entry = db.get(TimesheetEntry, entry_id)
     if entry is None or entry.employee_id != user.employee_id:
@@ -150,6 +186,7 @@ def add_entry(body: TimesheetEntryIn, request: Request, db: DbSession, user: Cur
     emp = me(user)
     project = _project_for(db, emp, body.project_id)
     week = _editable_week(db, emp, body.work_date)
+    hours, start, brk = _entry_times(db, emp.id, body)
     entry = TimesheetEntry(
         id=f"tse-{uuid.uuid4().hex[:12]}",
         employee_id=emp.id,
@@ -157,9 +194,14 @@ def add_entry(body: TimesheetEntryIn, request: Request, db: DbSession, user: Cur
         work_date=body.work_date,
         project_id=project.id,
         task=body.task.strip(),
-        hours=body.hours,
+        hours=hours,
         billable=project.billable_default if body.billable is None else body.billable,
         comment=(body.comment or "").strip() or None,
+        start_minute=start,
+        break_minutes=brk,
+        work_type=body.work_type,
+        work_id=body.work_id if body.work_type in ("ticket", "task") else None,
+        work_label=(body.work_label or "").strip() or None,
     )
     db.add(entry)
     db.flush()
@@ -181,14 +223,21 @@ def update_entry(entry_id: str, body: TimesheetEntryIn, request: Request, db: Db
     _check_day(db, old_week, emp.id, entry.work_date)
     project = _project_for(db, emp, body.project_id)
     week = _editable_week(db, emp, body.work_date)
+    hours, start, brk = _entry_times(db, emp.id, body, exclude_id=entry.id)
     before = _entry_snapshot(entry)
     entry.week_id = week.id
     entry.work_date = body.work_date
     entry.project_id = project.id
     entry.task = body.task.strip()
-    entry.hours = body.hours
+    entry.hours = hours
     entry.billable = project.billable_default if body.billable is None else body.billable
     entry.comment = (body.comment or "").strip() or None
+    entry.start_minute = start
+    entry.break_minutes = brk
+    if body.work_type is not None:
+        entry.work_type = body.work_type
+        entry.work_id = body.work_id if body.work_type in ("ticket", "task") else None
+        entry.work_label = (body.work_label or "").strip() or None
     record_audit(
         db, actor_id=user.id, action="timesheet_entry_updated", entity="timesheet_entry", entity_id=entry.id,
         subject_id=emp.id, before=before, after=_entry_snapshot(entry), ip=client_ip(request),

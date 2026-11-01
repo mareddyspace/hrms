@@ -46,6 +46,7 @@ import { useTaskAutoReminders } from "../data/taskAutoReminders.ts";
 type TaskTab = "dashboard" | "open" | "mine" | "scheduled" | "closed" | "report" | "people" | "history";
 type ViewMode = "list" | "board" | "calendar";
 type SortKey = "due" | "priority" | "status" | "updated" | "code";
+type SummaryFocus = "todo" | "progress" | "blocked" | "soon" | "overdue" | "done" | "all";
 
 const PRIORITY_RANK: Record<TaskPriority, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
 
@@ -141,6 +142,7 @@ export function TasksPage() {
   const [filterDue, setFilterDue] = useState<"all" | "overdue" | "soon" | "none">("all");
   const [filterBlocked, setFilterBlocked] = useState<"all" | "blocked" | "clear">("all");
   const [sortKey, setSortKey] = useState<SortKey>("due");
+  const [summaryFocus, setSummaryFocus] = useState<SummaryFocus | "">("");
   const [progressDraft, setProgressDraft] = useState(50);
   const [blockReason, setBlockReason] = useState("");
   const [blockDepends, setBlockDepends] = useState("");
@@ -251,12 +253,19 @@ export function TasksPage() {
     return rows;
   }, [tabFiltered, query, filterPriority, filterStatus, filterDue, filterBlocked, sortKey, today]);
 
+  // Keep the detail panel on a task the list actually shows (a summary tile or filter can hide the open one).
+  useEffect(() => {
+    if (filtered.length === 0 || filtered.some((t) => t.id === selectedId)) return;
+    setSelectedId(filtered[0].id);
+  }, [filtered, selectedId]);
+
   function selectTask(id: string) {
     setSelectedId(id);
     setMessage(null);
   }
 
-  function applySummaryFocus(focus: "todo" | "progress" | "blocked" | "soon" | "overdue" | "done" | "all") {
+  function applySummaryFocus(focus: SummaryFocus) {
+    setSummaryFocus(focus);
     setFilterPriority("");
     setFilterDue("all");
     setFilterBlocked("all");
@@ -463,27 +472,27 @@ export function TasksPage() {
         </label>
       </div>
       <MetricGrid>
-        <button type="button" className="metric-as-btn" onClick={() => applySummaryFocus("all")}>
-          <MetricCard label="Total" value={summary.total} />
-        </button>
-        <button type="button" className="metric-as-btn" onClick={() => applySummaryFocus("todo")}>
-          <MetricCard label="To do" value={summary.todo} hint="Open & unblocked" />
-        </button>
-        <button type="button" className="metric-as-btn" onClick={() => applySummaryFocus("progress")}>
-          <MetricCard label="In progress" value={summary.inProgress} />
-        </button>
-        <button type="button" className="metric-as-btn" onClick={() => applySummaryFocus("blocked")}>
-          <MetricCard label="Blocked" value={summary.blocked} hint={summary.blocked ? "Needs unblock" : "None"} />
-        </button>
-        <button type="button" className="metric-as-btn" onClick={() => applySummaryFocus("soon")}>
-          <MetricCard label="Due soon" value={summary.dueSoon} hint="Next 3 days" />
-        </button>
-        <button type="button" className="metric-as-btn" onClick={() => applySummaryFocus("overdue")}>
-          <MetricCard label="Overdue" value={summary.overdue} hint={summary.overdue ? "Needs attention" : "None"} />
-        </button>
-        <button type="button" className="metric-as-btn" onClick={() => applySummaryFocus("done")}>
-          <MetricCard label="Completed" value={summary.completed} />
-        </button>
+        {(
+          [
+            ["all", "Total", summary.total, undefined, "tone-total"],
+            ["todo", "To do", summary.todo, "Open & unblocked", "tone-todo"],
+            ["progress", "In progress", summary.inProgress, undefined, "tone-progress"],
+            ["blocked", "Blocked", summary.blocked, summary.blocked ? "Needs unblock" : "None", "tone-blocked"],
+            ["soon", "Due soon", summary.dueSoon, "Next 3 days", "tone-soon"],
+            ["overdue", "Overdue", summary.overdue, summary.overdue ? "Needs attention" : "None", "tone-overdue"],
+            ["done", "Completed", summary.completed, undefined, "tone-done"],
+          ] as const
+        ).map(([key, label, value, hint, tone]) => (
+          <button
+            key={key}
+            type="button"
+            className={`metric-as-btn task-tile ${tone}${summaryFocus === key ? " selected" : ""}`}
+            aria-pressed={summaryFocus === key}
+            onClick={() => applySummaryFocus(key)}
+          >
+            <MetricCard label={label} value={value} hint={hint} />
+          </button>
+        ))}
       </MetricGrid>
 
       {!isManager && (
@@ -718,7 +727,10 @@ export function TasksPage() {
             role="tab"
             aria-selected={tab === value}
             className={tab === value ? "year-chip active" : "year-chip"}
-            onClick={() => setTab(value)}
+            onClick={() => {
+              setTab(value);
+              setSummaryFocus("");
+            }}
           >
             {label}
           </button>
@@ -989,6 +1001,8 @@ export function TasksPage() {
                       </span>
                     }
                   >
+                    <div className="task-detail-cols">
+                    <div className="task-detail-col">
                     <div className="task-next-action">
                       <span className="muted">Next action</span>
                       <strong>{nextHint}</strong>
@@ -1120,6 +1134,8 @@ export function TasksPage() {
                       )}
                     </section>
 
+                    </div>
+                    <div className="task-detail-col">
                     <section className="task-section task-section-split">
                       <div>
                         <h4 className="task-section-title">Attachments</h4>
@@ -1486,6 +1502,8 @@ export function TasksPage() {
                         </label>
                       )}
                     </section>
+                    </div>
+                    </div>
                   </Card>
                 )}
               </aside>

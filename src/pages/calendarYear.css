@@ -1,0 +1,77 @@
+/* My calendar: Month / Year switch, year grid, birthdays and work anniversaries. */
+.cal-view-switch { display: inline-flex; gap: 4px; margin-right: 4px; }
+
+.cal-pill.birthday,
+.cal-cel.birthday { background: #fce7f3; color: #9d174d; }
+.cal-pill.anniversary,
+.cal-cel.anniversary { background: #ede9fe; color: #5b21b6; }
+.cal-pill.birthday,
+.cal-pill.anniversary { display: inline-flex; align-items: center; gap: 4px; }
+
+.cal-cel-counts { display: flex; gap: 4px; margin-top: 2px; flex-wrap: wrap; }
+.cal-cel {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 999px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 16px;
+}
+
+.cal-year { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; }
+.cal-year-month { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 8px 10px 10px; background: var(--card); }
+.cal-year-title {
+  border: 0;
+  background: none;
+  padding: 2px 0 6px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.cal-year-title:hover { color: var(--accent); text-decoration: underline; }
+.cal-year-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+.cal-year-head { font-size: 10.5px; color: var(--muted); font-weight: 600; }
+.cal-year-day {
+  position: relative;
+  border: 0;
+  background: none;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 24px;
+  padding: 0;
+  color: var(--ink);
+  cursor: pointer;
+}
+.cal-year-day:hover { background: var(--surface-hover); }
+.cal-year-day.weekly-off { color: var(--muted); }
+.cal-year-day.today { background: var(--accent); color: #fff; font-weight: 700; }
+.cal-year-day.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cal-year-day[class*="has-"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+}
+.cal-year-day.has-holiday::after { background: #1e40af; }
+.cal-year-day.has-leave::after { background: #b45309; }
+.cal-year-day.has-meeting::after { background: var(--accent); }
+.cal-year-day.has-reminder::after { background: #c2410c; }
+.cal-year-day.has-celebration::after { background: #be185d; }
+.cal-year-day.has-other::after { background: var(--muted); }
+.cal-year-day.today::after { background: #fff; }
+
+.cal-cel-list li p { margin: 2px 0 0; }
+.cal-cel-name { display: inline-flex; align-items: center; gap: 6px; }
+.cal-reminder-set { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+
+html[data-theme="night"] .cal-pill.birthday,
+html[data-theme="night"] .cal-cel.birthday { background: rgba(236, 72, 153, 0.18); color: #f9a8d4; }
+html[data-theme="night"] .cal-pill.anniversary,
+html[data-theme="night"] .cal-cel.anniversary { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; }

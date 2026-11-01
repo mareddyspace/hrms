@@ -480,14 +480,24 @@ export function Field({
   label,
   children,
   wide = false,
+  required = false,
 }: {
   label: string;
   children: ReactNode;
   wide?: boolean;
+  /** Mandatory: a red star after the label. */
+  required?: boolean;
 }) {
   return (
     <label className={wide ? "field wide" : "field"}>
-      <span>{label}</span>
+      <span>
+        {label}
+        {required && (
+          <span className="req-star" aria-hidden style={{ color: "var(--danger)", marginLeft: 3 }}>
+            *
+          </span>
+        )}
+      </span>
       {children}
     </label>
   );

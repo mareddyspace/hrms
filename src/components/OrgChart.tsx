@@ -302,6 +302,8 @@ export function OrgChart({ tools = true }: { tools?: boolean }) {
   const countries = useMemo(() => [...new Set(index.all.map((n) => n.countryCode).filter(Boolean))].sort(), [index]);
 
   const defaultOpen = useMemo(() => {
+    // Sign-in accounts only: a handful of people, so every branch opens and nobody is hidden.
+    if (SIGN_IN_ACCOUNTS_ONLY) return new Set<string>(index.all.filter((n) => n.children.length > 0).map((n) => n.id));
     // Your own line opens; other teams start folded so the page stays short.
     const chain = index.parents.get(employee.id) ?? [];
     const open = new Set<string>(chain);

@@ -3,7 +3,8 @@
 - A session belongs to the date in the person's time zone at check-in; check-in/out are stored in UTC.
 - Shift hours: the person's own (employees.shift_start/shift_end), else the country default, else 09:30-18:30.
 - Late: checked in after shift start. Early leave: checked out before shift end on the same local date.
-- Worked minutes = check-out - check-in - breaks. Overtime = anything over 9 hours in a day.
+- Worked minutes = check-out - check-in - breaks. Breaks are started and ended on the session (kept as a list);
+  the total is the sum of closed breaks (an open break is closed at check-out). Overtime = anything over 9 hours.
 - Corrections: for a date in the last 30 days (not the future), one pending request per date.
 """
 
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
@@ -73,6 +74,63 @@ def to_utc(value: datetime, employee: Employee) -> datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=zone(employee))
     return value.astimezone(UTC)
+
+
+def _parse(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    moment = datetime.fromisoformat(value)
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def break_list(session: AttendanceSession) -> list[dict]:
+    return [dict(b) for b in (session.breaks or [])]
+
+
+def open_break(session: AttendanceSession) -> dict | None:
+    return next((b for b in break_list(session) if not b.get("end")), None)
+
+
+def breaks_minutes(breaks: list[dict], until: datetime | None = None) -> int:
+    """Total minutes of the breaks; an open one counts up to `until` (or not at all)."""
+    total = 0
+    for b in breaks:
+        start, end = _parse(b.get("start")), _parse(b.get("end")) or until
+        if start and end and end > start:
+            total += int((end - start).total_seconds() // 60)
+    return total
+
+
+def start_break(session: AttendanceSession, moment: datetime) -> None:
+    if session.check_out is not None:
+        raise AttendanceError("You have already checked out.")
+    if open_break(session):
+        raise AttendanceError("You are already on a break.")
+    if moment < session.check_in:
+        raise AttendanceError("A break can't start before check-in.")
+    session.breaks = break_list(session) + [{"start": moment.astimezone(UTC).isoformat(), "end": None}]
+
+
+def end_break(session: AttendanceSession, moment: datetime) -> None:
+    items = break_list(session)
+    current = next((b for b in items if not b.get("end")), None)
+    if current is None:
+        raise AttendanceError("You are not on a break.")
+    current["end"] = moment.astimezone(UTC).isoformat()
+    session.breaks = items
+    session.break_minutes = breaks_minutes(items)
+
+
+def close_breaks(session: AttendanceSession, moment: datetime) -> None:
+    """At check-out: end an open break and take the total from the list."""
+    items = break_list(session)
+    if not items:
+        return
+    for b in items:
+        if not b.get("end"):
+            b["end"] = moment.astimezone(UTC).isoformat()
+    session.breaks = items
+    session.break_minutes = min(720, breaks_minutes(items))
 
 
 def apply_flags(session: AttendanceSession) -> None:
@@ -147,6 +205,12 @@ class MonthSummary:
     early: int
     hours: float
     overtime_hours: float
+    expected_days: int = 0
+    attendance_pct: float = 0
+    avg_hours: float = 0
+    missing_punches: int = 0
+    late_minutes: int = 0
+    break_minutes: int = 0
 
 
 def month_summary(db: Session, employee: Employee, year: int, month: int) -> MonthSummary:
@@ -180,16 +244,23 @@ def month_summary(db: Session, employee: Employee, year: int, month: int) -> Mon
             leave_days[day] = max(leave_days.get(day, 0), 0.5 if lv.half != "none" else 1.0)
             day += timedelta(days=1)
 
-    working = present = absent = late = early = 0
+    # Days before the person's first ever check-in aren't tracked (no absences, not expected).
+    tracked_from = db.scalar(
+        select(func.min(AttendanceSession.work_date)).where(AttendanceSession.employee_id == employee.id)
+    ) or (today + timedelta(days=1))
+    working = present = absent = late = early = expected = 0
     on_leave = 0.0
     day = first
     while day <= last:
         is_working = day.weekday() not in weekly_off and day not in holidays
         if is_working:
             working += 1
+            # days that should have been worked by now (past, or today once checked in), less full-day leave
+            if day >= tracked_from and (day < today or (day == today and day in sessions)) and leave_days.get(day, 0) < 1:
+                expected += 1
         if day in sessions:
             present += 1
-        elif is_working and day < today:
+        elif is_working and tracked_from <= day < today:
             if day in leave_days:
                 on_leave += leave_days[day]
             else:
@@ -197,12 +268,19 @@ def month_summary(db: Session, employee: Employee, year: int, month: int) -> Mon
         if is_working and day in leave_days and day in sessions:
             on_leave += leave_days[day]
         day += timedelta(days=1)
-    minutes = overtime = 0
+    minutes = overtime = complete = missing = late_total = break_total = 0
     for s in sessions.values():
         late += int(s.is_late)
+        late_total += s.late_minutes or 0
         early += int(s.is_early_leave)
         minutes += s.worked_minutes or 0
+        break_total += s.break_minutes or 0
         overtime += max(0, (s.worked_minutes or 0) - OVERTIME_AFTER_MINUTES)
+        if s.check_out is not None:
+            complete += 1
+        elif s.work_date < today:
+            missing += 1  # checked in, never checked out
+    attended = min(present, expected) if expected else present
     return MonthSummary(
         employee_id=employee.id,
         month=f"{year:04d}-{month:02d}",
@@ -214,4 +292,10 @@ def month_summary(db: Session, employee: Employee, year: int, month: int) -> Mon
         early=early,
         hours=round(minutes / 60, 2),
         overtime_hours=round(overtime / 60, 2),
+        expected_days=expected,
+        attendance_pct=round(100 * attended / expected, 1) if expected else 0.0,
+        avg_hours=round(minutes / 60 / complete, 2) if complete else 0.0,
+        missing_punches=missing,
+        late_minutes=late_total,
+        break_minutes=break_total,
     )

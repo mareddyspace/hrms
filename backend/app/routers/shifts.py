@@ -8,15 +8,16 @@ with a teammate on the same roster; the teammate accepts, then the manager (or H
 from __future__ import annotations
 
 import secrets
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.db import utcnow
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
-from app.models import CoverageMinimum, Employee, RosterShift, RosterWeek, ShiftSwap, ShiftType
+from app.models import CompOffCredit, CoverageMinimum, Employee, RosterShift, RosterWeek, ShiftSwap, ShiftType
 from app.schemas.engagement_shifts import (
     CoverageMinimumIn, CoverageMinimumOut, CoverageSlotOut, RosterAssignIn, RosterPublishIn, RosterShiftOut, RosterWeekOut,
     ShiftSwapDecisionIn, ShiftSwapIn, ShiftSwapOut, ShiftSwapRespondIn, ShiftTypeIn, ShiftTypeOut,
@@ -69,6 +70,7 @@ def save_type(body: ShiftTypeIn, request: Request, db: DbSession, user: CurrentU
         before = {"name": row.name, "start": row.start, "end": row.end, "active": row.active}
     row.name, row.start, row.end = body.name.strip(), body.start, body.end
     row.weekend_only, row.active = body.weekend_only, body.active
+    row.break_minutes, row.location = body.break_minutes, (body.location or "").strip() or None
     db.flush()
     record_audit(db, actor_id=user.id, action="shift_type_saved", entity="shift_type", entity_id=row.id, before=before,
                  after={"name": row.name, "start": row.start, "end": row.end, "active": row.active}, ip=client_ip(request))
@@ -409,3 +411,157 @@ def set_coverage(body: CoverageMinimumIn, request: Request, db: DbSession, user:
                  after={"minimum": body.minimum}, ip=client_ip(request))
     db.commit()
     return row
+
+
+# ---------- comp-off (migration 0025) ----------
+class CompOffCreditOut(BaseModel):
+    id: str
+    employee_id: str
+    employee_name: str
+    worked_date: date
+    days: float
+    reason: str
+    granted_by_name: str
+    granted_on: date
+    expires_on: date
+    expired: bool
+
+
+class CompOffCandidateOut(BaseModel):
+    employee_id: str
+    employee_name: str
+    work_date: date
+    shift_name: str
+    reason: str
+
+
+class CompOffRequestOut(BaseModel):
+    id: str
+    from_date: date
+    to_date: date
+    days: float
+    reason: str
+    status: str
+    decided_by_name: str | None = None
+    decision_note: str | None = None
+    created_at: datetime
+
+
+class CompOffSummaryOut(BaseModel):
+    earned: float = 0
+    used: float = 0
+    pending: float = 0
+    available: float = 0
+    from_roster: float = 0
+    from_overtime: float = 0
+    credits: list[CompOffCreditOut] = []
+    requests: list[CompOffRequestOut] = []
+    team_credits: list[CompOffCreditOut] = []
+    candidates: list[CompOffCandidateOut] = []
+
+
+class CompOffGrantIn(BaseModel):
+    employee_id: str = Field(min_length=1, max_length=64)
+    work_date: date
+
+
+def _name(db: DbSession, emp_id: str | None) -> str:
+    emp = db.get(Employee, emp_id) if emp_id else None
+    return emp.full_name if emp else (emp_id or "")
+
+
+def _credit_out(db: DbSession, c: CompOffCredit, today: date) -> CompOffCreditOut:
+    return CompOffCreditOut(id=c.id, employee_id=c.employee_id, employee_name=_name(db, c.employee_id),
+                            worked_date=c.worked_date, days=float(c.days), reason=c.reason,
+                            granted_by_name=_name(db, c.granted_by), granted_on=c.created_at.date(),
+                            expires_on=c.expires_on, expired=c.expires_on < today)
+
+
+def _decides(db: DbSession, user: CurrentUser, emp: Employee) -> bool:
+    return emp.id != user.employee_id and (emp.manager_id == user.employee_id or can_decide(db, user, emp))
+
+
+@router.get("/comp-off", response_model=CompOffSummaryOut)
+def comp_off(db: DbSession, user: CurrentUserDep) -> CompOffSummaryOut:
+    """My comp-off: balance (earned / used / pending / available), credits and comp-off leave requests; for a manager
+    also the team's credits and the off-day shifts still waiting to be credited."""
+    from app.models import LeaveRequest
+    from app.services.leave import balances
+    from app.services.overtime import earned_comp_off
+
+    emp = me(user)
+    today = _today(user)
+    out = CompOffSummaryOut()
+    row = next((b for b in balances(db, emp, today.year) if b.code == "comp_off"), None)
+    if row is not None:
+        out.earned, out.used, out.pending, out.available = row.quota, row.used, row.pending, row.available
+    out.from_roster = rules.roster_comp_off_days(db, emp.id, today.year, today)[0]
+    out.from_overtime = earned_comp_off(db, emp.id, today.year)
+    out.credits = [_credit_out(db, c, today) for c in db.scalars(
+        select(CompOffCredit).where(CompOffCredit.employee_id == emp.id).order_by(CompOffCredit.worked_date.desc()))]
+    out.requests = [
+        CompOffRequestOut(id=r.id, from_date=r.from_date, to_date=r.to_date, days=float(r.days), reason=r.reason,
+                          status=r.status, decided_by_name=_name(db, r.decided_by) if r.decided_by else None,
+                          decision_note=r.decision_note, created_at=r.created_at)
+        for r in db.scalars(select(LeaveRequest).where(LeaveRequest.employee_id == emp.id, LeaveRequest.leave_code == "comp_off")
+                            .order_by(LeaveRequest.from_date.desc()).limit(50))
+    ]
+    team = list(db.scalars(select(Employee).where(Employee.manager_id == emp.id)))
+    team_ids = {e.id for e in team}
+    if team_ids:
+        credits = list(db.scalars(select(CompOffCredit).where(CompOffCredit.employee_id.in_(team_ids))
+                                  .order_by(CompOffCredit.worked_date.desc())))
+        out.team_credits = [_credit_out(db, c, today) for c in credits]
+        credited = {(c.employee_id, c.worked_date) for c in credits}
+        since = today - timedelta(days=rules.COMP_OFF_VALID_DAYS)
+        by_id = {e.id: e for e in team}
+        for r in db.scalars(select(RosterShift).where(RosterShift.employee_id.in_(team_ids), RosterShift.work_date < today,
+                                                      RosterShift.work_date >= since).order_by(RosterShift.work_date.desc())):
+            if (r.employee_id, r.work_date) in credited or not rules.is_published(db, r) or rules.on_leave(db, r.employee_id, r.work_date):
+                continue
+            reason = rules.comp_off_reason(db, by_id[r.employee_id], r.work_date)
+            if reason:
+                shift = db.get(ShiftType, r.shift_id)
+                out.candidates.append(CompOffCandidateOut(employee_id=r.employee_id, employee_name=by_id[r.employee_id].full_name,
+                                                          work_date=r.work_date, shift_name=shift.name if shift else r.shift_id,
+                                                          reason=reason))
+    return out
+
+
+@router.post("/comp-off/grant", response_model=CompOffCreditOut, status_code=status.HTTP_201_CREATED)
+def grant_comp_off(body: CompOffGrantIn, request: Request, db: DbSession, user: CurrentUserDep) -> CompOffCreditOut:
+    """The manager credits one comp-off day for a published shift worked on a weekly off or holiday."""
+    me(user)
+    person = db.get(Employee, body.employee_id)
+    if person is None:
+        raise NOT_FOUND
+    if not _decides(db, user, person):
+        raise HTTPException(403, "Only someone above them in the reporting line can grant comp-off.")
+    today = _today(user)
+    if body.work_date >= today:
+        raise HTTPException(422, "Comp-off can be granted only after the day has passed.")
+    if body.work_date < today - timedelta(days=rules.COMP_OFF_VALID_DAYS):
+        raise HTTPException(422, f"Too late: that day is more than {rules.COMP_OFF_VALID_DAYS} days ago.")
+    reason = rules.comp_off_reason(db, person, body.work_date)
+    if not reason:
+        raise HTTPException(422, f"{body.work_date} is a regular working day, so there is no comp-off.")
+    row = _row(db, person.id, body.work_date)
+    if row is None or not rules.is_published(db, row):
+        raise HTTPException(422, f"{person.full_name} was not on the published roster on {body.work_date}.")
+    if rules.on_leave(db, person.id, body.work_date):
+        raise HTTPException(422, f"{person.full_name} was on approved leave that day.")
+    if db.scalar(select(CompOffCredit.id).where(CompOffCredit.employee_id == person.id,
+                                                CompOffCredit.worked_date == body.work_date)):
+        raise HTTPException(409, "Comp-off for that day is already granted.")
+    credit = CompOffCredit(id=f"co-{secrets.token_hex(6)}", employee_id=person.id, worked_date=body.work_date, days=1,
+                           reason=reason, granted_by=user.employee_id or "",
+                           expires_on=body.work_date + timedelta(days=rules.COMP_OFF_VALID_DAYS))
+    db.add(credit)
+    notify(db, recipient_id=person.id, title="Comp-off credited",
+           body=f"1 comp-off day for working on {body.work_date}. Use it by {credit.expires_on}.", href=ROUTE)
+    db.flush()
+    record_audit(db, actor_id=user.id, action="comp_off_granted", entity="comp_off_credit", entity_id=credit.id,
+                 subject_id=person.id, after={"worked_date": body.work_date, "reason": reason}, ip=client_ip(request))
+    db.commit()
+    db.refresh(credit)
+    return _credit_out(db, credit, today)

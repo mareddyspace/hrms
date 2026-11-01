@@ -203,3 +203,50 @@ def roster_week(db: Session, manager_id: str, week_start: date) -> RosterWeek | 
 def is_published(db: Session, row: RosterShift) -> bool:
     week = roster_week(db, row.manager_id, week_start_of(row.work_date))
     return week is not None and week.status == "published"
+
+
+# ---------- comp-off for working a weekly off or holiday (migration 0025) ----------
+COMP_OFF_VALID_DAYS = 90
+
+
+def comp_off_reason(db: Session, employee: Employee, d: date) -> str | None:
+    """Why working this day earns comp-off (a holiday in the person's calendar, or Saturday / Sunday), or None."""
+    from app.services.leave import holiday_dates_for
+    from app.models import Holiday
+
+    if d in holiday_dates_for(db, employee, d, d):
+        name = db.scalar(select(Holiday.name).where(Holiday.date == d, Holiday.country_code == employee.country_code))
+        return f"Holiday ({name})" if name else "Holiday"
+    if d.weekday() == 5:
+        return "Weekly off (Saturday)"
+    if d.weekday() == 6:
+        return "Weekly off (Sunday)"
+    return None
+
+
+def roster_comp_off_days(db: Session, employee_id: str, year: int, today: date) -> tuple[float, float]:
+    """(earned, used): comp-off days from roster credits worked in the year — credits used by comp-off leave before
+    they expired plus credits still valid (same rule as the portal's compOffCreditsFor) — and how many were used."""
+    from app.models import CompOffCredit
+
+    credits = list(db.scalars(select(CompOffCredit).where(
+        CompOffCredit.employee_id == employee_id, CompOffCredit.worked_date >= date(year, 1, 1),
+        CompOffCredit.worked_date <= date(year, 12, 31)).order_by(CompOffCredit.worked_date)))
+    if not credits:
+        return 0.0, 0.0
+    taken = db.scalars(select(LeaveRequest).where(
+        LeaveRequest.employee_id == employee_id, LeaveRequest.leave_code == "comp_off",
+        LeaveRequest.status.in_(("pending", "approved")), LeaveRequest.from_date >= date(year, 1, 1)))
+    days: list[date] = []
+    for req in taken:
+        d = req.from_date
+        while d <= req.to_date:
+            days.append(d)
+            d += timedelta(days=1)
+    used: set[str] = set()
+    for d in sorted(days):
+        credit = next((c for c in credits if c.id not in used and c.worked_date < d <= c.expires_on), None)
+        if credit is not None:
+            used.add(credit.id)
+    earned = float(sum(float(c.days) for c in credits if c.id in used or c.expires_on >= today))
+    return earned, float(sum(float(c.days) for c in credits if c.id in used))

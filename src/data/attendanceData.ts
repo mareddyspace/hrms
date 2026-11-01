@@ -11,6 +11,7 @@ import {
   type LeaveRequest,
 } from "../model.ts";
 import { scheduleForEmployee } from "./workSchedule.ts";
+import { API_ENABLED } from "../api/client.ts";
 
 export type PunchPhase = "not_started" | "checked_in" | "on_break" | "checked_out";
 
@@ -169,9 +170,10 @@ export function breakMinutes(breaks: AttendanceBreak[]): number {
 
 export function computeHoursWorked(checkIn?: string, checkOut?: string, breaks: AttendanceBreak[] = []): number {
   if (!checkIn || !checkOut) return 0;
-  const gross = minutesBetween(checkIn, checkOut);
+  let gross = minutesBetween(checkIn, checkOut);
+  if (gross < 0) gross += 24 * 60; // overnight shift: check-out after midnight
   const net = Math.max(0, gross - breakMinutes(breaks));
-  return Math.round((net / 60) * 10) / 10;
+  return Math.round((net / 60) * 100) / 100;
 }
 
 export function phaseLabel(phase: PunchPhase): string {
@@ -253,7 +255,11 @@ function recordFromSession(base: DayBase, session: TodaySession, today: string, 
   let hoursWorked = computeHoursWorked(checkIn, checkOut, breaks);
   if (open && session.checkIn && session.date === today) {
     const gross = Math.round((Date.now() - new Date(session.checkIn).getTime()) / 60000);
-    hoursWorked = Math.round((Math.max(0, gross - breakMinutes(breaks)) / 60) * 10) / 10;
+    hoursWorked = Math.round((Math.max(0, gross - breakMinutes(breaks)) / 60) * 100) / 100;
+  } else if (session.checkIn && session.checkOut) {
+    // Closed session: exact minutes between the two stamps (works across midnight).
+    const gross = Math.round((new Date(session.checkOut).getTime() - new Date(session.checkIn).getTime()) / 60000);
+    if (gross >= 0) hoursWorked = Math.round((Math.max(0, gross - breakMinutes(breaks)) / 60) * 100) / 100;
   }
   const stale = open && session.date < today;
   return {
@@ -307,6 +313,8 @@ export function buildAttendanceHistory(input: {
   corrections: AttendanceCorrection[];
   weeklyOffDays?: number[];
   sessions?: TodaySession[];
+  /** Generate sample punches for past days with no record (local demo only; never with real backend data). */
+  samples?: boolean;
 }): AttendanceDayRecord[] {
   const today = todayISO();
   const weeklyOffDays = input.weeklyOffDays ?? SAMPLE_SHIFT.weeklyOffDays;
@@ -315,7 +323,8 @@ export function buildAttendanceHistory(input: {
   const firstSessionDate = sessions.reduce<string | null>((min, s) => (!min || s.date < min ? s.date : min), null);
   const shift = shiftTimesFrom(input.shiftHours);
   const sampleFrom = toISO(new Date(parseISODate(today).getTime() - SAMPLE_HISTORY_DAYS * 86400000));
-  const sampleDay = (date: string) => date >= sampleFrom && (!firstSessionDate || date < firstSessionDate);
+  const samples = input.samples ?? !API_ENABLED;
+  const sampleDay = (date: string) => samples && date >= sampleFrom && (!firstSessionDate || date < firstSessionDate);
   const rows: AttendanceDayRecord[] = [];
   const start = parseISODate(input.from);
   const end = parseISODate(input.to);

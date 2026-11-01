@@ -202,6 +202,8 @@ class HolidayOut(ORM):
     date: dt.date
     name: str
     country_code: str
+    calendar: str | None = None
+    description: str | None = None
 
 
 class LeaveBalanceOut(BaseModel):
@@ -228,6 +230,7 @@ class LeaveRequestIn(BaseModel):
     to_date: date = Field(alias="to")
     half: Literal["none", "first", "second"] = "none"
     reason: str = Field(min_length=1, max_length=2000)
+    handover_to: str | None = Field(default=None, max_length=64)  # who covers the work while away
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -255,6 +258,9 @@ class LeaveRequestOut(BaseModel):
     decision_note: str | None
     created_at: datetime
     approval: dict | None = None  # approval steps and progress (app/services/time_approvals.py progress)
+    handover_to: str | None = None
+    handover_name: str | None = None
+    attachment_name: str | None = None
 
 
 # ---------- notifications ----------
@@ -298,6 +304,7 @@ class AttendanceSessionOut(ORM):
     early_minutes: int
     corrected: bool
     note: str | None
+    breaks: list[dict] | None = None  # [{"start": UTC, "end": UTC | None}]
 
 
 class AttendanceSummaryOut(BaseModel):
@@ -311,6 +318,13 @@ class AttendanceSummaryOut(BaseModel):
     early: int
     hours: float
     overtime_hours: float
+    # days that should have been worked so far, present share of them, mean hours per complete day, open sessions
+    expected_days: int = 0
+    attendance_pct: float = 0
+    avg_hours: float = 0
+    missing_punches: int = 0
+    late_minutes: int = 0
+    break_minutes: int = 0
 
 
 class CorrectionIn(BaseModel):
@@ -356,9 +370,16 @@ class TimesheetEntryIn(BaseModel):
     work_date: date
     project_id: str = Field(min_length=1, max_length=64)
     task: str = Field(min_length=1, max_length=200)
-    hours: float = Field(gt=0, le=24, multiple_of=0.25)
+    # Without a start and end time, hours is required (quarter hours). With them, hours = end - start - break.
+    hours: float | None = Field(default=None, gt=0, le=24)
     billable: bool | None = None  # None = the project's default
     comment: str | None = Field(default=None, max_length=2000)
+    start_minute: int | None = Field(default=None, ge=0, lt=1440)
+    end_minute: int | None = Field(default=None, gt=0, le=1440)
+    break_minutes: int = Field(default=0, ge=0, le=600)
+    work_type: str | None = Field(default=None, pattern="^(project|ticket|task)$")
+    work_id: str | None = Field(default=None, max_length=64)
+    work_label: str | None = Field(default=None, max_length=200)
 
 
 class TimesheetEntryOut(ORM):
@@ -371,6 +392,11 @@ class TimesheetEntryOut(ORM):
     hours: float
     billable: bool
     comment: str | None
+    start_minute: int | None = None
+    break_minutes: int = 0
+    work_type: str | None = None
+    work_id: str | None = None
+    work_label: str | None = None
 
 
 class TimesheetWeekOut(ORM):

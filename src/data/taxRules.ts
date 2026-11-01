@@ -92,7 +92,7 @@ function annualIndia(gross: number, o: TaxOptions): AnnualPay {
     // Section 87A rebate: no tax up to 12L taxable, with marginal relief just above it.
     tax = taxable <= 1200000 ? 0 : Math.min(tax, taxable - 1200000);
   } else {
-    const decl = declared("IN", o, ["80C", "80CCD(1B)", "80D", "80D-parents", "80E", "24(b)", "HRA"], { HRA: o.housingAnnual ?? 0 });
+    const decl = declared("IN", o, ["80C", "80CCD(1B)", "80D", "80D-parents", "80E", "24(b)", "HRA", "LTA", "80G", "80TTA"], { HRA: o.housingAnnual ?? 0 });
     const c80 = decl.find((d) => d.name === "80C")?.amount ?? 0;
     reliefs = [
       { name: "Standard deduction", amount: Math.min(50000, gross) },

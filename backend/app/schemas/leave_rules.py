@@ -109,12 +109,14 @@ class HolidayAdminIn(BaseModel):
     date: dt.date
     name: str = Field(min_length=1, max_length=200)
     calendar: str | None = Field(default=None, max_length=100)
+    description: str | None = Field(default=None, max_length=1000)
 
 
 class HolidayAdminUpdate(BaseModel):
     date: dt.date | None = None
     name: str | None = Field(default=None, min_length=1, max_length=200)
     calendar: str | None = Field(default=None, max_length=100)
+    description: str | None = Field(default=None, max_length=1000)
     active: bool | None = None
 
 
@@ -127,6 +129,7 @@ class HolidayAdminOut(BaseModel):
     name: str
     calendar: str | None
     active: bool
+    description: str | None = None
 
 
 class HolidayCalendarOut(BaseModel):

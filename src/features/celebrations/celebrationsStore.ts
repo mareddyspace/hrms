@@ -238,3 +238,58 @@ export async function sendWish(actor: PlusActor, c: Celebration, message: string
   bumpLocal();
   return result;
 }
+
+/* ───────────── Whole year (calendar month / year views) ───────────── */
+
+/** Birthdays (hidden ones left out) and work anniversaries for every day of `year`. */
+export function localYearCelebrations(year: number, today = todayISO()): Celebration[] {
+  const hidden = readPrefs();
+  const start = `${year}-01-01`;
+  const end = `${year}-12-31`;
+  const out: Celebration[] = [];
+  for (const p of listPeople()) {
+    if (p.employmentStatus === "Terminated" || !p.dateOfJoining || p.dateOfJoining > today) continue;
+    const base = {
+      employeeId: p.id,
+      name: p.fullName,
+      jobTitle: p.designation ?? "",
+      department: p.department ?? "",
+      location: p.location ?? "",
+      wishedByMe: false,
+    };
+    if (p.dateOfBirth && !hidden[p.id]) {
+      const occ = occurrenceIn(p.dateOfBirth, start, end);
+      if (occ) out.push({ ...base, kind: "birthday", date: occ });
+    }
+    const occ = occurrenceIn(p.dateOfJoining, start, end);
+    const years = occ ? year - Number(p.dateOfJoining.slice(0, 4)) : 0;
+    if (occ && years >= 1) out.push({ ...base, kind: "anniversary", date: occ, years });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+}
+
+/** Celebrations for a calendar year: GET /celebrations?year= in backend mode, the browser directory otherwise. */
+export function useYearCelebrations(year: number) {
+  useSyncExternalStore(API_ENABLED ? noSubscribe : subscribeLocal, () => (API_ENABLED ? 0 : localTick));
+  const [apiRows, setApiRows] = useState<{ year: number; rows: Celebration[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let live = true;
+    api
+      .get<CelebrationApi[]>("/celebrations", { year })
+      .then((rows) => {
+        if (!live) return;
+        setApiRows({ year, rows: rows.map(fromApi) });
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : "Could not load birthdays and anniversaries.");
+      });
+    return () => {
+      live = false;
+    };
+  }, [year]);
+  const rows = API_ENABLED ? (apiRows?.year === year ? apiRows.rows : []) : localYearCelebrations(year);
+  return { rows, error };
+}

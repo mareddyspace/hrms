@@ -14,6 +14,7 @@ import { getExitDetails, listPeople } from "../../data/peopleLocal.ts";
 import { getTaxRegime } from "../../data/taxRegime.ts";
 import { holidaySet, holidaysForPerson, todayISO, uid, workingDays, type CountryCode, type PortalState } from "../../model.ts";
 import { createLocalStore } from "../payrequests/localStore.ts";
+import { declarationsAsProofs } from "../taxdecl/taxDeclStore.ts";
 import { payoutMonth, perDayPay } from "../payrequests/rules.ts";
 import { notify } from "../workforce/workforceShared.ts";
 import { localPayableOvertime, markOvertimePaid, setOvertimeClosedMonthCheck } from "../overtime/overtimeStore.ts";
@@ -270,6 +271,7 @@ interface PersonOut {
   bank_masked: string | null;
   new_joiner: boolean;
   leaver: boolean;
+  declarations?: { financial_year: string; section: string; amount: number }[];
 }
 
 const opt = <T>(v: T | null | undefined) => (v === null ? undefined : v);
@@ -353,6 +355,7 @@ function personFromApi(p: PersonOut): RunPerson {
     bankMasked: opt(p.bank_masked),
     newJoiner: p.new_joiner,
     leaver: p.leaver,
+    declarations: (p.declarations ?? []).map((d) => ({ financialYear: d.financial_year, section: d.section, amount: d.amount })),
   };
 }
 
@@ -429,7 +432,7 @@ export async function prepareRun(actor: Actor, state: PortalState, month: string
   const problem = checkMonth(month);
   if (problem) return { error: problem };
   if (!PREPARE_ROLES.has(actor.role)) return { error: "Only HR or an admin can prepare payroll." };
-  const ctx = { investmentProofs: state.investmentProofs, timesheets: state.timesheets, orgTimesheets: state.orgTimesheets };
+  const ctx = { investmentProofs: declarationsAsProofs(state.investmentProofs), timesheets: state.timesheets, orgTimesheets: state.orgTimesheets };
   if (API_ENABLED) {
     let id: string | undefined;
     const error = await apiRun(async () => {

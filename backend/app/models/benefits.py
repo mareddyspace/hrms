@@ -30,6 +30,27 @@ class BenefitPlan(TimestampMixin, Base):
     auto_enrolled: Mapped[bool] = mapped_column(Boolean, default=False)
     eligibility: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Plan details (migration 0026): what is covered, the terms, and the legal entity (NULL = every entity).
+    coverage: Mapped[str | None] = mapped_column(Text)
+    terms: Mapped[str | None] = mapped_column(Text)
+    legal_entity: Mapped[str | None] = mapped_column(String(200))
+
+
+class BenefitPlanDocument(Base):
+    """Policy documents HR uploads for a plan (PDF or image), downloadable by anyone who can see the plan."""
+
+    __tablename__ = "benefit_plan_documents"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("benefit_plans.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    file_name: Mapped[str] = mapped_column(String(200))
+    content_type: Mapped[str] = mapped_column(String(100))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    storage_path: Mapped[str] = mapped_column(String(300))
+    uploaded_by: Mapped[str | None] = mapped_column(String(64))
+    uploaded_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class BenefitWindow(TimestampMixin, Base):
@@ -68,7 +89,7 @@ class BenefitEnrollment(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), index=True)
     plan_id: Mapped[str] = mapped_column(ForeignKey("benefit_plans.id"), index=True)
-    status: Mapped[str] = mapped_column(String(16), index=True)  # requested | approved | waived
+    status: Mapped[str] = mapped_column(String(16), index=True)  # requested | approved | waived | cancelled
     effective_date: Mapped[date | None] = mapped_column(Date)
     life_event_id: Mapped[str | None] = mapped_column(String(64))
     decided_by: Mapped[str | None] = mapped_column(String(64))
@@ -88,6 +109,11 @@ class BenefitDependent(TimestampMixin, Base):
     verification: Mapped[str] = mapped_column(String(16))  # pending | verified | rejected
     verified_by: Mapped[str | None] = mapped_column(String(64))
     verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Proof of relationship (migration 0026): one file, replaced on a new upload.
+    doc_name: Mapped[str | None] = mapped_column(String(200))
+    doc_type: Mapped[str | None] = mapped_column(String(100))
+    doc_size: Mapped[int | None] = mapped_column(Integer)
+    doc_path: Mapped[str | None] = mapped_column(String(300))
 
 
 class BenefitDependentCoverage(Base):

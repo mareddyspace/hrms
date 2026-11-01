@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   Banner,
   Card,
+  Dialog,
   EmptyState,
   FilterBar,
   MetricCard,
@@ -20,8 +21,10 @@ import {
   breakMinutes,
   formatHm,
   kindLabel,
+  minutesBetween,
   nonWorkingReason,
   phaseLabel,
+  shiftTimesFrom,
   type AttendanceCorrection,
   type AttendanceDayKind,
   type AttendanceDayRecord,
@@ -60,8 +63,9 @@ import {
 } from "../data/workSchedule.ts";
 import { managementChain } from "../demoAccounts.ts";
 import { usePortal } from "../store.tsx";
+import "./attendance.css";
 
-type RangeMode = "week" | "month" | "custom";
+type RangeMode = "week" | "month" | "year" | "custom";
 type AttTab = "overview" | "history" | "corrections" | "schedule";
 
 function useAttendance() {
@@ -96,6 +100,58 @@ function formatBreakDuration(mins: number): string {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+/** 8.25 -> "8h 15m" */
+function formatHours(hours: number): string {
+  const total = Math.round(hours * 60);
+  if (total <= 0) return "0h";
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+function minutesToHm(total: number): string {
+  return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/** Unpaid break counted in a shift (shift length minus this = expected working hours). */
+const BREAK_ALLOWANCE_MIN = 60;
+
+/** Correction window: the last 30 days, never the future. */
+const CORRECTION_DAYS = 30;
+const NO_CORRECTION: AttendanceDayKind[] = ["upcoming", "weekend", "holiday", "leave", "pending_correction"];
+
+function canCorrect(row: AttendanceDayRecord, today: string): boolean {
+  if (row.date > today || NO_CORRECTION.includes(row.kind)) return false;
+  const oldest = parseISODate(today);
+  oldest.setDate(oldest.getDate() - CORRECTION_DAYS);
+  return row.date >= toISO(oldest);
+}
+
+function correctionKindFor(row: AttendanceDayRecord | undefined): CorrectionKind {
+  return !row?.checkIn ? "missing_check_in" : !row.checkOut ? "missing_check_out" : "wrong_time";
+}
+
+/** Month figures from day records: attendance %, average hours, late arrivals, missing punches. */
+function monthFigures(rows: AttendanceDayRecord[], today: string) {
+  const past = rows.filter((r) => r.date <= today);
+  const worked = past.filter((r) => Boolean(r.checkIn) && ["present", "wfh", "missing_punch", "pending_correction"].includes(r.kind));
+  const absent = past.filter((r) => r.date < today && r.kind === "absent");
+  const complete = worked.filter((r) => r.checkIn && r.checkOut);
+  const hours = complete.reduce((sum, r) => sum + r.hoursWorked, 0);
+  const expected = worked.length + absent.length;
+  return {
+    present: worked.length,
+    absent: absent.length,
+    leave: past.filter((r) => r.kind === "leave").length,
+    pct: expected ? Math.round((1000 * worked.length) / expected) / 10 : 0,
+    avgHours: complete.length ? hours / complete.length : 0,
+    late: worked.filter((r) => r.lateMinutes > 0).length,
+    lateMinutes: worked.reduce((sum, r) => sum + r.lateMinutes, 0),
+    missing: past.filter((r) => r.kind === "missing_punch" || (r.checkIn && !r.checkOut && r.date < today)).length,
+    hours,
+  };
+}
+
 function correctionKindLabel(kind: CorrectionKind): string {
   if (kind === "missing_check_in") return "Missing check-in";
   if (kind === "missing_check_out") return "Missing check-out";
@@ -128,6 +184,8 @@ export function AttendancePage() {
   // Decision notes are per correction so typing on one row does not leak into another.
   const [decideNotes, setDecideNotes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [corrOpen, setCorrOpen] = useState(false);
+  const [scheduleWeek, setScheduleWeek] = useState(0);
   // Backend mode: the server's month summary (working days, late days, overtime) for the month shown.
   const [apiSummary, setApiSummary] = useState<AttendanceSummaryOut | null>(null);
   const summaryMonth = `${cursor.year}-${String(cursor.month + 1).padStart(2, "0")}`;
@@ -177,6 +235,7 @@ export function AttendancePage() {
       const mid = selectedDate || today;
       return { from: startOfWeek(mid), to: endOfWeek(mid) };
     }
+    if (rangeMode === "year") return { from: `${cursor.year}-01-01`, to: `${cursor.year}-12-31` };
     if (rangeMode === "custom") {
       const from = customFrom <= customTo ? customFrom : customTo;
       const to = customFrom <= customTo ? customTo : customFrom;
@@ -251,6 +310,35 @@ export function AttendancePage() {
   ]);
 
   const byDate = useMemo(() => new Map(monthHistory.map((r) => [r.date, r])), [monthHistory]);
+  const shift = shiftTimesFrom(employee.shiftHours);
+  const shiftMinutes = (() => {
+    const m = minutesBetween(shift.start, shift.end);
+    return m > 0 ? m : m + 24 * 60; // overnight shift
+  })();
+  const local = useMemo(() => monthFigures(monthHistory, today), [monthHistory, today]);
+  // Backend mode: the server's figures for the month (real punches only).
+  const monthStats = apiSummary
+    ? {
+        ...local,
+        present: apiSummary.present,
+        absent: apiSummary.absent,
+        pct: apiSummary.attendance_pct ?? local.pct,
+        avgHours: apiSummary.avg_hours ?? local.avgHours,
+        late: apiSummary.late,
+        lateMinutes: apiSummary.late_minutes ?? local.lateMinutes,
+        missing: apiSummary.missing_punches ?? local.missing,
+        hours: apiSummary.hours,
+      }
+    : local;
+  // Year view: one row per month of the selected year.
+  const yearRows = useMemo(() => {
+    if (rangeMode !== "year") return [];
+    return Array.from({ length: 12 }, (_, m) => {
+      const prefix = `${cursor.year}-${String(m + 1).padStart(2, "0")}`;
+      const rows = history.filter((r) => r.date.startsWith(prefix));
+      return { month: m, label: monthLabel(cursor.year, m), started: rows.some((r) => r.date <= today), ...monthFigures(rows, today) };
+    }).filter((r) => r.started);
+  }, [rangeMode, history, cursor.year, today]);
 
   const summary = useMemo(() => {
     const s = { present: 0, absent: 0, leave: 0, wfh: 0, exceptions: 0, holiday: 0 };
@@ -288,7 +376,7 @@ export function AttendancePage() {
   const filteredHistory = useMemo(() => {
     const q = historyQ.trim().toLowerCase();
     return history
-      .filter((r) => r.kind !== "upcoming" && r.kind !== "weekend")
+      .filter((r) => r.kind !== "upcoming" && r.kind !== "weekend" && r.date <= today)
       .filter((r) => {
         if (historyKind && r.kind !== historyKind) return false;
         if (!q) return true;
@@ -298,7 +386,7 @@ export function AttendancePage() {
       })
       .slice()
       .sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [history, historyQ, historyKind]);
+  }, [history, historyQ, historyKind, today]);
 
   const monthExpectedDays = monthHistory.filter(
     (r) =>
@@ -308,7 +396,8 @@ export function AttendancePage() {
       r.kind === "pending_correction" ||
       r.kind === "not_checked_in",
   ).length;
-  const monthExpectedHours = monthExpectedDays * SAMPLE_SHIFT.expectedHours;
+  const expectedHours = Math.max(0, shiftMinutes - BREAK_ALLOWANCE_MIN) / 60;
+  const monthExpectedHours = monthExpectedDays * expectedHours;
   const monthRecordedHours = monthHistory.reduce((sum, r) => sum + r.hoursWorked, 0);
 
   function moveMonth(delta: number) {
@@ -375,7 +464,7 @@ export function AttendancePage() {
     setCorrReason("");
     setCorrIn("");
     setCorrOut("");
-    setTab("corrections");
+    setCorrOpen(false);
     return true;
   }
 
@@ -392,7 +481,7 @@ export function AttendancePage() {
     setCorrDate(date);
     setCorrKind(kind);
     setCorrError(null);
-    setTab("corrections");
+    setCorrOpen(true);
   }
 
   function downloadReport() {
@@ -408,8 +497,13 @@ export function AttendancePage() {
           r.hoursWorked,
           r.lateMinutes,
           r.overtimeMinutes,
-          (r.note ?? "").replace(/,/g, ";"),
-        ].join(","),
+          r.note ?? "",
+        ]
+          .map((cell) => {
+            const text = String(cell);
+            return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+          })
+          .join(","),
       ),
     ];
     downloadText(
@@ -419,7 +513,104 @@ export function AttendancePage() {
     setMessage({ tone: "ok", text: "Attendance CSV downloaded." });
   }
 
+  // Shift schedule: Monday to Sunday of the chosen week, with the plan for each day.
+  const scheduleDays = (() => {
+    const monday = parseISODate(startOfWeek(today));
+    monday.setDate(monday.getDate() + scheduleWeek * 7);
+    const from = toISO(monday);
+    const end = parseISODate(from);
+    end.setDate(end.getDate() + 6);
+    const rows = buildAttendanceHistory({
+      employeeId: employee.id,
+      employeeName: employee.fullName,
+      from,
+      to: toISO(end),
+      holidays: employeeHolidays,
+      leaveRequests: state.leaveRequests,
+      absences: state.absences,
+      shiftHours: employee.shiftHours,
+      corrections: myCorrections,
+      weeklyOffDays: schedule.weeklyOffDays,
+      sessions: attState.sessions,
+    });
+    return rows.map((r) => {
+      const plan =
+        r.kind === "weekend"
+          ? "Weekly off"
+          : r.kind === "holiday"
+            ? `Holiday · ${r.note ?? ""}`.trim()
+            : r.kind === "leave"
+              ? "On leave"
+              : r.kind === "wfh" || r.note?.toLowerCase().includes("work from home")
+                ? "Work from home"
+                : "Working";
+      return { date: r.date, plan, working: plan === "Working" || plan === "Work from home", record: r.checkIn ? r : undefined };
+    });
+  })();
+
+  const correctionMin = (() => {
+    const d = parseISODate(today);
+    d.setDate(d.getDate() - CORRECTION_DAYS);
+    return toISO(d);
+  })();
+
   const regionHolidays = employeeHolidays.filter((h) => h.date >= range.from && h.date <= range.to);
+
+  const corrDayRecord = corrRecord;
+  const correctionForm = (
+    <div className="stack">
+                <p className="note">
+                  Own punches only, within the last 30 days.{" "}
+                  {approver ? `Reviewed by ${approver.fullName}.` : API_ENABLED ? "Sent for review." : "Approved automatically."}
+                </p>
+                <div className="form-grid-2">
+                  <label className="field">
+                    Date
+                    <input type="date" value={corrDate} max={today} min={correctionMin} onChange={(e) => setCorrDate(e.target.value)} />
+                  </label>
+                  <label className="field">
+                    Type
+                    <select value={corrKind} onChange={(e) => setCorrKind(e.target.value as CorrectionKind)}>
+                      <option value="missing_check_in">Missing check-in</option>
+                      <option value="missing_check_out">Missing check-out</option>
+                      <option value="wrong_time">Wrong time</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    Requested check-in{corrKind === "missing_check_in" || (!corrHasCheckIn && corrKind !== "other") ? " *" : ""}
+                    <input type="time" value={corrIn} onChange={(e) => setCorrIn(e.target.value)} placeholder="HH:mm" />
+                  </label>
+                  <label className="field">
+                    Requested check-out{corrKind === "missing_check_out" || (corrKind === "missing_check_in" && !corrHasCheckIn) ? " *" : ""}
+                    <input type="time" value={corrOut} onChange={(e) => setCorrOut(e.target.value)} placeholder="HH:mm" />
+                  </label>
+                  <label className="field" style={{ gridColumn: "1 / -1" }}>
+                    Reason
+                    <input
+                      value={corrReason}
+                      onChange={(e) => setCorrReason(e.target.value)}
+                      placeholder="Why does this need correcting?"
+                    />
+                  </label>
+                </div>
+                {corrError && (
+                  <p className="note err" role="alert">
+                    {corrError}
+                  </p>
+                )}
+                <div className="form-actions">
+                  <ActionButton className="btn" onAction={submitCorr} disabled={busy}>
+                    Submit request
+                  </ActionButton>
+                </div>
+      {corrDayRecord && (
+        <p className="muted">
+          Recorded: {kindLabel(corrDayRecord.kind)} · in {corrDayRecord.checkIn ?? "—"} · out {corrDayRecord.checkOut ?? "—"}
+        </p>
+      )}
+    </div>
+  );
 
   return (
     <Page
@@ -468,16 +659,29 @@ export function AttendancePage() {
                     </strong>
                   </div>
                   <div>
-                    <span className="muted">Hours worked</span>
-                    <strong>{live.hoursWorked.toFixed(1)}h</strong>
+                    <span className="muted">Working hours</span>
+                    <strong>{formatHours(live.hoursWorked)}</strong>
                   </div>
                   <div>
                     <span className="muted">Shift</span>
                     <strong>
-                      {employee.shiftName || SAMPLE_SHIFT.name} · {employee.shiftHours || `${SAMPLE_SHIFT.start}–${SAMPLE_SHIFT.end}`}
+                      {schedule.shiftName} · {shift.start}–{shift.end}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="muted">{session.checkOut ? "Shift target" : "Left to work"}</span>
+                    <strong>
+                      {session.checkIn && !session.checkOut
+                        ? formatHours(Math.max(0, expectedHours - live.hoursWorked))
+                        : formatHours(expectedHours)}
                     </strong>
                   </div>
                 </div>
+                {session.checkIn && (() => {
+                  const inHm = formatHm(session.checkIn);
+                  const lateBy = minutesBetween(shift.start, inHm) - SAMPLE_SHIFT.lateGraceMinutes;
+                  return lateBy > 0 ? <p className="note warn">Late by {lateBy} min (shift starts {shift.start}, {SAMPLE_SHIFT.lateGraceMinutes} min grace).</p> : null;
+                })()}
                 {session.date !== today && session.phase !== "not_started" && (
                   <p className="note warn">Session started {formatShortDate(session.date)} (overnight) — check out to close it.</p>
                 )}
@@ -519,12 +723,47 @@ export function AttendancePage() {
                 </div>
               </Card>
 
+              <Card
+                title={`Monthly summary · ${monthLabel(cursor.year, cursor.month)}`}
+                action={
+                  <div className="row-gap">
+                    <button type="button" className="btn-ghost btn-tiny" aria-label="Previous month" onClick={() => moveMonth(-1)}>
+                      ←
+                    </button>
+                    <button type="button" className="btn-ghost btn-tiny" aria-label="Next month" onClick={() => moveMonth(1)}>
+                      →
+                    </button>
+                  </div>
+                }
+              >
+                <MetricGrid>
+                  <MetricCard label="Attendance" value={`${monthStats.pct}%`} hint={`${monthStats.present} present · ${monthStats.absent} absent`} />
+                  <MetricCard label="Avg working hours" value={formatHours(monthStats.avgHours)} hint={`${formatHours(monthStats.hours)} in total`} />
+                  <MetricCard label="Late arrivals" value={monthStats.late} hint={monthStats.lateMinutes ? `${monthStats.lateMinutes} min in total` : "None"} />
+                  <MetricCard label="Missing punches" value={monthStats.missing} hint={monthStats.missing ? "Request a correction" : "All complete"} />
+                </MetricGrid>
+                {monthStats.missing > 0 && (
+                  <button
+                    type="button"
+                    className="btn-ghost btn-tiny"
+                    onClick={() => {
+                      setRangeMode("month");
+                      setHistoryKind("missing_punch");
+                      setTab("history");
+                    }}
+                  >
+                    Show missing punches
+                  </button>
+                )}
+              </Card>
+
               <FilterBar>
                 <label className="filter-label">
                   Range
                   <select value={rangeMode} onChange={(e) => setRangeMode(e.target.value as RangeMode)}>
-                    <option value="week">This week</option>
-                    <option value="month">This month</option>
+                    <option value="week">Week</option>
+                    <option value="month">Month</option>
+                    <option value="year">Year</option>
                     <option value="custom">Custom</option>
                   </select>
                 </label>
@@ -557,6 +796,16 @@ export function AttendancePage() {
                     </button>
                     <button type="button" className="btn-ghost" onClick={() => moveMonth(1)}>
                       Next month →
+                    </button>
+                  </div>
+                )}
+                {rangeMode === "year" && (
+                  <div className="row-gap">
+                    <button type="button" className="btn-ghost" onClick={() => moveMonth(-12)}>
+                      ← {cursor.year - 1}
+                    </button>
+                    <button type="button" className="btn-ghost" onClick={() => moveMonth(12)}>
+                      {cursor.year + 1} →
                     </button>
                   </div>
                 )}
@@ -601,6 +850,7 @@ export function AttendancePage() {
                     <span className="day weekend legend-swatch">Weekly off</span>
                     <span className="day missing_punch legend-swatch">Missing punch</span>
                     <span className="day pending_correction legend-swatch">Correction</span>
+                    <span className="day no_record legend-swatch">No record</span>
                   </div>
                   <div className="cal att-cal">
                     {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
@@ -621,7 +871,7 @@ export function AttendancePage() {
                       else if (kind === "pending_correction") caption = "Correction";
                       else if (kind === "not_checked_in") caption = "Not checked in";
                       else if (kind === "present") {
-                        caption = row && row.hoursWorked > 0 ? `${row.hoursWorked}h` : schedule.hoursLabel;
+                        caption = row?.checkIn ? formatHours(row.hoursWorked) : schedule.hoursLabel;
                       } else if (
                         kind === "weekend" &&
                         isPrimaryWeeklyOffLabel(date, schedule.weeklyOffDays)
@@ -668,8 +918,8 @@ export function AttendancePage() {
                             <StatusBadge status={kindLabel(selectedRecord.kind)} />
                           </div>
                           <div>
-                            <span className="muted">Hours</span>
-                            <strong>{selectedRecord.hoursWorked.toFixed(1)}h</strong>
+                            <span className="muted">Working hours</span>
+                            <strong>{formatHours(selectedRecord.hoursWorked)}</strong>
                           </div>
                           <div>
                             <span className="muted">Check-in</span>
@@ -678,6 +928,16 @@ export function AttendancePage() {
                           <div>
                             <span className="muted">Check-out</span>
                             <strong>{selectedRecord.checkOut ?? "—"}</strong>
+                          </div>
+                          <div>
+                            <span className="muted">Break</span>
+                            <strong>{formatBreakDuration(breakMinutes(selectedRecord.breaks ?? []))}</strong>
+                          </div>
+                          <div>
+                            <span className="muted">Shift</span>
+                            <strong>
+                              {shift.start}–{shift.end}
+                            </strong>
                           </div>
                         </div>
                         <div>
@@ -703,24 +963,25 @@ export function AttendancePage() {
                               : ""}
                           </p>
                         )}
-                        {!["upcoming", "weekend", "holiday", "leave"].includes(selectedRecord.kind) && (
+                        {myCorrections
+                          .filter((c) => c.date === selectedRecord.date)
+                          .map((c) => (
+                            <p key={c.id} className="note">
+                              Correction {c.status.toLowerCase()}
+                              {c.decisionNote ? ` · ${c.decisionNote}` : ""}
+                            </p>
+                          ))}
+                        {canCorrect(selectedRecord, today) ? (
                           <button
                             type="button"
-                            className="btn-ghost"
-                            onClick={() =>
-                              openCorrection(
-                                selectedRecord.date,
-                                !selectedRecord.checkIn
-                                  ? "missing_check_in"
-                                  : !selectedRecord.checkOut
-                                    ? "missing_check_out"
-                                    : "wrong_time",
-                              )
-                            }
+                            className="btn"
+                            onClick={() => openCorrection(selectedRecord.date, correctionKindFor(selectedRecord))}
                           >
                             Request correction
                           </button>
-                        )}
+                        ) : selectedRecord.kind === "pending_correction" ? (
+                          <p className="muted">A correction is waiting for review.</p>
+                        ) : null}
                       </div>
                     )}
                   </Card>
@@ -755,6 +1016,49 @@ export function AttendancePage() {
             >
               <FilterBar>
                 <label className="filter-label">
+                  View
+                  <select value={rangeMode} onChange={(e) => setRangeMode(e.target.value as RangeMode)}>
+                    <option value="week">Week</option>
+                    <option value="month">Month</option>
+                    <option value="year">Year</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+                {rangeMode === "custom" ? (
+                  <>
+                    <label className="filter-label">
+                      From
+                      <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+                    </label>
+                    <label className="filter-label">
+                      To
+                      <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+                    </label>
+                  </>
+                ) : (
+                  <div className="row-gap">
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      aria-label="Previous"
+                      onClick={() => (rangeMode === "week" ? moveWeek(-1) : moveMonth(rangeMode === "year" ? -12 : -1))}
+                    >
+                      ←
+                    </button>
+                    <strong className="att-range-label">
+                      {rangeMode === "year" ? cursor.year : rangeMode === "month" ? monthLabel(cursor.year, cursor.month) : `${formatShortDate(range.from)} – ${formatShortDate(range.to)}`}
+                    </strong>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      aria-label="Next"
+                      onClick={() => (rangeMode === "week" ? moveWeek(1) : moveMonth(rangeMode === "year" ? 12 : 1))}
+                    >
+                      →
+                    </button>
+                  </div>
+                )}
+                <label className="filter-label">
                   Search
                   <input
                     value={historyQ}
@@ -773,12 +1077,63 @@ export function AttendancePage() {
                     <option value="missing_punch">Missing punch</option>
                     <option value="pending_correction">Correction pending</option>
                     <option value="not_checked_in">Not checked in</option>
+                    <option value="no_record">No record</option>
                     <option value="holiday">Holiday</option>
                   </select>
                 </label>
               </FilterBar>
+              {rangeMode === "year" && yearRows.length > 0 && (
+                <div className="table-scroll att-year">
+                  <table className="data">
+                    <thead>
+                      <tr>
+                        <th>Month</th>
+                        <th>Attendance</th>
+                        <th>Present</th>
+                        <th>Absent</th>
+                        <th>Leave</th>
+                        <th>Late</th>
+                        <th>Missing</th>
+                        <th>Avg hours</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {yearRows.map((m) => (
+                        <tr
+                          key={m.month}
+                          className="row-click"
+                          tabIndex={0}
+                          title="Show this month"
+                          onClick={() => {
+                            setCursor({ year: cursor.year, month: m.month });
+                            setRangeMode("month");
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              setCursor({ year: cursor.year, month: m.month });
+                              setRangeMode("month");
+                            }
+                          }}
+                        >
+                          <td>{m.label}</td>
+                          <td>{m.pct}%</td>
+                          <td>{m.present}</td>
+                          <td>{m.absent}</td>
+                          <td>{m.leave}</td>
+                          <td>{m.late}</td>
+                          <td>{m.missing}</td>
+                          <td>{formatHours(m.avgHours)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <p className="muted att-count">
+                {filteredHistory.length} {filteredHistory.length === 1 ? "day" : "days"}
+              </p>
               {filteredHistory.length === 0 ? (
-                <EmptyState title="No records" />
+                <EmptyState title="No records" description="Try another range or status." />
               ) : (
                 <div className="table-scroll">
                   <table className="data">
@@ -792,15 +1147,18 @@ export function AttendancePage() {
                         <th>Late</th>
                         <th>OT</th>
                         <th>Note</th>
+                        <th></th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredHistory.map((r) => (
                         <tr
                           key={r.id}
-                          className={r.date === selectedDate ? "row-active" : undefined}
+                          className={`row-click${r.date === selectedDate ? " row-active" : ""}`}
+                          title="Open this day"
                           onClick={() => {
                             setSelectedDate(r.date);
+                            setCursor({ year: Number(r.date.slice(0, 4)), month: Number(r.date.slice(5, 7)) - 1 });
                             setTab("overview");
                           }}
                         >
@@ -810,10 +1168,24 @@ export function AttendancePage() {
                           </td>
                           <td>{r.checkIn ?? "—"}</td>
                           <td>{r.checkOut ?? "—"}</td>
-                          <td>{r.hoursWorked.toFixed(1)}h</td>
+                          <td>{formatHours(r.hoursWorked)}</td>
                           <td>{r.lateMinutes ? `${r.lateMinutes}m` : "—"}</td>
                           <td>{r.overtimeMinutes ? `${r.overtimeMinutes}m` : "—"}</td>
                           <td>{r.note || "—"}</td>
+                          <td>
+                            {canCorrect(r, today) && (
+                              <button
+                                type="button"
+                                className="btn-ghost btn-tiny"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openCorrection(r.date, correctionKindFor(r));
+                                }}
+                              >
+                                Request correction
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -826,51 +1198,7 @@ export function AttendancePage() {
           {tab === "corrections" && (
             <div className="att-corr-grid">
               <Card title="Request a correction">
-                <p className="note">
-                  Own punches only, within the last 30 days.{" "}
-                  {approver ? `Reviewed by ${approver.fullName}.` : API_ENABLED ? "Sent for review." : "Approved automatically."}
-                </p>
-                <div className="form-grid-2">
-                  <label className="field">
-                    Date
-                    <input type="date" value={corrDate} max={today} onChange={(e) => setCorrDate(e.target.value)} />
-                  </label>
-                  <label className="field">
-                    Type
-                    <select value={corrKind} onChange={(e) => setCorrKind(e.target.value as CorrectionKind)}>
-                      <option value="missing_check_in">Missing check-in</option>
-                      <option value="missing_check_out">Missing check-out</option>
-                      <option value="wrong_time">Wrong time</option>
-                      <option value="other">Other</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    Requested check-in{corrKind === "missing_check_in" || (!corrHasCheckIn && corrKind !== "other") ? " *" : ""}
-                    <input type="time" value={corrIn} onChange={(e) => setCorrIn(e.target.value)} placeholder="HH:mm" />
-                  </label>
-                  <label className="field">
-                    Requested check-out{corrKind === "missing_check_out" || (corrKind === "missing_check_in" && !corrHasCheckIn) ? " *" : ""}
-                    <input type="time" value={corrOut} onChange={(e) => setCorrOut(e.target.value)} placeholder="HH:mm" />
-                  </label>
-                  <label className="field" style={{ gridColumn: "1 / -1" }}>
-                    Reason
-                    <input
-                      value={corrReason}
-                      onChange={(e) => setCorrReason(e.target.value)}
-                      placeholder="Why does this need correcting?"
-                    />
-                  </label>
-                </div>
-                {corrError && (
-                  <p className="note err" role="alert">
-                    {corrError}
-                  </p>
-                )}
-                <div className="form-actions">
-                  <ActionButton className="btn" onAction={submitCorr} disabled={busy}>
-                    Submit request
-                  </ActionButton>
-                </div>
+                {correctionForm}
               </Card>
 
               <Card title="My correction requests">
@@ -926,13 +1254,31 @@ export function AttendancePage() {
                 <div className="att-today-grid">
                   <div>
                     <span className="muted">Assigned shift</span>
-                    <strong>{employee.shiftName || SAMPLE_SHIFT.name}</strong>
+                    <strong>{schedule.shiftName}</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Shift time</span>
+                    <strong>
+                      {shift.start} – {shift.end}
+                    </strong>
                   </div>
                   <div>
                     <span className="muted">Expected hours</span>
+                    <strong>{formatHours(expectedHours)} a day</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Break</span>
+                    <strong>{BREAK_ALLOWANCE_MIN} min unpaid</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Late after</span>
                     <strong>
-                      {SAMPLE_SHIFT.start} – {SAMPLE_SHIFT.end} ({SAMPLE_SHIFT.expectedHours}h / day)
+                      {SAMPLE_SHIFT.lateGraceMinutes} min grace ({minutesToHm(minutesBetween("00:00", shift.start) + SAMPLE_SHIFT.lateGraceMinutes)})
                     </strong>
+                  </div>
+                  <div>
+                    <span className="muted">Time zone</span>
+                    <strong>{employee.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone}</strong>
                   </div>
                   <div>
                     <span className="muted">Weekly offs</span>
@@ -944,6 +1290,53 @@ export function AttendancePage() {
                   </div>
                 </div>
                 <p className="note">{schedule.note}</p>
+              </Card>
+
+              <Card
+                title="Shift schedule"
+                className="att-corr-span"
+                action={
+                  <div className="row-gap">
+                    <button type="button" className="btn-ghost btn-tiny" onClick={() => setScheduleWeek((w) => w - 1)}>
+                      ← Week
+                    </button>
+                    <button type="button" className="btn-ghost btn-tiny" onClick={() => setScheduleWeek(0)}>
+                      This week
+                    </button>
+                    <button type="button" className="btn-ghost btn-tiny" onClick={() => setScheduleWeek((w) => w + 1)}>
+                      Week →
+                    </button>
+                  </div>
+                }
+              >
+                <div className="table-scroll">
+                  <table className="data">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Day</th>
+                        <th>Plan</th>
+                        <th>Shift</th>
+                        <th>Expected</th>
+                        <th>Recorded</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scheduleDays.map((d) => (
+                        <tr key={d.date} className={d.date === today ? "row-active" : undefined}>
+                          <td>{formatShortDate(d.date)}</td>
+                          <td>{parseISODate(d.date).toLocaleDateString("en-GB", { weekday: "long" })}</td>
+                          <td>
+                            <StatusBadge status={d.plan} tone={d.working ? "ok" : "neutral"} literal keepCase />
+                          </td>
+                          <td>{d.working ? `${shift.start}–${shift.end}` : "—"}</td>
+                          <td>{d.working ? formatHours(expectedHours) : "—"}</td>
+                          <td>{d.record?.checkIn ? `${d.record.checkIn}–${d.record.checkOut ?? "…"} · ${formatHours(d.record.hoursWorked)}` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </Card>
 
               <Card title={`Monthly summary · ${monthLabel(cursor.year, cursor.month)}`}>
@@ -973,6 +1366,9 @@ export function AttendancePage() {
             </div>
           )}
       </>
+      <Dialog open={corrOpen} title={`Request correction · ${formatShortDate(corrDate)}`} onClose={() => setCorrOpen(false)}>
+        {correctionForm}
+      </Dialog>
     </Page>
   );
 }

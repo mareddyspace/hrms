@@ -38,7 +38,7 @@ export interface DayRecord {
 
 export const DAY_STATUS_LABEL: Record<DayStatus, string> = {
   draft: "Draft",
-  submitted: "Submitted",
+  submitted: "Pending",
   approved: "Approved",
   rejected: "Sent back",
   reopened: "Reopened",

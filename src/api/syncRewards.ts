@@ -6,6 +6,7 @@
 import type {
   ApiLetterInfo,
   BenefitEnrollment,
+  BenefitHistoryRow,
   BenefitPlan,
   BonusRecord,
   CompCycle,
@@ -147,6 +148,12 @@ interface BenefitPlanOut {
   auto_enrolled: boolean;
   eligibility: { exclude_employment_types?: string[]; min_service_months?: number; grades?: string[] };
   rules: string[];
+  employer_annual_cost?: number;
+  currency?: string;
+  coverage?: string | null;
+  terms?: string | null;
+  legal_entity?: string | null;
+  documents?: { id: string; title: string; file_name: string; size_bytes: number }[];
 }
 
 interface EligibilityOut {
@@ -192,6 +199,10 @@ interface DependentOut {
   verified_by: string | null;
   verified_at: string | null;
   covered_plan_ids: string[];
+  doc_name?: string | null;
+  doc_size?: number | null;
+  cover_eligible?: boolean;
+  cover_note?: string;
 }
 
 interface EnrollmentOut {
@@ -249,6 +260,7 @@ export interface ApiCompData {
 }
 
 export interface ApiBenefitsData {
+  history: BenefitHistoryRow[];
   enrollments: BenefitEnrollment[];
   dependents: Dependent[];
   lifeEvents: LifeEvent[];
@@ -532,6 +544,12 @@ function toPlan(p: BenefitPlanOut): BenefitPlan {
     mandatory: p.mandatory,
     autoEnrolled: p.auto_enrolled,
     coversDependents: p.covers_dependents,
+    coverage: p.coverage ?? undefined,
+    terms: p.terms ?? undefined,
+    legalEntity: p.legal_entity ?? undefined,
+    employerAnnualCost: p.employer_annual_cost,
+    currency: p.currency,
+    files: (p.documents ?? []).map((d) => ({ id: d.id, title: d.title, fileName: d.file_name, size: d.size_bytes })),
     eligibility: {
       excludeEmploymentTypes: p.eligibility.exclude_employment_types,
       minServiceMonths: p.eligibility.min_service_months,
@@ -540,16 +558,17 @@ function toPlan(p: BenefitPlanOut): BenefitPlan {
   };
 }
 
-const ENROLL_STATUS: Record<string, BenefitEnrollment["status"]> = { requested: "Pending", approved: "Enrolled", waived: "Waived" };
+const ENROLL_STATUS: Record<string, BenefitEnrollment["status"]> = { requested: "Pending", approved: "Enrolled", waived: "Waived", cancelled: "Cancelled" };
 const VERIFICATION: Record<string, Dependent["verification"]> = { pending: "Pending", verified: "Verified", rejected: "Rejected" };
 
 export async function loadApiBenefits(accountId: string): Promise<ApiBenefitsData> {
   const me = await apiMe(accountId);
   const hr = HR_ROLES.has(me.role);
   const ownCode = me.country_code ?? "";
-  const planCountries = hr ? TIMEZ_COUNTRIES.map((c) => c.code) : [ownCode];
-  const [planLists, windows, changeWindow, lifeEvents, myDeps, queue, mine, toDecide, all, nominees] = await Promise.all([
-    Promise.all(planCountries.map((code) => orElse(api.get<BenefitPlanOut[]>("/benefits/plans", hr ? { country: code } : undefined), []))),
+  // Everyone can browse every country's plans (plans hold no personal data); enrolling stays own-country only.
+  const planCountries = TIMEZ_COUNTRIES.map((c) => c.code);
+  const [planLists, windows, changeWindow, lifeEvents, myDeps, queue, mine, toDecide, all, nominees, history] = await Promise.all([
+    Promise.all(planCountries.map((code) => orElse(api.get<BenefitPlanOut[]>("/benefits/plans", { country: code }), []))),
     orElse(api.get<WindowOut[]>("/benefits/windows"), []),
     orElse(api.get<ChangeWindowOut>("/benefits/change-window"), { open: false, text: "", life_event_id: null }),
     orElse(api.get<LifeEventOut[]>("/benefits/life-events"), []),
@@ -559,6 +578,7 @@ export async function loadApiBenefits(accountId: string): Promise<ApiBenefitsDat
     orElse(api.get<EnrollmentOut[]>("/benefits/enrollments", { view: "to_decide" }), []),
     hr ? orElse(api.get<EnrollmentOut[]>("/benefits/enrollments", { view: "all" }), []) : Promise.resolve([]),
     orElse(api.get<NomineeOut[]>("/benefits/beneficiaries"), []),
+    orElse(api.get<{ id: number | string; date: string; event: string; detail: string; by: string }[]>("/benefits/history"), []),
   ]);
   const planOuts = planLists.flat();
   const plans = planOuts.map(toPlan);
@@ -603,6 +623,10 @@ export async function loadApiBenefits(accountId: string): Promise<ApiBenefitsDat
     verification: VERIFICATION[d.verification] ?? "Pending",
     verifiedBy: d.verified_by ? nameOf(d.verified_by) : undefined,
     verifiedOn: d.verified_at ? day(d.verified_at) : undefined,
+    docName: d.doc_name ?? undefined,
+    docSize: d.doc_size ?? undefined,
+    coverEligible: d.cover_eligible,
+    coverNote: d.cover_note,
   }));
 
   const win = windows.find((w) => w.is_open && (!w.country_code || w.country_code === ownCode)) ?? windows.find((w) => !w.country_code || w.country_code === ownCode) ?? windows[0];
@@ -616,6 +640,13 @@ export async function loadApiBenefits(accountId: string): Promise<ApiBenefitsDat
     : { year: new Date().getFullYear(), start: "", end: "" };
 
   return {
+    history: history.map((h) => ({
+      id: String(h.id),
+      employeeId: me.employee_id ?? accountId,
+      date: h.date,
+      event: h.event,
+      detail: h.by ? `${h.detail}${h.detail ? " · " : ""}by ${h.by}` : h.detail,
+    })),
     enrollments,
     dependents,
     lifeEvents: lifeEvents.map((e) => ({
@@ -691,6 +722,30 @@ export function apiSetCoverage(enrollmentId: string, dependentIds: string[]): Pr
 
 export function apiRequestEnrollment(planId: string, dependentIds: string[] = []): Promise<Outcome> {
   return attempt(() => api.post("/benefits/enrollments", { plan_id: planId, dependent_ids: dependentIds }));
+}
+
+export function apiCancelEnrollment(id: string): Promise<Outcome> {
+  return attempt(() => api.post(`/benefits/enrollments/${enc(id)}/cancel`));
+}
+
+export function apiUploadDependentDoc(id: string, file: File): Promise<Outcome> {
+  return attempt(() =>
+    authorizedFetch(`/benefits/dependents/${enc(id)}/document?${new URLSearchParams({ filename: file.name })}`, {
+      method: "POST",
+      headers: { "Content-Type": fileType(file) },
+      body: file,
+    }),
+  );
+}
+
+export function apiUploadPlanDoc(planId: string, title: string, file: File): Promise<Outcome> {
+  return attempt(() =>
+    authorizedFetch(`/benefits/plans/${enc(planId)}/documents?${new URLSearchParams({ title, filename: file.name })}`, {
+      method: "POST",
+      headers: { "Content-Type": fileType(file) },
+      body: file,
+    }),
+  );
 }
 
 export function apiDecideEnrollment(id: string, decision: "approve" | "waive"): Promise<Outcome> {

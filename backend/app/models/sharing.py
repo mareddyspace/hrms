@@ -78,6 +78,21 @@ class MailMessage(Base):
                                                            order_by="MailRecipient.id")
 
 
+class MailDraft(TimestampMixin, Base):
+    """An unsent mail kept for its author (migration 0027)."""
+
+    __tablename__ = "mail_drafts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True)
+    to_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    cc_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    subject: Mapped[str] = mapped_column(String(300), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str | None] = mapped_column(String(32))
+    thread_id: Mapped[str | None] = mapped_column(String(64))
+
+
 class MailRecipient(Base):
     __tablename__ = "mail_recipients"
     __table_args__ = (UniqueConstraint("message_id", "person_id", name="uq_mail_recipient"),)
@@ -125,6 +140,9 @@ class Announcement(TimestampMixin, Base):
     author_id: Mapped[str | None] = mapped_column(String(64))
     author_name: Mapped[str] = mapped_column(String(200))
     must_acknowledge: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Holiday | Policy | Event | IT | Wellness | People | Leadership | General (migration 0027)
+    category: Mapped[str | None] = mapped_column(String(32))
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
 
     reads: Mapped[list[AnnouncementRead]] = relationship(back_populates="announcement", cascade="all, delete-orphan")
 

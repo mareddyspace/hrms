@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { API_ENABLED, api } from "../api/client.ts";
 import { Card, Page } from "../components/ui.tsx";
 import { findDemoById, managementChain } from "../demoAccounts.ts";
 import {
@@ -126,6 +127,43 @@ export function TeamLeaveCalendarPage() {
 
   const dates = monthDates(cursor.year, cursor.month);
   const week = weekDates(mondayOf(today));
+
+  // Backend mode: teammates' approved leave from the server. It only says "On leave" (no type or reason) unless
+  // the viewer is their manager or HR.
+  const [apiTeam, setApiTeam] = useState<LeaveRequest[]>([]);
+  const spanFrom = [dates[0], week[0]].sort()[0];
+  const spanTo = [dates[dates.length - 1], week[week.length - 1]].sort().reverse()[0];
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let live = true;
+    type Row = { id: string; employee_id: string; from: string; to: string; half: string; status: string; leave_code: string | null; reason: string | null };
+    api
+      .get<Row[]>("/leave/team-calendar", { from: spanFrom, to: spanTo })
+      .then((rows) => {
+        if (!live) return;
+        setApiTeam(
+          rows.map((r) => ({
+            id: r.id,
+            employeeId: r.employee_id,
+            code: (r.leave_code ?? "pto") as LeaveCode,
+            from: r.from,
+            to: r.to,
+            reason: r.reason ?? "",
+            status: r.status === "pending" ? "pending" : "approved",
+            appliedOn: r.from,
+            ...(r.half === "first" || r.half === "second" ? { half: r.half } : {}),
+          })),
+        );
+      })
+      .catch(() => live && setApiTeam([]));
+    return () => {
+      live = false;
+    };
+  }, [spanFrom, spanTo]);
+  const allLeave = useMemo(() => {
+    const known = new Set(state.leaveRequests.map((r) => r.id));
+    return [...state.leaveRequests, ...apiTeam.filter((r) => !known.has(r.id))];
+  }, [state.leaveRequests, apiTeam]);
   const policyName = (code: LeaveCode) => state.leavePolicies.find((p) => p.code === code)?.name ?? code;
 
   // Per person: holidays, weekly offs and leave for each date in view (month + this week).
@@ -133,7 +171,7 @@ export function TeamLeaveCalendarPage() {
     const span = [...new Set([...dates, ...week])];
     const byPerson = new Map<string, Map<string, DayInfo>>();
     const visibleIds = new Set(visible.map((p) => p.id));
-    const leaves = state.leaveRequests.filter(
+    const leaves = allLeave.filter(
       (r) => visibleIds.has(r.employeeId) && (r.status === "approved" || r.status === "pending"),
     );
     for (const person of visible) {
@@ -158,7 +196,7 @@ export function TeamLeaveCalendarPage() {
     }
     return byPerson;
     // seesDetail depends only on mode and employee.id.
-  }, [visible, state.leaveRequests, state.holidays, dates.join(), week.join(), mode, employee.id]);
+  }, [visible, allLeave, state.holidays, dates.join(), week.join(), mode, employee.id]);
 
   /** Off-day weight for one person on one date: 1, 0.5 for a half day, 0 when working (incl. WFH). */
   function offWeight(personId: string, date: string, includePending: boolean): number {
@@ -168,7 +206,7 @@ export function TeamLeaveCalendarPage() {
     let weight = leave.half ? 0.5 : 1;
     // Two different approved halves on one day make a full day.
     if (leave.half) {
-      const other = state.leaveRequests.find(
+      const other = allLeave.find(
         (r) =>
           r.id !== leave.id &&
           r.employeeId === personId &&
@@ -233,7 +271,7 @@ export function TeamLeaveCalendarPage() {
 
   function describe(person: RosterPerson, leave: LeaveRequest): string {
     const range = leave.from === leave.to ? formatShortDate(leave.from) : `${formatShortDate(leave.from)} – ${formatShortDate(leave.to)}`;
-    if (!seesDetail(person.id)) return `${range}${halfText(leave)}`;
+    if (!seesDetail(person.id)) return `On leave · ${range}${halfText(leave)}`;
     return `${policyName(leave.code)} · ${range}${halfText(leave)}${leave.status === "pending" ? " · pending" : ""}`;
   }
 
@@ -338,7 +376,7 @@ export function TeamLeaveCalendarPage() {
         <div className="tlc-legend" style={{ margin: "10px 0" }}>
           {mode === "team" ? (
             <span>
-              <i className="tlc-swatch" style={{ background: AWAY_COLOUR }} /> Teammate away
+              <i className="tlc-swatch" style={{ background: AWAY_COLOUR }} /> Teammate on leave
             </span>
           ) : null}
           {usedCodes.map((code) => (
@@ -403,7 +441,7 @@ export function TeamLeaveCalendarPage() {
                         : info?.kind === "off"
                           ? `${formatShortDate(d)} · Weekly off`
                           : leave
-                            ? `${person.name} · ${detail ? policyName(leave.code) : "Away"}${halfText(leave)}${
+                            ? `${person.name} · ${detail ? policyName(leave.code) : "On leave"}${halfText(leave)}${
                                 leave.status === "pending" ? " · pending" : ""
                               }`
                             : undefined;

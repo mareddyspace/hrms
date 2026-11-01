@@ -1,11 +1,9 @@
 import { useState } from "react";
 import { Banner, Card, Field, Page, StatusPill, SubmitButton, notify, useAction } from "../components/ui.tsx";
-import { claimLimitsFor, declarableTaxYears, itemCurrency, money, payRulesFor, receiptThresholdFor } from "../countryPay.ts";
+import { claimLimitsFor, itemCurrency, money, payRulesFor, receiptThresholdFor } from "../countryPay.ts";
 import { addDaysISO, EXPENSE_CLAIM_WINDOW_DAYS, formatShortDate, todayISO } from "../model.ts";
 
 import { usePortal } from "../store.tsx";
-import { useTaxRegime } from "../data/taxRegime.ts";
-import { RegimePicker } from "./PayslipsPage.tsx";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
 
 const REIMBURSE_CATEGORIES = ["Internet", "Books", "Medical", "Conveyance", "Other"] as const;
@@ -156,132 +154,5 @@ export function ReimbursementPage() {
   );
 }
 
-export function InvestmentProofPage() {
-  const { state, employee, addInvestmentProof, payInput } = usePortal();
-  const rules = payRulesFor(employee.countryCode);
-  const years = declarableTaxYears(rules, todayISO());
-  const mine = state.investmentProofs.filter((item) => item.employeeId === employee.id);
-  const [section, setSection] = useState<string>(rules.declarations[0]?.code ?? "");
-  const [title, setTitle] = useState("");
-  const [amount, setAmount] = useState("");
-  const [financialYear, setFinancialYear] = useState(years[0]);
-  const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  // The same regime as the payslips: picking it here changes the payslip TDS.
-  const regime = useTaxRegime(employee.id);
-  const cap = rules.declarations.find((item) => item.code === section)?.cap;
-  const hasRegimes = rules.code === "IN";
-  const newRegime = hasRegimes && regime === "new";
-  const declareAction = useAction();
-
-  function onSubmit(): boolean {
-    const error = addInvestmentProof({
-      section,
-      title,
-      amount: Number(amount),
-      financialYear,
-    });
-    setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: "Declaration submitted." });
-    if (error) return false;
-    notify("Tax declaration submitted.");
-    setTitle("");
-    setAmount("");
-    return true;
-  }
-
-  if (rules.declarations.length === 0) {
-    return (
-      <Page title="Tax declarations" subtitle={employee.countryName}>
-        <Card>
-          <p className="empty">{rules.declarationNote}</p>
-        </Card>
-      </Page>
-    );
-  }
-
-  const regimeField = hasRegimes && (
-    <div style={{ gridColumn: "1 / -1" }}>
-      <RegimePicker input={payInput} showLink={false} />
-    </div>
-  );
-
-  return (
-    <Page title="Tax declarations" subtitle={`${employee.countryName ?? "India"} · ${rules.declarationNote}`}>
-      <div className="split">
-        <Card title="Declare">
-          {newRegime ? (
-            <div className="form-grid">
-              {regimeField}
-              <p className="empty">
-                No deductions under the new regime. Switch to the old regime to declare investments. Verified proofs then lower your TDS.
-              </p>
-            </div>
-          ) : (
-          <form onSubmit={declareAction.submit(onSubmit)}>
-            <div className="form-grid">
-              {regimeField}
-              <Field label="Section">
-                <select value={section} onChange={(event) => setSection(event.target.value)}>
-                  {rules.declarations.map((item) => (
-                    <option key={item.code} value={item.code}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Tax year">
-                <select value={financialYear} onChange={(event) => setFinancialYear(event.target.value)}>
-                  {years.map((fy) => (
-                    <option key={fy} value={fy}>
-                      {fy}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Title" wide>
-                <input value={title} onChange={(event) => setTitle(event.target.value)} />
-              </Field>
-              <Field label={cap ? `Amount (${rules.currency}, up to ${money(cap, rules.currency)})` : `Amount (${rules.currency})`}>
-                <input type="number" min={1} value={amount} onChange={(event) => setAmount(event.target.value)} />
-              </Field>
-            </div>
-            <div className="form-actions">
-              <SubmitButton action={declareAction} className="btn">
-                Submit
-              </SubmitButton>
-            </div>
-            <Banner message={message} />
-          </form>
-          )}
-        </Card>
-        <Card title="Submitted">
-          <div className="table-scroll">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Section</th>
-                  <th>Title</th>
-                  <th className="num">Amount</th>
-                  <th>Tax year</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mine.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.section}</td>
-                    <td>{item.title}</td>
-                    <td className="num">{money(item.amount, item.currency)}</td>
-                    <td>{item.financialYear}</td>
-                    <td>
-                      <StatusPill status={item.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
-    </Page>
-  );
-}
+/** Tax declarations with proofs, Finance verification and deadlines: src/features/taxdecl/TaxDeclarationsPage.tsx. */
+export { TaxDeclarationsPage as InvestmentProofPage } from "../features/taxdecl/TaxDeclarationsPage.tsx";

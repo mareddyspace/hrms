@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type DragEvent } from "react";
-import { ActionButton, Banner, Card, DataTable, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, SubmitButton, Tabs, notify, useAction } from "../../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, FilterBar, MetricCard, MetricGrid, Page, StatusBadge, SubmitButton, Tabs, notify, useAction } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
 import { addDaysISO, holidaysForPerson, monthLabel, parseISODate, todayISO } from "../../model.ts";
 import { dayHead, dragShift, droppedShift, hoursFor, isNightShift, monthDates, ShiftChip, shiftColor, shiftHours } from "./rosterUi.tsx";
+import { scheduleForEmployee } from "../../data/workSchedule.ts";
 import {
+  apiCompOffSummary,
   assignShift,
   canApproveSwap,
   cancelSwap,
@@ -109,84 +111,265 @@ export function ShiftRosterPage() {
 
 // ---------- My shifts ----------
 
+/** Worked hours of a shift: its length less the unpaid break. */
+function netHours(shift: ShiftDef | undefined): number {
+  if (!shift) return 0;
+  return Math.max(0, Math.round((shiftHours(shift) - (shift.breakMinutes ?? 60) / 60) * 100) / 100);
+}
+
+type DayInfo = { date: string; shift?: ShiftDef; managerId?: string };
+
+function ShiftDetailDialog({ info, onClose, actor }: { info: DayInfo; onClose: () => void; actor: WorkforceActor }) {
+  const data = useShifts();
+  const ctx = useRosterContext();
+  const leave = leaveOn(actor.id, info.date, ctx.leaves);
+  const holiday = holidayOn(info.date, holidaysForPerson(ctx.holidays, actor.id));
+  const swaps = data.swaps.filter((s) => s.date === info.date && (s.requesterId === actor.id || s.teammateId === actor.id));
+  const s = info.shift;
+  const isWeeklyOff = useWeeklyOff();
+  return (
+    <Dialog open title={`${shortDay(info.date)}${s ? ` · ${s.name}` : ""}`} onClose={onClose} actions={<button type="button" className="btn-ghost" onClick={onClose}>Close</button>}>
+      {s ? (
+        <dl className="meta">
+          <dt>Shift</dt>
+          <dd>
+            <ShiftChip shift={s} />
+          </dd>
+          <dt>Starts</dt>
+          <dd>{s.start}</dd>
+          <dt>Ends</dt>
+          <dd>
+            {s.end}
+            {isNightShift(s) ? " (next day)" : ""}
+          </dd>
+          <dt>Break</dt>
+          <dd>{s.breakMinutes ?? 60} min</dd>
+          <dt>Hours</dt>
+          <dd>
+            {netHours(s)} h worked ({shiftHours(s)} h with the break)
+          </dd>
+          <dt>Location</dt>
+          <dd>{s.location || "—"}</dd>
+          <dt>Manager</dt>
+          <dd>{info.managerId ? personName(info.managerId) : "—"}</dd>
+          {compOffReason(info.date, holidaysForPerson(ctx.holidays, actor.id)) && (
+            <>
+              <dt>Comp-off</dt>
+              <dd>{compOffReason(info.date, holidaysForPerson(ctx.holidays, actor.id))}: working it earns a comp-off day once your manager credits it.</dd>
+            </>
+          )}
+        </dl>
+      ) : (
+        <p>{isWeeklyOff(info.date) ? "Weekly off." : "No shift on the published roster."}</p>
+      )}
+      {leave && <p className="note warn">You are on approved leave this day.</p>}
+      {holiday && <p className="note">Holiday: {holiday.name}</p>}
+      {swaps.length > 0 && (
+        <div>
+          <strong>Swap requests</strong>
+          <ul className="wf-plain-list">
+            {swaps.map((sw) => (
+              <li key={sw.id}>
+                {swapLine(sw, data)} · <SwapBadge status={sw.status} />
+                {sw.decisionNote && <span className="muted"> “{sw.decisionNote}”</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
+/** Weekly offs from the signed-in person's own schedule (Sat/Sun by default; Fri/Sat in some countries). */
+function useWeeklyOff(): (date: string) => boolean {
+  const { employee } = usePortal();
+  const offs = scheduleForEmployee({ shiftName: employee.shiftName, shiftHours: employee.shiftHours, countryCode: employee.countryCode }).weeklyOffDays;
+  return (date: string) => offs.includes(parseISODate(date).getDay());
+}
+
 function MyShifts({ actor }: { actor: WorkforceActor }) {
   const data = useShifts();
   const ctx = useRosterContext();
   const today = todayISO();
   const [weekStart, setWeekStart] = useState(() => weekStartOf(today));
+  const [mode, setMode] = useState<"week" | "month">("week");
+  const [month, setMonth] = useState(() => ({ y: parseISODate(today).getFullYear(), m: parseISODate(today).getMonth() }));
+  const [detail, setDetail] = useState<DayInfo | null>(null);
+  const [shiftFilter, setShiftFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const isWeeklyOff = useWeeklyOff();
   const mine = publishedShiftsFor(actor.id, data);
   const upcoming = mine.filter((a) => a.date >= today);
   const recent = mine.filter((a) => a.date < today && a.date >= addDaysISO(today, -14)).reverse();
   const shown = weekDates(weekStart);
   const credits = creditsFor(actor.id, data).filter((c) => !isCreditExpired(c, today));
+  const apiCompOff = apiCompOffSummary();
   const next = upcoming[0];
-  const weekHours = hoursFor(actor.id, shown, { ...data, assignments: mine });
-  const nights = mine.filter((a) => shown.includes(a.date) && isNightShift(shiftById(a.shiftId, data))).length;
+  const weekRows = mine.filter((a) => shown.includes(a.date));
+  const weekHours = Math.round(weekRows.reduce((sum, a) => sum + netHours(shiftById(a.shiftId, data)), 0) * 100) / 100;
+  const nights = weekRows.filter((a) => isNightShift(shiftById(a.shiftId, data))).length;
+  const weeklyOffs = shown.filter((d) => isWeeklyOff(d) && !mine.some((a) => a.date === d));
+  // Changes to my shifts: approved swaps (either side).
+  const changes = data.swaps
+    .filter((s) => s.status === "approved" && (s.requesterId === actor.id || s.teammateId === actor.id))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const needle = search.trim().toLowerCase();
+  const matches = (a: (typeof mine)[number]) => {
+    const shift = shiftById(a.shiftId, data);
+    if (shiftFilter && a.shiftId !== shiftFilter) return false;
+    if (!needle) return true;
+    return [shortDay(a.date), a.date, shift?.name ?? "", shift?.location ?? "", personName(a.managerId)].some((v) => v.toLowerCase().includes(needle));
+  };
+  const open = (date: string) => {
+    const a = mine.find((x) => x.date === date);
+    setDetail({ date, shift: a ? shiftById(a.shiftId, data) : undefined, managerId: a?.managerId });
+  };
 
   const row = (a: (typeof mine)[number]) => {
     const shift = shiftById(a.shiftId, data);
-    const note = compOffReason(a.date, ctx.holidays);
+    const note = compOffReason(a.date, holidaysForPerson(ctx.holidays, actor.id));
     return [
-      shortDay(a.date),
+      <button key="d" type="button" className="link-btn" onClick={() => open(a.date)}>
+        {shortDay(a.date)}
+      </button>,
       <ShiftChip key="s" shift={shift} />,
       shift ? `${shift.start}–${shift.end}` : "—",
+      `${netHours(shift)} h`,
+      shift?.location || "—",
       [isWeekend(a.date) ? "Weekend" : "", note ?? ""].filter(Boolean).join(" · "),
     ];
   };
+  const monthDays = monthDates(month.y, month.m);
 
   return (
     <>
       <MetricGrid>
         <MetricCard label="Next shift" value={next ? shiftById(next.shiftId, data)?.name ?? "—" : "None"} hint={next ? shortDay(next.date) : undefined} />
-        <MetricCard label="Hours this week" value={`${weekHours} h`} hint={nights ? `${nights} night` : undefined} />
-        <MetricCard label="Comp-off credits" value={credits.length} hint="Available to use" />
+        <MetricCard label="Hours this week" value={`${weekHours} h`} hint={`${weekRows.length} shifts${nights ? ` · ${nights} night` : ""}`} />
+        <MetricCard label="Weekly offs" value={weeklyOffs.length} hint={weeklyOffs.map((d) => shortDay(d).split(",")[0]).join(", ") || "None this week"} />
+        <MetricCard label="Comp-off available" value={apiCompOff ? apiCompOff.available : credits.length} hint="Days" />
       </MetricGrid>
       <Card
-        title={`Week of ${fmt(weekStart)}`}
+        title={mode === "week" ? `Week of ${fmt(weekStart)}` : monthLabel(month.y, month.m)}
         action={
           <div className="row-gap">
-            <button className="btn-ghost btn-tiny" type="button" onClick={() => setWeekStart(addDaysISO(weekStart, -7))}>
+            <Tabs
+              tabs={[
+                { id: "week", label: "Week" },
+                { id: "month", label: "Month" },
+              ]}
+              value={mode}
+              onChange={(id) => setMode(id === "month" ? "month" : "week")}
+            />
+            <button className="btn-ghost btn-tiny" type="button" onClick={() => (mode === "week" ? setWeekStart(addDaysISO(weekStart, -7)) : setMonth(({ y, m }) => (m === 0 ? { y: y - 1, m: 11 } : { y, m: m - 1 })))}>
               Previous
             </button>
-            <button className="btn-ghost btn-tiny" type="button" onClick={() => setWeekStart(weekStartOf(today))}>
-              This week
+            <button
+              className="btn-ghost btn-tiny"
+              type="button"
+              onClick={() => {
+                setWeekStart(weekStartOf(today));
+                setMonth({ y: parseISODate(today).getFullYear(), m: parseISODate(today).getMonth() });
+              }}
+            >
+              {mode === "week" ? "This week" : "This month"}
             </button>
-            <button className="btn-ghost btn-tiny" type="button" onClick={() => setWeekStart(addDaysISO(weekStart, 7))}>
+            <button className="btn-ghost btn-tiny" type="button" onClick={() => (mode === "week" ? setWeekStart(addDaysISO(weekStart, 7)) : setMonth(({ y, m }) => (m === 11 ? { y: y + 1, m: 0 } : { y, m: m + 1 })))}>
               Next
             </button>
           </div>
         }
       >
-        <div className="wf-my-week">
-          {shown.map((d) => {
-            const a = mine.find((x) => x.date === d);
-            const shift = a ? shiftById(a.shiftId, data) : undefined;
-            const leave = leaveOn(actor.id, d, ctx.leaves);
-            const holiday = holidayOn(d, holidaysForPerson(ctx.holidays, actor.id));
-            return (
-              <div key={d} className={`wf-my-day${isWeekend(d) ? " weekend" : ""}${d === today ? " today" : ""}`}>
-                <strong>{shortDay(d)}</strong>
-                {shift ? <ShiftChip shift={shift} /> : <span className="muted">Off</span>}
-                {shift && <span className="muted">{shift.start}–{shift.end}</span>}
-                {leave && <span className="wf-tag warn">On leave</span>}
-                {holiday && <span className="wf-tag info">{holiday.name}</span>}
-              </div>
-            );
-          })}
-        </div>
+        {mode === "week" ? (
+          <div className="wf-my-week">
+            {shown.map((d) => {
+              const a = mine.find((x) => x.date === d);
+              const shift = a ? shiftById(a.shiftId, data) : undefined;
+              const leave = leaveOn(actor.id, d, ctx.leaves);
+              const holiday = holidayOn(d, holidaysForPerson(ctx.holidays, actor.id));
+              return (
+                <button key={d} type="button" className={`wf-my-day wf-day-btn${isWeekend(d) ? " weekend" : ""}${d === today ? " today" : ""}`} onClick={() => open(d)} aria-label={`${shortDay(d)}: ${shift ? shift.name : "no shift"}. Open details`}>
+                  <strong>{shortDay(d)}</strong>
+                  {shift ? <ShiftChip shift={shift} /> : <span className="muted">{isWeeklyOff(d) ? "Weekly off" : "Off"}</span>}
+                  {shift && (
+                    <span className="muted">
+                      {shift.start}–{shift.end} · {netHours(shift)} h
+                    </span>
+                  )}
+                  {leave && <span className="wf-tag warn">On leave</span>}
+                  {holiday && <span className="wf-tag info">{holiday.name}</span>}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="wf-month-cal">
+            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+              <span key={d} className="wf-month-dow">
+                {d}
+              </span>
+            ))}
+            {Array.from({ length: (parseISODate(monthDays[0]).getDay() + 6) % 7 }, (_, i) => (
+              <span key={`p${i}`} />
+            ))}
+            {monthDays.map((d) => {
+              const a = mine.find((x) => x.date === d);
+              const shift = a ? shiftById(a.shiftId, data) : undefined;
+              const leave = leaveOn(actor.id, d, ctx.leaves);
+              return (
+                <button key={d} type="button" className={`wf-month-day${d === today ? " today" : ""}${isWeekend(d) ? " weekend" : ""}`} onClick={() => open(d)} aria-label={`${shortDay(d)}: ${shift ? shift.name : "no shift"}`}>
+                  <span className="wf-month-num">{Number(d.slice(8))}</span>
+                  {shift ? <ShiftChip shift={shift} short /> : <span className="muted">{isWeeklyOff(d) ? "Off" : ""}</span>}
+                  {leave && <span className="wf-tag warn">L</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <p className="muted">Click a day for the shift's times, break, location and manager.</p>
       </Card>
-      <Card title="Upcoming">
-        <DataTable
-          headers={["Date", "Shift", "Hours", ""]}
-          rows={upcoming.map(row)}
-          empty={<EmptyState title="No published shifts" />}
-        />
+      <Card
+        title="Upcoming"
+        action={
+          <FilterBar>
+            <input type="search" aria-label="Search shifts" placeholder="Search date, shift, location" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <select aria-label="Filter by shift" value={shiftFilter} onChange={(e) => setShiftFilter(e.target.value)}>
+              <option value="">All shifts</option>
+              {data.shifts.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </FilterBar>
+        }
+      >
+        <DataTable headers={["Date", "Shift", "Time", "Hours", "Location", ""]} rows={upcoming.filter(matches).map(row)} empty={<EmptyState title={needle || shiftFilter ? "No shift matches" : "No published shifts"} />} />
       </Card>
-      {recent.length > 0 && (
-        <Card title="Last 14 days">
-          <DataTable headers={["Date", "Shift", "Hours", ""]} rows={recent.map(row)} />
+      {changes.length > 0 && (
+        <Card title="Shift changes">
+          <DataTable
+            headers={["Date", "Change", "Approved by", "Note"]}
+            rows={changes.map((s) => {
+              const mineBefore = s.requesterId === actor.id ? s.requesterShiftId : s.teammateShiftId;
+              const mineAfter = s.requesterId === actor.id ? s.teammateShiftId : s.requesterShiftId;
+              return [
+                shortDay(s.date),
+                `${shiftById(mineBefore, data)?.name ?? "—"} → ${shiftById(mineAfter, data)?.name ?? "—"} (swap with ${personName(s.requesterId === actor.id ? s.teammateId : s.requesterId)})`,
+                s.decidedByName ?? "—",
+                s.decisionNote ?? "",
+              ];
+            })}
+          />
         </Card>
       )}
+      {recent.filter(matches).length > 0 && (
+        <Card title="Last 14 days">
+          <DataTable headers={["Date", "Shift", "Time", "Hours", "Location", ""]} rows={recent.filter(matches).map(row)} />
+        </Card>
+      )}
+      {detail && <ShiftDetailDialog info={detail} actor={actor} onClose={() => setDetail(null)} />}
     </>
   );
 }
@@ -211,12 +394,40 @@ function swapLine(swap: ShiftSwap, data: ReturnType<typeof getShiftState>) {
   return `${personName(swap.requesterId)} (${shiftById(swap.requesterShiftId, data)?.name ?? "—"}) ↔ ${personName(swap.teammateId)} (${shiftById(swap.teammateShiftId, data)?.name ?? "—"})`;
 }
 
+/** Requested → teammate → manager, as short steps. */
+function SwapSteps({ swap }: { swap: ShiftSwap }) {
+  const teammateDone = swap.status === "awaiting_manager" || swap.status === "approved" || swap.status === "rejected";
+  const steps: [string, "done" | "now" | "stop" | "todo"][] = [
+    [`Requested ${fmt(swap.requestedOn)}`, "done"],
+    [
+      swap.status === "declined" ? "Teammate declined" : teammateDone ? "Teammate accepted" : "Teammate to accept",
+      swap.status === "declined" ? "stop" : teammateDone ? "done" : swap.status === "awaiting_teammate" ? "now" : "todo",
+    ],
+    [
+      swap.status === "approved" ? `Manager approved${swap.decidedByName ? ` (${swap.decidedByName})` : ""}` : swap.status === "rejected" ? `Manager rejected${swap.decidedByName ? ` (${swap.decidedByName})` : ""}` : "Manager to approve",
+      swap.status === "approved" ? "done" : swap.status === "rejected" ? "stop" : swap.status === "awaiting_manager" ? "now" : "todo",
+    ],
+  ];
+  if (swap.status === "cancelled") steps.push(["Cancelled", "stop"]);
+  return (
+    <ol className="wf-steps" aria-label="Swap progress">
+      {steps.map(([label, state]) => (
+        <li key={label} className={state}>
+          {label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function Swaps({ actor }: { actor: WorkforceActor }) {
   const data = useShifts();
   const ctx = useRosterContext();
   const today = todayISO();
   const [msg, setMsg] = useState<Msg>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [statusFilter, setStatusFilter] = useState<"" | "open" | SwapStatus>("");
+  const [search, setSearch] = useState("");
 
   const myUpcoming = publishedShiftsFor(actor.id, data).filter((a) => a.date > today);
   const [date, setDate] = useState("");
@@ -239,24 +450,31 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
   const teammates = API_ENABLED
     ? (partners.date === date && mineOnDate ? partners.ids : []).map((id) => ({ id: `${id}-${date}`, personId: id, shiftId: "" }))
     : mineOnDate
-    ? data.assignments.filter(
-        (a) =>
-          a.date === date &&
-          a.managerId === mineOnDate.managerId &&
-          a.personId !== actor.id &&
-          a.shiftId !== mineOnDate.shiftId &&
-          rosterWeek(a.managerId, weekStartOf(a.date), data)?.status === "published" &&
-          !swapPartnerError(a.personId, date),
-      )
-    : [];
+      ? data.assignments.filter(
+          (a) =>
+            a.date === date &&
+            a.managerId === mineOnDate.managerId &&
+            a.personId !== actor.id &&
+            a.shiftId !== mineOnDate.shiftId &&
+            rosterWeek(a.managerId, weekStartOf(a.date), data)?.status === "published" &&
+            !swapPartnerError(a.personId, date),
+        )
+      : [];
 
   const forMe = data.swaps.filter((s) => s.teammateId === actor.id && s.status === "awaiting_teammate");
   const toApprove = data.swaps.filter((s) => s.status === "awaiting_manager" && canApproveSwap(actor, s));
-  const mine = data.swaps.filter((s) => s.requesterId === actor.id || (s.teammateId === actor.id && s.status !== "awaiting_teammate"));
+  const needle = search.trim().toLowerCase();
+  const mine = data.swaps
+    .filter((s) => s.requesterId === actor.id || (s.teammateId === actor.id && s.status !== "awaiting_teammate"))
+    .filter((s) => (statusFilter === "open" ? s.status === "awaiting_teammate" || s.status === "awaiting_manager" : !statusFilter || s.status === statusFilter))
+    .filter((s) => !needle || [swapLine(s, data), s.reason, s.decisionNote ?? "", shortDay(s.date)].some((v) => v.toLowerCase().includes(needle)));
 
   const swapAction = useAction();
 
   async function submit() {
+    if (!date) return setMsg({ tone: "err", text: "Pick one of your upcoming shifts." }), false;
+    if (!teammateId) return setMsg({ tone: "err", text: "Pick a teammate to swap with." }), false;
+    if (!reason.trim()) return setMsg({ tone: "err", text: "Give a reason for the swap." }), false;
     const error = await requestSwap(actor, ctx, { teammateId, date, reason });
     setMsg(result(error, `Swap request sent to ${personName(teammateId)}.`));
     if (error) return false;
@@ -315,41 +533,37 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
             {toApprove.map((s) => {
               const impact = swapCoverageImpact(ctx, s.id, data);
               return (
-              <li key={s.id} className="approval-item">
-                <strong>{shortDay(s.date)}</strong>
-                <span>{swapLine(s, data)}</span>
-                <p className="muted">{s.reason}</p>
-                {impact.length > 0 && <p className="note wf-danger">Leaves {describeGaps(impact, data)} under-covered.</p>}
-                <div className="approval-actions">
-                  <input aria-label="Decision note"
-                    placeholder="Note (needed to reject)"
-                    value={notes[s.id] ?? ""}
-                    onChange={(e) => setNotes({ ...notes, [s.id]: e.target.value })}
-                  />
-                  <ActionButton
-                    className="btn btn-tiny"
-                    success="Swap approved. Roster updated."
-                    onAction={async () => {
-                      const error = await decideSwap(actor, ctx, s.id, true, notes[s.id], impact.length > 0);
-                      setMsg(result(error, "Swap approved — roster updated."));
-                      return error;
-                    }}
-                  >
-                    {impact.length ? "Approve anyway" : "Approve"}
-                  </ActionButton>
-                  <ActionButton
-                    className="btn-ghost btn-tiny"
-                    success="Swap rejected."
-                    onAction={async () => {
-                      const error = await decideSwap(actor, ctx, s.id, false, notes[s.id]);
-                      setMsg(result(error, "Swap rejected."));
-                      return error;
-                    }}
-                  >
-                    Reject
-                  </ActionButton>
-                </div>
-              </li>
+                <li key={s.id} className="approval-item">
+                  <strong>{shortDay(s.date)}</strong>
+                  <span>{swapLine(s, data)}</span>
+                  <p className="muted">{s.reason}</p>
+                  {impact.length > 0 && <p className="note wf-danger">Leaves {describeGaps(impact, data)} under-covered.</p>}
+                  <div className="approval-actions">
+                    <input aria-label="Decision note" placeholder="Comment (needed to reject)" value={notes[s.id] ?? ""} onChange={(e) => setNotes({ ...notes, [s.id]: e.target.value })} />
+                    <ActionButton
+                      className="btn btn-tiny"
+                      success="Swap approved. Roster updated."
+                      onAction={async () => {
+                        const error = await decideSwap(actor, ctx, s.id, true, notes[s.id], impact.length > 0);
+                        setMsg(result(error, "Swap approved — roster updated."));
+                        return error;
+                      }}
+                    >
+                      {impact.length ? "Approve anyway" : "Approve"}
+                    </ActionButton>
+                    <ActionButton
+                      className="btn-ghost btn-tiny"
+                      success="Swap rejected."
+                      onAction={async () => {
+                        const error = await decideSwap(actor, ctx, s.id, false, notes[s.id]);
+                        setMsg(result(error, "Swap rejected."));
+                        return error;
+                      }}
+                    >
+                      Reject
+                    </ActionButton>
+                  </div>
+                </li>
               );
             })}
           </ul>
@@ -357,12 +571,18 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
       )}
       <Card title="Request a swap">
         {myUpcoming.length === 0 ? (
-          <EmptyState title="No upcoming shifts to swap" />
+          <EmptyState title="No upcoming shifts to swap" description="Swaps are for your published shifts after today." />
         ) : (
           <form className="stack" onSubmit={swapAction.submit(submit)}>
             <div className="form-grid-2">
-              <Field label="Date">
-                <select value={date} onChange={(e) => { setDate(e.target.value); setTeammateId(""); }}>
+              <Field label="Date and shift">
+                <select
+                  value={date}
+                  onChange={(e) => {
+                    setDate(e.target.value);
+                    setTeammateId("");
+                  }}
+                >
                   <option value="">Pick one of your shifts</option>
                   {myUpcoming.map((a) => (
                     <option key={a.id} value={a.date}>
@@ -373,7 +593,7 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
               </Field>
               <Field label="Swap with">
                 <select value={teammateId} onChange={(e) => setTeammateId(e.target.value)} disabled={!date}>
-                  <option value="">{date && !teammates.length ? "No teammate on a different shift" : "Pick a teammate"}</option>
+                  <option value="">{date && !teammates.length ? "No eligible teammate on another shift" : "Pick a teammate"}</option>
                   {teammates.map((a) => (
                     <option key={a.id} value={a.personId}>
                       {personName(a.personId)}
@@ -386,21 +606,42 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
                 <input value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} />
               </Field>
             </div>
+            <p className="muted">Only teammates on the same published roster, on a different shift that day, can be asked. They accept first, then your manager approves.</p>
             <div className="row-gap">
-              <SubmitButton action={swapAction} className="btn">Submit request</SubmitButton>
+              <SubmitButton action={swapAction} className="btn">
+                Submit request
+              </SubmitButton>
             </div>
           </form>
         )}
       </Card>
-      <Card title="My swaps">
+      <Card
+        title="My swaps"
+        action={
+          <FilterBar>
+            <input type="search" aria-label="Search swaps" placeholder="Search name, shift, reason" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <select aria-label="Filter swaps by status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
+              <option value="">All statuses</option>
+              <option value="open">Open</option>
+              {(Object.keys(SWAP_LABEL) as SwapStatus[]).map((k) => (
+                <option key={k} value={k}>
+                  {SWAP_LABEL[k][0]}
+                </option>
+              ))}
+            </select>
+          </FilterBar>
+        }
+      >
         <DataTable
-          headers={["Date", "Swap", "Status", ""]}
+          headers={["Date", "Swap", "Progress", "Status", ""]}
           rows={mine.map((s) => [
             shortDay(s.date),
             <span key="l">
               {swapLine(s, data)}
-              {s.decisionNote && <span className="muted wf-block">{s.decisionNote}</span>}
+              <span className="muted wf-block">{s.reason}</span>
+              {s.decisionNote && <span className="wf-block">Manager: “{s.decisionNote}”</span>}
             </span>,
+            <SwapSteps key="p" swap={s} />,
             <SwapBadge key="b" status={s.status} />,
             s.requesterId === actor.id && (s.status === "awaiting_teammate" || s.status === "awaiting_manager") ? (
               <ActionButton
@@ -419,7 +660,7 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
               ""
             ),
           ])}
-          empty={<EmptyState title="No swaps yet" />}
+          empty={<EmptyState title={needle || statusFilter ? "No swap matches" : "No swaps yet"} />}
         />
       </Card>
     </>
@@ -428,43 +669,115 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
 
 // ---------- Comp-off ----------
 
+const LEAVE_STATUS_TONE: Record<string, "ok" | "warn" | "danger" | "neutral"> = { approved: "ok", pending: "warn", rejected: "danger", cancelled: "neutral", withdrawn: "neutral" };
+
 function CompOff({ actor }: { actor: WorkforceActor }) {
   const data = useShifts();
   const ctx = useRosterContext();
+  const { state, leaveTable, applyLeave } = usePortal();
   const today = todayISO();
   const [msg, setMsg] = useState<Msg>(null);
+  const [date, setDate] = useState("");
+  const [reason, setReason] = useState("");
+  const [historyFilter, setHistoryFilter] = useState("");
   const mine = creditsFor(actor.id, data);
-  const available = mine.filter((c) => !isCreditExpired(c, today));
   const candidates = compOffCandidates(actor, ctx, data);
-  const teamCredits = data.credits.filter((c) => canDecideFor(actor, c.personId));
+  const teamCredits = data.credits.filter((c) => c.personId !== actor.id && (API_ENABLED || canDecideFor(actor, c.personId)));
+  const apiSummary = apiCompOffSummary();
+  const row = leaveTable.find((r) => r.code === "comp_off");
+  const earned = row?.quota ?? apiSummary?.earned ?? 0;
+  const used = row?.utilized ?? apiSummary?.used ?? 0;
+  const pendingDays = row?.pending ?? apiSummary?.pending ?? 0;
+  const available = row?.available ?? apiSummary?.available ?? 0;
+  const requests = state.leaveRequests
+    .filter((r) => r.employeeId === actor.id && r.code === "comp_off")
+    .filter((r) => !historyFilter || r.status === historyFilter)
+    .sort((a, b) => b.from.localeCompare(a.from));
+  const applyAction = useAction();
+
+  async function apply() {
+    if (!date) return setMsg({ tone: "err", text: "Pick the day you want off." }), false;
+    if (!reason.trim()) return setMsg({ tone: "err", text: "Give a reason." }), false;
+    if (available <= 0) return setMsg({ tone: "err", text: "You have no comp-off days available." }), false;
+    const error = await applyLeave({ code: "comp_off", from: date, to: date, reason: reason.trim() });
+    setMsg(result(error, `Comp-off for ${fmt(date)} sent for approval.`));
+    if (error) return false;
+    notify(`Comp-off for ${fmt(date)} sent for approval.`);
+    setDate("");
+    setReason("");
+    return true;
+  }
 
   return (
     <>
       <Banner message={msg} />
       <MetricGrid>
-        <MetricCard label="Available" value={available.length} hint="Comp-off days" />
-        <MetricCard
-          label="Next expiry"
-          value={available.length ? fmt([...available].sort((a, b) => a.expiresOn.localeCompare(b.expiresOn))[0].expiresOn) : "—"}
-        />
+        <MetricCard label="Earned" value={earned} hint={apiSummary ? `${apiSummary.fromRoster} from rostered off days · ${apiSummary.fromOvertime} from overtime` : "This year"} />
+        <MetricCard label="Used" value={used} hint="Approved comp-off leave" />
+        <MetricCard label="Pending" value={pendingDays} hint="Waiting for approval" />
+        <MetricCard label="Available" value={available} hint={mine.filter((c) => !isCreditExpired(c, today)).length ? `Next credit expires ${fmt([...mine].filter((c) => !isCreditExpired(c, today)).sort((a, b) => a.expiresOn.localeCompare(b.expiresOn))[0].expiresOn)}` : undefined} />
       </MetricGrid>
+      <Card title="Apply for comp-off">
+        <form className="stack" onSubmit={applyAction.submit(apply)}>
+          <div className="form-grid-2">
+            <Field label="Day off">
+              <input type="date" value={date} min={addDaysISO(today, -30)} onChange={(e) => setDate(e.target.value)} />
+            </Field>
+            <Field label="Reason">
+              <input value={reason} maxLength={300} placeholder="e.g. For working Saturday's release" onChange={(e) => setReason(e.target.value)} />
+            </Field>
+          </div>
+          <p className="muted">Goes to your manager like any leave request. You'll be notified when it's decided.</p>
+          <div className="row-gap">
+            <SubmitButton action={applyAction} className="btn" disabled={available <= 0}>
+              Apply
+            </SubmitButton>
+            {available <= 0 && <span className="muted">No comp-off days available.</span>}
+          </div>
+        </form>
+      </Card>
+      <Card
+        title="Request history"
+        action={
+          <select aria-label="Filter comp-off requests" value={historyFilter} onChange={(e) => setHistoryFilter(e.target.value)}>
+            <option value="">All</option>
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        }
+      >
+        <DataTable
+          headers={["Day", "Reason", "Applied", "Status", "Decided by", "Manager comment"]}
+          rows={requests.map((r) => [
+            r.from === r.to ? fmt(r.from) : `${fmt(r.from)} – ${fmt(r.to)}`,
+            r.reason,
+            r.appliedOn ? fmt(r.appliedOn.slice(0, 10)) : "—",
+            <StatusBadge key="s" status={r.status} tone={LEAVE_STATUS_TONE[r.status] ?? "neutral"} literal />,
+            r.decidedByName ?? (r.status === "pending" ? r.approvalProgress ?? "Waiting" : "—"),
+            r.decisionNote ?? "—",
+          ])}
+          empty={<EmptyState title={historyFilter ? "No request with this status" : "No comp-off requests yet"} />}
+        />
+      </Card>
       {candidates.length > 0 && (
         <Card title="Worked on a weekly off or holiday">
           <DataTable
             headers={["Person", "Date", "Shift", "Why", ""]}
-            rows={candidates.map(({ assignment: a, reason }) => [
+            rows={candidates.map(({ assignment: a, reason: why }) => [
               personName(a.personId),
               shortDay(a.date),
               shiftById(a.shiftId, data)?.name ?? "—",
-              reason,
+              why,
               <ActionButton
                 key="g"
                 className="btn btn-tiny"
                 busyLabel="Granting…"
                 doneLabel="Granted"
                 success={`1 comp-off day credited to ${personName(a.personId)}.`}
-                onAction={() => {
-                  const error = grantCompOff(actor, ctx, a.personId, a.date);
+                onAction={async () => {
+                  const error = await grantCompOff(actor, ctx, a.personId, a.date);
                   setMsg(result(error, `1 comp-off day credited to ${personName(a.personId)}.`));
                   return error;
                 }}
@@ -485,7 +798,7 @@ function CompOff({ actor }: { actor: WorkforceActor }) {
             fmt(c.expiresOn),
             isCreditExpired(c, today) ? <StatusBadge key="s" status="Expired" tone="danger" literal /> : <StatusBadge key="s" status="Available" tone="ok" literal />,
           ])}
-          empty={<EmptyState title="No comp-off credits" description="Earned by working an off day." />}
+          empty={<EmptyState title="No comp-off credits" description="Earned by working a rostered weekly off or holiday, or overtime taken as comp-off." />}
         />
       </Card>
       {teamCredits.length > 0 && (
@@ -988,7 +1301,7 @@ function CoverageSettings({ actor }: { actor: WorkforceActor }) {
 
 // ---------- Shift types (HR) ----------
 
-const BLANK = { name: "", start: "09:00", end: "17:00", weekendOnly: false };
+const BLANK = { name: "", start: "09:00", end: "17:00", weekendOnly: false, breakMinutes: "60", location: "" };
 
 function ShiftTypes({ actor }: { actor: WorkforceActor }) {
   const data = useShifts();
@@ -998,14 +1311,14 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
 
   function edit(s: ShiftDef) {
     setEditing(s.id);
-    setForm({ name: s.name, start: s.start, end: s.end, weekendOnly: s.weekendOnly });
+    setForm({ name: s.name, start: s.start, end: s.end, weekendOnly: s.weekendOnly, breakMinutes: String(s.breakMinutes ?? 60), location: s.location ?? "" });
     setMsg(null);
   }
 
   const saveAction = useAction();
 
   async function submit() {
-    const error = await saveShift(actor, { ...form, id: editing ?? undefined });
+    const error = await saveShift(actor, { ...form, breakMinutes: Number(form.breakMinutes), id: editing ?? undefined });
     setMsg(result(error, editing ? "Shift updated." : "Shift added."));
     if (error) return false;
     notify(editing ? `Shift ${form.name.trim()} updated.` : `Shift ${form.name.trim()} added.`);
@@ -1019,10 +1332,12 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
       <Banner message={msg} />
       <Card title="Shift types">
         <DataTable
-          headers={["Shift", "Hours", "Days", "Status", ""]}
+          headers={["Shift", "Hours", "Break", "Location", "Days", "Status", ""]}
           rows={data.shifts.map((s) => [
             s.name,
             `${s.start}–${s.end}`,
+            `${s.breakMinutes ?? 60} min`,
+            s.location || "—",
             s.weekendOnly ? "Sat–Sun" : "Any day",
             <StatusBadge key="s" status={s.active ? "Active" : "Inactive"} tone={s.active ? "ok" : "neutral"} literal />,
             <div key="a" className="row-gap">
@@ -1057,6 +1372,12 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
             </Field>
             <Field label="Ends">
               <input type="time" value={form.end} onChange={(e) => setForm({ ...form, end: e.target.value })} />
+            </Field>
+            <Field label="Break (minutes)">
+              <input type="number" min={0} max={240} step={5} value={form.breakMinutes} onChange={(e) => setForm({ ...form, breakMinutes: e.target.value })} />
+            </Field>
+            <Field label="Location">
+              <input value={form.location} maxLength={100} placeholder="e.g. Kochi office" onChange={(e) => setForm({ ...form, location: e.target.value })} />
             </Field>
           </div>
           <label className="row-gap">

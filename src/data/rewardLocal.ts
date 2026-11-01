@@ -2,6 +2,7 @@ import { API_ENABLED, apiSessionAccount, onApiSession } from "../api/client.ts";
 import {
   apiAddBonus,
   apiAddDependent,
+  apiCancelEnrollment,
   apiCloseLifeEvent,
   apiCreateCycle,
   apiCreateProposal,
@@ -18,6 +19,7 @@ import {
   apiSetWindowOverride,
   apiUpdateBand,
   apiUpdateDependent,
+  apiUploadDependentDoc,
   apiVerifyDependent,
   forgetApiMe,
   loadApiBenefits,
@@ -32,6 +34,7 @@ import { pushPersonTaskAlert } from "./collabLocal.ts";
 import { resolveFlow, workflowVersion, type FlowDecision, type FlowStep } from "./approvalWorkflows.ts";
 import { decideFlowStep, isWaitingOn, stepText, waitingApproverIds, type SteppedRequest } from "./expenseFlow.ts";
 import { getBasePeople } from "./peopleData.ts";
+import { isMasked } from "../utils/mask.ts";
 import { canManagePeople } from "./peoplePermissions.ts";
 import { canManageLetters } from "./rbac.ts";
 import {
@@ -47,6 +50,7 @@ import {
   GRADE_BANDS,
   LETTER_REQUESTS,
   OPEN_ENROLLMENT_SEED,
+  PLAN_DETAILS,
   SENSITIVE_LETTER_TYPES,
   type BenefitChangeRequest,
   type BenefitEnrollment,
@@ -238,6 +242,7 @@ export async function refreshRewardApi(areas: ApiArea[] = ["comp", "benefits", "
     }
     if (benefits) {
       Object.assign(next, {
+        benefitHistory: benefits.history,
         enrollments: benefits.enrollments,
         dependents: benefits.dependents,
         lifeEvents: benefits.lifeEvents,
@@ -896,8 +901,10 @@ export function canDecideBenefitFor(actor: Pick<DemoAccount, "id" | "role">, emp
 }
 
 /** Benefit plans: from the API in backend mode, else the built-in catalogue. */
+const LOCAL_PLANS: BenefitPlan[] = BENEFIT_PLANS.map((p) => ({ ...p, ...(PLAN_DETAILS[p.id] ?? {}) }));
+
 export function benefitPlans(state: Pick<RewardState, "api"> = getRewardState()): BenefitPlan[] {
-  return state.api ? (state.api.benefits?.plans ?? []) : BENEFIT_PLANS;
+  return state.api ? (state.api.benefits?.plans ?? []) : LOCAL_PLANS;
 }
 
 export function isMandatoryPlan(planId: string): boolean {
@@ -1277,6 +1284,79 @@ export function requestEnrollment(actor: DemoAccount, planId: string, dependentI
     }
     logBenefit(s, actor.id, "Enrollment", `Requested ${plan.name}`);
   });
+}
+
+/**
+ * Withdraw a pending request (any time) or leave a plan (inside a change window). Statutory plans can't be left.
+ */
+export function cancelEnrollment(actor: DemoAccount, enrollmentId: string): RewardOutcome {
+  if (API_ENABLED) return viaApi(apiCancelEnrollment(enrollmentId), ["benefits"]);
+  let plan = "";
+  let wasPending = false;
+  const result = updateReward((s) => {
+    const row = s.enrollments.find((e) => e.id === enrollmentId);
+    if (!row || row.employeeId !== actor.id) return "You can only cancel your own enrollments.";
+    if (row.status !== "Pending" && row.status !== "Enrolled") return "Only a pending request or an active enrollment can be cancelled.";
+    if (isMandatoryPlan(row.planId)) return "Statutory plans can't be cancelled.";
+    wasPending = row.status === "Pending";
+    if (!wasPending) {
+      const blocked = windowError(s, actor.id);
+      if (blocked) return blocked;
+    }
+    row.status = "Cancelled";
+    row.effective = todayISO();
+    plan = row.planName;
+    s.dependents.filter((d) => d.employeeId === actor.id).forEach((d) => (d.coveredPlans = d.coveredPlans.filter((n) => n !== row.planName)));
+    logBenefit(s, actor.id, wasPending ? "Request withdrawn" : "Enrollment cancelled", plan);
+  });
+  if (!result) alertBenefitsHr(actor.id, `Benefit cancelled · ${actor.fullName}`, `${plan}: ${wasPending ? "request withdrawn" : "enrollment cancelled"}.`);
+  return result;
+}
+
+const PROOF_TYPES = new Set(["application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/** Proof of relationship for a dependent (PDF or image). A rejected dependent goes back to HR for verification. */
+export async function uploadDependentDoc(actor: DemoAccount, id: string, file: File): Promise<RewardResult> {
+  if (!PROOF_TYPES.has(file.type)) return "Attach a PDF or an image (PNG, JPG, GIF, WebP).";
+  if (file.size > (API_ENABLED ? 5 * 1024 * 1024 : 1024 * 1024)) return API_ENABLED ? "The file is larger than 5 MB." : "In this demo (browser storage) files can be up to 1 MB.";
+  if (API_ENABLED) return viaApi(apiUploadDependentDoc(id, file), ["benefits"]);
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Could not read the file."));
+    reader.readAsDataURL(file);
+  }).catch(() => "");
+  if (!dataUrl) return "Could not read the file.";
+  let name = "";
+  const result = updateReward((s) => {
+    const row = s.dependents.find((d) => d.id === id);
+    if (!row || row.employeeId !== actor.id) return "You can only add proofs to your own dependents.";
+    row.docName = file.name.replace(/[^\w.\- ()]/g, "_").slice(0, 200);
+    row.docSize = file.size;
+    row.docDataUrl = dataUrl;
+    if (row.verification === "Rejected") {
+      row.verification = "Pending";
+      row.verifiedBy = undefined;
+      row.verifiedOn = undefined;
+    }
+    name = row.name;
+    logBenefit(s, actor.id, "Dependent proof", `Proof uploaded for ${row.name}`);
+  });
+  if (!result) alertBenefitsHr(actor.id, `Verify dependent · ${actor.fullName}`, `Proof added for ${name}.`);
+  return result;
+}
+
+/** Children are covered until their 25th birthday; anyone must be verified by HR first. */
+export function dependentCover(d: Dependent, today = todayISO()): { eligible: boolean; note: string } {
+  if (d.coverEligible !== undefined) return { eligible: d.coverEligible, note: d.coverNote ?? "" };
+  if (d.relationship === "Child" && d.dateOfBirth && !isMasked(d.dateOfBirth)) {
+    const dob = parseISODate(d.dateOfBirth);
+    const now = parseISODate(today);
+    const age = now.getFullYear() - dob.getFullYear() - (now.getMonth() < dob.getMonth() || (now.getMonth() === dob.getMonth() && now.getDate() < dob.getDate()) ? 1 : 0);
+    if (age >= 25) return { eligible: false, note: "children are covered until age 25" };
+  }
+  if (d.verification && d.verification !== "Verified") return { eligible: false, note: d.verification === "Pending" ? "waiting for HR verification" : "rejected by HR" };
+  return { eligible: true, note: "Eligible for cover" };
 }
 
 export function pendingChangeFor(state: Pick<RewardState, "changeRequests">, enrollmentId: string): BenefitChangeRequest | undefined {

@@ -159,6 +159,8 @@ class ShiftTypeIn(BaseModel):
     end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     weekend_only: bool = False
     active: bool = True
+    break_minutes: int = Field(default=60, ge=0, le=240)
+    location: str | None = Field(default=None, max_length=100)
 
 
 class ShiftTypeOut(BaseModel):
@@ -169,6 +171,8 @@ class ShiftTypeOut(BaseModel):
     end: str
     weekend_only: bool
     active: bool
+    break_minutes: int = 60
+    location: str | None = None
 
 
 class RosterAssignIn(BaseModel):

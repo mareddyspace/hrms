@@ -225,6 +225,16 @@ from app.routers import overtime as overtime_router, payroll_runs as payroll_run
 app.include_router(payroll_runs_router.router, prefix=API_PREFIX)
 app.include_router(overtime_router.router, prefix=API_PREFIX)
 
+# ---------- project details: milestones, tasks, updates, documents, activity (migration 0025) ----------
+from app.routers import projects as projects_router  # noqa: E402
+
+app.include_router(projects_router.router, prefix=API_PREFIX)
+
+# ---------- tax declarations with proofs (migration 0026) ----------
+from app.routers import tax_declarations as tax_declarations_router  # noqa: E402
+
+app.include_router(tax_declarations_router.router, prefix=API_PREFIX)
+
 # ---------- start-up: optional migrations (outermost hook, so it runs before the jobs above touch the database) ----------
 from app import migrate as _migrate  # noqa: E402
 from app.services import storage as _storage  # noqa: E402

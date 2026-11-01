@@ -230,6 +230,15 @@ export interface LeaveRequest extends DecisionInfo {
   half?: LeaveHalf;
   /** Backend mode: "Step 2 of 2 · HR" while a multi-step approval is pending. */
   approvalProgress?: string;
+  /** Backend mode: the approval chain's steps (for the request timeline). */
+  approvalSteps?: {
+    steps: { label: string; status: string; approvers: string[]; decisions: { by: string; decision: string; note: string | null; at: string | null }[] }[];
+  };
+  /** Colleague covering the work while away. */
+  handoverTo?: string;
+  handoverName?: string;
+  /** Name of the supporting file (e.g. a medical certificate). */
+  attachmentName?: string;
 }
 
 /** Which half of the day a half-day leave covers. */
@@ -270,6 +279,9 @@ export interface Holiday {
   name: string;
   /** Country the holiday applies to; untagged entries are treated as India (older saved data). */
   countryCode?: CountryCode;
+  /** Region (holiday calendar) for a regional holiday; empty = the whole country. */
+  region?: string;
+  description?: string;
 }
 
 let personCountry: (employeeId: string) => CountryCode | undefined = () => undefined;
@@ -316,7 +328,10 @@ export interface TimeEntry {
   id: string;
   date: string;
   startHour: number;
+  /** Worked hours (end - start - break). */
   hours: number;
+  /** Unpaid break inside the block, in minutes (the block ends at start + hours + break). */
+  breakMinutes?: number;
   note: string;
   billable: boolean;
   /** What the time was spent on. Missing = plain project time. Hours still roll up to the sheet's project. */
@@ -836,6 +851,11 @@ export interface LeaveInput {
   reason: string;
   /** Half-day leave; only valid for a single day and not for WFH types. */
   half?: LeaveHalf;
+  /** Colleague covering the work (employee id). */
+  handoverTo?: string;
+  handoverName?: string;
+  /** Supporting file; backend mode uploads it, local mode keeps its name. */
+  attachment?: File;
 }
 
 export const EXPENSE_CATEGORIES = ["Travel", "Food", "Lodging", "Supplies", "Other"] as const;

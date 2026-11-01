@@ -85,3 +85,22 @@ def test_hidden_birthday_cannot_be_wished(client, babu, ram):
         assert res.status_code == 404
     finally:
         _set("emp-mahesh", hide_birthday=False)
+
+
+def test_year_view_lists_every_month_and_respects_hidden_birthdays(client, babu, ram):
+    with SessionLocal() as db:
+        today = today_for(db.get(Employee, "emp-ram"))
+    other_month = 1 if today.month != 1 else 6
+    _set("emp-ram", date_of_birth=date(1988, other_month, 15), hide_birthday=False)
+    res = client.get("/api/v1/celebrations", params={"year": today.year}, headers=babu)
+    assert res.status_code == 200, res.text
+    rows = [r for r in res.json() if r["employee_id"] == "emp-ram" and r["kind"] == "birthday"]
+    assert rows and rows[0]["date"] == f"{today.year}-{other_month:02d}-15"
+    assert "1988" not in res.text
+    assert not [r for r in res.json() if r["kind"] == "new_joiner"]
+    client.put("/api/v1/celebrations/me/preferences", json={"hide_birthday": True}, headers=ram)
+    try:
+        res = client.get("/api/v1/celebrations", params={"year": today.year}, headers=babu)
+        assert not [r for r in res.json() if r["employee_id"] == "emp-ram" and r["kind"] == "birthday"]
+    finally:
+        client.put("/api/v1/celebrations/me/preferences", json={"hide_birthday": False}, headers=ram)

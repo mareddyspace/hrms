@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, TimestampMixin, UTCDateTime
@@ -32,6 +32,8 @@ class AttendanceSession(TimestampMixin, Base):
     early_minutes: Mapped[int] = mapped_column(Integer, default=0)
     corrected: Mapped[bool] = mapped_column(Boolean, default=False)
     note: Mapped[str | None] = mapped_column(Text)
+    # Breaks taken in the session: [{"start": UTC ISO, "end": UTC ISO | None}] (migration 0024).
+    breaks: Mapped[list | None] = mapped_column(JSON)
 
 
 class AttendanceCorrection(TimestampMixin, Base):

@@ -1,7 +1,7 @@
 """Verification codes for changes to your own personal details (POST /people/me/otp, PATCH /people/me).
 
-Any self-edit that changes a field in OTP_FIELDS (name, date of birth, mobile, personal email, address, emergency
-contact) needs a 6-digit code. Preferences (languages, education, experience, career goals) do not.
+Any self-edit that changes a field in OTP_FIELDS (name, preferred name and languages, date of birth, mobile, personal
+email, address, emergency contact) needs a 6-digit code. Background (education, experience, career goals) does not.
 
 One open code per person, kept in platform_settings under "profile_otp:<employee id>": the code and the exact new
 values are stored only as HMAC hashes, with an expiry (10 minutes) and an attempt count. A good code is used once.
@@ -32,6 +32,7 @@ from app.services.security_mail import deliver_security_mail
 
 OTP_FIELDS = (
     "first_name", "middle_name", "last_name", "full_name", "preferred_name", "date_of_birth",
+    "preferred_language", "languages",
     "mobile", "personal_email",
     "address_line", "address_city", "address_postcode", "address_country",
     "emergency_name", "emergency_relationship", "emergency_phone",

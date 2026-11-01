@@ -26,12 +26,20 @@ class OptionalHolidayOut(BaseModel):
     date: date
     name: str
     picked_by: int = 0  # open (pending or approved) picks, for HR
+    description: str | None = None
+    region: str | None = None  # NULL = the whole country
+    legal_entity: str | None = None
+    select_by: date | None = None  # last day to pick it (default: the day before)
 
 
 class OptionalHolidayIn(BaseModel):
     country_code: str = Field(min_length=2, max_length=2)
     date: date
     name: str = Field(min_length=2, max_length=60)
+    description: str | None = Field(default=None, max_length=1000)
+    region: str | None = Field(default=None, max_length=100)
+    legal_entity: str | None = Field(default=None, max_length=200)
+    select_by: date | None = None
 
 
 def _picks(db: DbSession, rows: list[OptionalHoliday]) -> dict[tuple[str, date], int]:
@@ -51,7 +59,9 @@ def _picks(db: DbSession, rows: list[OptionalHoliday]) -> dict[tuple[str, date],
 
 def _out(rows: list[OptionalHoliday], picks: dict[tuple[str, date], int]) -> list[OptionalHolidayOut]:
     return [
-        OptionalHolidayOut(id=r.id, country_code=r.country_code, date=r.date, name=r.name, picked_by=picks.get((r.country_code, r.date), 0))
+        OptionalHolidayOut(id=r.id, country_code=r.country_code, date=r.date, name=r.name, picked_by=picks.get((r.country_code, r.date), 0),
+                           description=r.description, region=r.region, legal_entity=r.legal_entity,
+                           select_by=optional.deadline(r))
         for r in rows
     ]
 
@@ -71,7 +81,7 @@ def list_optional(
     if not code:
         return []
     year = year or (leave_rules.today_for(emp).year if emp else date.today().year)
-    rows = optional.list_for(db, code, year)
+    rows = optional.list_for(db, code, year, None if country else emp)
     return _out(rows, _picks(db, rows) if user.scope.is_hr else {})
 
 
@@ -90,6 +100,8 @@ def add_optional(body: OptionalHolidayIn, request: Request, db: DbSession, user:
         raise HTTPException(422, "That date is a weekend. Pick a working day.")
     if body.date in leave_rules.holiday_dates(db, cc, body.date, body.date):
         raise HTTPException(422, "That date is already a public holiday.")
+    if body.select_by is not None and (body.select_by >= body.date or body.select_by < date.today()):
+        raise HTTPException(422, "The pick-by date must be before the holiday and not in the past.")
     existing = db.scalar(select(OptionalHoliday).where(OptionalHoliday.country_code == cc, OptionalHoliday.date == body.date))
     if existing is not None and existing.active:
         raise HTTPException(409, "There's already an optional holiday on that date.")
@@ -99,6 +111,10 @@ def add_optional(body: OptionalHolidayIn, request: Request, db: DbSession, user:
     else:
         row = OptionalHoliday(id=f"oh-{uuid.uuid4().hex[:12]}", country_code=cc, date=body.date, name=body.name.strip(), active=True)
         db.add(row)
+    row.description = (body.description or "").strip() or None
+    row.region = (body.region or "").strip() or None
+    row.legal_entity = (body.legal_entity or "").strip() or None
+    row.select_by = body.select_by
     db.flush()
     record_audit(db, actor_id=user.id, action="optional_holiday_added", entity="optional_holiday", entity_id=row.id,
                  after={"country": cc, "date": row.date, "name": row.name}, ip=client_ip(request))

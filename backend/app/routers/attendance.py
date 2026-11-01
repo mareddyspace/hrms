@@ -39,6 +39,7 @@ def _session_snapshot(s: AttendanceSession) -> dict:
         "is_early_leave": s.is_early_leave,
         "worked_minutes": s.worked_minutes,
         "corrected": s.corrected,
+        "breaks": len(s.breaks or []),
     }
 
 
@@ -115,7 +116,9 @@ def check_out(body: CheckOutIn, request: Request, db: DbSession, user: CurrentUs
         raise HTTPException(409, "Check-out must be after check-in.")
     before = _session_snapshot(session)
     session.check_out = moment
-    if body.break_minutes is not None:
+    if session.breaks:
+        rules.close_breaks(session, moment)  # breaks recorded on the session win over a typed total
+    elif body.break_minutes is not None:
         session.break_minutes = body.break_minutes
     if body.note and body.note.strip():
         session.note = body.note.strip()
@@ -130,6 +133,42 @@ def check_out(body: CheckOutIn, request: Request, db: DbSession, user: CurrentUs
         title="Checked out",
         body=f"{(session.worked_minutes or 0) / 60:.2f} h worked on {session.work_date}.",
         href="/attendance",
+    )
+    db.commit()
+    return session
+
+
+def _open_session(db: DbSession, emp: Employee) -> AttendanceSession:
+    moment = rules.now()
+    session = db.scalar(
+        select(AttendanceSession)
+        .where(
+            AttendanceSession.employee_id == emp.id,
+            AttendanceSession.check_out.is_(None),
+            AttendanceSession.work_date >= moment.astimezone(rules.zone(emp)).date() - timedelta(days=1),
+        )
+        .order_by(AttendanceSession.work_date.desc())
+    )
+    if session is None:
+        raise HTTPException(409, "Check in first.")
+    return session
+
+
+@router.post("/break/{action}", response_model=AttendanceSessionOut)
+def take_break(action: str, request: Request, db: DbSession, user: CurrentUserDep) -> AttendanceSession:
+    """Start or end a break on today's open session; the breaks are saved on the session."""
+    if action not in ("start", "end"):
+        raise NOT_FOUND
+    emp = me(user)
+    session = _open_session(db, emp)
+    before = _session_snapshot(session)
+    try:
+        (rules.start_break if action == "start" else rules.end_break)(session, rules.now())
+    except rules.AttendanceError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    record_audit(
+        db, actor_id=user.id, action=f"attendance_break_{action}", entity="attendance_session", entity_id=session.id,
+        subject_id=emp.id, before=before, after=_session_snapshot(session), ip=client_ip(request),
     )
     db.commit()
     return session

@@ -147,3 +147,22 @@ from app.models.payroll_runs import (  # noqa: E402
 )
 
 __all__ += ["ComplianceDueDate", "EmployeeBankDetail", "OvertimeRequest", "PayrollRun", "PayrollRunLine"]
+
+# Project details (milestones, tasks, updates, documents, activity) and roster comp-off credits (migration 0025)
+from app.models.projects import (  # noqa: E402
+    CompOffCredit, ProjectActivity, ProjectDocument, ProjectMilestone, ProjectPost, ProjectTask,
+)
+
+__all__ += ["CompOffCredit", "ProjectActivity", "ProjectDocument", "ProjectMilestone", "ProjectPost", "ProjectTask"]
+
+# Tax declarations with proofs; benefit plan documents (migration 0026)
+from app.models.benefits import BenefitPlanDocument  # noqa: E402
+from app.models.tax_declarations import TaxDeclaration, TaxDeclarationDocument, TaxDeclarationWindow  # noqa: E402
+
+__all__ += ["BenefitPlanDocument", "TaxDeclaration", "TaxDeclarationDocument", "TaxDeclarationWindow"]
+
+# Mail drafts, announcement category / pin, help desk subcategory / contact preference and FAQ votes (migration 0027)
+from app.models.desk import DeskFaqVote  # noqa: E402
+from app.models.sharing import MailDraft  # noqa: E402
+
+__all__ += ["DeskFaqVote", "MailDraft"]

@@ -272,9 +272,8 @@ async function runApiPunch(employeeId: string, action: PunchAction): Promise<str
   if (action === "check_in") return apiCheckIn();
   const open = getOpenSession(employeeId);
   if (!open) return "Check in first.";
-  if (action === "check_out") return apiCheckOut(open);
-  apiBreak(open, action === "start_break" ? "start" : "end");
-  return null;
+  if (action === "check_out") return apiCheckOut();
+  return apiBreak(action === "start_break" ? "start" : "end");
 }
 
 /** Punches that wait for the server in backend mode (its errors come back as text); same as attendanceAction otherwise. */
@@ -578,7 +577,7 @@ export function sessionHours(session: TodaySession): {
   const net = Math.max(0, grossMin - breakMins);
   return {
     breakMinutes: breakMins,
-    hoursWorked: Math.round((net / 60) * 10) / 10,
+    hoursWorked: Math.round((net / 60) * 100) / 100,
     phase: session.phase,
   };
 }

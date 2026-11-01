@@ -58,6 +58,7 @@ class Holiday(TimestampMixin, Base):
     # NULL = every calendar in the country; else only people whose employees.holiday_calendar matches (migration 0011).
     calendar: Mapped[str | None] = mapped_column(String(100))
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    description: Mapped[str | None] = mapped_column(Text)  # migration 0024
 
 
 class OptionalHoliday(TimestampMixin, Base):
@@ -71,6 +72,11 @@ class OptionalHoliday(TimestampMixin, Base):
     date: Mapped[dt.date] = mapped_column(Date)
     name: Mapped[str] = mapped_column(String(200))
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    # migration 0024: details, who it applies to (NULL = everyone in the country) and the last day to pick it
+    description: Mapped[str | None] = mapped_column(Text)
+    region: Mapped[str | None] = mapped_column(String(100))
+    legal_entity: Mapped[str | None] = mapped_column(String(200))
+    select_by: Mapped[dt.date | None] = mapped_column(Date)
 
 
 class LeaveRequest(TimestampMixin, Base):
@@ -89,6 +95,11 @@ class LeaveRequest(TimestampMixin, Base):
     decided_by: Mapped[str | None] = mapped_column(ForeignKey("employees.id"))
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     decision_note: Mapped[str | None] = mapped_column(Text)
+    # migration 0024: who covers the work, and one supporting file (e.g. a medical certificate)
+    handover_to: Mapped[str | None] = mapped_column(String(64))  # employee id
+    attachment_name: Mapped[str | None] = mapped_column(String(200))
+    attachment_type: Mapped[str | None] = mapped_column(String(100))
+    attachment_path: Mapped[str | None] = mapped_column(String(300))
 
 
 class LeaveCarryForward(TimestampMixin, Base):

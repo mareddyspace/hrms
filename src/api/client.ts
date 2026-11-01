@@ -12,6 +12,7 @@ export const API_URL = RAW_URL.replace(/\/+$/, "");
 
 /** True when the portal talks to the backend for sign-in, people and leave. */
 export const API_ENABLED = API_URL !== "";
+const LOCAL_API = API_ENABLED && ["localhost", "127.0.0.1", "::1"].includes(new URL(API_URL).hostname.toLowerCase());
 
 const API_PREFIX = "/api/v1";
 const TOKEN_KEY = "timez.api.tokens";
@@ -216,7 +217,11 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
     }
     // A 504 or a dropped connection may mean the server already saved a POST, so only reads retry on those.
     const safe = (options.method ?? "GET") === "GET";
-    const waking = res === null ? safe : res.status === 502 || res.status === 503 || (res.status === 504 && safe);
+    // Cold-start retries are for hosted backends. Local API failures should surface immediately instead of
+    // displaying a misleading "Waking up" message and making sign-in wait through the full retry schedule.
+    const retryableRead = safe && !LOCAL_API;
+    if (res === null && !retryableRead) throw new ApiError(0, messageFrom(null, 0));
+    const waking = retryableRead && (res === null || res.status === 502 || res.status === 503 || res.status === 504);
     if (!waking) return res!;
     if (attempt >= WAKE_RETRY_MS.length) {
       if (res) return res;

@@ -63,6 +63,9 @@ import {
   canDecideCompReview,
   canDecideEnrollmentRow,
   canVerifyDependentRow,
+  cancelEnrollment,
+  dependentCover,
+  uploadDependentDoc,
   formatAmount,
   runRewardApi,
   type CompProposal,
@@ -99,7 +102,8 @@ import {
   verifyDependent,
 } from "../data/rewardLocal.ts";
 import { BandDialog, BonusDialog, CoverDialog, DependentDialog, NewCycleDialog, ProposeDialog } from "./RewardDialogs.tsx";
-import { formatShortDate, todayISO, type DocumentGroup } from "../model.ts";
+import { downloadDependentDoc, downloadPlanFile, downloadPlanSummary, uploadPlanFile } from "../features/benefits/benefitDocs.ts";
+import { formatShortDate, parseISODate, todayISO, type DocumentGroup } from "../model.ts";
 import { MaskedValue } from "../components/MaskedValue.tsx";
 import { isRevealRole } from "../data/piiReveal.ts";
 import { isMasked } from "../utils/mask.ts";
@@ -696,10 +700,21 @@ export function BenefitsPage() {
   const isBenefitsAdmin = canAdminBenefits(demoProfile);
   const canSeeOthers = isBenefitsAdmin;
 
-  // Employees are locked to their own country; HR can browse any country.
+  // Everyone can browse another country's plans (default: your own); enrolling stays within your own country.
+  // HR also sees everyone's enrollments, dependents and history for the chosen country.
   const ownCountry = employee.countryName ?? "";
   const [hrCountry, setHrCountry] = useState(ownCountry);
-  const country = canSeeOthers ? hrCountry : ownCountry;
+  const country = hrCountry;
+  const [entity, setEntity] = useState("");
+  const [planQuery, setPlanQuery] = useState("");
+  const [planType, setPlanType] = useState("");
+  const [enrollQuery, setEnrollQuery] = useState("");
+  const [enrollStatus, setEnrollStatus] = useState("");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyEvent, setHistoryEvent] = useState("");
+  const [docTitle, setDocTitle] = useState("");
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const [docKey, setDocKey] = useState(0);
 
   const countryOf = (employeeId: string) =>
     demoAccounts.find((a) => a.id === employeeId)?.countryName ??
@@ -710,7 +725,15 @@ export function BenefitsPage() {
   const nameOf = (employeeId: string) => demoAccounts.find((a) => a.id === employeeId)?.fullName ?? employeeId;
 
   const allPlans = benefitPlans(reward);
-  const plans = allPlans.filter((p) => (canSeeOthers ? !country || p.country === country : p.country === ownCountry));
+  const countryPlans = allPlans.filter((p) => !country || p.country === country);
+  const entities = [...new Set([...countryPlans.map((p) => p.legalEntity).filter((e): e is string => Boolean(e)), ...(country === ownCountry && employee.legalEntity ? [employee.legalEntity] : [])])];
+  const needle = planQuery.trim().toLowerCase();
+  const plans = countryPlans.filter(
+    (p) =>
+      (!entity || !p.legalEntity || p.legalEntity === entity) &&
+      (!planType || p.category === planType) &&
+      (!needle || [p.name, p.provider, p.category, p.summary, p.coverage ?? ""].some((t) => t.toLowerCase().includes(needle))),
+  );
   const selectedPlan = plans.find((p) => p.id === planId) ?? plans[0];
 
   // Plans paid through payroll (PF, 401(k), pension, super): this month's amounts from your latest payslip.
@@ -735,7 +758,12 @@ export function BenefitsPage() {
       ? !country || e.country === country
       : e.employeeId === employee.id || (e.status === "Pending" && decidesFor(e.employeeId)),
   );
-  const myPlanIds = new Set(reward.enrollments.filter((e) => e.employeeId === employee.id && e.status !== "Waived").map((e) => e.planId));
+  const myPlanIds = new Set(reward.enrollments.filter((e) => e.employeeId === employee.id && e.status !== "Waived" && e.status !== "Cancelled").map((e) => e.planId));
+  const myEnrollments = reward.enrollments.filter((e) => e.employeeId === employee.id);
+  const enrollNeedle = enrollQuery.trim().toLowerCase();
+  const enrollmentsShown = enrollments.filter(
+    (e) => (!enrollStatus || e.status === enrollStatus) && (!enrollNeedle || `${e.employeeName} ${e.planName}`.toLowerCase().includes(enrollNeedle)),
+  );
   const availablePlans = allPlans.filter((p) => p.country === ownCountry && !myPlanIds.has(p.id) && !p.mandatory);
   const changeRequests = reward.changeRequests.filter((c) =>
     canSeeOthers ? inScope(c.employeeId) : c.employeeId === employee.id || (c.status === "Pending" && decidesFor(c.employeeId)),
@@ -745,7 +773,11 @@ export function BenefitsPage() {
   const dependents = reward.dependents.filter(
     (d) => inScope(d.employeeId) || (d.verification === "Pending" && decidesFor(d.employeeId)),
   );
-  const history = reward.benefitHistory.filter((h) => inScope(h.employeeId));
+  const historyAll = reward.benefitHistory.filter((h) => (API_ENABLED ? true : inScope(h.employeeId)));
+  const historyNeedle = historyQuery.trim().toLowerCase();
+  const history = historyAll.filter(
+    (h) => (!historyEvent || h.event === historyEvent) && (!historyNeedle || `${h.event} ${h.detail} ${nameOf(h.employeeId)}`.toLowerCase().includes(historyNeedle)),
+  );
   const lifeEvents = reward.lifeEvents.filter((e) =>
     canSeeOthers ? inScope(e.employeeId) : e.employeeId === employee.id || decidesFor(e.employeeId),
   );
@@ -753,6 +785,13 @@ export function BenefitsPage() {
   const myEvent = activeLifeEvent(reward, employee.id);
   const oe = reward.openEnrollment;
   const oeOpen = openEnrollmentIsOpen(oe);
+  const activeMine = myEnrollments.filter((e) => e.status === "Enrolled");
+  const companyCost = activeMine.reduce((acc, e) => {
+    const p = allPlans.find((x) => x.id === e.planId);
+    if (p?.employerAnnualCost) acc.set(p.currency ?? "", (acc.get(p.currency ?? "") ?? 0) + p.employerAnnualCost);
+    return acc;
+  }, new Map<string, number>());
+  const daysLeft = oe.end ? Math.round((parseISODate(oe.end).getTime() - parseISODate(todayISO()).getTime()) / 86_400_000) : null;
   const coveredBy = (planName: string, employeeId: string) =>
     reward.dependents.filter((d) => d.employeeId === employeeId && d.coveredPlans.includes(planName)).map((d) => d.name);
 
@@ -805,7 +844,12 @@ export function BenefitsPage() {
             Dependents
           </button>
         ) : null;
-      if (e.status === "Pending") return <span className="reward-actions"><span className="muted">Awaiting HR</span>{coverBtn}</span>;
+      const cancelBtn = (label: string) => (
+        <ActionButton className="quiet-link" busyLabel="Cancelling…" doneLabel="Cancelled" onAction={() => run(cancelEnrollment(demoProfile, e.id), `${e.planName}: ${label.toLowerCase()} done.`)}>
+          {label}
+        </ActionButton>
+      );
+      if (e.status === "Pending") return <span className="reward-actions"><span className="muted">Awaiting HR</span>{coverBtn}{cancelBtn("Withdraw request")}</span>;
       if (e.status === "Enrolled") {
         let main: ReactNode;
         if (mandatory) main = <span className="muted">Mandatory</span>;
@@ -816,9 +860,15 @@ export function BenefitsPage() {
               Request change
             </button>
           );
-        } else if (API_ENABLED) main = <span className="muted">Ask HR to change</span>;
+        } else if (API_ENABLED) main = null;
         else main = <ChangeRequestButton onSend={(note) => run(requestEnrollmentChange(demoProfile, e.id, note), "Change request sent to HR.")} />;
-        return <span className="reward-actions">{main}{coverBtn}</span>;
+        return (
+          <span className="reward-actions">
+            {main}
+            {coverBtn}
+            {!mandatory && (changeWin.open ? cancelBtn("Cancel enrollment") : null)}
+          </span>
+        );
       }
       return (
         <ActionButton className="quiet-link" onAction={() => join(e.planId)}>
@@ -847,6 +897,19 @@ export function BenefitsPage() {
     if (d.employeeId === employee.id) {
       return (
         <span className="reward-actions">
+          <label className="quiet-link" style={{ cursor: "pointer" }}>
+            {d.docName ? "Replace proof" : "Upload proof"}
+            <input
+              type="file"
+              accept="application/pdf,image/png,image/jpeg,image/gif,image/webp"
+              style={{ display: "none" }}
+              onChange={(ev) => {
+                const f = ev.target.files?.[0];
+                ev.target.value = "";
+                if (f) void run(uploadDependentDoc(demoProfile, d.id, f), `Proof uploaded for ${d.name}.`);
+              }}
+            />
+          </label>
           <button type="button" className="quiet-link" onClick={() => setDepDialog(d)}>
             Edit
           </button>
@@ -886,20 +949,38 @@ export function BenefitsPage() {
       <FilterBar>
         <label className="filter-label">
           Country
-          {canSeeOthers ? (
-            <select value={hrCountry} onChange={(e) => setHrCountry(e.target.value)}>
-              <option value="">All countries</option>
-              {[...new Set(allPlans.map((p) => p.country))].map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          ) : (
-            <select aria-label="Country" value={ownCountry} disabled>
-              <option value={ownCountry}>{ownCountry || "Not set"}</option>
-            </select>
-          )}
+          <select
+            value={hrCountry}
+            onChange={(e) => {
+              setHrCountry(e.target.value);
+              setEntity("");
+              setPlanId("");
+            }}
+          >
+            {canSeeOthers && <option value="">All countries</option>}
+            {[...new Set([ownCountry, ...allPlans.map((p) => p.country)].filter(Boolean))].map((c) => (
+              <option key={c} value={c}>
+                {c}
+                {c === ownCountry ? " (yours)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="filter-label">
+          Legal entity
+          <select value={entity} onChange={(e) => setEntity(e.target.value)}>
+            <option value="">All entities</option>
+            {entities.map((x) => (
+              <option key={x} value={x}>
+                {x}
+              </option>
+            ))}
+          </select>
         </label>
       </FilterBar>
+      {country && country !== ownCountry && (
+        <Banner message={{ tone: "info", text: `Showing ${country} plans for reference. You can enroll only in plans for ${ownCountry || "your own country"}.` }} />
+      )}
 
       <Banner message={msg} />
 
@@ -915,8 +996,47 @@ export function BenefitsPage() {
       />
 
       {tab === "plans" && (
+        <Card title="Your coverage">
+          <MetricGrid>
+            <MetricCard label="Plans you're in" value={activeMine.length} hint={activeMine.map((e) => e.planName).join(", ") || "None yet"} />
+            <MetricCard label="Requests with HR" value={myEnrollments.filter((e) => e.status === "Pending").length} />
+            <MetricCard label="Dependents covered" value={myDependents.filter((d) => d.coveredPlans.length > 0).length} hint={`${myDependents.length} on file`} />
+            <MetricCard
+              label="Company pays a year"
+              value={companyCost.size ? [...companyCost].map(([cur, amt]) => money(amt, cur || undefined)).join(" + ") : "—"}
+              hint="Employer contribution for your plans"
+            />
+            <MetricCard
+              label="Enrollment window"
+              value={oeOpen ? "Open" : "Closed"}
+              hint={oeOpen && daysLeft != null && daysLeft >= 0 ? `Closes ${formatShortDate(oe.end)} (${daysLeft} day${daysLeft === 1 ? "" : "s"} left)` : openEnrollmentLabel(oe)}
+            />
+          </MetricGrid>
+          {oeOpen && daysLeft != null && daysLeft >= 0 && daysLeft <= 7 && (
+            <Banner message={{ tone: "warn", text: `Open enrollment closes in ${daysLeft} day${daysLeft === 1 ? "" : "s"}. Review your plans and dependents.` }} />
+          )}
+        </Card>
+      )}
+      {tab === "plans" && (
         <div className="mgr-home-grid">
           <Card title={`Benefit plans · ${country || "All countries"}`}>
+            <div className="form-actions" style={{ justifyContent: "flex-start", flexWrap: "wrap", marginTop: 0 }}>
+              <label className="filter-label">
+                Search
+                <input type="search" value={planQuery} placeholder="Plan, provider or cover" onChange={(e) => setPlanQuery(e.target.value)} />
+              </label>
+              <label className="filter-label">
+                Type
+                <select value={planType} onChange={(e) => setPlanType(e.target.value)}>
+                  <option value="">All types</option>
+                  {[...new Set(countryPlans.map((p) => p.category))].map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <DataTable
               headers={["Plan", "Category", "Provider", "Employee cost", "Your eligibility", ""]}
               rows={plans.map((p) => [
@@ -941,7 +1061,29 @@ export function BenefitsPage() {
           {selectedPlan && (
             <Card title={selectedPlan.name}>
               <p>{selectedPlan.summary}</p>
-              <p className="note">Provider: {selectedPlan.provider}</p>
+              <dl className="info-grid">
+                <div className="info-fact"><dt>Provider</dt><dd>{selectedPlan.provider}</dd></div>
+                <div className="info-fact"><dt>Type</dt><dd>{selectedPlan.category}</dd></div>
+                <div className="info-fact"><dt>Country · entity</dt><dd>{selectedPlan.country} · {selectedPlan.legalEntity ?? "all entities"}</dd></div>
+                <div className="info-fact"><dt>Employee contribution</dt><dd>{selectedPlan.employeeCost || "—"}</dd></div>
+                <div className="info-fact">
+                  <dt>Employer contribution</dt>
+                  <dd>{selectedPlan.employerAnnualCost ? `${money(selectedPlan.employerAnnualCost, selectedPlan.currency)} a year per member` : "—"}</dd>
+                </div>
+                <div className="info-fact"><dt>Dependents</dt><dd>{selectedPlan.coversDependents ? "Can be covered" : "Employee only"}</dd></div>
+              </dl>
+              {selectedPlan.coverage && (
+                <>
+                  <h3 style={{ fontSize: 14, marginTop: 12 }}>Coverage</h3>
+                  <p>{selectedPlan.coverage}</p>
+                </>
+              )}
+              {selectedPlan.terms && (
+                <>
+                  <h3 style={{ fontSize: 14, marginTop: 12 }}>Terms</h3>
+                  <p className="note">{selectedPlan.terms}</p>
+                </>
+              )}
               {payslipAmounts(selectedPlan.id, selectedPlan.country) && (
                 <p className="note">
                   On your {latestSlip?.label} payslip: {payslipAmounts(selectedPlan.id, selectedPlan.country)}.{" "}
@@ -961,21 +1103,49 @@ export function BenefitsPage() {
                 ))}
               </ul>
               <p className="note">You: {eligibilityCell(selectedPlan.id)}</p>
-              <h3 style={{ fontSize: 14, marginTop: 12 }}>Plan documents</h3>
+              <h3 style={{ fontSize: 14, marginTop: 12 }}>Policy documents</h3>
               <ul className="todo">
-                {selectedPlan.documents.map((d) => (
-                  <li key={d}>
-                    {d}{" "}
-                    <button
-                      type="button"
-                      className="quiet-link"
-                      onClick={() => downloadText(`${d}.txt`, `${d}\n\n${LEGAL_DISCLAIMER}\n\nPlan summary for ${selectedPlan.name}.`)}
-                    >
-                      Download (.txt)
-                    </button>
+                <li>
+                  Plan summary (PDF){" "}
+                  <ActionButton className="quiet-link" busyLabel="Preparing…" doneLabel="Downloaded" onAction={() => downloadPlanSummary(selectedPlan)} success={`${selectedPlan.name} summary downloaded.`} toastError>
+                    Download
+                  </ActionButton>
+                </li>
+                {(selectedPlan.files ?? []).map((f) => (
+                  <li key={f.id}>
+                    {f.title} <span className="muted">· {f.fileName}</span>{" "}
+                    <ActionButton className="quiet-link" busyLabel="Downloading…" doneLabel="Downloaded" onAction={() => downloadPlanFile(selectedPlan, f)} toastError>
+                      Download
+                    </ActionButton>
                   </li>
                 ))}
               </ul>
+              {API_ENABLED && isBenefitsAdmin && (
+                <form
+                  className="form-actions"
+                  style={{ justifyContent: "flex-start", flexWrap: "wrap" }}
+                  onSubmit={(ev) => {
+                    ev.preventDefault();
+                    if (!docFile) {
+                      setMsg({ tone: "err", text: "Choose a PDF to upload." });
+                      return;
+                    }
+                    void run(uploadPlanFile(selectedPlan, docTitle, docFile), `${docTitle.trim()} added to ${selectedPlan.name}.`).then((e) => {
+                      if (!e) {
+                        setDocTitle("");
+                        setDocFile(null);
+                        setDocKey((k) => k + 1);
+                      }
+                    });
+                  }}
+                >
+                  <input aria-label="Document title" placeholder="Document title, e.g. Policy wording" value={docTitle} maxLength={200} onChange={(ev) => setDocTitle(ev.target.value)} />
+                  <input key={docKey} aria-label="Policy file" type="file" accept="application/pdf,image/png,image/jpeg" onChange={(ev) => setDocFile(ev.target.files?.[0] ?? null)} />
+                  <button className="btn-ghost" type="submit">
+                    Upload policy document
+                  </button>
+                </form>
+              )}
             </Card>
           )}
         </div>
@@ -1089,9 +1259,26 @@ export function BenefitsPage() {
           </Card>
 
           <Card title="Enrollment status">
+            <div className="form-actions" style={{ justifyContent: "flex-start", flexWrap: "wrap", marginTop: 0 }}>
+              <label className="filter-label">
+                Search
+                <input type="search" value={enrollQuery} placeholder={canSeeOthers ? "Employee or plan" : "Plan"} onChange={(e) => setEnrollQuery(e.target.value)} />
+              </label>
+              <label className="filter-label">
+                Status
+                <select value={enrollStatus} onChange={(e) => setEnrollStatus(e.target.value)}>
+                  <option value="">Any status</option>
+                  {["Pending", "Enrolled", "Waived", "Cancelled"].map((x) => (
+                    <option key={x} value={x}>
+                      {x}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <DataTable
               headers={["Employee", "Plan", "Country", "Status", "Effective", "Dependents", "Action"]}
-              rows={enrollments.map((e) => [
+              rows={enrollmentsShown.map((e) => [
                 e.employeeName,
                 e.planName,
                 e.country,
@@ -1166,7 +1353,7 @@ export function BenefitsPage() {
           }
         >
           <DataTable
-            headers={[...(canSeeOthers ? ["Employee"] : []), "Name", "Relationship", "Date of birth", "Gender", "Covered plans", "Verification", "Action"]}
+            headers={[...(canSeeOthers ? ["Employee"] : []), "Name", "Relationship", "Date of birth", "Gender", "Covered plans", "Can be covered", "Proof", "Verification", "Action"]}
             rows={dependents.map((d) => [
               ...(canSeeOthers ? [nameOf(d.employeeId)] : []),
               d.name,
@@ -1180,6 +1367,21 @@ export function BenefitsPage() {
               />,
               d.gender ?? "—",
               d.coveredPlans.join(", ") || "—",
+              (() => {
+                const cov = dependentCover(d);
+                return cov.eligible ? (
+                  <StatusBadge key={`${d.id}-c`} status="Eligible" tone="ok" literal />
+                ) : (
+                  <span key={`${d.id}-c`} className="muted">No – {cov.note}</span>
+                );
+              })(),
+              d.docName ? (
+                <ActionButton key={`${d.id}-p`} className="quiet-link" busyLabel="Downloading…" doneLabel="Downloaded" onAction={() => downloadDependentDoc(d)} toastError>
+                  {d.docName}
+                </ActionButton>
+              ) : (
+                <span key={`${d.id}-p`} className="muted">None</span>
+              ),
               <StatusBadge
                 key={`${d.id}-v`}
                 status={d.verification ?? "Verified"}
@@ -1190,7 +1392,7 @@ export function BenefitsPage() {
             ])}
             empty={<EmptyState title="No dependents on file" />}
           />
-          <p className="note">HR verifies dependents before they're covered.</p>
+          <p className="note">HR verifies dependents (with a proof of relationship) before they're covered. Children are covered until age 25.</p>
         </Card>
       )}
       {tab === "dependents" && reward.api?.benefits && (
@@ -1199,6 +1401,23 @@ export function BenefitsPage() {
 
       {tab === "history" && (
         <Card title="Benefit history">
+          <div className="form-actions" style={{ justifyContent: "flex-start", flexWrap: "wrap", marginTop: 0 }}>
+            <label className="filter-label">
+              Search
+              <input type="search" value={historyQuery} placeholder="Plan, dependent or event" onChange={(e) => setHistoryQuery(e.target.value)} />
+            </label>
+            <label className="filter-label">
+              Event
+              <select value={historyEvent} onChange={(e) => setHistoryEvent(e.target.value)}>
+                <option value="">All events</option>
+                {[...new Set(historyAll.map((h) => h.event))].map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <DataTable
             headers={[...(canSeeOthers ? ["Employee"] : []), "Date", "Event", "Detail"]}
             rows={history.map((h) => [...(canSeeOthers ? [nameOf(h.employeeId)] : []), h.date, h.event, h.detail])}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, TimestampMixin, UTCDateTime, utcnow
@@ -30,6 +30,9 @@ class DeskTicket(TimestampMixin, Base):
     escalation_level: Mapped[int] = mapped_column(Integer, default=0)
     satisfaction: Mapped[int | None] = mapped_column(Integer)  # 1-5, from the requester once resolved
     satisfaction_comment: Mapped[str | None] = mapped_column(Text)
+    # Migration 0027: finer topic and how the requester wants to be contacted (email | phone | chat).
+    subcategory: Mapped[str | None] = mapped_column(String(64))
+    contact_preference: Mapped[str | None] = mapped_column(String(16))
 
 
 class DeskTicketComment(Base):
@@ -55,3 +58,16 @@ class DeskTicketFile(TimestampMixin, Base):
     size_bytes: Mapped[int] = mapped_column(Integer)
     sha256: Mapped[str] = mapped_column(String(64))
     storage_path: Mapped[str] = mapped_column(String(500))
+
+
+class DeskFaqVote(Base):
+    """One "helpful / not helpful" vote per person per FAQ entry (migration 0027)."""
+
+    __tablename__ = "desk_faq_votes"
+    __table_args__ = (UniqueConstraint("faq_id", "person_id", name="uq_desk_faq_vote"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    faq_id: Mapped[str] = mapped_column(String(64), index=True)
+    person_id: Mapped[str] = mapped_column(String(64), index=True)
+    helpful: Mapped[bool] = mapped_column(Boolean)
+    voted_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)

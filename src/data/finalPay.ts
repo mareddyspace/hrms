@@ -3,6 +3,7 @@
  * worked out exactly as the payslips are (src/data/payslipGenerator.ts).
  */
 import { API_ENABLED } from "../api/client.ts";
+import { declarationsAsProofs } from "../features/taxdecl/taxDeclStore.ts";
 import { findDemoById } from "../demoAccounts.ts";
 import type { ExitCase } from "../features/lifecycle/exitStore.ts";
 import { leaveRows, todayISO, type CountryCode, type PortalState } from "../model.ts";
@@ -39,7 +40,7 @@ export function finalSettlementForCase(
     employmentStatus: person?.employmentStatus,
     annualBase: payslipAnnualBase(row.employeeId, (person?.countryCode ?? demo?.countryCode ?? "IN") as CountryCode),
     regime: getTaxRegime(row.employeeId),
-    investmentProofs: state?.investmentProofs,
+    investmentProofs: declarationsAsProofs(state?.investmentProofs),
     timesheets: state?.timesheets,
     orgTimesheets: state?.orgTimesheets,
   });

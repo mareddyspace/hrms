@@ -28,6 +28,12 @@ export interface TimesheetEntryOut {
   hours: number;
   billable: boolean;
   comment: string | null;
+  /** Start of the block in minutes after midnight (null for blocks logged before start times were kept). */
+  start_minute?: number | null;
+  break_minutes?: number;
+  work_type?: string | null;
+  work_id?: string | null;
+  work_label?: string | null;
 }
 
 export interface TimesheetWeekOut {
@@ -63,7 +69,7 @@ export interface UtilizationOut {
   projects: UtilizationRow[];
 }
 
-/* Start time and the ticket/task a block was for aren't API fields; this browser remembers them per entry. */
+/* Older blocks (before the API kept start times and the ticket/task) fall back to what this browser remembered. */
 const META_KEY = "timez.api.time-entry-meta";
 type EntryMeta = Pick<TimeEntry, "startHour" | "workType" | "workId" | "workLabel">;
 
@@ -171,16 +177,21 @@ function mapTime(raw: RawTime, accountId: string): ApiTimeState {
     const weekStart = week?.week_start ?? mondayOf(e.work_date);
     const key = `${e.week_id}|${e.project_id}`;
     const m = meta[e.id];
-    const start = m?.startHour ?? nextStart.get(e.work_date) ?? 9.5;
-    nextStart.set(e.work_date, Math.max(nextStart.get(e.work_date) ?? 9.5, start + e.hours));
+    const brk = e.break_minutes ?? 0;
+    const start = e.start_minute != null ? e.start_minute / 60 : m?.startHour ?? nextStart.get(e.work_date) ?? 9.5;
+    nextStart.set(e.work_date, Math.max(nextStart.get(e.work_date) ?? 9.5, start + e.hours + brk / 60));
+    const workType = (e.work_type ?? m?.workType) as TimeEntry["workType"];
     const entry: TimeEntry = {
       id: e.id,
       date: e.work_date,
       startHour: start,
       hours: e.hours,
+      ...(brk ? { breakMinutes: brk } : {}),
       note: e.task,
       billable: e.billable,
-      ...(m?.workType && m.workType !== "project" ? { workType: m.workType, workId: m.workId, workLabel: m.workLabel } : {}),
+      ...(workType && workType !== "project"
+        ? { workType, workId: e.work_id ?? m?.workId, workLabel: e.work_label ?? m?.workLabel }
+        : {}),
     };
     let sheet = sheets.get(key);
     if (!sheet) {
@@ -239,35 +250,31 @@ export const timeMirror = createMirror<RawTime, ApiTimeState>(emptyTime, loadTim
 
 /* ───────── Changes ───────── */
 
+/** The entry as the API takes it: start / end / break in minutes (the server works out the hours and refuses overlaps). */
+function entryBody(projectId: string, input: Omit<TimeEntry, "id">) {
+  const start = Math.round(input.startHour * 60);
+  const brk = Math.round(input.breakMinutes ?? 0);
+  return {
+    work_date: input.date,
+    project_id: projectId,
+    task: input.note.trim().slice(0, 200),
+    start_minute: start,
+    end_minute: Math.min(1440, start + Math.round(input.hours * 60) + brk),
+    break_minutes: brk,
+    billable: input.billable,
+    comment: input.workLabel?.trim() || null,
+    work_type: input.workType ?? "project",
+    work_id: input.workType && input.workType !== "project" ? input.workId ?? null : null,
+    work_label: input.workLabel?.trim() || null,
+  };
+}
+
 export function apiAddTimeEntry(projectId: string, input: Omit<TimeEntry, "id">): Promise<string | null> {
-  return mutate(async () => {
-    const out = await api.post<TimesheetEntryOut>("/timesheets/entries", {
-      work_date: input.date,
-      project_id: projectId,
-      task: input.note.trim().slice(0, 200),
-      hours: Math.round(input.hours * 4) / 4,
-      billable: input.billable,
-      comment: input.workLabel?.trim() || null,
-    });
-    const map = readMeta();
-    map[out.id] = { startHour: input.startHour, workType: input.workType, workId: input.workId, workLabel: input.workLabel };
-    writeMeta(map);
-  }, timeMirror);
+  return mutate(() => api.post<TimesheetEntryOut>("/timesheets/entries", entryBody(projectId, input)), timeMirror);
 }
 
 export function apiUpdateTimeEntry(entryId: string, projectId: string, input: Omit<TimeEntry, "id">): Promise<string | null> {
-  return mutate(
-    () =>
-      apiPut<TimesheetEntryOut>(`/timesheets/entries/${encodeURIComponent(entryId)}`, {
-        work_date: input.date,
-        project_id: projectId,
-        task: input.note.trim().slice(0, 200),
-        hours: Math.round(input.hours * 4) / 4,
-        billable: input.billable,
-        comment: input.workLabel?.trim() || null,
-      }),
-    timeMirror,
-  );
+  return mutate(() => apiPut<TimesheetEntryOut>(`/timesheets/entries/${encodeURIComponent(entryId)}`, entryBody(projectId, input)), timeMirror);
 }
 
 export function apiRemoveTimeEntry(entryId: string): Promise<string | null> {

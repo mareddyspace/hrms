@@ -1,4 +1,5 @@
 import { useSearchParams } from "react-router-dom";
+import { declarationsAsProofs, decideDeclaration, useDeclarationsVersion, withdrawDeclaration } from "../features/taxdecl/taxDeclStore.ts";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { decideCorrectionAsync, getAttendanceState, subscribeAttendance } from "../data/attendanceLocal.ts";
 import { API_ENABLED } from "../api/client.ts";
@@ -158,7 +159,7 @@ export function countWaitingOnMe(
       // daily timesheets (someone with no one above them goes to HR)
       getLocalDays().filter((d) => d.status === "submitted" && (mine(d.personId, "timesheets") || hrDecides(d.personId))).length;
   const proofs = canVerifyProofs
-    ? state.investmentProofs.filter((p) => p.status === "submitted" && p.employeeId !== myId).length
+    ? declarationsAsProofs(state.investmentProofs).filter((p) => p.status === "submitted" && p.employeeId !== myId).length
     : 0;
   const corrections = apiPending
     ? 0
@@ -188,6 +189,7 @@ export type ApprovalInboxItem = RequestItem;
 export function useApprovalInbox() {
   const portal = usePortal();
   const { state, employee, demoAccounts, leaveTable, canDecideFor, canVerifyProofs } = portal;
+  useDeclarationsVersion(); // tax proofs live in their own store (src/features/taxdecl)
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
   const attendance = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
   const shifts = useSyncExternalStore(subscribeShifts, getShiftState, getShiftState);
@@ -415,7 +417,8 @@ export function useApprovalInbox() {
         withdraw: () => portal.setCabStatus(x.id, "withdrawn"),
       });
     }
-    for (const x of state.investmentProofs) {
+    for (const x of declarationsAsProofs(state.investmentProofs)) {
+      if (x.status === "withdrawn") continue;
       list.push({
         key: `poi-${x.id}`,
         kind: "Tax-saving proof",
@@ -426,8 +429,8 @@ export function useApprovalInbox() {
         open: x.status === "submitted",
         decided: x,
         approveLabel: "Verify",
-        decide: (d, note) => portal.setInvestmentProofStatus(x.id, d === "approved" ? "verified" : "rejected", note),
-        withdraw: () => portal.setInvestmentProofStatus(x.id, "withdrawn"),
+        decide: (d, note) => decideDeclaration(actor, x.id, d === "approved" ? "verify" : "reject", note ?? ""),
+        withdraw: () => withdrawDeclaration(actor, x.id),
       });
     }
     for (const row of state.orgTimesheets) {

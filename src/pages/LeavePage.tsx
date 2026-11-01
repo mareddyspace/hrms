@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
-import { useEffect, useMemo, useState } from "react";
-import { ActionButton, Banner, Card, Field, LeaveTable, Page, StatusBadge, StatusPill, SubmitButton, notify, useAction } from "../components/ui.tsx";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ActionButton, Banner, Card, Field, Page, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { managementChain } from "../demoAccounts.ts";
 import type { BackdatedLeavePermission, LeaveCode, LeaveHalf } from "../model.ts";
 import {
@@ -10,6 +10,7 @@ import {
   holidaysForPerson,
   leaveNameFor,
   leaveRows,
+  localPolicy,
   needsBackdatedPermission,
   plural,
   SICK_LEAVE_GRACE_DAYS,
@@ -18,9 +19,19 @@ import {
 } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { API_ENABLED } from "../api/client.ts";
-import { apiLeaveMeta } from "../api/portalSync.ts";
+import { apiLeaveAttachment, apiLeaveMeta } from "../api/portalSync.ts";
 import { OptionalHolidaysCard } from "../features/workforce/OptionalHolidaysPage.tsx";
-import { getPerson } from "../data/peopleLocal.ts";
+import { getPerson, listPeople, subscribePeople } from "../data/peopleLocal.ts";
+import {
+  LeaveBalanceCards,
+  LeavePoliciesCard,
+  LeaveRequestHistory,
+  UpcomingHolidaysCard,
+  dateProblem,
+  dayBreakdown,
+  localPolicyLines,
+  useHandoverOptions,
+} from "./leaveParts.tsx";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
@@ -95,12 +106,22 @@ export function LeavePage() {
   // Set when the form was filled from an approved permission: the permission only covers that leave type.
   const [lockedCode, setLockedCode] = useState<LeaveCode | null>(null);
   const [halfDay, setHalfDay] = useState(false);
+  const [handoverTo, setHandoverTo] = useState("");
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLDivElement>(null);
+  const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
+  const handoverOptions = useHandoverOptions(people, { id: employee.id, managerId: approver?.id ?? getPerson(employee.id)?.managerId });
   const [halfPart, setHalfPart] = useState<LeaveHalf>("first");
   // Half days: one date only, and not for work-from-home types (you're working either way).
   const halfAllowed = Boolean(from) && from === to && code !== "wfh" && code !== "emergency_wfh";
   const half: LeaveHalf | undefined = halfAllowed && halfDay ? halfPart : undefined;
-  const days =
-    from && to ? workingDays(from, to, holidaySet(holidaysForPerson(state.holidays, employee.id)), activeOffs, half) : 0;
+  const myHolidays = holidaysForPerson(state.holidays, employee.id);
+  const days = from && to ? workingDays(from, to, holidaySet(myHolidays), activeOffs, half) : 0;
+  const breakdown = dayBreakdown(from, to, myHolidays, activeOffs);
+  const dateError = dateProblem(from, to, today, code);
+  const selectedRow = formRows.find((row) => row.code === code);
+  const overBalance = Boolean(selectedRow && code !== "unpaid" && days > selectedRow.available);
   // Balances for the selected leave year (quotas reset every January).
   const yearRows = useMemo(
     () =>
@@ -143,6 +164,9 @@ export function LeavePage() {
     resetReason();
     setFrom("");
     setTo("");
+    setHandoverTo("");
+    setAttachment(null);
+    if (fileRef.current) fileRef.current.value = "";
     setLockedCode(null);
     setHalfDay(false);
     setHalfPart("first");
@@ -150,7 +174,37 @@ export function LeavePage() {
 
   const applyAction = useAction();
 
+  function pickFile(file: File | undefined) {
+    if (!file) return setAttachment(null);
+    if (!/^(application\/pdf|image\/(png|jpeg|gif|webp))$/.test(file.type)) {
+      setMessage({ tone: "err", text: "Attach a PDF or an image (PNG, JPG)." });
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setMessage({ tone: "err", text: "The file is larger than 5 MB." });
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    setAttachment(file);
+  }
+
+  function startApply(next: LeaveCode) {
+    setCode(next);
+    fillReason(reasonForm, next);
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    formRef.current?.querySelector<HTMLInputElement>("input[type=date]")?.focus();
+  }
+
   async function onSubmit(): Promise<boolean> {
+    if (dateError) {
+      setMessage({ tone: "err", text: dateError });
+      return false;
+    }
+    if (from && to && days <= 0) {
+      setMessage({ tone: "err", text: "Those dates have no working days (weekends and holidays are skipped)." });
+      return false;
+    }
     if (hasTemplateBlanks(reason)) {
       setMessage({ tone: "err", text: TEMPLATE_BLANKS_ERROR });
       return false;
@@ -170,7 +224,16 @@ export function LeavePage() {
       resetForm();
       return true;
     }
-    const error = await applyLeave({ code, from, to, reason, half });
+    const handoverName = handoverOptions.find((p) => p.id === handoverTo)?.fullName;
+    const error = await applyLeave({
+      code,
+      from,
+      to,
+      reason,
+      half,
+      ...(handoverTo ? { handoverTo, handoverName } : {}),
+      ...(attachment ? { attachment } : {}),
+    });
     setMessage(
       error
         ? { tone: "err", text: error }
@@ -187,7 +250,24 @@ export function LeavePage() {
     return true;
   }
 
-  function applyWithPermission(p: BackdatedLeavePermission) {
+  async function openAttachment(id: string, name: string) {
+    if (!API_ENABLED) {
+      setMessage({ tone: "err", text: "The file is kept on the device it was added from." });
+      return;
+    }
+    try {
+      const url = URL.createObjectURL(await apiLeaveAttachment(id));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      setMessage({ tone: "err", text: e instanceof Error ? e.message : "Could not download the file." });
+    }
+  }
+
+    function applyWithPermission(p: BackdatedLeavePermission) {
     setCode(p.code);
     setLockedCode(p.code);
     setFrom(p.from);
@@ -241,7 +321,7 @@ export function LeavePage() {
         <div className="leave-main">
           <Card title={`Leave balance · ${year}`}>
             {/* Unpaid leave has no balance; it stays available in the apply form below. */}
-            <LeaveTable rows={yearRows.filter((row) => row.code !== "unpaid")} showPending={hasApprover} />
+            <LeaveBalanceCards rows={yearRows.filter((row) => row.code !== "unpaid")} showPending={hasApprover} onApply={startApply} />
           </Card>
           {(teamPermissions.length > 0 || teamLeave.length > 0) && (
             <Card title={`Team approvals (${teamPermissions.length + teamLeave.length})`}>
@@ -285,6 +365,15 @@ export function LeavePage() {
                       {r.half ? ` · ${halfLabel(r.half)}` : ""}
                     </span>
                     <span className="muted">Reason: {r.reason}</span>
+                    {r.handoverName && <span className="muted">Work covered by {r.handoverName}</span>}
+                    {r.attachmentName && (
+                      <span className="muted">
+                        File:{" "}
+                        <button type="button" className="link-btn" onClick={() => void openAttachment(r.id, r.attachmentName!)}>
+                          {r.attachmentName}
+                        </button>
+                      </span>
+                    )}
                     {r.approvalProgress && <span className="muted">{r.approvalProgress}</span>}
                     <div className="approval-actions">
                       <input
@@ -349,81 +438,22 @@ export function LeavePage() {
           )}
 
           <Card title={hasApprover ? `My requests · ${year}` : `My leave · ${year}`}>
-            <div className="table-scroll">
-              <table className="data requests">
-                <thead>
-                  <tr>
-                    <th>Type</th>
-                    <th>Dates</th>
-                    <th>Days</th>
-                    <th>Reason</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {requests.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="muted">
-                        No leave requests in {year}.
-                      </td>
-                    </tr>
-                  )}
-                  {requests.map((request) => {
-                    const policy = leaveTable.find((row) => row.code === request.code);
-                    const count = daysOf(request.id, () =>
-                      workingDays(
-                        request.from,
-                        request.to,
-                        holidaySet(holidaysForPerson(state.holidays, employee.id)),
-                        activeOffs,
-                        request.half,
-                      ),
-                    );
-                    return (
-                      <tr key={request.id}>
-                        <td>{policy?.name ?? request.code}</td>
-                        <td>
-                          {request.half
-                            ? `${formatShortDate(request.from)} · ${halfLabel(request.half)}`
-                            : request.from === request.to
-                              ? formatShortDate(request.from)
-                              : `${formatShortDate(request.from)} – ${formatShortDate(request.to)}`}
-                        </td>
-                        <td>{count}</td>
-                        <td>{request.reason}</td>
-                        <td>
-                          <StatusPill status={request.status} />
-                          {request.status === "pending" && request.approvalProgress && (
-                            <span className="muted request-decision">{request.approvalProgress}</span>
-                          )}
-                          {request.decidedByName && (
-                            <span className="muted request-decision">
-                              by {request.decidedByName}
-                              {request.decisionNote ? ` · “${request.decisionNote}”` : ""}
-                            </span>
-                          )}
-                        </td>
-                        <td>
-                          {(request.status === "pending" || (request.status === "approved" && request.from > today)) && (
-                            <ActionButton
-                              className="btn-ghost btn-tiny"
-                              success={request.status === "pending" ? "Leave request withdrawn." : "Leave cancelled."}
-                              onError={(error) => setMessage({ tone: "err", text: error })}
-                              onAction={() => setLeaveStatus(request.id, "withdrawn")}
-                            >
-                              {request.status === "pending" ? "Withdraw" : "Cancel leave"}
-                            </ActionButton>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <LeaveRequestHistory
+              requests={requests}
+              leaveName={(c) => leaveTable.find((row) => row.code === c)?.name ?? leaveName(c, employee.id)}
+              daysOf={(request) =>
+                daysOf(request.id, () =>
+                  workingDays(request.from, request.to, holidaySet(myHolidays), activeOffs, request.half),
+                )
+              }
+              approverName={approver?.fullName}
+              today={today}
+              onWithdraw={(request) => setLeaveStatus(request.id, "withdrawn")}
+              onError={(error) => setMessage({ tone: "err", text: error })}
+            />
           </Card>
         </div>
+        <div className="leave-side" ref={formRef}>
         <Card title={hasApprover ? "Apply for leave" : "Record leave"}>
           {hasApprover && approver && (
             <p className="muted" style={{ marginTop: 0 }}>
@@ -453,10 +483,19 @@ export function LeavePage() {
                 </select>
               </Field>
               <Field label="From">
-                <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} required />
+                <input
+                  type="date"
+                  value={from}
+                  max={code === "sick" ? today : undefined}
+                  onChange={(event) => {
+                    setFrom(event.target.value);
+                    if (!to || to < event.target.value) setTo(event.target.value);
+                  }}
+                  required
+                />
               </Field>
               <Field label="To">
-                <input type="date" value={to} onChange={(event) => setTo(event.target.value)} required />
+                <input type="date" value={to} min={from || undefined} onChange={(event) => setTo(event.target.value)} required />
               </Field>
               {halfAllowed && (
                 <Field label="Half day" wide>
@@ -478,6 +517,44 @@ export function LeavePage() {
                   </div>
                 </Field>
               )}
+              <Field label="Work covered by" wide>
+                <select value={handoverTo} onChange={(event) => setHandoverTo(event.target.value)}>
+                  <option value="">No one</option>
+                  {handoverOptions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.fullName}
+                      {p.designation ? ` · ${p.designation}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Attachment" wide>
+                <div className="lv-file">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="application/pdf,image/png,image/jpeg,image/gif,image/webp"
+                    aria-label="Attach a file"
+                    onChange={(event) => pickFile(event.target.files?.[0])}
+                  />
+                  {attachment && (
+                    <span className="muted">
+                      {attachment.name} · {Math.max(1, Math.round(attachment.size / 1024))} KB{" "}
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => {
+                          setAttachment(null);
+                          if (fileRef.current) fileRef.current.value = "";
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </span>
+                  )}
+                  <span className="muted">PDF or image, up to 5 MB{code === "sick" ? " (a medical certificate helps)" : ""}.</span>
+                </div>
+              </Field>
               <Field label="Reason" wide>
                 <textarea
                   ref={reasonRef}
@@ -488,9 +565,22 @@ export function LeavePage() {
               </Field>
             </div>
             <p className="note">
-              Working days: {days}
-              {half ? ` (${halfLabel(half)})` : ""}.
+              Working days: <strong>{days}</strong>
+              {half ? ` (${halfLabel(half)})` : ""}
+              {breakdown.calendar > 0 && !half
+                ? ` of ${breakdown.calendar} ${breakdown.calendar === 1 ? "day" : "days"}${breakdown.weekends ? ` · ${breakdown.weekends} weekly off` : ""}${breakdown.holidays.length ? ` · ${breakdown.holidays.length} holiday` : ""}`
+                : ""}
+              .
             </p>
+            {breakdown.holidays.length > 0 && (
+              <p className="muted">Not counted: {breakdown.holidays.map((h) => `${h.name} (${formatShortDate(h.date)})`).join(", ")}</p>
+            )}
+            {dateError && <p className="note err">{dateError}</p>}
+            {overBalance && selectedRow && (
+              <p className="note warn">
+                Only {selectedRow.available} {selectedRow.available === 1 ? "day" : "days"} of {selectedRow.name} available.
+              </p>
+            )}
             {needsPermission && (
               <p className="note warn">
                 These dates are in the past. {approver?.fullName ?? "Your manager"} must approve before you can apply.
@@ -512,7 +602,13 @@ export function LeavePage() {
             <Banner message={message} />
           </form>
         </Card>
-        {leaveTable.some((row) => row.code === "optional" && row.quota > 0) && <OptionalHolidaysCard />}
+          <UpcomingHolidaysCard holidays={myHolidays} today={today} countryName={employee.countryName || "your country"} />
+          {leaveTable.some((row) => row.code === "optional" && row.quota > 0) && <OptionalHolidaysCard />}
+          <LeavePoliciesCard
+            countryName={employee.countryName || "your country"}
+            local={localPolicyLines(state.leavePolicies, (p) => localPolicy(p, employee.countryCode as never))}
+          />
+        </div>
       </div>
     </Page>
   );

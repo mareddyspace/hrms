@@ -23,8 +23,18 @@ export async function loadApiHolidays(replace: Replace, country: string, year: n
   try {
     const rows = asAdmin
       ? (await leaveAdminApi.holidays(country, year)).filter((h) => h.active && !h.calendar)
-      : await api.get<{ id: string; date: string; name: string; country_code: string }[]>("/leave/holidays", { year });
-    const list: Holiday[] = rows.map((h) => ({ id: h.id, date: h.date, name: h.name, countryCode: h.country_code as CountryCode }));
+      : await api.get<{ id: string; date: string; name: string; country_code: string; calendar?: string | null; description?: string | null }[]>(
+          "/leave/holidays",
+          { year },
+        );
+    const list: Holiday[] = rows.map((h) => ({
+      id: h.id,
+      date: h.date,
+      name: h.name,
+      countryCode: h.country_code as CountryCode,
+      ...(h.calendar ? { region: h.calendar } : {}),
+      ...(h.description ? { description: h.description } : {}),
+    }));
     const code = asAdmin ? country : (list[0]?.countryCode ?? country);
     replace((all) => [...all.filter((h) => !inYear(h, code, year)), ...list].sort((a, b) => a.date.localeCompare(b.date)));
     return null;
@@ -49,7 +59,7 @@ export async function saveHoliday(
   replace: Replace,
   current: Holiday[],
   actor: Actor,
-  input: { id?: string; countryCode: string; date: string; name: string },
+  input: { id?: string; countryCode: string; date: string; name: string; description?: string },
 ): Promise<string | null> {
   if (!canEditHolidays(actor.role)) return "Only HR or an administrator can change holidays.";
   const error = validate(current, input);
@@ -58,8 +68,9 @@ export async function saveHoliday(
   const year = Number(input.date.slice(0, 4));
   if (API_ENABLED) {
     try {
-      if (input.id) await leaveAdminApi.updateHoliday(input.id, { date: input.date, name });
-      else await leaveAdminApi.createHoliday({ country_code: input.countryCode, date: input.date, name, calendar: null });
+      const description = input.description?.trim() || null;
+      if (input.id) await leaveAdminApi.updateHoliday(input.id, { date: input.date, name, description });
+      else await leaveAdminApi.createHoliday({ country_code: input.countryCode, date: input.date, name, calendar: null, description });
     } catch (e) {
       return e instanceof Error ? e.message : "Could not save the holiday.";
     }
@@ -69,7 +80,13 @@ export async function saveHoliday(
   }
   const before = input.id ? current.find((h) => h.id === input.id) : undefined;
   const id = before?.id ?? `h-${input.countryCode.toLowerCase()}-${Date.now().toString(36)}`;
-  const row: Holiday = { id, date: input.date, name, countryCode: input.countryCode as CountryCode };
+  const row: Holiday = {
+    id,
+    date: input.date,
+    name,
+    countryCode: input.countryCode as CountryCode,
+    ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+  };
   replace((all) => [...all.filter((h) => h.id !== id), row].sort((a, b) => a.date.localeCompare(b.date)));
   appendAuditEntries([
     {

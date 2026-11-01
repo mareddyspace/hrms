@@ -20,6 +20,8 @@ interface AnnouncementOut {
   author_id: string | null;
   author_name: string;
   must_acknowledge: boolean;
+  category?: string;
+  pinned?: boolean;
   read: boolean;
   acknowledged: boolean;
   can_manage: boolean;
@@ -54,6 +56,8 @@ function fromApi(a: AnnouncementOut): Announcement {
     mustAcknowledge: a.must_acknowledge,
     acknowledged: a.acknowledged,
     serverCanManage: a.can_manage,
+    category: a.category ?? "General",
+    pinned: !!a.pinned,
     ...(a.audience_count !== null ? { receipts: { audience: a.audience_count, read: a.read_count ?? 0, acknowledged: a.ack_count ?? 0 } } : {}),
   };
 }
@@ -89,6 +93,7 @@ export function apiMarkAnnouncementRead(id: string): void {
 }
 
 export const apiAcknowledgeAnnouncement = (id: string) => send(`/announcements/${enc(id)}/acknowledge`);
+export const apiPinAnnouncement = (id: string, pinned: boolean) => send(`/announcements/${enc(id)}/pin`, { pinned });
 export const apiSetAnnouncementState = (id: string, state: AnnouncementState) => send(`/announcements/${enc(id)}/state`, { state });
 
 export function apiCreateAnnouncement(input: {
@@ -98,6 +103,8 @@ export function apiCreateAnnouncement(input: {
   audience: string;
   state: "Draft" | "Published";
   mustAcknowledge: boolean;
+  category?: string;
+  pinned?: boolean;
 }): Promise<string | null> {
   return send("/announcements", {
     title: input.title.trim(),
@@ -106,6 +113,8 @@ export function apiCreateAnnouncement(input: {
     audience: input.audience.trim(),
     state: input.state,
     must_acknowledge: input.mustAcknowledge,
+    category: input.category ?? "General",
+    pinned: !!input.pinned,
   });
 }
 

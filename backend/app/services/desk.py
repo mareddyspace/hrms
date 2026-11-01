@@ -37,6 +37,18 @@ SLA: dict[str, tuple[str, int]] = {
 }
 DESK_ROLES = HR_ROLES | {"admin"}
 
+# Finer topics per category (shown as "Subcategory" on the request form; src/data/collabData.ts HR_REQUEST_SUBCATEGORIES).
+SUBCATEGORIES: dict[str, tuple[str, ...]] = {
+    "Payroll provider": ("Payslip query", "Salary not credited", "Tax / deductions", "Bank details", "Reimbursement"),
+    "Benefits": ("Health insurance", "Retirement / pension", "Wellness", "Enrolment change"),
+    "Documents": ("Employment letter", "Salary certificate", "Experience letter", "Visa / travel letter"),
+    "IT access": ("New system access", "Password / sign-in", "Laptop / hardware", "VPN / network", "Software install"),
+    "Leave": ("Leave balance", "Leave policy", "Holiday calendar", "Long leave / sabbatical"),
+    "Profile correction": ("Name / personal details", "Bank details", "Emergency contact", "Job details"),
+    "Other": ("General question", "Feedback", "Workplace concern"),
+}
+CONTACT_PREFERENCES = ("email", "phone", "chat")
+
 
 def add_working_days(start: datetime, days: int) -> datetime:
     current = start

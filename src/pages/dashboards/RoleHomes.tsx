@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { declarationsAsProofs } from "../../features/taxdecl/taxDeclStore.ts";
 import { countUnreadNotificationsFor } from "../../data/notificationFeed.ts";
 import { Link } from "react-router-dom";
 import { COMPANY_NAME } from "../../brand.ts";
@@ -42,7 +43,7 @@ import {
   weightedProgress,
 } from "../../data/homeInsights.ts";
 import { useHomeLayout } from "../../data/preferences.ts";
-import { money } from "../../countryPay.ts";
+import { PayAmount, PayEyeToggle } from "../../components/PayMask.tsx";
 import { estimateMonthSoFar, paydayFor } from "../../data/payslipGenerator.ts";
 import { workDatesInWeek } from "../../data/workSchedule.ts";
 import {
@@ -424,7 +425,7 @@ export function EmployeeHome() {
     ...mine(state.cabBookings)
       .filter((r) => r.status === "pending")
       .map((r) => ({ id: r.id, type: "Cab", detail: r.to, date: r.date, to: R.help })),
-    ...mine(state.investmentProofs)
+    ...mine(declarationsAsProofs(state.investmentProofs))
       .filter((r) => r.status === "submitted")
       .map((r) => ({ id: r.id, type: "Tax proof", detail: r.section, date: r.submittedOn, to: "/investment" })),
   ].sort((a, b) => b.date.localeCompare(a.date));
@@ -547,19 +548,23 @@ export function EmployeeHome() {
             id: "earned",
             label: "Earned this month",
             node: (
-              <Card title="Earned so far this month" to={R.payslips}>
+              <Card title="Earned so far this month" to={R.payslips} action={<PayEyeToggle />}>
                 <div className="home-pay-figures">
                   <div>
                     <span className="muted">Gross</span>
-                    <strong>{money(earned.gross, earned.currency)}</strong>
+                    <strong>
+                      <PayAmount amount={earned.gross} currency={earned.currency} />
+                    </strong>
                   </div>
                   <div>
                     <span className="muted">Net (est.)</span>
-                    <strong>{money(earned.net, earned.currency)}</strong>
+                    <strong>
+                      <PayAmount amount={earned.net} currency={earned.currency} />
+                    </strong>
                   </div>
                 </div>
                 <p className="muted">
-                  {earned.daysCounted} of {earned.totalDays} days · tax and deductions {money(earned.deductionTotal, earned.currency)}
+                  {earned.daysCounted} of {earned.totalDays} days · tax and deductions <PayAmount amount={earned.deductionTotal} currency={earned.currency} />
                 </p>
                 <Link to={R.payslips}>Payslips</Link>
               </Card>
@@ -854,10 +859,16 @@ export function EmployeeHome() {
       id: "pay",
       label: "Pay & benefits",
       node: (
-        <Card title="Pay & benefits" to={R.payslips}>
+        <Card title="Pay & benefits" to={R.payslips} action={payslipViews[0] ? <PayEyeToggle /> : undefined}>
           <ul className="todo">
             <li>
               <Link to={R.payslips}>Latest payslip · {payslipViews[0]?.label ?? "—"}</Link>
+              {payslipViews[0] && (
+                <span className="muted">
+                  {" "}
+                  · Net <PayAmount amount={payslipViews[0].net} currency={payslipViews[0].currency ?? "INR"} />
+                </span>
+              )}
             </li>
             <li>
               <Link to={R.benefits}>Benefits enrollment</Link>
@@ -1291,7 +1302,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
       .map((t) => ({ t, j: talent.joiners.find((j) => j.id === t.joinerId) }))
       .filter(({ j }) => !scopeName || j?.country === scopeName)
       .map(({ t, j }) => ({ id: t.id, kind: "Onboarding", who: j?.name ?? "Joiner", detail: t.title, date: t.due, to: R.onboarding })),
-    ...state.investmentProofs
+    ...declarationsAsProofs(state.investmentProofs)
       .filter((p) => p.status === "submitted" && inScope(p.employeeId))
       .map((p) => ({ id: p.id, kind: "Tax proof", who: personName(p.employeeId, data.people), detail: p.section, date: p.submittedOn, to: R.approvals })),
     ...exitState.cases

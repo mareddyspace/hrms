@@ -58,3 +58,24 @@ html[data-theme="night"] .wf-chip:not(.c-clear), html[data-theme="night"] .wf-ro
 .wf-my-day.weekend { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .wf-my-day.today { border-color: var(--accent); }
 @media (max-width: 720px) { .wf-my-week { grid-template-columns: repeat(2, 1fr); } }
+/* Shifts & roster: clickable days, month calendar, swap progress (My shifts, Swaps). */
+.wf-day-btn { font: inherit; text-align: left; cursor: pointer; color: inherit; background: var(--card, #fff); border: 1px solid var(--line); }
+.wf-day-btn:hover, .wf-day-btn:focus-visible { border-color: var(--accent); }
+.wf-month-cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.wf-month-dow { font-size: 12px; font-weight: 600; color: var(--muted); text-align: center; }
+.wf-month-day { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-height: 64px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--card, #fff); font: inherit; font-size: 12px; cursor: pointer; color: inherit; }
+.wf-month-day:hover { border-color: var(--accent); }
+.wf-month-day.weekend { background: var(--soft); }
+.wf-month-day.today { box-shadow: inset 0 0 0 2px var(--accent); }
+.wf-month-num { font-weight: 700; color: var(--muted); }
+.wf-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 12px; }
+.wf-steps li::before { content: "○ "; }
+.wf-steps li.done { color: var(--ok, #2e7d4f); }
+.wf-steps li.done::before { content: "✓ "; }
+.wf-steps li.now { font-weight: 600; color: var(--warn); }
+.wf-steps li.now::before { content: "● "; }
+.wf-steps li.stop { color: var(--danger); }
+.wf-steps li.stop::before { content: "✕ "; }
+.wf-steps li.todo { color: var(--muted); }
+.wf-plain-list { margin: 6px 0 0; padding-left: 18px; }
+@media (max-width: 720px) { .wf-month-cal { gap: 3px; } .wf-month-day { min-height: 52px; padding: 4px; } }

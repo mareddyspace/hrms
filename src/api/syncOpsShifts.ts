@@ -6,6 +6,7 @@ import { addDaysISO, todayISO } from "../model.ts";
 import { ApiError, api, type MeOut } from "./client.ts";
 import { apiPut } from "./syncShared.ts";
 import type {
+  CompOffCredit,
   CoverageRule,
   CoverageSlot,
   CoverageStatus,
@@ -25,6 +26,8 @@ interface ShiftTypeOut {
   end: string;
   weekend_only: boolean;
   active: boolean;
+  break_minutes?: number;
+  location?: string | null;
 }
 
 interface RosterShiftOut {
@@ -78,6 +81,67 @@ interface CoverageMinimumOut {
   minimum: number;
 }
 
+interface CompOffCreditOut {
+  id: string;
+  employee_id: string;
+  employee_name: string;
+  worked_date: string;
+  days: number;
+  reason: string;
+  granted_by_name: string;
+  granted_on: string;
+  expires_on: string;
+  expired: boolean;
+}
+
+/** Comp-off as the API counts it: my balance and credits, and (managers) the team's credits and off-day shifts to credit. */
+export interface ApiCompOff {
+  earned: number;
+  used: number;
+  pending: number;
+  available: number;
+  fromRoster: number;
+  fromOvertime: number;
+  credits: CompOffCredit[];
+  teamCredits: CompOffCredit[];
+  candidates: { personId: string; date: string; shiftName: string; reason: string }[];
+}
+
+interface CompOffOut {
+  earned: number;
+  used: number;
+  pending: number;
+  available: number;
+  from_roster: number;
+  from_overtime: number;
+  credits: CompOffCreditOut[];
+  team_credits: CompOffCreditOut[];
+  candidates: { employee_id: string; employee_name: string; work_date: string; shift_name: string; reason: string }[];
+}
+
+const toCredit = (c: CompOffCreditOut): CompOffCredit => ({
+  id: c.id,
+  personId: c.employee_id,
+  workedDate: c.worked_date,
+  reason: c.reason,
+  grantedById: "",
+  grantedByName: c.granted_by_name,
+  grantedOn: c.granted_on,
+  expiresOn: c.expires_on,
+});
+
+const toCompOff = (o: CompOffOut): ApiCompOff => ({
+  earned: o.earned,
+  used: o.used,
+  pending: o.pending,
+  available: o.available,
+  fromRoster: o.from_roster,
+  fromOvertime: o.from_overtime,
+  credits: o.credits.map(toCredit),
+  teamCredits: o.team_credits.map(toCredit),
+  candidates: o.candidates.map((c) => ({ personId: c.employee_id, date: c.work_date, shiftName: c.shift_name, reason: c.reason })),
+});
+
 /** One roster week as the API counts it (coverage and gaps include approved leave). */
 export interface ApiRosterWeek {
   week: RosterWeek;
@@ -96,11 +160,21 @@ export interface ApiShiftData {
   mine: ShiftAssignment[];
   swaps: ShiftSwap[];
   coverage: CoverageRule[];
+  compOff: ApiCompOff | null;
 }
 
 export const rosterKey = (managerId: string, weekStart: string) => `${managerId}|${weekStart}`;
 
-const toShift = (s: ShiftTypeOut): ShiftDef => ({ id: s.id, name: s.name, start: s.start, end: s.end, weekendOnly: s.weekend_only, active: s.active });
+const toShift = (s: ShiftTypeOut): ShiftDef => ({
+  id: s.id,
+  name: s.name,
+  start: s.start,
+  end: s.end,
+  weekendOnly: s.weekend_only,
+  active: s.active,
+  breakMinutes: s.break_minutes ?? 60,
+  location: s.location ?? "",
+});
 
 const toRow = (r: RosterShiftOut): ShiftAssignment => ({
   id: r.id,
@@ -168,13 +242,15 @@ export async function loadRosterWeek(managerId: string, weekStart: string, names
 export async function loadApiShifts(accountId: string, names: (id: string) => string, extraWeeks: string[] = []): Promise<ApiShiftData> {
   const me = (await api.get<MeOut>("/auth/me")).employee_id ?? accountId;
   const weeks = [...new Set([...defaultWeeks(), ...extraWeeks])];
-  const [types, mine, swapsMine, swapsToDecide, coverage, rosters] = await Promise.all([
+  const [types, mine, swapsMine, swapsToDecide, coverage, rosters, compOff] = await Promise.all([
     api.get<ShiftTypeOut[]>("/shifts/types"),
     api.get<RosterShiftOut[]>("/shifts/mine", { from_date: addDaysISO(todayISO(), -30) }),
     api.get<ShiftSwapOut[]>("/shifts/swaps", { view: "mine" }),
     api.get<ShiftSwapOut[]>("/shifts/swaps", { view: "to_decide" }).catch(() => [] as ShiftSwapOut[]),
     api.get<CoverageMinimumOut[]>("/shifts/coverage"),
     Promise.all(weeks.map((w) => loadRosterWeek(me, w, names).catch(() => null))),
+    // A server without comp-off credits (404) still shows rosters and swaps.
+    api.get<CompOffOut>("/shifts/comp-off").catch(() => null),
   ]);
   const swaps = new Map<string, ShiftSwap>();
   for (const s of [...swapsMine, ...swapsToDecide]) swaps.set(s.id, toSwap(s, names));
@@ -187,8 +263,12 @@ export async function loadApiShifts(accountId: string, names: (id: string) => st
     mine: mine.map(toRow),
     swaps: [...swaps.values()].sort((a, b) => b.requestedOn.localeCompare(a.requestedOn)),
     coverage: coverage.map((c) => ({ scope: c.scope, shiftId: c.shift_id, weekday: c.weekday, min: c.minimum })),
+    compOff: compOff ? toCompOff(compOff) : null,
   };
 }
+
+/** A manager credits one comp-off day for a published shift worked on a weekly off or holiday. */
+export const apiGrantCompOff = (personId: string, date: string) => api.post("/shifts/comp-off/grant", { employee_id: personId, work_date: date });
 
 /** The 409 for under-covered shifts carries {message, gaps}; the client only reads string details. */
 async function withGapMessage<T>(run: () => Promise<T>, fallback: string): Promise<T> {
@@ -200,7 +280,7 @@ async function withGapMessage<T>(run: () => Promise<T>, fallback: string): Promi
   }
 }
 
-export const apiSaveShiftType = (input: { id?: string; name: string; start: string; end: string; weekendOnly: boolean; active: boolean }) =>
+export const apiSaveShiftType = (input: { id?: string; name: string; start: string; end: string; weekendOnly: boolean; active: boolean; breakMinutes?: number; location?: string }) =>
   api.post<ShiftTypeOut>("/shifts/types", {
     id: input.id ?? null,
     name: input.name.trim(),
@@ -208,6 +288,8 @@ export const apiSaveShiftType = (input: { id?: string; name: string; start: stri
     end: input.end,
     weekend_only: input.weekendOnly,
     active: input.active,
+    break_minutes: input.breakMinutes ?? 60,
+    location: input.location?.trim() || null,
   });
 
 export async function apiAssignShift(personId: string, date: string, shiftId: string | null, names: (id: string) => string) {

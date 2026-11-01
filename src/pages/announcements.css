@@ -1,0 +1,88 @@
+/* Announcements: filters on top, list left, reading pane right. */
+.ann-compose {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.ann-compose-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.ann-compose-grid .field.wide { grid-column: 1 / -1; }
+.ann-check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); }
+.ann-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ann-toolbar input[type="search"] { flex: 1 1 240px; max-width: 360px; }
+.ann-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ann-cats { margin-bottom: 12px; }
+.ann-layout { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.ann-list ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: calc(100vh - 300px); overflow: auto; }
+.ann-item {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 11px 13px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.ann-item:hover { border-color: var(--accent); }
+.ann-item.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.ann-item.unread .ann-title { font-weight: 700; }
+.ann-item-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ann-date { margin-left: auto; font-size: var(--text-xs); color: var(--muted); }
+.ann-title { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; line-height: 1.35; }
+.ann-unread-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.ann-snippet { font-size: var(--text-sm); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ann-meta { font-size: var(--text-xs); color: var(--muted); }
+.ann-tag, .ann-pin, .ann-ack {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.ann-pin { background: #fff4d6; color: #8a5a00; border-color: #f1d58a; }
+.ann-ack { background: #fdecec; color: var(--danger); border-color: #f5c2c2; }
+.ann-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.cat-holiday { background: #e6f4ea; color: #1e6b3a; }
+.cat-policy { background: #e8eefc; color: #2747a8; }
+.cat-event { background: #f3e8fd; color: #6b2fa8; }
+.cat-it { background: #e0f2f7; color: #0e5f75; }
+.cat-wellness { background: #e7f7f1; color: #12715a; }
+.cat-people { background: #fff0e3; color: #9a4b0b; }
+.cat-leadership { background: #ece9f8; color: #3e2f86; }
+.cat-general { background: var(--soft); color: var(--ink); }
+.ann-dot.cat-holiday { background: #34a853; }
+.ann-dot.cat-policy { background: #3b5bdb; }
+.ann-dot.cat-event { background: #9c4ddb; }
+.ann-dot.cat-it { background: #0e7490; }
+.ann-dot.cat-wellness { background: #20a07e; }
+.ann-dot.cat-people { background: #e07b20; }
+.ann-dot.cat-leadership { background: #5b4bc4; }
+.ann-dot.cat-general { background: #8a99a8; }
+.ann-reader {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  padding: 20px 24px;
+  display: grid;
+  gap: 14px;
+  min-height: 320px;
+  align-content: start;
+}
+.ann-reader-head h2 { margin: 8px 0 4px; font-size: 20px; }
+.ann-reader-head .muted { margin: 0; font-size: var(--text-sm); }
+.ann-body { white-space: pre-wrap; line-height: 1.6; font-size: 14.5px; border-top: 1px solid var(--line); padding-top: 14px; }
+.ann-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 900px) {
+  .ann-layout { grid-template-columns: 1fr; }
+  .ann-compose-grid { grid-template-columns: 1fr; }
+}
+html[data-theme="night"] .ann-pin { background: #3a2d14; color: #f5c56b; border-color: #6b5320; }
+html[data-theme="night"] .ann-ack { background: #3a1d24; color: #fca5a5; border-color: #6b2c36; }
+html[data-theme="night"] .ann-tag { filter: brightness(0.85) saturate(1.2); }

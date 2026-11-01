@@ -10,6 +10,7 @@ import {
   Check,
   Clock,
   Copy,
+  Eye,
   Lock,
   Pencil,
   Mail,
@@ -54,7 +55,9 @@ import { formatShortDate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { Employee360View } from "./Employee360View.tsx";
 import { EmployeeFormDialog, saveEmployee } from "./EmployeeFormDialog.tsx";
-import { ProfileDetailsCards } from "./ProfileDetailsCards.tsx";
+import { OwnDetailsEditor, ProfileDetailsCards, VerifyBadge, useCorrectionUi, type OwnEditMode } from "./ProfileDetailsCards.tsx";
+import { CertificateDialog, type CertificateDoc } from "../components/CertificateViewer.tsx";
+import "./profile.css";
 
 /** What a coworker sees about someone — no pay, leave balances or other HR-only records. */
 type ProfilePerson = {
@@ -288,11 +291,17 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [ownEdit, setOwnEdit] = useState<OwnEditMode | null>(null);
+  const [viewingCert, setViewingCert] = useState<CertificateDoc | null>(null);
+  // Your own record (not a view-as persona): edit buttons and correction requests.
+  const ownRecord = id === employee.id && demoProfile.id === id;
+  const correctionUi = useCorrectionUi(getPerson(id) ?? people.find((p) => p.id === id), demoProfile, ownRecord);
 
   // Opening another person's profile from this one reuses the page, so clear the last banner.
   useEffect(() => {
     setBanner(null);
     setEditing(false);
+    setOwnEdit(null);
     setHrEditOpen(false);
   }, [id]);
 
@@ -340,6 +349,20 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   const career = person.record ? timelineFor({ ...person.record, ...getExitDetails(person.record) }, history) : [];
   const canHrEdit = canManagePeople(demoProfile.role) && !isMe && Boolean(person.record);
   const certs = talent.certifications.filter((c) => c.employeeId === person.id);
+  const certificateFor = (c: (typeof certs)[number]): CertificateDoc => ({
+    id: c.id,
+    kind: "professional",
+    title: c.name,
+    recipient: c.employeeName || person.fullName,
+    issuer: c.issuer,
+    issuedOn: c.earnedOn,
+    expiresOn: c.expiresOn,
+    credentialId: c.verifiedBy ? c.credentialId : undefined,
+    verified: Boolean(c.verifiedBy),
+    expired: Boolean(c.expiresOn && c.expiresOn < today),
+  });
+  // The tabs below hold the full record, so the cards above don't repeat it.
+  const withRecord = canOpenRecord && Boolean(person.record);
   const praise = talent.feedback.filter((f) => f.kind === "Praise" && f.toId === person.id);
   const theirTime = localTime(person.timeZone, now);
   const myTime = localTime(employee.timeZone, now);
@@ -431,11 +454,17 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
       </section>
 
       <Banner message={banner} />
+      {correctionUi.ui}
 
-      {isMe && editing && <SelfProfileEditor onClose={() => setEditing(false)} />}
+      {isMe && editing && (
+        <Dialog open wide title="Edit contact details" onClose={() => setEditing(false)}>
+          <SelfProfileEditor bare onClose={() => setEditing(false)} />
+        </Dialog>
+      )}
 
       <div className="profile-grid">
         <div className="stack">
+          {!withRecord && (
           <Card title="About">
             <dl className="profile-facts">
               <div>
@@ -489,6 +518,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
               </p>
             )}
           </Card>
+          )}
 
           {person.record && (
             <ProfileDetailsCards
@@ -497,6 +527,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
               canSeePersonal={canSeePersonal}
               canSeeWork={access.work}
               viewer={demoProfile}
+              compact={withRecord}
             />
           )}
 
@@ -519,7 +550,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
             )
           )}
 
-          {access.work && career.length > 0 && (
+          {!withRecord && access.work && career.length > 0 && (
             <Card title={`Career at ${COMPANY_NAME}`}>
               <ol className="profile-timeline">
                 {career
@@ -602,6 +633,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
             </ul>
           </Card>
 
+          {!withRecord && (
           <Card title="Organization">
             <div className="stack">
               <section>
@@ -641,25 +673,47 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
               </Link>
             </div>
           </Card>
+          )}
 
           {/* Certifications are part of the personal record: self, reporting line and HR only. */}
           {canSeePersonal && (
-          <Card title="Certifications">
+          <Card title={`Certifications${certs.length ? ` (${certs.length})` : ""}`} action={isMe ? <Link to="/learning" className="quiet-link">Learning</Link> : undefined}>
             {certs.length === 0 ? (
               <p className="muted">None listed.</p>
             ) : (
               <ul className="profile-certs">
-                {certs.map((c) => ({ key: c.id, name: c.name, issuer: c.issuer, when: c.earnedOn })).map((c) => (
-                  <li key={c.key}>
-                    <Award size={16} aria-hidden />
-                    <span>
-                      <strong>{c.name}</strong>
-                      <span className="muted">
-                        {c.issuer} · {formatShortDate(c.when)}
+                {certs.map((c) => {
+                  const expired = Boolean(c.expiresOn && c.expiresOn < today);
+                  return (
+                    <li key={c.id}>
+                      <Award size={16} aria-hidden />
+                      <span className="profile-cert-text">
+                        <strong>{c.name}</strong>
+                        <span className="muted">
+                          {c.issuer} · {formatShortDate(c.earnedOn)}
+                          {c.expiresOn ? ` · ${expired ? "expired" : "valid until"} ${formatShortDate(c.expiresOn)}` : ""}
+                        </span>
+                        <span className="profile-cert-status">
+                          <VerifyBadge state={expired ? "expired" : c.verifiedBy ? "verified" : "none"} />
+                          {c.verifiedBy && (
+                            <span className="muted">
+                              by {c.verifiedBy}
+                              {c.verifiedOn ? ` · ${formatShortDate(c.verifiedOn)}` : ""}
+                            </span>
+                          )}
+                        </span>
                       </span>
-                    </span>
-                  </li>
-                ))}
+                      <button
+                        type="button"
+                        className="btn-ghost btn-tiny"
+                        onClick={() => setViewingCert(certificateFor(c))}
+                        aria-label={`View ${c.name} certificate`}
+                      >
+                        <Eye size={13} aria-hidden /> View
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </Card>
@@ -667,18 +721,38 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
 
         </div>
       </div>
-      {/* Everything about the person, below the summary — no tab to find it. */}
-      {canOpenRecord && person.record && (
-        <section className="profile-full-record" aria-label={isMe ? "My full record" : "Full record"}>
-          <h2 className="card-title">{isMe ? "My full record" : "Full record"}</h2>
+      {/* The employee record, tab by tab. Your own profile skips the drafted summary (the tabs say it all). */}
+      {withRecord && person.record && (
+        <section className="profile-full-record" aria-label="Employee record">
+          <h2 className="card-title">Employee record</h2>
           <Employee360View
             person={{ ...person.record, photo: person.photo }}
             viewer={demoProfile}
             selfId={employee.id}
             hideHeader
+            hideSummary={isMe}
+            selfEdit={
+              ownRecord
+                ? { editContact: () => setEditing(true), editPersonal: () => setOwnEdit("personal"), correct: correctionUi.correct }
+                : undefined
+            }
           />
         </section>
       )}
+
+      {ownRecord && ownEdit && person.record && (
+        <OwnDetailsEditor
+          mode={ownEdit}
+          record={person.record}
+          viewer={demoProfile}
+          onClose={() => setOwnEdit(null)}
+          onSaved={() => {
+            setOwnEdit(null);
+            setBanner({ tone: "ok", text: "Personal details saved." });
+          }}
+        />
+      )}
+      <CertificateDialog doc={viewingCert} onClose={() => setViewingCert(null)} />
 
       {hrEditOpen && person.record && (
         <EmployeeFormDialog
