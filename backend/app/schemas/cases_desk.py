@@ -107,6 +107,8 @@ class DeskTicketCreateIn(BaseModel):
     subject: str = Field(min_length=3, max_length=200)
     description: str = Field(min_length=1, max_length=4000)
     priority: CasePriority = "Normal"
+    subcategory: str | None = Field(default=None, max_length=64)
+    contact_preference: Literal["email", "phone", "chat"] | None = None
 
 
 class DeskTicketCommentIn(BaseModel):
@@ -166,6 +168,8 @@ class DeskTicketOut(BaseModel):
     escalation_level: int
     satisfaction: int | None
     satisfaction_comment: str | None
+    subcategory: str | None = None
+    contact_preference: str | None = None
     overdue: bool = False
     comments: list[DeskTicketCommentOut] = []
     files: list[DeskTicketFileOut] = []

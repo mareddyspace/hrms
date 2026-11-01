@@ -50,6 +50,8 @@ export interface RunPerson {
   bankMasked?: string;
   newJoiner: boolean;
   leaver: boolean;
+  /** Verified tax declarations (backend input pack); local mode reads them from the declarations store. */
+  declarations?: { financialYear: string; section: string; amount: number }[];
   /** Local mode: the overtime requests this line pays (marked paid when the run locks). */
   overtimeIds?: string[];
 }
@@ -126,7 +128,18 @@ export function computeLine(p: RunPerson, month: string, ctx: CalcContext): RunL
     employmentStatus: p.employmentStatus,
     annualBase: p.annualBase,
     regime: p.taxRegime,
-    investmentProofs: ctx.investmentProofs,
+    investmentProofs: p.declarations
+      ? p.declarations.map((d, i) => ({
+          id: `run-decl-${p.employeeId}-${i}`,
+          employeeId: p.employeeId,
+          section: d.section,
+          title: d.section,
+          amount: d.amount,
+          financialYear: d.financialYear,
+          status: "verified" as const,
+          submittedOn: "",
+        }))
+      : ctx.investmentProofs,
     timesheets: ctx.timesheets,
     orgTimesheets: ctx.orgTimesheets,
   };

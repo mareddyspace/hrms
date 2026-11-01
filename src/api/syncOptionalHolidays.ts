@@ -9,6 +9,19 @@ export interface OptionalHolidayOut {
   name: string;
   /** Open picks (pending or approved); filled for HR only. */
   picked_by: number;
+  description?: string | null;
+  /** Region (holiday calendar) it applies to; null = the whole country. */
+  region?: string | null;
+  legal_entity?: string | null;
+  /** Last day to pick it. */
+  select_by?: string | null;
+}
+
+export interface OptionalHolidayInput {
+  description?: string;
+  region?: string;
+  legalEntity?: string;
+  selectBy?: string;
 }
 
 const cache = new Map<string, OptionalHolidayOut[]>();
@@ -71,9 +84,17 @@ function reloadAll() {
   }
 }
 
-export async function apiAddOptional(country: string, date: string, name: string): Promise<string | null> {
+export async function apiAddOptional(country: string, date: string, name: string, extra: OptionalHolidayInput = {}): Promise<string | null> {
   try {
-    await api.post("/leave/optional-holidays", { country_code: country, date, name: name.trim() });
+    await api.post("/leave/optional-holidays", {
+      country_code: country,
+      date,
+      name: name.trim(),
+      description: extra.description?.trim() || null,
+      region: extra.region?.trim() || null,
+      legal_entity: extra.legalEntity?.trim() || null,
+      select_by: extra.selectBy || null,
+    });
     reloadAll();
     return null;
   } catch (e) {

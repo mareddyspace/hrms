@@ -28,6 +28,8 @@ export interface AttendanceSessionOut {
   early_minutes?: number;
   corrected: boolean;
   note: string | null;
+  /** Breaks saved on the session (UTC times; end null while on break). */
+  breaks?: { start: string; end: string | null }[] | null;
 }
 
 export interface CorrectionOut {
@@ -59,32 +61,13 @@ export interface AttendanceSummaryOut {
   early: number;
   hours: number;
   overtime_hours: number;
+  expected_days?: number;
+  attendance_pct?: number;
+  avg_hours?: number;
+  missing_punches?: number;
+  late_minutes?: number;
+  break_minutes?: number;
 }
-
-/* Breaks aren't kept by the API (only the total on check-out), so the ones taken today live in this browser. */
-const BREAKS_KEY = "timez.api.attendance-breaks";
-type BreakMap = Record<string, { start: string; end?: string }[]>;
-
-function readBreaks(): BreakMap {
-  try {
-    return JSON.parse(localStorage.getItem(BREAKS_KEY) ?? "{}") as BreakMap;
-  } catch {
-    return {};
-  }
-}
-
-function writeBreaks(map: BreakMap) {
-  try {
-    // Keep only the last couple of weeks.
-    const cutoff = addDaysISO(todayISO(), -14);
-    const kept = Object.fromEntries(Object.entries(map).filter(([key]) => (key.split(":")[1] ?? "") >= cutoff));
-    localStorage.setItem(BREAKS_KEY, JSON.stringify(kept));
-  } catch {
-    /* storage blocked */
-  }
-}
-
-const breakKey = (employeeId: string, date: string) => `${employeeId}:${date}`;
 
 function hmPlus(hm: string, minutes: number): string {
   const [h, m] = hm.split(":").map(Number);
@@ -92,11 +75,13 @@ function hmPlus(hm: string, minutes: number): string {
   return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
-function toSession(s: AttendanceSessionOut, breaks: BreakMap): TodaySession {
-  const local = breaks[breakKey(s.employee_id, s.work_date)];
+/** Breaks come from the server (saved on the session); older days that only know a total show it as one break. */
+function toSession(s: AttendanceSessionOut): TodaySession {
   const open = !s.check_out;
-  let list = local ?? [];
-  // Closed days only know the total: show it as one break so hours add up.
+  let list = (s.breaks ?? []).map((b) => ({
+    start: localHm(utcIso(b.start)) ?? "00:00",
+    ...(b.end ? { end: localHm(utcIso(b.end)) } : {}),
+  }));
   if (!open && s.break_minutes > 0 && !list.length) list = [{ start: "13:00", end: hmPlus("13:00", s.break_minutes) }];
   const onBreak = open && list.some((b) => !b.end);
   return {
@@ -110,7 +95,7 @@ function toSession(s: AttendanceSessionOut, breaks: BreakMap): TodaySession {
 }
 
 function kindOf(c: CorrectionOut): CorrectionKind {
-  if (c.requested_check_in && c.requested_check_out) return "wrong_time";
+  if (c.requested_check_in && c.requested_check_out) return c.session_id ? "wrong_time" : "missing_check_in";
   if (c.requested_check_in) return c.session_id ? "wrong_time" : "missing_check_in";
   if (c.requested_check_out) return "missing_check_out";
   return "other";
@@ -172,9 +157,8 @@ async function load(): Promise<RawAttendance> {
 }
 
 export const attendanceMirror = createMirror<RawAttendance, ApiAttendanceState>(emptyState, load, (raw) => {
-  const breaks = readBreaks();
   return {
-    sessions: raw.sessions.map((s) => toSession(s, breaks)),
+    sessions: raw.sessions.map((s) => toSession(s)),
     corrections: raw.corrections.map(toCorrection),
     decidable: new Set(raw.decidable),
   };
@@ -182,45 +166,18 @@ export const attendanceMirror = createMirror<RawAttendance, ApiAttendanceState>(
 
 /* ───────── Actions ───────── */
 
-function nowHm(): string {
-  const d = new Date();
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-function breakTotal(list: { start: string; end?: string }[], closeAt: string): number {
-  let total = 0;
-  for (const b of list) {
-    const end = b.end ?? closeAt;
-    const [sh, sm] = b.start.split(":").map(Number);
-    const [eh, em] = end.split(":").map(Number);
-    total += Math.max(0, eh * 60 + em - (sh * 60 + sm));
-  }
-  return total;
-}
-
 export function apiCheckIn(): Promise<string | null> {
   return mutate(() => api.post<AttendanceSessionOut>("/attendance/check-in", { work_mode: "office", source: "web" }), attendanceMirror);
 }
 
-/** Starts or ends a break on the open session (kept in this browser; the total goes to the API on check-out). */
-export function apiBreak(session: TodaySession, action: "start" | "end") {
-  const map = readBreaks();
-  const key = breakKey(session.employeeId, session.date);
-  const list = [...(map[key] ?? session.breaks)].map((b) => ({ ...b }));
-  if (action === "start") list.push({ start: nowHm() });
-  else {
-    const open = [...list].reverse().find((b) => !b.end);
-    if (open) open.end = nowHm();
-  }
-  map[key] = list;
-  writeBreaks(map);
-  attendanceMirror.remap();
+/** Starts or ends a break on the open session (saved on the server). */
+export function apiBreak(action: "start" | "end"): Promise<string | null> {
+  return mutate(() => api.post<AttendanceSessionOut>(`/attendance/break/${action}`), attendanceMirror);
 }
 
-export function apiCheckOut(session: TodaySession): Promise<string | null> {
-  const list = readBreaks()[breakKey(session.employeeId, session.date)] ?? session.breaks;
-  const minutes = Math.max(0, Math.min(720, Math.round(breakTotal(list, nowHm()))));
-  return mutate(() => api.post<AttendanceSessionOut>("/attendance/check-out", { break_minutes: minutes }), attendanceMirror);
+/** Checks out; the server closes an open break and totals the saved ones. */
+export function apiCheckOut(): Promise<string | null> {
+  return mutate(() => api.post<AttendanceSessionOut>("/attendance/check-out", {}), attendanceMirror);
 }
 
 /** Times are HH:MM in the person's own time zone (the API reads naive times that way). */

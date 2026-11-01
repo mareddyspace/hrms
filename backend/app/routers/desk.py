@@ -11,11 +11,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.db import utcnow
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
-from app.models import DeskTicket, DeskTicketComment, DeskTicketFile, Employee
+from app.models import DeskFaqVote, DeskTicket, DeskTicketComment, DeskTicketFile, Employee
 from app.schemas.cases_desk import (
     DeskSlaCategoryOut, DeskSlaSummaryOut, DeskTicketAssignIn, DeskTicketCommentIn, DeskTicketCommentOut,
     DeskTicketCreateIn, DeskTicketFileOut, DeskTicketOut, DeskTicketRatingIn, DeskTicketStatusIn,
@@ -92,15 +93,66 @@ def _notify_status(db: DbSession, t: DeskTicket, actor_id: str | None, actor_nam
 
 @router.get("/categories")
 def categories(user: CurrentUserDep) -> list[dict]:
-    return [{"category": c, "owner_id": rules.SLA[c][0], "working_days": rules.SLA[c][1]} for c in rules.CATEGORIES]
+    return [{"category": c, "owner_id": rules.SLA[c][0], "working_days": rules.SLA[c][1],
+             "subcategories": list(rules.SUBCATEGORIES.get(c, ()))} for c in rules.CATEGORIES]
+
+
+class FaqVoteIn(BaseModel):
+    helpful: bool
+
+
+class FaqVotesOut(BaseModel):
+    helpful: int
+    not_helpful: int
+    mine: bool | None = None
+
+
+def _faq_tally(db: DbSession, me_id: str | None, faq_id: str | None = None) -> dict[str, FaqVotesOut]:
+    q = select(DeskFaqVote)
+    if faq_id:
+        q = q.where(DeskFaqVote.faq_id == faq_id)
+    out: dict[str, FaqVotesOut] = {}
+    for v in db.scalars(q):
+        row = out.setdefault(v.faq_id, FaqVotesOut(helpful=0, not_helpful=0))
+        if v.helpful:
+            row.helpful += 1
+        else:
+            row.not_helpful += 1
+        if v.person_id == me_id:
+            row.mine = v.helpful
+    return out
+
+
+@router.get("/faq-votes", response_model=dict[str, FaqVotesOut])
+def faq_votes(db: DbSession, user: CurrentUserDep) -> dict[str, FaqVotesOut]:
+    return _faq_tally(db, user.employee_id)
+
+
+@router.post("/faq/{faq_id}/vote", response_model=FaqVotesOut)
+def vote_faq(faq_id: str, body: FaqVoteIn, db: DbSession, user: CurrentUserDep) -> FaqVotesOut:
+    """One vote per person per answer; voting again changes it."""
+    emp = me(user)
+    if not faq_id or len(faq_id) > 64:
+        raise HTTPException(422, "Unknown question.")
+    row = db.scalar(select(DeskFaqVote).where(DeskFaqVote.faq_id == faq_id, DeskFaqVote.person_id == emp.id))
+    if row is None:
+        db.add(DeskFaqVote(faq_id=faq_id, person_id=emp.id, helpful=body.helpful, voted_at=utcnow()))
+    else:
+        row.helpful, row.voted_at = body.helpful, utcnow()
+    db.commit()
+    return _faq_tally(db, emp.id, faq_id).get(faq_id, FaqVotesOut(helpful=0, not_helpful=0))
 
 
 @router.post("/requests", response_model=DeskTicketOut, status_code=status.HTTP_201_CREATED)
 def create_ticket(body: DeskTicketCreateIn, request: Request, db: DbSession, user: CurrentUserDep) -> DeskTicketOut:
     emp = me(user)
     now = utcnow()
+    sub = (body.subcategory or "").strip() or None
+    if sub and sub not in rules.SUBCATEGORIES.get(body.category, ()):
+        raise HTTPException(422, "Pick a subcategory from the list.")
     t = DeskTicket(id=f"hr-{secrets.token_hex(6)}", requester_id=emp.id, category=body.category, subject=body.subject.strip(),
                    description=body.description.strip(), priority=body.priority, status="Open",
+                   subcategory=sub, contact_preference=body.contact_preference,
                    assignee_id=rules.route(body.category, emp.id), submitted_at=now, due_at=rules.due_at(body.category, now),
                    escalation_level=0)
     db.add(t)

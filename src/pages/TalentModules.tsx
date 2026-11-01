@@ -1965,6 +1965,7 @@ export function LearningPage() {
   const [viewing, setViewing] = useState<CertificateDoc | null>(null);
   const hr = canManagePeople(demoProfile.role);
   const [q, setQ] = useState("");
+  const [category, setCategory] = useState("");
   const [mandatoryOnly, setMandatoryOnly] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   // New expiry dates typed for renewals of certifications without a fixed validity.
@@ -1973,6 +1974,7 @@ export function LearningPage() {
 
   const catalog = courseCatalog().filter((c) => {
     if (mandatoryOnly && !c.mandatory) return false;
+    if (category && c.category !== category) return false;
     if (q && !`${c.title} ${c.category}`.toLowerCase().includes(q.toLowerCase())) return false;
     return true;
   });
@@ -2049,6 +2051,14 @@ export function LearningPage() {
           Search catalog
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Course or category…" />
         </label>
+        <label className="filter-label">
+          Category
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="">All categories</option>
+            {[...new Set(courseCatalog().map((c) => c.category))].sort().map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
+        {(q || category || mandatoryOnly) && <button type="button" className="btn-ghost" onClick={() => { setQ(""); setCategory(""); setMandatoryOnly(false); }}>Clear filters</button>}
         <label className="filter-label" style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 18 }}>
           <input type="checkbox" checked={mandatoryOnly} onChange={(e) => setMandatoryOnly(e.target.checked)} />
           Mandatory only
@@ -2112,7 +2122,7 @@ export function LearningPage() {
       {tab === "paths" && (
         <Card title="Learning paths">
           <DataTable
-            headers={["Path", "Audience", "Courses", "Your progress"]}
+            headers={["Path", "Audience", "Courses", "Your progress", "Action"]}
             rows={LEARNING_PATHS.map((p) => {
               const isDone = (id: string) => mine.some((e) => e.courseId === id && e.status === "Completed");
               const done = p.courses.filter(isDone).length;
@@ -2123,6 +2133,16 @@ export function LearningPage() {
                   .map((id) => `${isDone(id) ? "✓ " : ""}${courseCatalog().find((c) => c.id === id)?.title ?? id}`)
                   .join(" · "),
                 <Progress key={p.id} value={(done / p.courses.length) * 100} label={`${done} of ${p.courses.length} courses`} />,
+                p.courses.every((id) => enrolledCourseIds.has(id)) ? <span key={`${p.id}-status`} className="muted">All courses enrolled</span> : <ActionButton key={`${p.id}-enroll`} className="btn-ghost" busyLabel="Enrolling…" success={`Learning path ${p.title} started.`} onAction={async () => {
+                  const missing = p.courses.filter((id) => !enrolledCourseIds.has(id) && courseCatalog().some((c) => c.id === id && courseOpenTo(c, demoProfile)));
+                  if (!missing.length) { setNotice({ tone: "err", text: "No available courses remain in this path." }); return "No available courses remain in this path."; }
+                  for (const id of missing) {
+                    const result = await talentRun(() => enrollInCourse(demoProfile, id), () => {});
+                    if (result) { setNotice({ tone: "err", text: result }); return result; }
+                  }
+                  setNotice({ tone: "ok", text: `Enrolled in ${missing.length} course${missing.length === 1 ? "" : "s"} from ${p.title}.` });
+                  return null;
+                }}>Start path</ActionButton>,
               ];
             })}
           />

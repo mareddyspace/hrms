@@ -43,6 +43,7 @@ class ConversationOut(BaseModel):
     participant_names: list[str]
     messages: list[MessageOut]
     is_member: bool
+    created_by: str | None = None
 
 
 class ConversationIn(BaseModel):
@@ -50,6 +51,14 @@ class ConversationIn(BaseModel):
     title: str = Field(default="", max_length=200)
     member_ids: list[str] = Field(min_length=1, max_length=50)
     restricted: str | None = None
+
+
+class MembersIn(BaseModel):
+    member_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class RenameIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
 
 
 class MessageIn(BaseModel):
@@ -82,6 +91,7 @@ def _out(c: ChatConversation, me: str) -> ConversationOut:
                              read_by=[m.from_id, *(p for p, t in reads.items() if p != m.from_id and t and t >= m.at)])
                   for m in msgs],
         is_member=me in reads,
+        created_by=c.created_by,
     )
 
 
@@ -184,5 +194,86 @@ def mark_read(cid: str, db: DbSession, user: CurrentUserDep) -> ConversationOut:
         for n in db.scalars(select(Notification).where(Notification.recipient_id == me, Notification.read_at.is_(None),
                                                        Notification.href == f"/chat?c={cid}")):
             n.read_at = member.last_read_at
+        db.commit()
+    return _out(_load(db, cid, me, role), me)
+
+
+def _group_for_member(db: Session, cid: str, me: str, role: str) -> ChatConversation:
+    c = _load(db, cid, me, role)
+    if c.kind != "group":
+        raise HTTPException(422, "Only group chats have members to change.")
+    if not any(m.person_id == me for m in c.members):
+        raise HTTPException(403, "Only group members can change the group.")
+    return c
+
+
+def _system_note(c: ChatConversation, me: str, my_name: str, text: str) -> None:
+    at = now()
+    c.messages.append(ChatMessage(id=f"msg-{uuid.uuid4().hex[:12]}", from_id=me, from_name=my_name, text=text, at=at))
+    c.updated_at = at
+
+
+@router.post("/conversations/{cid}/members", response_model=ConversationOut)
+def add_members(cid: str, payload: MembersIn, request: Request, db: DbSession, user: CurrentUserDep) -> ConversationOut:
+    """Any member adds people to a group chat."""
+    me, role = _me(user), user.account.role
+    c = _group_for_member(db, cid, me, role)
+    current = {m.person_id for m in c.members}
+    new = [p for p in dict.fromkeys(payload.member_ids) if p and p not in current]
+    if not new:
+        raise HTTPException(422, "Those people are already in the group.")
+    if len(current) + len(new) > 100:
+        raise HTTPException(422, "A group can have up to 100 people.")
+    for pid in new:
+        if not person_exists(db, pid):
+            raise HTTPException(422, "Pick people from the directory.")
+    if c.restricted and not all(is_hr(_role_of(db, p) or "") for p in new):
+        raise HTTPException(403, "Only HR can join a confidential thread.")
+    my_name = person_name(db, me)
+    names = []
+    for pid in new:
+        name = person_name(db, pid)
+        names.append(name)
+        c.members.append(ChatMember(person_id=pid, name=name))
+        tell(db, pid, me, f"Added to {c.title}", f"{my_name} added you to a group chat.", f"/chat?c={c.id}")
+    _system_note(c, me, my_name, f"Added {', '.join(names)}.")
+    record_audit(db, actor_id=user.id, action="chat.members_added", entity="chat_conversation", entity_id=c.id,
+                 after={"added": new}, ip=client_ip(request))
+    db.commit()
+    return _out(_load(db, cid, me, role), me)
+
+
+@router.delete("/conversations/{cid}/members/{person_id}", response_model=ConversationOut | None)
+def remove_member(cid: str, person_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> ConversationOut | None:
+    """The group's creator removes people; anyone may leave (remove themselves)."""
+    me, role = _me(user), user.account.role
+    c = _group_for_member(db, cid, me, role)
+    member = next((m for m in c.members if m.person_id == person_id), None)
+    if member is None:
+        raise HTTPException(404, "That person is not in this group.")
+    if person_id != me and c.created_by != me:
+        raise HTTPException(403, "Only the person who created the group can remove others.")
+    my_name = person_name(db, me)
+    c.members.remove(member)
+    _system_note(c, me, my_name, f"{my_name} left the group." if person_id == me else f"Removed {member.name}.")
+    record_audit(db, actor_id=user.id, action="chat.member_removed", entity="chat_conversation", entity_id=c.id,
+                 after={"removed": person_id}, ip=client_ip(request))
+    db.commit()
+    if person_id == me:
+        return None
+    return _out(_load(db, cid, me, role), me)
+
+
+@router.put("/conversations/{cid}", response_model=ConversationOut)
+def rename_group(cid: str, payload: RenameIn, db: DbSession, user: CurrentUserDep) -> ConversationOut:
+    me, role = _me(user), user.account.role
+    c = _group_for_member(db, cid, me, role)
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(422, "Give the group a name.")
+    if title != c.title:
+        my_name = person_name(db, me)
+        _system_note(c, me, my_name, f"Renamed the group to “{title}”.")
+        c.title = title
         db.commit()
     return _out(_load(db, cid, me, role), me)

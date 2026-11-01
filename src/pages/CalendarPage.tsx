@@ -1,4 +1,7 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
+import { Link } from "react-router-dom";
+import { Award, BellRing, Cake } from "lucide-react";
+import { useCelebrations, useYearCelebrations, type Celebration } from "../features/celebrations/celebrationsStore.ts";
 import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
 import { holidaysForPerson, leaveNameFor } from "../model.ts";
 import {
@@ -39,6 +42,7 @@ import { usePortal } from "../store.tsx";
 import { updateNote, useNotes } from "../data/notesStore.ts";
 import { NoteEditor } from "../components/NotesPanel.tsx";
 import "../components/notes.css";
+import "./calendarYear.css";
 
 
 const FILTERS: Array<{ id: "all" | CalendarEventKind; label: string }> = [
@@ -52,7 +56,43 @@ const FILTERS: Array<{ id: "all" | CalendarEventKind; label: string }> = [
   { id: "deadline", label: "Deadlines" },
   { id: "interview", label: "Interviews" },
   { id: "note", label: "My notes" },
+  { id: "birthday", label: "Birthdays" },
+  { id: "anniversary", label: "Anniversaries" },
 ];
+
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const isCelebration = (kind: CalendarEventKind) => kind === "birthday" || kind === "anniversary";
+
+/** A birthday (day and month only) or work anniversary as a calendar event. */
+function celebrationEvent(c: Celebration, meId: string): CalendarEvent {
+  const mine = c.employeeId === meId;
+  const who = mine ? "Your" : `${c.name}'s`;
+  const title =
+    c.kind === "birthday" ? (mine ? "Your birthday" : `${c.name}'s birthday`) : `${who} ${c.years ? `${c.years}-year ` : ""}work anniversary`;
+  return {
+    id: `cal-cel-${c.kind}-${c.employeeId}-${c.date}`,
+    date: c.date,
+    kind: c.kind as CalendarEventKind,
+    title,
+    description: [c.jobTitle, c.department].filter(Boolean).join(" · "),
+    audienceIds: [meId],
+    ownerId: c.employeeId,
+    personName: c.name,
+  } as CalendarEvent;
+}
+
+/** Title of the reminder saved for a celebration, so the page can tell it is already set. */
+function reminderTitleFor(e: CalendarEvent): string {
+  const name = (e as CalendarEvent & { personName?: string }).personName ?? "";
+  return e.kind === "birthday" ? `Wish ${name} a happy birthday` : `Congratulate ${name} on the work anniversary`;
+}
+
+function addDays(iso: string, days: number): string {
+  const d = parseISODate(iso);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 function kindTone(kind: CalendarEventKind): "ok" | "warn" | "info" | "neutral" {
   switch (kind) {
@@ -69,6 +109,9 @@ function kindTone(kind: CalendarEventKind): "ok" | "warn" | "info" | "neutral" {
     case "leave":
       return "warn";
     case "wfh":
+      return "ok";
+    case "birthday":
+    case "anniversary":
       return "ok";
     default:
       return "neutral";
@@ -100,6 +143,7 @@ export function CalendarPage() {
   const today = todayISO();
   const initial = new Date();
   const [cursor, setCursor] = useState({ year: initial.getFullYear(), month: initial.getMonth() });
+  const [view, setView] = useState<"month" | "year">("month");
   const [selected, setSelected] = useState(today);
   const [filter, setFilter] = useState<"all" | CalendarEventKind>("all");
   const [tick, setTick] = useState(0);
@@ -158,17 +202,26 @@ export function CalendarPage() {
       }));
   }, [talent, employee.id, employee.fullName]);
 
+  // Birthdays (day and month only; "Hide my birthday" respected) and work anniversaries for the year on screen.
+  const yearCelebrations = useYearCelebrations(cursor.year);
+  const celebrationEvents = useMemo(
+    () => yearCelebrations.rows.filter((c) => c.kind !== "new_joiner").map((c) => celebrationEvent(c, employee.id)),
+    [yearCelebrations.rows, employee.id],
+  );
+  // Next two weeks, across the year end too.
+  const soonCelebrations = useCelebrations(employee.id, 14);
+
   const allEvents = useMemo(() => {
     const base = eventsForPerson(employee.id, holidaySource);
     const ids = new Set(base.map((e) => e.id));
-    const extras = [...leaveEvents, ...interviewEvents, ...notesToEvents(myNotes, employee.id)].filter((e) => !ids.has(e.id));
+    const extras = [...leaveEvents, ...interviewEvents, ...notesToEvents(myNotes, employee.id), ...celebrationEvents].filter((e) => !ids.has(e.id));
     return [...base, ...extras].sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
       return (a.time ?? "").localeCompare(b.time ?? "");
     });
     // tick refreshes after local reminder add/remove
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employee.id, holidaySource, leaveEvents, interviewEvents, myNotes, tick, sharedEvents]);
+  }, [employee.id, holidaySource, leaveEvents, interviewEvents, myNotes, celebrationEvents, tick, sharedEvents]);
 
   const cells = monthCells(cursor.year, cursor.month);
 
@@ -199,14 +252,67 @@ export function CalendarPage() {
 
   const selectedIsOff = isWeeklyOffDate(selected, schedule.weeklyOffDays);
 
+  // Birthdays and anniversaries have their own card unless they are the filter, so they don't crowd out meetings.
   const upcoming = useMemo(
-    () => visible.filter((e) => e.date >= today).slice(0, 12),
-    [visible, today],
+    () => visible.filter((e) => e.date >= today && (filter !== "all" || !isCelebration(e.kind))).slice(0, 12),
+    [visible, today, filter],
+  );
+
+  const reminderTitles = useMemo(
+    () => new Set(allEvents.filter((e) => e.kind === "reminder").map((e) => `${e.date}|${e.title}`)),
+    [allEvents],
+  );
+  const soon = useMemo(
+    () => soonCelebrations.rows.filter((c) => c.kind !== "new_joiner" && c.date >= today).map((c) => celebrationEvent(c, employee.id)),
+    [soonCelebrations.rows, today, employee.id],
   );
 
   function move(delta: number) {
+    if (view === "year") {
+      setCursor({ year: cursor.year + delta, month: cursor.month });
+      return;
+    }
     const next = new Date(cursor.year, cursor.month + delta, 1);
     setCursor({ year: next.getFullYear(), month: next.getMonth() });
+  }
+
+  async function remindMe(e: CalendarEvent): Promise<string | null> {
+    if (e.date < today) return "That day has passed.";
+    const failed = await saveReminderShared({
+      title: reminderTitleFor(e),
+      date: e.date,
+      description: e.title,
+      ownerId: employee.id,
+    });
+    if (failed) return failed;
+    setTick((n) => n + 1);
+    return null;
+  }
+
+  function celebrationActions(e: CalendarEvent) {
+    if (e.ownerId === employee.id) return null;
+    const set = reminderTitles.has(`${e.date}|${reminderTitleFor(e)}`);
+    const canWish = e.date >= addDays(today, -1) && e.date <= addDays(today, 7);
+    if (e.date < today && !canWish) return null;
+    return (
+      <span className="cal-note-actions">
+        {e.date >= today &&
+          (set ? (
+            <span className="muted cal-reminder-set">
+              <BellRing size={13} aria-hidden /> Reminder set
+            </span>
+          ) : (
+            <ActionButton className="btn-ghost btn-tiny" success="Reminder saved." onAction={() => remindMe(e)}>
+              <BellRing size={13} aria-hidden /> Remind me
+            </ActionButton>
+          ))}
+        {canWish && (
+          <Link className="btn-ghost btn-tiny" to="/celebrations">
+            Send wishes
+          </Link>
+        )}
+      </span>
+    );
   }
 
   const reminderAction = useAction();
@@ -284,10 +390,24 @@ export function CalendarPage() {
         <Card>
           <div className="row-between" style={{ marginBottom: 12 }}>
             <h2 className="card-title" style={{ margin: 0 }}>
-              {monthLabel(cursor.year, cursor.month)}
+              {view === "year" ? cursor.year : monthLabel(cursor.year, cursor.month)}
             </h2>
             <span className="form-actions">
-              <button className="btn-ghost" type="button" onClick={() => move(-1)}>
+              <span className="cal-view-switch" role="tablist" aria-label="Calendar view">
+                {(["month", "year"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    role="tab"
+                    aria-selected={view === v}
+                    className={view === v ? "chip-btn active" : "chip-btn"}
+                    onClick={() => setView(v)}
+                  >
+                    {v === "month" ? "Month" : "Year"}
+                  </button>
+                ))}
+              </span>
+              <button className="btn-ghost" type="button" onClick={() => move(-1)} aria-label={view === "year" ? "Previous year" : "Previous month"}>
                 Previous
               </button>
               <button
@@ -301,7 +421,7 @@ export function CalendarPage() {
               >
                 Today
               </button>
-              <button className="btn-ghost" type="button" onClick={() => move(1)}>
+              <button className="btn-ghost" type="button" onClick={() => move(1)} aria-label={view === "year" ? "Next year" : "Next month"}>
                 Next
               </button>
             </span>
@@ -316,8 +436,77 @@ export function CalendarPage() {
             <span className="cal-pill wfh">WFH</span>
             <span className="cal-pill note">My notes</span>
             <span className="cal-pill weekly-off">Weekly off</span>
+            <span className="cal-pill birthday">
+              <Cake size={12} aria-hidden /> Birthday
+            </span>
+            <span className="cal-pill anniversary">
+              <Award size={12} aria-hidden /> Anniversary
+            </span>
           </div>
+          {yearCelebrations.error && <Banner message={{ tone: "err", text: yearCelebrations.error }} />}
 
+          {view === "year" && (
+            <div className="cal-year" aria-label={`Year ${cursor.year}`}>
+              {MONTH_SHORT.map((name, m) => (
+                <section key={name} className="cal-year-month">
+                  <button
+                    type="button"
+                    className="cal-year-title"
+                    title={`Open ${monthLabel(cursor.year, m)}`}
+                    onClick={() => {
+                      setCursor({ year: cursor.year, month: m });
+                      setView("month");
+                    }}
+                  >
+                    {name}
+                  </button>
+                  <div className="cal-year-grid">
+                    {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
+                      <span key={`h-${i}`} className="cal-year-head">
+                        {d}
+                      </span>
+                    ))}
+                    {monthCells(cursor.year, m).map((cell, i) => {
+                      if (!cell) return <span key={`b-${i}`} />;
+                      // Someone has a birthday or anniversary most days, so the year grid marks them only when filtered to them.
+                      const events = (byDate.get(cell) ?? []).filter((e) => filter !== "all" || !isCelebration(e.kind));
+                      const kinds = new Set(events.map((e) => (isCelebration(e.kind) ? "celebration" : e.kind)));
+                      const dot = kinds.has("holiday")
+                        ? "holiday"
+                        : kinds.has("leave") || kinds.has("wfh")
+                          ? "leave"
+                          : kinds.has("meeting") || kinds.has("interview")
+                            ? "meeting"
+                            : kinds.has("reminder") || kinds.has("deadline") || kinds.has("note")
+                              ? "reminder"
+                              : kinds.has("celebration")
+                                ? "celebration"
+                                : events.length
+                                  ? "other"
+                                  : "";
+                      return (
+                        <button
+                          key={cell}
+                          type="button"
+                          title={[formatLongDate(cell), ...events.slice(0, 6).map((e) => e.title), events.length > 6 ? `+${events.length - 6} more` : ""]
+                            .filter(Boolean)
+                            .join(" · ")}
+                          className={`cal-year-day${cell === today ? " today" : ""}${cell === selected ? " selected" : ""}${
+                            isWeeklyOffDate(cell, schedule.weeklyOffDays) ? " weekly-off" : ""
+                          }${dot ? ` has-${dot}` : ""}`}
+                          onClick={() => setSelected(cell)}
+                        >
+                          {Number(cell.slice(-2))}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+
+          {view === "month" && (
           <div className="work-cal" role="grid" aria-label="Month calendar">
             {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
               <div key={label} className="work-cal-head">
@@ -328,7 +517,9 @@ export function CalendarPage() {
               if (!cell) return <div key={`blank-${index}`} className="work-cal-cell empty" />;
               const events = byDate.get(cell) ?? [];
               const weeklyOff = isWeeklyOffDate(cell, schedule.weeklyOffDays);
-              const pills = cellPills(events);
+              const pills = cellPills(events.filter((e) => !isCelebration(e.kind)));
+              const birthdays = events.filter((e) => e.kind === "birthday").length;
+              const anniversaries = events.filter((e) => e.kind === "anniversary").length;
               const showOffLabel =
                 weeklyOff &&
                 pills.length === 0 &&
@@ -336,8 +527,11 @@ export function CalendarPage() {
               const tip = [
                 formatLongDate(cell),
                 weeklyOff ? `Weekly off (${schedule.weeklyOffLabels.join(", ")})` : schedule.hoursLabel,
-                ...events.map((e) => e.title),
-              ].join(" · ");
+                ...events.slice(0, 8).map((e) => e.title),
+                events.length > 8 ? `+${events.length - 8} more` : "",
+              ]
+                .filter(Boolean)
+                .join(" · ");
               return (
                 <button
                   key={cell}
@@ -355,10 +549,27 @@ export function CalendarPage() {
                     ))}
                     {showOffLabel && <li className="cal-mini weekly-off">Weekly off</li>}
                   </ul>
+                  {(birthdays > 0 || anniversaries > 0) && (
+                    <span className="cal-cel-counts">
+                      {birthdays > 0 && (
+                        <span className="cal-cel birthday" aria-label={`${birthdays} birthday${birthdays === 1 ? "" : "s"}`}>
+                          <Cake size={11} aria-hidden />
+                          {birthdays}
+                        </span>
+                      )}
+                      {anniversaries > 0 && (
+                        <span className="cal-cel anniversary" aria-label={`${anniversaries} work anniversar${anniversaries === 1 ? "y" : "ies"}`}>
+                          <Award size={11} aria-hidden />
+                          {anniversaries}
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
+          )}
           <p className="note" style={{ marginTop: 10 }}>
             Shift: {schedule.shiftName} · {schedule.hoursLabel}
           </p>
@@ -400,6 +611,7 @@ export function CalendarPage() {
                         {e.ownerId === employee.id ? "Cancel meeting" : "Decline"}
                       </ActionButton>
                     )}
+                    {isCelebration(e.kind) && celebrationActions(e)}
                     {isLocalEvent(e) && e.kind === "reminder" && e.ownerId === employee.id && (
                       <ActionButton className="btn-ghost btn-tiny" onAction={() => onLocalAction(e, "remove")}>
                         Remove reminder
@@ -470,6 +682,31 @@ export function CalendarPage() {
                 </button>
               </li>
             ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card title="Birthdays & anniversaries · next 14 days" to="/celebrations">
+        {soonCelebrations.error ? (
+          <Banner message={{ tone: "err", text: soonCelebrations.error }} />
+        ) : soon.length === 0 ? (
+          <EmptyState title="None in the next 14 days" />
+        ) : (
+          <ul className="calendar-agenda cal-cel-list">
+            {soon.slice(0, 20).map((e) => (
+              <li key={e.id}>
+                <div className="row-between">
+                  <button type="button" className="quiet-link cal-cel-name" onClick={() => setSelected(e.date)}>
+                    {e.kind === "birthday" ? <Cake size={14} aria-hidden /> : <Award size={14} aria-hidden />}
+                    <strong>{e.title}</strong>
+                  </button>
+                  <span className="muted">{e.date === today ? "Today" : formatShortDate(e.date).replace(/\s\d{4}$/, "")}</span>
+                </div>
+                {e.description && <p className="muted">{e.description}</p>}
+                {celebrationActions(e)}
+              </li>
+            ))}
+            {soon.length > 20 && <li className="muted">+{soon.length - 20} more on the calendar</li>}
           </ul>
         )}
       </Card>

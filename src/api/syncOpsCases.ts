@@ -211,6 +211,8 @@ interface DeskTicketOut {
   escalation_level?: number;
   overdue?: boolean;
   comments?: DeskCommentOut[];
+  subcategory?: string | null;
+  contact_preference?: "email" | "phone" | "chat" | null;
   files?: { id: string; file_name: string; content_type: string; size_bytes: number; uploaded_by: string | null; created_at: string }[];
 }
 
@@ -231,8 +233,12 @@ function toRequest(t: DeskTicketOut): HrRequest {
     comments: comments.map((c) => ({
       at: utcIso(c.created_at) ?? c.created_at,
       author: c.author_name ?? (c.system ? "System" : "HR"),
+      authorId: c.author_id ?? undefined,
+      system: c.system,
       text: c.text,
     })),
+    subcategory: t.subcategory ?? undefined,
+    contactPreference: t.contact_preference ?? undefined,
     submittedAt: submitted,
     assigneeId: t.assignee_id ?? "",
     priority: t.priority as HrRequestPriority,
@@ -270,12 +276,21 @@ export async function loadApiHrRequests(): Promise<HrRequest[]> {
   return full.map(toRequest).sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""));
 }
 
-export async function apiCreateHrRequest(input: { category: string; subject: string; description: string; priority?: string }) {
+export async function apiCreateHrRequest(input: {
+  category: string;
+  subject: string;
+  description: string;
+  priority?: string;
+  subcategory?: string;
+  contactPreference?: string;
+}) {
   const out = await api.post<DeskTicketOut>("/desk/requests", {
     category: input.category,
     subject: input.subject.trim(),
     description: input.description.trim(),
     priority: input.priority ?? "Normal",
+    subcategory: input.subcategory || null,
+    contact_preference: input.contactPreference || null,
   });
   return out.id;
 }

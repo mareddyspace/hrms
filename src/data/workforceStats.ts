@@ -3,6 +3,7 @@
  * so every screen agrees and nothing is hard-coded.
  */
 import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../demoAccounts.ts";
+import { declarationsAsProofs } from "../features/taxdecl/taxDeclStore.ts";
 import {
   TIMEZ_COUNTRIES,
   addDaysISO,
@@ -352,7 +353,7 @@ export function waitingItems(
     }
   }
   if (canVerifyProofs) {
-    for (const p of state.investmentProofs) {
+    for (const p of declarationsAsProofs(state.investmentProofs)) {
       if (p.status === "submitted" && p.employeeId !== myId) {
         items.push({ id: p.id, employeeId: p.employeeId, kind: "Tax proof", detail: p.section, date: p.submittedOn });
       }

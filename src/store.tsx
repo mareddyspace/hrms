@@ -24,6 +24,8 @@ import {
   addDaysISO,
   formatLongDate,
   hoursFromEntries,
+  formatHourCompact,
+  mondayOf,
   validateTimesheet,
   workingDays,
   holidaySet,
@@ -77,6 +79,7 @@ import { getOptionalHolidayState, subscribeOptionalHolidays } from "./features/w
 import { editedPerson, getPerson, isAccountActive, listPeople, managerChainIds, subscribePeople } from "./data/peopleLocal.ts";
 import { delegatedAuthority, noteLeaves, type DelegationScope } from "./data/delegations.ts";
 import { cachedPayslips, generatePayslips, type PayslipInput } from "./data/payslipGenerator.ts";
+import { declarationsAsProofs, declarationsVersion } from "./features/taxdecl/taxDeclStore.ts"; // tax declarations (verified ones lower the tax)
 import { getTaxRegime } from "./data/taxRegime.ts";
 import { payslipAnnualBase, useAnnualPayRevision } from "./data/annualPay.ts";
 import { getExitState, subscribeExits } from "./features/lifecycle/exitStore.ts";
@@ -102,7 +105,7 @@ import {
 } from "./api/portalSync.ts";
 import { setApiNotificationReadHandler } from "./data/collabLocal.ts";
 import type { LeaveRow } from "./model.ts";
-import { apiAddTimeEntry, apiDecideDay, apiDecideWeek, apiRemoveTimeEntry, apiReopenDay, apiSubmitDay, timeMirror } from "./api/syncTimeSheets.ts";
+import { apiAddTimeEntry, apiDecideDay, apiDecideWeek, apiRemoveTimeEntry, apiReopenDay, apiSubmitDay, apiUpdateTimeEntry, timeMirror } from "./api/syncTimeSheets.ts";
 import { checkOutNeededToSubmit } from "./data/attendanceLocal.ts";
 import { DAY_TARGET, HALF_DAY_TARGET, dayFromApi, dayRecordFor, getLocalDays, isFixable, legacyLockedDate, saveLocalDays, shortfallText } from "./data/timesheetDays.ts";
 import { halfDayLeave as halfDayLeaveOn, blockingLeave as fullDayLeaveOn, parseISODate } from "./model.ts";
@@ -410,10 +413,12 @@ interface PortalApi {
   applyEncashment: (code: LeaveCode, days: number) => string | null;
   setEncashmentStatus: (id: string, status: RequestStatus, note?: string) => string | null;
   saveTimesheet: (projectId: string, weekStart: string, hours: Record<string, number>, status: TimesheetStatus) => string | null;
+  /** Adds a block, or replaces block `entryId` (edit) — same rules: today only, no overlaps, no leave/holiday. */
   addTimeEntry: (
     projectId: string,
     weekStart: string,
     input: Omit<TimeEntry, "id">,
+    entryId?: string,
   ) => Promise<string | null>;
   removeTimeEntry: (projectId: string, weekStart: string, entryId: string) => Promise<string | null>;
   submitWeekTimesheets: (weekStart: string) => Promise<string | null>;
@@ -1107,14 +1112,14 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           // Pay follows the compensation record when there is one (same figure as Compensation).
           annualBase: payslipAnnualBase(active.id, active.countryCode),
           regime: getTaxRegime(active.id),
-          investmentProofs: state.investmentProofs,
+          investmentProofs: declarationsAsProofs(state.investmentProofs),
           timesheets: state.timesheets,
           orgTimesheets: state.orgTimesheets,
         };
       },
       get payslipViews() {
         const input = this.payInput;
-        const key = [active.id, input.regime, input.lastWorkingDay ?? "", input.unusedLeaveDays, input.today, input.employmentStatus ?? "", input.annualBase ?? ""].join("|");
+        const key = [active.id, input.regime, input.lastWorkingDay ?? "", input.unusedLeaveDays, input.today, input.employmentStatus ?? "", input.annualBase ?? "", declarationsVersion()].join("|");
         return cachedPayslips(state, key, () => generatePayslips(input).map((slip) => ({ ...slip, ...toPayslipView(slip) })));
       },
       currentProjects,
@@ -1253,20 +1258,25 @@ export function PortalProvider({ children }: { children: ReactNode }) {
               to: input.to,
               half: input.half && input.from === input.to ? input.half : "none",
               reason: input.reason.trim(),
+              handoverTo: input.handoverTo,
+              attachment: input.attachment,
             });
           } catch (error) {
-            return error instanceof Error ? error.message : "Could not send the request.";
+            const message = error instanceof Error ? error.message : "Could not send the request.";
+            if (message.startsWith("Leave request sent")) await refreshApiLeave().catch(() => undefined);
+            return message;
           }
           await refreshApiLeave().catch(() => undefined);
           return null;
         }
         const error = validateLeave(state, active.id, input, activeOffs, todayISO(), { needsApprover: activeHasApprover });
         if (error) return error;
-        const { half, ...rest } = input;
+        const { half, attachment, ...rest } = input;
         const request: LeaveRequest = {
           id: uid("lv"),
           employeeId: active.id,
           ...rest,
+          ...(attachment ? { attachmentName: attachment.name } : {}),
           ...(half && input.from === input.to ? { half } : {}),
           reason: input.reason.trim(),
           status: "pending",
@@ -1534,24 +1544,36 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         });
         return null;
       },
-      addTimeEntry: async (projectId, weekStart, input) => {
+      addTimeEntry: async (projectId, weekStart, input, entryId) => {
         const project = viewState.projects.find((item) => item.id === projectId && item.employeeId === active.id);
+        // Editing: the block being replaced, and the sheets without it (so it doesn't clash with itself).
+        const editing = entryId
+          ? viewState.timesheets.filter((s) => s.employeeId === active.id).flatMap((s) => s.entries ?? []).find((e) => e.id === entryId)
+          : undefined;
+        if (entryId && !editing) return "That block was not found. Reload and try again.";
+        const otherSheets = viewState.timesheets.map((s) =>
+          entryId && s.entries?.some((e) => e.id === entryId)
+            ? { ...s, entries: s.entries.filter((e) => e.id !== entryId), hours: hoursFromEntries(s.entries.filter((e) => e.id !== entryId)) }
+            : s,
+        );
         if (!project) return "Choose a project.";
         if (!input.date) return "Choose a date.";
         if (!input.note.trim()) return "Enter a short note for the block.";
         if (!Number.isFinite(input.hours) || input.hours <= 0) return "Enter hours greater than zero.";
         if (input.startHour < 0 || input.startHour >= 24) return "Enter a valid start time.";
-        if (input.startHour + input.hours > 24) return "A block can't run past midnight.";
+        if (input.startHour + input.hours + (input.breakMinutes ?? 0) / 60 > 24) return "A block can't run past midnight.";
         if (input.date < weekStart || input.date > addDaysISO(weekStart, 6)) return "That date isn't in this week.";
         // The API checks this itself and knows which days were sent back or reopened.
         if (!API_ENABLED) {
-          const day = dayRecordFor(getLocalDays(), active.id, input.date);
-          if (day && !isFixable(day.status)) return `This day is ${day.status} and can't be changed.`;
-          const weekSentBack = state.orgTimesheets.some(
-            (row) => row.personId === active.id && row.weekStart === weekStart && row.status === "draft" && !!row.decidedBy,
-          );
-          if (input.date !== todayISO() && !isFixable(day?.status) && !weekSentBack)
-            return "You can only log time for today. For a missed day, ask your manager to reopen it.";
+          for (const d of editing && editing.date !== input.date ? [editing.date, input.date] : [input.date]) {
+            const day = dayRecordFor(getLocalDays(), active.id, d);
+            if (day && !isFixable(day.status)) return `This day is ${day.status} and can't be changed.`;
+            const weekSentBack = state.orgTimesheets.some(
+              (row) => row.personId === active.id && row.weekStart === mondayOf(d) && row.status === "draft" && !!row.decidedBy,
+            );
+            if (d !== todayISO() && !isFixable(day?.status) && !weekSentBack)
+              return "You can only log time for today. For a missed day, ask your manager to reopen it.";
+          }
         }
         if (legacyLocked(weekStart, input.date)) return "That day was submitted with the whole week and can't be changed.";
         // Ticket/task time only against open work assigned to you (tasks must be accepted).
@@ -1559,33 +1581,44 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           const ticket = getTickets().find((t) => t.id === input.workId);
           if (!ticket || ticket.assigneeId !== active.id) return "Pick a ticket assigned to you.";
           if (!isOpenTicket(ticket)) return "That ticket is already resolved.";
-        } else if (input.workType === "task") {
+        } else if (input.workType === "task" && !input.workId?.startsWith("pt-")) {
+          // Portal tasks (project tasks, ids "pt-…", are checked on the Projects page / by the API).
           const task = state.tasks.find((t) => t.id === input.workId);
           if (!task || task.employeeId !== active.id) return "Pick a task assigned to you.";
           if (!task.accepted) return "Accept the task before logging time.";
           if (task.status === "done" || task.status === "scheduled") return "That task isn't open.";
         }
-        const overlapping = viewState.timesheets
+        // A block runs from its start for its hours plus its break; blocks on the same day may not overlap.
+        const spanEnd = (e: Pick<TimeEntry, "startHour" | "hours" | "breakMinutes">) => e.startHour + e.hours + (e.breakMinutes ?? 0) / 60;
+        const clash = otherSheets
           .filter((sheet) => sheet.employeeId === active.id)
           .flatMap((sheet) => sheet.entries ?? [])
-          .some(
-            (entry) =>
-              entry.date === input.date &&
-              input.startHour < entry.startHour + entry.hours &&
-              entry.startHour < input.startHour + input.hours,
-          );
-        if (overlapping) return "That block overlaps time you've already logged.";
-        const existing = viewState.timesheets.find(
+          .find((entry) => entry.date === input.date && input.startHour < spanEnd(entry) - 1e-6 && entry.startHour < spanEnd(input) - 1e-6);
+        if (clash) return `That block overlaps ${formatHourCompact(clash.startHour)}–${formatHourCompact(spanEnd(clash))} (${clash.note}).`;
+        const existing = otherSheets.find(
           (sheet) => sheet.employeeId === active.id && sheet.projectId === projectId && sheet.weekStart === weekStart,
         );
-        const entry: TimeEntry = { ...input, id: uid("te"), note: input.note.trim() };
+        const entry: TimeEntry = { ...input, id: entryId ?? uid("te"), note: input.note.trim() };
         const entries = [...(existing?.entries ?? []), entry];
         const hours = hoursFromEntries(entries);
-        const error = validateTimesheet(viewState, active.id, project, hours);
+        const error = validateTimesheet({ ...viewState, timesheets: otherSheets }, active.id, project, hours);
         if (error) return error;
-        // Backend mode: the API keeps the entry (and checks the week is still editable).
-        if (API_ENABLED) return apiAddTimeEntry(projectId, { ...input, note: input.note.trim() });
-        setState((prev) => {
+        // Backend mode: the API keeps the entry (and checks the day is still editable and nothing overlaps).
+        if (API_ENABLED)
+          return entryId
+            ? apiUpdateTimeEntry(entryId, projectId, { ...input, note: input.note.trim() })
+            : apiAddTimeEntry(projectId, { ...input, note: input.note.trim() });
+        setState((prior) => {
+          const prev = entryId
+            ? {
+                ...prior,
+                timesheets: prior.timesheets.map((sheet) =>
+                  sheet.entries?.some((e) => e.id === entryId)
+                    ? { ...sheet, entries: sheet.entries.filter((e) => e.id !== entryId), hours: hoursFromEntries(sheet.entries.filter((e) => e.id !== entryId)) }
+                    : sheet,
+                ),
+              }
+            : prior;
           const current = prev.timesheets.find(
             (sheet) => sheet.employeeId === active.id && sheet.projectId === projectId && sheet.weekStart === weekStart,
           );

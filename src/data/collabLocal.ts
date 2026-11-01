@@ -492,6 +492,7 @@ export function createGroupConversation(input: {
       id: createdId,
       kind: "group",
       title,
+      createdBy: input.selfId,
       participantIds: ids,
       participantNames: names,
       messages: [
@@ -855,6 +856,9 @@ export function createHrRequest(input: {
   author: string;
   requesterId: string;
   priority?: HrRequestPriority;
+  subcategory?: string;
+  contactPreference?: HrRequest["contactPreference"];
+  attachments?: HrRequest["attachments"];
 }): string {
   const id = `hr-local-${Date.now()}`;
   updateCollab((s) => {
@@ -874,11 +878,14 @@ export function createHrRequest(input: {
       requesterName: input.author,
       createdAt: now.slice(0, 10),
       updatedAt: now.slice(0, 10),
-      comments: [{ at: now, author: input.author, text: input.description.trim() }],
+      comments: [{ at: now, author: input.author, authorId: input.requesterId, text: input.description.trim() }],
       submittedAt: now,
       assigneeId,
       priority: input.priority ?? "Normal",
       dueAt,
+      subcategory: input.subcategory,
+      contactPreference: input.contactPreference,
+      attachments: input.attachments,
     });
     if (assigneeId) {
       deliverInto(s, {
@@ -962,7 +969,7 @@ export function addHrComment(
     if (!row) return;
     const now = new Date().toISOString();
     const before = row.status;
-    row.comments.push({ at: now, author, text: body });
+    row.comments.push({ at: now, author, authorId: actor.id, text: body });
     row.updatedAt = now.slice(0, 10);
     if (byHr && !row.firstResponseAt) row.firstResponseAt = now;
     if (row.status === "Open" && byHr) row.status = "In progress";
@@ -1067,6 +1074,8 @@ export async function createHrRequestApi(input: {
   subject: string;
   description: string;
   priority?: HrRequestPriority;
+  subcategory?: string;
+  contactPreference?: HrRequest["contactPreference"];
 }): Promise<{ id: string } | { error: string }> {
   let id = "";
   const error = await apiRun(async () => {

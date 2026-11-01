@@ -206,7 +206,7 @@ def add_record(body: CompRecordIn, request: Request, db: DbSession, user: Curren
                                 grade=(body.grade or emp.grade).strip(), reason=body.reason.strip(), created_by=user.id)
     db.add(record)
     record_audit(db, actor_id=user.id, action="comp_record_created", entity="compensation_record", entity_id=record.id,
-                 subject_id=emp.id, after={"effective_date": record.effective_date, "base_salary": record.base_salary,
+                 subject_id=emp.id, after={"effective_date": record.effective_date,  # amounts stay out of the audit log
                                            "currency": record.currency, "grade": record.grade, "reason": record.reason},
                  ip=client_ip(request))
     db.commit()
@@ -237,7 +237,7 @@ def add_bonus(body: CompBonusIn, request: Request, db: DbSession, user: CurrentU
                       amount=round(body.amount, 2), currency=emp.currency, status="accrued", created_by=user.id)
     db.add(bonus)
     record_audit(db, actor_id=user.id, action="bonus_created", entity="comp_bonus", entity_id=bonus.id, subject_id=emp.id,
-                 after={"type": bonus.bonus_type, "period": bonus.period, "amount": bonus.amount, "status": "accrued"},
+                 after={"type": bonus.bonus_type, "period": bonus.period, "status": "accrued"},
                  ip=client_ip(request))
     db.commit()
     return bonus

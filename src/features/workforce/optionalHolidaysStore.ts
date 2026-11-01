@@ -25,6 +25,46 @@ export interface OptionalHoliday {
   name: string;
   /** Backend mode, HR only: open picks for this holiday. */
   pickedBy?: number;
+  description?: string;
+  /** Region (holiday calendar) it applies to; empty = the whole country. */
+  region?: string;
+  legalEntity?: string;
+  /** Last day to pick it (YYYY-MM-DD); default the day before. */
+  selectBy?: string;
+}
+
+/** Last day the holiday can be picked. */
+export function pickDeadline(h: OptionalHoliday): string {
+  if (h.selectBy) return h.selectBy;
+  const d = new Date(`${h.date}T00:00:00`);
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Why the holiday can't be picked today, or null. */
+export function pickClosedReason(h: OptionalHoliday, today = todayISO()): string | null {
+  if (h.date <= today) return "This holiday has passed.";
+  if (today > pickDeadline(h)) return `Picks closed on ${fmt(pickDeadline(h))}.`;
+  return null;
+}
+
+const SAMPLE_INFO: Record<string, string> = {
+  "oh-in-mahavir": "Jain festival marking the birth of Lord Mahavir.",
+  "oh-in-onam": "Harvest festival of Kerala.",
+  "oh-in-rakhi": "Festival celebrating the bond between brothers and sisters.",
+  "oh-in-karva": "Festival observed mainly in North India.",
+  "oh-in-chhath": "Festival of the Sun god, observed mainly in Bihar and Uttar Pradesh.",
+  "oh-in-xmas-eve": "The evening before Christmas Day.",
+  "oh-in-nye": "The last day of the year.",
+  "oh-us-thanks": "The Friday after Thanksgiving.",
+  "oh-us-xmas-eve": "The day before Christmas Day.",
+};
+
+/** Sample holidays must be picked a week ahead (same as the server seed). */
+function sampleDeadline(date: string): string {
+  const d = new Date(`${date}T00:00:00`);
+  d.setDate(d.getDate() - 7);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 interface OptionalHolidayState {
@@ -100,10 +140,19 @@ export function holidaysFor(
       date: h.date,
       name: h.name,
       pickedBy: h.picked_by,
+      ...(h.description ? { description: h.description } : {}),
+      ...(h.region ? { region: h.region } : {}),
+      ...(h.legal_entity ? { legalEntity: h.legal_entity } : {}),
+      ...(h.select_by ? { selectBy: h.select_by } : {}),
     }));
   }
   return state.holidays
     .filter((h) => h.countryCode === countryCode && Number(h.date.slice(0, 4)) === year)
+    .map((h) =>
+      SAMPLE_INFO[h.id]
+        ? { ...h, description: h.description ?? SAMPLE_INFO[h.id], selectBy: h.selectBy ?? sampleDeadline(h.date) }
+        : h,
+    )
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -131,7 +180,7 @@ export function localPickCount(leaveRequests: LeaveRequest[], holiday: OptionalH
 
 export async function addOptionalHoliday(
   actor: WorkforceActor,
-  input: { countryCode: string; date: string; name: string },
+  input: { countryCode: string; date: string; name: string; description?: string; region?: string; selectBy?: string },
   companyHolidays: Holiday[],
 ): Promise<WorkforceResult> {
   if (!isHrRole(actor.role)) return "Only HR can manage optional holidays.";
@@ -142,14 +191,27 @@ export async function addOptionalHoliday(
   if (!isISODate(input.date)) return "Pick a valid date.";
   if (input.date < todayISO()) return "Pick a date that hasn't passed.";
   if (isWeekend(input.date)) return `${fmt(input.date)} is a weekend. Pick a working day.`;
-  if (API_ENABLED) return apiAddOptional(input.countryCode, input.date, name);
+  if (input.selectBy && (input.selectBy >= input.date || input.selectBy < todayISO())) {
+    return "The pick-by date must be before the holiday and not in the past.";
+  }
+  if (API_ENABLED) {
+    return apiAddOptional(input.countryCode, input.date, name, { description: input.description, region: input.region, selectBy: input.selectBy });
+  }
   const clash = companyHolidays.find((h) => h.date === input.date && (h.countryCode ?? "IN") === input.countryCode);
   if (clash) return `${fmt(input.date)} is already a public holiday (${clash.name}).`;
   return store.mutate((s) => {
     if (s.holidays.some((h) => h.countryCode === input.countryCode && h.date === input.date)) {
       return `There's already an optional holiday on ${fmt(input.date)} for ${countryName(input.countryCode)}.`;
     }
-    s.holidays.push({ id: newId("oh"), countryCode: input.countryCode, date: input.date, name });
+    s.holidays.push({
+      id: newId("oh"),
+      countryCode: input.countryCode,
+      date: input.date,
+      name,
+      ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+      ...(input.region?.trim() ? { region: input.region.trim() } : {}),
+      ...(input.selectBy ? { selectBy: input.selectBy } : {}),
+    });
     return null;
   });
 }

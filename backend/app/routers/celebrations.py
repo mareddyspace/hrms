@@ -74,9 +74,12 @@ def _next_in(d: date, start: date, end: date) -> date | None:
     return None
 
 
-def celebrations(db: Session, today: date, days: int, viewer_id: str | None) -> list[CelebrationOut]:
-    """From today - 1 (yesterday's wishes still count) to today + days - 1."""
+def celebrations(db: Session, today: date, days: int, viewer_id: str | None, year: int | None = None) -> list[CelebrationOut]:
+    """From today - 1 (yesterday's wishes still count) to today + days - 1; with `year`, every day of that year
+    (the calendar's month and year views). New joiners are only listed for the rolling window."""
     start, end = today - timedelta(days=1), today + timedelta(days=days - 1)
+    if year is not None:
+        start, end = date(year, 1, 1), date(year, 12, 31)
     wished = set()
     if viewer_id:
         wished = {(to, msg_kind) for to, msg_kind in db.execute(
@@ -95,7 +98,7 @@ def celebrations(db: Session, today: date, days: int, viewer_id: str | None) -> 
             years = occ.year - emp.joining_date.year if occ else 0
             if occ and years >= 1:
                 out.append(CelebrationOut(**base, kind="anniversary", date=occ, years=years))
-            elif today - timedelta(days=7) <= emp.joining_date <= today:
+            elif year is None and today - timedelta(days=7) <= emp.joining_date <= today:
                 out.append(CelebrationOut(**base, kind="new_joiner", date=emp.joining_date))
     out.sort(key=lambda c: (c.date, c.kind, c.name))
     return out
@@ -103,10 +106,11 @@ def celebrations(db: Session, today: date, days: int, viewer_id: str | None) -> 
 
 @router.get("", response_model=list[CelebrationOut])
 def list_celebrations(db: DbSession, user: CurrentUserDep,
-                      days: Annotated[int, Query(ge=1, le=31)] = 7) -> list[CelebrationOut]:
+                      days: Annotated[int, Query(ge=1, le=31)] = 7,
+                      year: Annotated[int | None, Query(ge=2000, le=2100)] = None) -> list[CelebrationOut]:
     emp = user.employee
     today = today_for(emp) if emp else date.today()
-    return celebrations(db, today, days, user.employee_id)
+    return celebrations(db, today, days, user.employee_id, year)
 
 
 @router.post("/wishes", response_model=CelebrationOut, status_code=201)

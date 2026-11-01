@@ -321,6 +321,16 @@ const mirror = createApiMirror<Ticket[]>(
   async () => (await api.get<TicketOut[]>("/tickets")).map(fromApi),
 );
 
+/** Backend mode: true once the first list arrived (local mode: always). */
+export function ticketsLoaded(): boolean {
+  return !API_ENABLED || mirror.loaded();
+}
+
+/** Backend mode: the last load error, if the list could not be fetched. */
+export function ticketsLoadError(): string | null {
+  return API_ENABLED ? mirror.lastError() : null;
+}
+
 /** Backend mode: load the list again (to pick up other people's changes). Does nothing in local mode. */
 export function refreshTickets(): Promise<void> {
   return API_ENABLED ? mirror.reload() : Promise.resolve();

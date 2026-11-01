@@ -9,3 +9,22 @@
 .project-team li { display: flex; justify-content: space-between; gap: 8px; }
 .project-activity li { display: grid; grid-template-columns: 70px 1fr; gap: 8px; }
 .ts-team-detail { padding: 6px 0 10px; display: grid; gap: 8px; }
+.project-card-metric { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.project-card-metric span { color: var(--muted, #5f6b66); }
+.progress.warn i { background: var(--warn, #b26a00); }
+.progress.danger i { background: var(--danger, #b3261e); }
+.project-sort { display: inline-flex; align-items: center; gap: 6px; }
+.project-twin { display: grid; gap: 14px; }
+.project-twin p { margin: 6px 0 0; }
+.project-alerts { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 6px; }
+.project-alerts li { padding: 8px 12px; border-radius: 8px; border-left: 4px solid var(--accent, #2d6a5a); background: var(--card, #fff); font-size: 14px; }
+.project-alerts li.danger { border-left-color: var(--danger, #b3261e); }
+.project-alerts li.warn { border-left-color: var(--warn, #b26a00); }
+.project-posts, .project-docs { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.project-posts li { border-top: 1px solid var(--line, #e3e7e5); padding-top: 8px; }
+.project-posts li.update { border-left: 3px solid var(--accent, #2d6a5a); padding-left: 8px; }
+.project-posts p { margin: 4px 0 0; white-space: pre-wrap; }
+.project-docs li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.project-team li { align-items: center; }
+.project-milestones .link-btn, .project-team .link-btn { text-align: left; }
+.project-overdue { color: var(--danger, #b3261e); }

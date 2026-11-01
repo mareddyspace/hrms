@@ -1,0 +1,11 @@
+/* Time & attendance additions (AttendanceModule.tsx). */
+.day.no_record { background: #f8fafc; border-color: #e2e8f0; color: #64748b; }
+.row-click { cursor: pointer; }
+.row-click:hover td { background: var(--accent-soft, #eef4ff); }
+.att-range-label { min-width: 120px; text-align: center; align-self: center; }
+.att-year { margin-bottom: 12px; }
+.att-count { margin: 8px 0; }
+html[data-theme="night"] .day.no_record { background: #1e293b; border-color: #334155; color: #94a3b8; }
+@media (max-width: 640px) {
+  .att-range-label { min-width: 0; }
+}

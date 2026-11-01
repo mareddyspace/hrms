@@ -47,6 +47,7 @@ export interface HolidayAdmin {
   name: string;
   calendar: string | null;
   active: boolean;
+  description?: string | null;
 }
 
 export interface HolidayCalendar {
@@ -83,7 +84,7 @@ export const leaveAdminApi = {
   deactivatePolicy: (id: string) => apiDelete<LeavePolicyAdmin>(`${L}/policies/${enc(id)}`),
   holidays: (country: string, year: number) => api.get<HolidayAdmin[]>(`${L}/holidays`, { country, year }),
   calendars: (country: string) => api.get<HolidayCalendar[]>(`${L}/calendars`, { country }),
-  createHoliday: (body: { country_code: string; date: string; name: string; calendar: string | null }) =>
+  createHoliday: (body: { country_code: string; date: string; name: string; calendar: string | null; description?: string | null }) =>
     api.post<HolidayAdmin>(`${L}/holidays`, body),
   updateHoliday: (id: string, body: Partial<Omit<HolidayAdmin, "id" | "country_code">>) =>
     apiPut<HolidayAdmin>(`${L}/holidays/${enc(id)}`, body),

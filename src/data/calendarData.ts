@@ -17,7 +17,9 @@ export type CalendarEventKind =
   | "wfh"
   | "deadline"
   | "interview"
-  | "note";
+  | "note"
+  | "birthday"
+  | "anniversary";
 
 export type CalendarEvent = {
   id: string;
@@ -47,6 +49,8 @@ export const CALENDAR_KIND_LABEL: Record<CalendarEventKind, string> = {
   deadline: "Deadline",
   interview: "Interview",
   note: "My note",
+  birthday: "Birthday",
+  anniversary: "Work anniversary",
 };
 
 /** Dated notes become calendar events; undated ones stay off the calendar. */

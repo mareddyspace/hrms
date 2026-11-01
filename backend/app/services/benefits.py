@@ -18,7 +18,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.deps import CurrentUser
-from app.models import Account, BenefitPlan, BenefitWindow, Employee, LifeEvent
+from app.models import Account, BenefitDependent, BenefitPlan, BenefitWindow, Employee, LifeEvent
 from app.services.scope import HR_ROLES, manager_chain_ids
 
 LIFE_EVENT_TYPES = ("Marriage", "Birth or adoption", "Divorce", "Death of a dependent", "Spouse lost coverage")
@@ -151,3 +151,17 @@ def can_decide_for(db: Session, user: CurrentUser, emp: Employee) -> bool:
 
 def life_event_window_end(event_date: date) -> date:
     return event_date + timedelta(days=LIFE_EVENT_WINDOW_DAYS)
+
+
+CHILD_MAX_AGE = 25  # children are covered until their 25th birthday
+
+
+def dependent_cover(dep: BenefitDependent, today: date, check_verification: bool = True) -> tuple[bool, str]:
+    """Can this dependent be added to a plan's cover? (relationship / age, and HR verification)."""
+    dob = dep.date_of_birth
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    if dep.relationship == "Child" and age >= CHILD_MAX_AGE:
+        return False, f"children are covered until age {CHILD_MAX_AGE}"
+    if check_verification and dep.verification != "verified":
+        return False, "waiting for HR verification" if dep.verification == "pending" else "rejected by HR"
+    return True, "Eligible for cover"

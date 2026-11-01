@@ -242,7 +242,8 @@ def create_holiday(body: HolidayAdminIn, request: Request, db: DbSession, user: 
     _hr_or_admin(user)
     _country(db, body.country_code)
     row = Holiday(id=f"h-{body.country_code.lower()}-{uuid.uuid4().hex[:10]}", country_code=body.country_code,
-                  date=body.date, name=body.name.strip(), calendar=(body.calendar or "").strip() or None, active=True)
+                  date=body.date, name=body.name.strip(), calendar=(body.calendar or "").strip() or None, active=True,
+                  description=(body.description or "").strip() or None)
     _holiday_clash(db, row)
     db.add(row)
     db.flush()

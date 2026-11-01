@@ -45,7 +45,7 @@ function validPhone(value: string): boolean {
 }
 
 /** Problems with the employee-editable fields, or null when they are fine. Name and work email are HR-owned. */
-function validateDraft(draft: ProfileDraft, extras: ProfileExtras): string | null {
+function validateDraft(draft: ProfileDraft, extras: ProfileExtras, phoneOnFile: boolean): string | null {
   // Backend mode: an unchanged mobile stays masked and isn't sent.
   if (!(API_ENABLED && isMasked(draft.mobile)) && !validPhone(draft.mobile)) {
     return "Enter a valid mobile number: 8–15 digits, optionally starting with + (spaces allowed).";
@@ -53,12 +53,12 @@ function validateDraft(draft: ProfileDraft, extras: ProfileExtras): string | nul
   if (extras.personalEmail.trim() && !EMAIL_PATTERN.test(extras.personalEmail.trim())) {
     return "Enter a valid personal email address.";
   }
-  const hasEmergency = extras.emergencyName.trim() || extras.emergencyPhone.trim() || extras.emergencyRelation.trim();
-  if (hasEmergency) {
-    if (!extras.emergencyName.trim()) return "Enter the emergency contact's name.";
-    if (!(API_ENABLED && !extras.emergencyPhone.trim()) && !validPhone(extras.emergencyPhone)) {
-      return "Enter a valid emergency contact phone: 8–15 digits.";
-    }
+  // Emergency contact is mandatory (name, relationship and phone).
+  if (!extras.emergencyName.trim()) return "Enter the emergency contact's name.";
+  if (!extras.emergencyRelation.trim()) return "Enter the emergency contact's relationship.";
+  // Backend mode: a phone already on file arrives masked, so blank keeps it (phoneOnFile).
+  if (!(phoneOnFile && !extras.emergencyPhone.trim()) && !validPhone(extras.emergencyPhone)) {
+    return "Enter a valid emergency contact phone: 8–15 digits.";
   }
   return null;
 }
@@ -139,7 +139,20 @@ export function ProfileEditForm({
 
   async function saveProfile(): Promise<boolean | string> {
     setMessage(null);
-    const invalid = validateDraft(draft, extras);
+    const onFile = getPerson(employee.id);
+    const invalid =
+      validateDraft(draft, extras, API_ENABLED && Boolean(onFile?.emergencyPhone)) ??
+      (API_ENABLED
+        ? !apiAddress.line.trim() && !onFile?.addressLine
+          ? "Enter your address."
+          : !apiAddress.city.trim()
+            ? "Enter your city."
+            : !apiAddress.country.trim()
+              ? "Enter your country."
+              : null
+        : !draft.address.trim()
+          ? "Enter your address."
+          : null);
     if (invalid) {
       setMessage({ tone: "err", text: invalid });
       return false;
@@ -179,7 +192,7 @@ export function ProfileEditForm({
           <input type="email" value={employee.email} readOnly disabled />
           <span className="note">Ask HR to change.</span>
         </Field>
-        <Field label="Mobile">
+        <Field label="Mobile" required>
           <input
             type="tel"
             inputMode="tel"
@@ -196,14 +209,14 @@ export function ProfileEditForm({
         </Field>
         {API_ENABLED ? (
           <>
-            <Field label="Address" wide>
+            <Field label="Address" wide required>
               <input
                 value={apiAddress.line}
                 placeholder={getPerson(employee.id)?.addressLine ? "Unchanged" : ""}
                 onChange={(event) => setApiAddress({ ...apiAddress, line: event.target.value })}
               />
             </Field>
-            <Field label="City">
+            <Field label="City" required>
               <input value={apiAddress.city} onChange={(event) => setApiAddress({ ...apiAddress, city: event.target.value })} />
             </Field>
             <Field label="Postcode">
@@ -213,12 +226,12 @@ export function ProfileEditForm({
                 onChange={(event) => setApiAddress({ ...apiAddress, postcode: event.target.value })}
               />
             </Field>
-            <Field label="Country">
+            <Field label="Country" required>
               <input value={apiAddress.country} onChange={(event) => setApiAddress({ ...apiAddress, country: event.target.value })} />
             </Field>
           </>
         ) : (
-          <Field label="Address" wide>
+          <Field label="Address" wide required>
             <input value={draft.address} onChange={(event) => setDraft({ ...draft, address: event.target.value })} />
           </Field>
         )}
@@ -226,16 +239,16 @@ export function ProfileEditForm({
 
       <h3 className="card-title" style={{ marginTop: 16 }}>Emergency contact</h3>
       <div className="form-grid">
-        <Field label="Name">
+        <Field label="Name" required>
           <input value={extras.emergencyName} onChange={(event) => setExtras({ ...extras, emergencyName: event.target.value })} />
         </Field>
-        <Field label="Relationship">
+        <Field label="Relationship" required>
           <input
             value={extras.emergencyRelation}
             onChange={(event) => setExtras({ ...extras, emergencyRelation: event.target.value })}
           />
         </Field>
-        <Field label="Phone">
+        <Field label="Phone" required>
           <input
             type="tel"
             inputMode="tel"

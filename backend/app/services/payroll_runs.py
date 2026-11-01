@@ -179,8 +179,13 @@ def inputs(db: Session, country: str, entity: str, month: str) -> list[dict[str,
             if inst["month"] == month:
                 name = f"{CASH_LINE} ({i + 1} of {len(plan)})" if len(plan) > 1 else CASH_LINE
                 cash.setdefault(adv.employee_id, []).append({"name": name, "amount": inst["amount"]})
-    from app.models import CompensationRecord
+    from app.models import CompensationRecord, TaxDeclaration
 
+    # Verified tax declarations (old regime / reliefs) count in the payslip's tax, as on the employee's own payslips.
+    decls: dict[str, list[dict[str, Any]]] = {}
+    for d in db.scalars(select(TaxDeclaration).where(TaxDeclaration.employee_id.in_(ids or [""]), TaxDeclaration.status == "verified")):
+        decls.setdefault(d.employee_id, []).append({"financial_year": d.financial_year, "section": d.section,
+                                                    "amount": d.verified_amount if d.verified_amount is not None else d.amount})
     out = []
     for emp in people:
         comp = db.scalar(select(CompensationRecord).where(CompensationRecord.employee_id == emp.id,
@@ -206,6 +211,7 @@ def inputs(db: Session, country: str, entity: str, month: str) -> list[dict[str,
             "overtime_hours": sum(r.hours for r in ot), "overtime_pay": round(sum(r.amount for r in ot), 2),
             "bank_ok": bank is not None, "bank_masked": _mask(bank.account_number) if bank else None,
             "new_joiner": start <= emp.joining_date <= end, "leaver": lwd is not None,
+            "declarations": decls.get(emp.id, []),
         })
     return out
 
@@ -326,7 +332,7 @@ def prepare(db: Session, country: str, entity: str, month: str, lines: list[dict
     db.flush()
     record_audit(db, actor_id=actor_id, action="payroll_prepared", entity="payroll_runs", entity_id=run.id,
                  after={"month": month, "country": country, "entity": entity, "headcount": run.headcount,
-                        "net": run.totals["net"], "exceptions": len(exceptions)}, ip=ip)
+                        "exceptions": len(exceptions)}, ip=ip)  # no pay amounts in the audit log
     return run
 
 
@@ -427,7 +433,7 @@ def approve(db: Session, run: PayrollRun, actor_id: str, ip: str | None) -> None
     run.approved_by = actor_id
     run.approved_at = utcnow()
     record_audit(db, actor_id=actor_id, action="payroll_approved_locked", entity="payroll_runs", entity_id=run.id,
-                 after={"status": "locked", "headcount": run.headcount, "net": run.totals.get("net")}, ip=ip)
+                 after={"status": "locked", "headcount": run.headcount}, ip=ip)
     start, _ = month_bounds(run.month)
     for l in lines:
         notify(db, recipient_id=l.employee_id, title=f"Payslip for {start:%B %Y}",

@@ -99,6 +99,17 @@ export interface BenefitPlan {
   coversDependents?: boolean;
   /** Who may join. Country is always the plan's own country. */
   eligibility?: PlanEligibility;
+  /** What is covered, in plain words. */
+  coverage?: string;
+  /** Plan terms (when cover starts and ends, claims, limits). */
+  terms?: string;
+  /** Legal entity the plan belongs to; empty = every entity in the country. */
+  legalEntity?: string;
+  /** Company cost per member per year, in the plan's currency. */
+  employerAnnualCost?: number;
+  currency?: string;
+  /** Backend mode: policy documents HR uploaded. */
+  files?: { id: string; title: string; fileName: string; size: number }[];
 }
 
 export interface PlanEligibility {
@@ -116,7 +127,7 @@ export interface BenefitEnrollment {
   planId: string;
   planName: string;
   country: string;
-  status: "Eligible" | "Enrolled" | "Waived" | "Pending";
+  status: "Eligible" | "Enrolled" | "Waived" | "Pending" | "Cancelled";
   effective: string;
   /** Requested with a life event rather than in open enrollment. */
   lifeEventId?: string;
@@ -148,6 +159,13 @@ export interface Dependent {
   verification?: "Pending" | "Verified" | "Rejected";
   verifiedBy?: string;
   verifiedOn?: string;
+  /** Proof of relationship (birth / marriage certificate). Local mode keeps the file in the browser. */
+  docName?: string;
+  docSize?: number;
+  docDataUrl?: string;
+  /** Backend mode: can this dependent be covered (age / relationship rules and HR verification)? */
+  coverEligible?: boolean;
+  coverNote?: string;
 }
 
 export const DEPENDENT_RELATIONSHIPS = ["Spouse", "Partner", "Child", "Parent", "Parent-in-law"];
@@ -392,6 +410,27 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
     documents: ["PF FAQ"],
     mandatory: true,
     autoEnrolled: true,
+  },
+  {
+    id: "bp-in-life",
+    country: "India",
+    name: "Group Term Life (India)",
+    category: "Life",
+    provider: "Harbor Life India",
+    summary: "3x annual base salary life cover",
+    employeeCost: "Employer paid",
+    documents: ["Group Term Life policy"],
+  },
+  {
+    id: "bp-in-nps",
+    country: "India",
+    name: "NPS employer contribution",
+    category: "Retirement",
+    provider: "NPS Trust",
+    summary: "Employer contribution of 10% of basic for senior grades",
+    employeeCost: "Voluntary top-up",
+    documents: ["NPS scheme guide"],
+    eligibility: { excludeEmploymentTypes: ["Contract"], minServiceMonths: 12, grades: ["G8", "G9", "M1", "M2", "E1"] },
   },
   {
     id: "bp-us-med",
@@ -657,3 +696,62 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "FORM 12BB — Investment declaration, FY 2026-27\n\nEmployee: Babu Menon (EMP1184)\n\nHouse rent: INR 25,000 a month · Landlord PAN: AKLPS••••R\nSection 80C: PPF 1,00,000 · ELSS 50,000\nSection 80D: Health insurance (self and family) 25,000\n\nDeclared on 18 April 2026.",
   ),
 ];
+
+/** Plan details (same as the backend seed, app/seed_pay_benefits.py): coverage, terms, company cost per member a year. */
+export const PLAN_DETAILS: Record<string, { coverage: string; terms: string; employerAnnualCost: number; currency: string; legalEntity?: string }> = {
+  "bp-in-med": {
+    coverage: "Hospitalisation up to ₹5,00,000 a year per family (floater) for you, your spouse and up to two children. Cashless at network hospitals; pre- and post-hospitalisation 30/60 days; maternity ₹50,000.",
+    terms: "Cover runs from the enrollment date to 31 March. Dependents must be verified by HR. Pre-existing conditions covered from day one. Claims within 30 days of discharge.",
+    employerAnnualCost: 45000,
+    currency: "INR",
+    legalEntity: "TimeZ India Pvt Ltd",
+  },
+  "bp-in-pf": {
+    coverage: "Employee 12% of basic + employer 12% of basic (3.67% to EPF, 8.33% to EPS). Interest as declared by EPFO.",
+    terms: "Statutory under the EPF Act. Withdrawals and transfers through the EPFO member portal (UAN).",
+    employerAnnualCost: 100000,
+    currency: "INR",
+  },
+  "bp-in-life": {
+    coverage: "Life cover of 3 × annual base salary; accidental death benefit of an equal amount.",
+    terms: "Cover ends on your last working day. Nominee as recorded under Dependents › Nominees.",
+    employerAnnualCost: 6000,
+    currency: "INR",
+  },
+  "bp-in-nps": {
+    coverage: "Employer contribution of 10% of basic to your NPS Tier I account (tax-free under 80CCD(2)).",
+    terms: "Senior grades after 12 months of service. You need a PRAN; Tier II top-ups are voluntary.",
+    employerAnnualCost: 150000,
+    currency: "INR",
+  },
+  "bp-us-med": {
+    coverage: "PPO network: $500 individual / $1,500 family deductible, 80% coinsurance, $4,000 out-of-pocket max.",
+    terms: "Elections hold for the plan year (Jan–Dec) unless you have a qualifying life event.",
+    employerAnnualCost: 14000,
+    currency: "USD",
+  },
+  "bp-us-401": {
+    coverage: "Employer matches 100% of the first 4% you defer; immediate vesting of your deferrals, match vests over 3 years.",
+    terms: "Change your deferral rate any payroll; IRS limits apply.",
+    employerAnnualCost: 5000,
+    currency: "USD",
+  },
+  "bp-uk-med": {
+    coverage: "Inpatient and outpatient treatment, cancer cover, mental health; optional partner and children.",
+    terms: "Benefit-in-kind is reported on your P11D. 12-month moratorium on pre-existing conditions.",
+    employerAnnualCost: 1800,
+    currency: "GBP",
+  },
+  "bp-uk-pen": {
+    coverage: "Employer 3% and employee 5% of qualifying earnings (salary sacrifice available).",
+    terms: "Automatic enrolment; you may opt out within one month of being enrolled.",
+    employerAnnualCost: 2400,
+    currency: "GBP",
+  },
+  "bp-ae-med": {
+    coverage: "DHA essential benefits plus outpatient, dental emergency and maternity; dependents covered.",
+    terms: "Mandatory for all employees in Dubai; card issued within 10 working days.",
+    employerAnnualCost: 9000,
+    currency: "AED",
+  },
+};

@@ -5785,7 +5785,7 @@ html[data-theme="night"] .orgchart-you {
 }
 .task-workbench {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(300px, 420px);
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
@@ -5861,6 +5861,39 @@ html[data-theme="night"] .orgchart-you {
   max-height: calc(100vh - 96px);
   overflow: auto;
 }
+.task-detail-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.task-detail-col { min-width: 0; }
+.task-detail-cols > .task-detail-col + .task-detail-col {
+  border-left: 1px solid var(--line);
+  padding-left: 20px;
+}
+.task-detail-cols > .task-detail-col + .task-detail-col > .task-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+/* Task summary tiles: coloured by default, white once picked. */
+.task-tile .metric-card { border-top: 3px solid transparent; transition: background .15s, border-color .15s; }
+.task-tile.tone-total .metric-card { background: #eef2ff; border-top-color: #6366f1; }
+.task-tile.tone-todo .metric-card { background: #e8f3fb; border-top-color: #4b8bb8; }
+.task-tile.tone-progress .metric-card { background: #f1ecfb; border-top-color: #8b6fd6; }
+.task-tile.tone-blocked .metric-card { background: #fdeceb; border-top-color: #c45c6a; }
+.task-tile.tone-soon .metric-card { background: #fff5e3; border-top-color: #d99a2b; }
+.task-tile.tone-overdue .metric-card { background: #fde4e4; border-top-color: #b42318; }
+.task-tile.tone-done .metric-card { background: #e7f6ee; border-top-color: #2f9e6a; }
+.task-tile.selected .metric-card {
+  background: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent) inset, var(--shadow-sm);
+}
+.task-tile .metric-card .metric-value,
+.task-tile .metric-card .metric-label { color: #1f2937; }
+.task-tile .metric-card .metric-hint { color: #4b5563; }
 .task-detail-grid.compact {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
@@ -5899,6 +5932,10 @@ html[data-theme="night"] .orgchart-you {
 }
 .task-cal-chip.selected {
   outline: 2px solid var(--accent);
+}
+@media (max-width: 1180px) {
+  .task-detail-cols { grid-template-columns: 1fr; }
+  .task-detail-cols > .task-detail-col + .task-detail-col { border-left: 0; padding-left: 0; }
 }
 @media (max-width: 960px) {
   .task-workbench { grid-template-columns: 1fr; }

@@ -18,6 +18,7 @@ import {
   type PersonOut,
 } from "./client.ts";
 import { approvalProgressText, type WithApproval } from "./approvalProgress.ts";
+import { downloadBlob, uploadRaw } from "./syncShared.ts";
 
 /* ───────── People ───────── */
 
@@ -155,7 +156,10 @@ function toStatus(status: string): RequestStatus {
   return "withdrawn"; // withdrawn, cancelled
 }
 
-function toLeaveRequest(r: LeaveRequestOut & WithApproval, nameOf: (id: string) => string | undefined): LeaveRequest {
+/** Leave fields added in migration 0024 (handover person, supporting file). */
+type LeaveExtras = { handover_to?: string | null; handover_name?: string | null; attachment_name?: string | null };
+
+function toLeaveRequest(r: LeaveRequestOut & WithApproval & LeaveExtras, nameOf: (id: string) => string | undefined): LeaveRequest {
   const progress = approvalProgressText(r.approval);
   return {
     id: r.id,
@@ -172,6 +176,9 @@ function toLeaveRequest(r: LeaveRequestOut & WithApproval, nameOf: (id: string) 
     decidedOn: r.decided_at ? r.decided_at.slice(0, 10) : undefined,
     decisionNote: r.decision_note ?? undefined,
     ...(progress ? { approvalProgress: progress } : {}),
+    ...(r.approval ? { approvalSteps: r.approval } : {}),
+    ...(r.handover_to ? { handoverTo: r.handover_to, handoverName: r.handover_name ?? nameOf(r.handover_to) ?? r.handover_to } : {}),
+    ...(r.attachment_name ? { attachmentName: r.attachment_name } : {}),
   };
 }
 
@@ -223,14 +230,36 @@ export async function loadApiLeave(
   };
 }
 
-export async function apiApplyLeave(input: { code: string; from: string; to: string; half?: string; reason: string }) {
-  await api.post<LeaveRequestOut>("/leave/requests", {
+export async function apiApplyLeave(input: {
+  code: string;
+  from: string;
+  to: string;
+  half?: string;
+  reason: string;
+  handoverTo?: string;
+  attachment?: File;
+}) {
+  const created = await api.post<LeaveRequestOut>("/leave/requests", {
     leave_code: input.code,
     from: input.from,
     to: input.to,
     half: input.half ?? "none",
     reason: input.reason,
+    handover_to: input.handoverTo || null,
   });
+  if (input.attachment) {
+    try {
+      await uploadRaw(`/leave/requests/${encodeURIComponent(created.id)}/attachment`, input.attachment, input.attachment.type || "application/octet-stream", input.attachment.name);
+    } catch (error) {
+      const why = error instanceof Error ? error.message : "Upload failed.";
+      throw new Error(`Leave request sent, but the file was not attached: ${why}`);
+    }
+  }
+}
+
+/** Downloads the supporting file of a leave request (owner, approvers, HR). */
+export function apiLeaveAttachment(id: string): Promise<Blob> {
+  return downloadBlob(`/leave/requests/${encodeURIComponent(id)}/attachment`);
 }
 
 export async function apiDecideLeave(id: string, decision: "approve" | "reject", note?: string) {

@@ -27,6 +27,7 @@ router = APIRouter(prefix="/announcements", tags=["announcements"])
 SCOPES = {"Company", "Country", "Department", "Team"}
 STATES = {"Draft", "Scheduled", "Published"}
 MANAGER_ROLES = {"manager", "executive"}
+CATEGORIES = {"Holiday", "Policy", "Event", "IT", "Wellness", "People", "Leadership", "General"}
 
 
 class AnnouncementOut(BaseModel):
@@ -41,6 +42,8 @@ class AnnouncementOut(BaseModel):
     author_id: str | None
     author_name: str
     must_acknowledge: bool
+    category: str = "General"
+    pinned: bool = False
     read: bool
     acknowledged: bool
     can_manage: bool
@@ -58,6 +61,12 @@ class AnnouncementIn(BaseModel):
     state: str = "Draft"
     scheduled_for: datetime | None = None
     must_acknowledge: bool = False
+    category: str = "General"
+    pinned: bool = False
+
+
+class PinIn(BaseModel):
+    pinned: bool
 
 
 class StateIn(BaseModel):
@@ -156,7 +165,8 @@ def _out(db: Session, a: Announcement, me: str, manage: bool) -> AnnouncementOut
     out = AnnouncementOut(
         id=a.id, title=a.title, body=a.body, scope=a.scope, audience=a.audience, state=a.state,
         published_at=a.published_at, scheduled_for=a.scheduled_for, author_id=a.author_id, author_name=a.author_name,
-        must_acknowledge=a.must_acknowledge, read=mine is not None, acknowledged=bool(mine and mine.acknowledged_at),
+        must_acknowledge=a.must_acknowledge, category=a.category or "General", pinned=bool(a.pinned),
+        read=mine is not None, acknowledged=bool(mine and mine.acknowledged_at),
         can_manage=manage,
     )
     if manage and a.state == "Published":
@@ -196,6 +206,8 @@ def create_announcement(payload: AnnouncementIn, request: Request, db: DbSession
     me = _me(user)
     if payload.scope not in SCOPES or payload.state not in STATES:
         raise HTTPException(422, "Pick a scope and state from the list.")
+    if payload.category not in CATEGORIES:
+        raise HTTPException(422, "Pick a category from the list.")
     if payload.scope in {"Country", "Department"} and not payload.audience.strip():
         raise HTTPException(422, "Pick the country or department.")
     if not _can_manage(payload, user, me):
@@ -209,7 +221,8 @@ def create_announcement(payload: AnnouncementIn, request: Request, db: DbSession
     a = Announcement(id=f"an-{uuid.uuid4().hex[:10]}", title=payload.title.strip(), body=payload.body.strip(),
                      scope=payload.scope, audience=audience or ("All TimeZ" if payload.scope == "Company" else "My team"),
                      state="Draft", scheduled_for=payload.scheduled_for if payload.state == "Scheduled" else None,
-                     author_id=me, author_name=person_name(db, me), must_acknowledge=payload.must_acknowledge)
+                     author_id=me, author_name=person_name(db, me), must_acknowledge=payload.must_acknowledge,
+                     category=payload.category, pinned=payload.pinned)
     db.add(a)
     if payload.state == "Published":
         db.flush()
@@ -244,6 +257,21 @@ def set_state(aid: str, payload: StateIn, request: Request, db: DbSession, user:
         a.state, a.scheduled_for = "Draft", None
     record_audit(db, actor_id=user.id, action="announcement.state", entity="announcement", entity_id=a.id,
                  before={"state": before}, after={"state": a.state}, ip=client_ip(request))
+    db.commit()
+    a, manage = _load(db, aid, user, me)
+    return _out(db, a, me, manage)
+
+
+@router.post("/{aid}/pin", response_model=AnnouncementOut)
+def set_pin(aid: str, payload: PinIn, request: Request, db: DbSession, user: CurrentUserDep) -> AnnouncementOut:
+    """Whoever manages the post pins it to the top for everyone (or unpins it)."""
+    me = _me(user)
+    a, manage = _load(db, aid, user, me)
+    if not manage:
+        raise HTTPException(403, "Only whoever manages this announcement can pin it.")
+    a.pinned = payload.pinned
+    record_audit(db, actor_id=user.id, action="announcement.pin", entity="announcement", entity_id=a.id,
+                 after={"pinned": payload.pinned}, ip=client_ip(request))
     db.commit()
     a, manage = _load(db, aid, user, me)
     return _out(db, a, me, manage)

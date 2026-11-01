@@ -117,7 +117,15 @@ def set_tax_regime(body: TaxRegimeIn, request: Request, db: DbSession, user: Cur
         raise HTTPException(404, "No employee record on this account.")
     if emp.country_code != "IN":
         raise HTTPException(422, "Tax regimes apply to India only.")
+    from app.services import tax_declarations as decl
+    from app.services.leave import today_for
+
+    today = today_for(emp)
+    label, start = decl.declarable_years("IN", today)[0]
+    win = decl.window_for(db, "IN", label, start)
     before = emp.tax_regime or "new"
+    if before != body.regime and not win.open(today):
+        raise HTTPException(409, f"The tax regime for {label} can no longer be changed (closed {win.deadline:%d %b %Y}).")
     if before != body.regime:
         emp.tax_regime = body.regime
         record_audit(db, actor_id=user.id, action="changed tax regime", entity="employee", entity_id=emp.id,

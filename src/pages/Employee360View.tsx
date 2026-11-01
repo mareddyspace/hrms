@@ -1,5 +1,22 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import {
+  Briefcase,
+  Building2,
+  CalendarClock,
+  Eye,
+  HeartPulse,
+  IdCard,
+  Languages,
+  Lock,
+  MapPin,
+  Network,
+  Phone,
+  Users,
+} from "lucide-react";
+import { CertificateDialog, type CertificateDoc } from "../components/CertificateViewer.tsx";
+import { initials } from "../components/OrgChart.tsx";
+import type { CorrectionField } from "../data/profileCorrections.ts";
 import { Card, DataTable, EmptyState, MetricCard, MetricGrid, StatusBadge, Tabs } from "../components/ui.tsx";
 import { COMPANY_NAME } from "../brand.ts";
 import { money, payRulesFor } from "../countryPay.ts";
@@ -52,6 +69,68 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+/** One titled block of a record tab: icon, heading, optional Edit, then a label / value grid or a list. */
+function Section({ icon, title, action, wide = false, children }: { icon: ReactNode; title: string; action?: ReactNode; wide?: boolean; children: ReactNode }) {
+  return (
+    <section className={`pi-section${wide ? " wide" : ""}`}>
+      <header className="pi-head">
+        <span className="pi-icon" aria-hidden>
+          {icon}
+        </span>
+        <h3>{title}</h3>
+        {action && <span className="pi-action">{action}</span>}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+function Item({ label, value, action, wide = false }: { label: string; value: ReactNode; action?: ReactNode; wide?: boolean }) {
+  const empty = value === "" || value === undefined || value === null;
+  return (
+    <div className={`pi-item${wide ? " wide" : ""}`}>
+      <dt>{label}</dt>
+      <dd>
+        {empty ? <span className="muted">—</span> : value}
+        {action && <span className="pi-item-action">{action}</span>}
+      </dd>
+    </div>
+  );
+}
+
+function EditLink({ onClick, label = "Edit" }: { onClick: () => void; label?: string }) {
+  return (
+    <button type="button" className="btn-ghost btn-tiny" onClick={onClick}>
+      {label}
+    </button>
+  );
+}
+
+/** Avatar, name (linked to the profile) and title — for reporting lines and teams. */
+function PersonRow({ person, current = false, note }: { person: PersonRecord; current?: boolean; note?: string }) {
+  const body = (
+    <>
+      <span className="pi-avatar" aria-hidden>
+        {person.photo && person.photo !== "/profile.svg" ? <img src={person.photo} alt="" /> : initials(person.fullName)}
+      </span>
+      <span className="pi-person-text">
+        <strong>{person.fullName}</strong>
+        <span className="muted">
+          {person.designation}
+          {note ? ` · ${note}` : ""}
+        </span>
+      </span>
+    </>
+  );
+  return current ? (
+    <div className="pi-person current">{body}</div>
+  ) : (
+    <Link className="pi-person" to={`/people/${person.id}`}>
+      {body}
+    </Link>
+  );
+}
+
 function shiftISO(iso: string, days: number): string {
   const d = parseISODate(iso);
   d.setDate(d.getDate() + days);
@@ -96,6 +175,8 @@ export function Employee360View({
   selfId,
   onEdit,
   hideHeader = false,
+  hideSummary = false,
+  selfEdit,
 }: {
   person: PersonRecord;
   viewer: DemoAccount;
@@ -103,6 +184,10 @@ export function Employee360View({
   onEdit?: () => void;
   /** Skip the photo/name card when the page already shows a profile header. */
   hideHeader?: boolean;
+  /** Your own profile: no drafted summary (the tabs already say it all). */
+  hideSummary?: boolean;
+  /** Your own profile: Edit buttons per section and "Request correction" for HR-owned fields. */
+  selfEdit?: { editContact: () => void; editPersonal: () => void; correct: (field: CorrectionField) => ReactNode };
 }) {
   const { state, employee } = usePortal();
   const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
@@ -119,6 +204,8 @@ export function Employee360View({
   const exit = getExitDetails(person);
   const [tab, setTab] = useState<TabId>("personal");
   const [revealPay, setRevealPay] = useState(false);
+  const [viewingCert, setViewingCert] = useState<CertificateDoc | null>(null);
+  const correct = (field: CorrectionField) => selfEdit?.correct(field);
   // Personal details are masked; the person, and HR / admin in scope, can show one field at a time.
   const canReveal = access.personal && canRevealPersonal(viewer, person.id, selfId, access.personal);
   const firstName = person.preferredName || person.firstName || person.fullName.split(" ")[0];
@@ -133,7 +220,6 @@ export function Employee360View({
   const emergencyName = API_ENABLED ? person.emergencyName ?? "" : extras.emergencyName;
   const emergencyPhone = API_ENABLED ? person.emergencyPhone ?? "" : extras.emergencyPhone;
   const emergencyRelation = API_ENABLED ? person.emergencyRelationship ?? "" : extras.emergencyRelation;
-  const emergency = emergencyName ? [emergencyName, emergencyRelation].filter(Boolean).join(" · ") : "";
   const revealAddress =
     API_ENABLED && isMasked(address)
       ? async () => {
@@ -150,6 +236,12 @@ export function Employee360View({
   const manager = person.managerId ? byId.get(person.managerId) : undefined;
   const chain = managerChainIds(person.id).map((id) => byId.get(id)).filter((p): p is PersonRecord => Boolean(p));
   const reports = directReportIds(person.id).map((id) => byId.get(id)).filter((p): p is PersonRecord => Boolean(p));
+  const peers = manager
+    ? directReportIds(manager.id)
+        .filter((id) => id !== person.id)
+        .map((id) => byId.get(id))
+        .filter((p): p is PersonRecord => Boolean(p) && !isTerminated(p))
+    : [];
 
   /* ───── Schedule, attendance, leave, timesheets ───── */
   const schedule = scheduleForEmployee({
@@ -199,7 +291,8 @@ export function Employee360View({
         Number(today.slice(0, 4)),
       )
     : [];
-  const leaveRequests = state.leaveRequests.filter((l) => l.employeeId === person.id).slice(0, 6);
+  const leaveRequests = state.leaveRequests.filter((l) => l.employeeId === person.id).slice(0, 8);
+  const leaveName = (code: string) => leaveBalances.find((r) => r.code === code)?.name ?? code.toUpperCase();
 
   const timesheetWeeks = useMemo(() => {
     const weeks = new Map<string, { week: string; hours: number; status: string; projects: string }>();
@@ -252,6 +345,18 @@ export function Employee360View({
   const showPay = revealPay;
 
   const documents = state.documents.filter((d) => d.employeeId === person.id);
+  const certificateFor = (c: (typeof certifications)[number]): CertificateDoc => ({
+    id: c.id,
+    kind: "professional",
+    title: c.name,
+    recipient: c.employeeName || person.fullName,
+    issuer: c.issuer,
+    issuedOn: c.earnedOn,
+    expiresOn: c.expiresOn,
+    credentialId: c.verifiedBy ? c.credentialId : undefined,
+    verified: Boolean(c.verifiedBy),
+    expired: Boolean(c.expiresOn && c.expiresOn < today),
+  });
 
   /* ───── Lifecycle (compensation changes only for viewers who may see pay) ───── */
   const timeline: LifecycleEvent[] = useMemo(() => {
@@ -273,6 +378,11 @@ export function Employee360View({
     return [...events, ...compEvents].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [person, history, access.compensation, reward.history]);
+
+  // Latest job, promotion or hire that is already in effect.
+  const roleSince = timeline
+    .filter((e) => (e.type === "Hire" || e.type === "Promotion" || e.type === "Job change") && !isScheduled(e, today))
+    .sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))[0]?.effectiveDate;
 
   const tabs: { id: TabId; label: string }[] = [
     { id: "personal", label: "Personal information" },
@@ -462,7 +572,7 @@ export function Employee360View({
         </Card>
       )}
 
-      {summaryOn && (
+      {summaryOn && !hideSummary && (
         <Card
           title="Summary"
           action={
@@ -497,203 +607,315 @@ export function Employee360View({
       <Tabs tabs={tabs} value={activeTab} onChange={(id) => setTab(id as TabId)} />
 
       {activeTab === "personal" && (
-        <Card title="Personal information">
-          <dl className="info-grid">
-            {access.personal && <Fact label="Employee ID" value={person.employeeCode} />}
-            <Fact label="First name" value={person.firstName} />
-            {access.personal && <Fact label="Middle name" value={person.middleName ?? ""} />}
-            <Fact label="Last name" value={person.lastName} />
-            <Fact label="Preferred name" value={preferredName} />
-            <Fact label="Work email" value={person.email} />
-            {access.personal && (
-              <>
-                <Fact
-                  label="Date of birth"
-                  value={
-                    <MaskedValue
-                      value={person.dateOfBirth}
-                      kind="dob"
-                      canReveal={canReveal}
-                      onReveal={personRevealer(person.id, "date_of_birth", person.dateOfBirth)}
-                      format={(dob) => (isMasked(dob) ? dob : `${dob} · ${ageOn(dob, today)} yrs`)}
+        <Card title="Personal information" className="pi-card">
+          {!access.personal ? (
+            <>
+              <dl className="pi-grid">
+                <Item label="First name" value={person.firstName} />
+                <Item label="Last name" value={person.lastName} />
+                <Item label="Preferred name" value={preferredName} />
+                <Item label="Work email" value={person.email} />
+              </dl>
+              <p className="profile-private">
+                <Lock size={13} aria-hidden /> Visible to {firstName}, their managers and HR.
+              </p>
+            </>
+          ) : (
+            <div className="pi-layout">
+              <Section
+                icon={<IdCard size={16} />}
+                title="Identity"
+                wide
+                action={selfEdit && <EditLink onClick={selfEdit.editPersonal} />}
+              >
+                <dl className="pi-grid">
+                  <Item label="Employee ID" value={person.employeeCode} />
+                  <Item label="Legal name" value={person.fullName} action={correct("fullName")} />
+                  <Item label="First name" value={person.firstName} />
+                  <Item label="Middle name" value={person.middleName ?? ""} action={correct("middleName")} />
+                  <Item label="Last name" value={person.lastName} />
+                  <Item label="Preferred name" value={preferredName} />
+                  <Item
+                    label="Date of birth"
+                    value={
+                      person.dateOfBirth ? (
+                        <MaskedValue
+                          value={person.dateOfBirth}
+                          kind="dob"
+                          canReveal={canReveal}
+                          onReveal={personRevealer(person.id, "date_of_birth", person.dateOfBirth)}
+                          format={(dob) => (isMasked(dob) ? dob : `${formatShortDate(dob)} · ${ageOn(dob, today)} yrs`)}
+                        />
+                      ) : (
+                        ""
+                      )
+                    }
+                    action={correct("dateOfBirth")}
+                  />
+                  <Item label="Gender" value={person.gender} />
+                  <Item label="Nationality" value={person.nationality} action={correct("nationality")} />
+                </dl>
+              </Section>
+
+              <Section icon={<Phone size={16} />} title="Contact" action={selfEdit && <EditLink onClick={selfEdit.editContact} />}>
+                <dl className="pi-grid two">
+                  <Item label="Work email" value={person.email} wide />
+                  <Item
+                    label="Personal email"
+                    wide
+                    value={
+                      personalEmail ? (
+                        <MaskedValue value={personalEmail} kind="email" canReveal={canReveal} onReveal={personRevealer(person.id, "personal_email", personalEmail)} />
+                      ) : (
+                        ""
+                      )
+                    }
+                  />
+                  <Item
+                    label="Mobile"
+                    value={mobile ? <MaskedValue value={mobile} kind="phone" canReveal={canReveal} onReveal={personRevealer(person.id, "mobile", mobile)} /> : ""}
+                  />
+                  <Item label="Time zone" value={person.timeZone} />
+                </dl>
+              </Section>
+
+              <Section icon={<MapPin size={16} />} title="Address" action={selfEdit && <EditLink onClick={selfEdit.editContact} />}>
+                <dl className="pi-grid two">
+                  <Item
+                    label="Home address"
+                    wide
+                    value={address ? <MaskedValue value={address} kind="address" canReveal={canReveal} onReveal={revealAddress} /> : ""}
+                  />
+                  <Item label="Work location" value={[person.location, person.countryName].filter(Boolean).join(", ")} wide />
+                </dl>
+              </Section>
+
+              <Section icon={<HeartPulse size={16} />} title="Emergency contact" action={selfEdit && <EditLink onClick={selfEdit.editContact} />}>
+                {emergencyName ? (
+                  <dl className="pi-grid two">
+                    <Item label="Name" value={emergencyName} />
+                    <Item label="Relationship" value={emergencyRelation} />
+                    <Item
+                      label="Phone"
+                      wide
+                      value={
+                        emergencyPhone ? (
+                          <MaskedValue
+                            value={emergencyPhone}
+                            kind="phone"
+                            canReveal={canReveal}
+                            onReveal={personRevealer(person.id, "emergency_phone", emergencyPhone)}
+                          />
+                        ) : (
+                          ""
+                        )
+                      }
                     />
-                  }
-                />
-                <Fact label="Gender" value={person.gender} />
-                <Fact label="Nationality" value={person.nationality} />
-                <Fact
-                  label="Personal email"
-                  value={
-                    <MaskedValue
-                      value={personalEmail}
-                      kind="email"
-                      canReveal={canReveal}
-                      onReveal={personRevealer(person.id, "personal_email", personalEmail)}
-                    />
-                  }
-                />
-                <Fact
-                  label="Phone"
-                  value={<MaskedValue value={mobile} kind="phone" canReveal={canReveal} onReveal={personRevealer(person.id, "mobile", mobile)} />}
-                />
-                <Fact label="Address" value={<MaskedValue value={address} kind="address" canReveal={canReveal} onReveal={revealAddress} />} />
-                <Fact
-                  label="Emergency contact"
-                  value={
-                    emergency ? (
-                      <>
-                        {emergency}
-                        {emergencyPhone && (
-                          <>
-                            {" · "}
-                            <MaskedValue
-                              value={emergencyPhone}
-                              kind="phone"
-                              canReveal={canReveal}
-                              onReveal={personRevealer(person.id, "emergency_phone", emergencyPhone)}
-                            />
-                          </>
-                        )}
-                      </>
-                    ) : (
-                      "Not provided"
-                    )
-                  }
-                />
-                <Fact label="Time zone" value={person.timeZone} />
-              </>
-            )}
-          </dl>
-          {!access.personal && <p className="muted">Visible to {firstName}, their managers and HR.</p>}
+                  </dl>
+                ) : (
+                  <p className="pi-missing">{isSelf ? "Not added yet. Add one so HR can reach someone in an emergency." : "Not provided"}</p>
+                )}
+              </Section>
+
+              <Section icon={<Languages size={16} />} title="Languages" action={selfEdit && <EditLink onClick={selfEdit.editPersonal} />}>
+                <dl className="pi-grid two">
+                  <Item label="Preferred language" value={person.preferredLanguage ?? ""} />
+                  <Item
+                    label="Spoken"
+                    wide
+                    value={
+                      (person.spokenLanguages ?? []).length ? (
+                        <span className="pi-chips">
+                          {(person.spokenLanguages ?? []).map((l) => (
+                            <span key={l} className="pi-chip">
+                              {l}
+                            </span>
+                          ))}
+                        </span>
+                      ) : (
+                        ""
+                      )
+                    }
+                  />
+                </dl>
+              </Section>
+
+              <Section
+                icon={<Users size={16} />}
+                title={`Dependents${person.dependents.length ? ` (${person.dependents.length})` : ""}`}
+                action={isSelf ? <Link to="/benefits" className="btn-ghost btn-tiny">Benefits</Link> : undefined}
+              >
+                {person.dependents.length === 0 ? (
+                  <p className="pi-missing">None recorded</p>
+                ) : (
+                  <table className="pi-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Relation</th>
+                        <th>Date of birth</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {person.dependents.map((d) => (
+                        <tr key={d.name}>
+                          <td>{d.name}</td>
+                          <td>{d.relation}</td>
+                          <td>
+                            <MaskedValue value={d.dateOfBirth} kind="dob" canReveal={canReveal} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </Section>
+            </div>
+          )}
         </Card>
       )}
 
-      {activeTab === "personal" && access.personal && (
-        <div className="mgr-home-grid">
-          <Card title="Education">
-            {person.education.length === 0 ? (
-              <EmptyState title="None recorded" />
-            ) : (
-              <ul className="todo">
-                {person.education.map((e) => (
-                  <li key={`${e.degree}-${e.year}`}>
-                    <strong>{e.degree}</strong> · {e.institution} · {e.year}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-          <Card title="Experience">
-            {person.experience.length === 0 ? (
-              <EmptyState title={`None before ${COMPANY_NAME}`} />
-            ) : (
-              <ul className="todo">
-                {person.experience.map((x) => (
-                  <li key={`${x.employer}-${x.from}`}>
-                    <strong>{x.title}</strong> · {x.employer} · {x.from.slice(0, 7)} to {x.to.slice(0, 7)}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-          <Card title="Dependents">
-            {person.dependents.length === 0 ? (
-              <EmptyState title="None recorded" />
-            ) : (
-              <ul className="todo">
-                {person.dependents.map((d) => (
-                  <li key={d.name}>
-                    <strong>{d.name}</strong> · {d.relation} · <MaskedValue value={d.dateOfBirth} kind="dob" canReveal={canReveal} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </div>
-      )}
-
       {activeTab === "employment" && (
-        <Card title="Employment information">
-          <dl className="info-grid">
-            <Fact label="Employee ID" value={person.employeeCode} />
-            <Fact label="Status" value={person.employmentStatus} />
-            {terminated && <Fact label="Exit date" value={exit.exitDate ?? ""} />}
-            {terminated && access.isHr && <Fact label="Exit reason" value={exit.exitReason ?? ""} />}
-            <Fact label="Employment type" value={person.employmentType} />
-            <Fact label="Joining date" value={`${formatShortDate(person.dateOfJoining)} · ${tenureText(person.dateOfJoining, today)}`} />
-            <Fact label="Work location" value={`${person.location}, ${person.countryName}`} />
-            <Fact label="Work arrangement" value={person.workArrangement} />
-            {person.company && <Fact label="Company" value={person.company} />}
-            {access.personal && person.holidayCalendar && <Fact label="Holiday calendar" value={person.holidayCalendar} />}
-            {access.personal && person.leavePolicy && <Fact label="Leave policy" value={person.leavePolicy} />}
-            {access.personal && person.payrollStatus && <Fact label="Payroll status" value={person.payrollStatus} />}
-            {access.personal && person.aiProfileStatus && <Fact label="AI profile status" value={person.aiProfileStatus} />}
-            <Fact label="Working hours" value={schedule.hoursLabel} />
-            <Fact label="Time zone" value={person.timeZone} />
-          </dl>
+        <Card title="Employment information" className="pi-card">
+          <div className="pi-layout">
+            <Section icon={<Briefcase size={16} />} title="Employment" wide>
+              <dl className="pi-grid">
+                <Item label="Employee ID" value={person.employeeCode} />
+                <Item
+                  label="Status"
+                  value={<StatusBadge status={person.employmentStatus} tone={terminated ? "danger" : person.employmentStatus === "Active" ? "ok" : "warn"} literal />}
+                />
+                <Item label="Employment type" value={person.employmentType} />
+                <Item label="Date of joining" value={`${formatShortDate(person.dateOfJoining)} · ${tenureText(person.dateOfJoining, today)}`} />
+                {person.confirmationDate && <Item label="Confirmed on" value={formatShortDate(person.confirmationDate)} />}
+                {person.contractEndDate && <Item label="Contract ends" value={formatShortDate(person.contractEndDate)} />}
+                <Item label="Company" value={person.company || person.legalEntity} />
+                {terminated && <Item label="Exit date" value={exit.exitDate ? formatShortDate(exit.exitDate) : ""} />}
+                {terminated && access.isHr && <Item label="Exit reason" value={exit.exitReason ?? ""} />}
+              </dl>
+            </Section>
+            <Section icon={<Building2 size={16} />} title="Role & placement">
+              <dl className="pi-grid two">
+                <Item label="Job title" value={person.designation} action={correct("designation")} />
+                <Item label="Department" value={person.department} action={correct("department")} />
+                <Item label="Manager" value={manager ? <Link to={`/people/${manager.id}`}>{manager.fullName}</Link> : person.managerName || "Top of the company"} action={correct("managerId")} />
+                <Item label="Work arrangement" value={person.workArrangement} action={correct("workArrangement")} />
+                <Item label="Work location" value={`${person.location}, ${person.countryName}`} wide />
+              </dl>
+            </Section>
+            <Section icon={<CalendarClock size={16} />} title="Schedule & policies">
+              <dl className="pi-grid two">
+                <Item label="Working hours" value={schedule.hoursLabel} />
+                <Item label="Time zone" value={person.timeZone} />
+                {access.personal && <Item label="Holiday calendar" value={person.holidayCalendar ?? ""} />}
+                {access.personal && <Item label="Leave policy" value={person.leavePolicy ?? ""} />}
+                {access.personal && <Item label="Payroll status" value={person.payrollStatus ?? ""} />}
+                {access.personal && person.leaveOfAbsence && (
+                  <Item
+                    label="Leave of absence"
+                    wide
+                    value={`${person.leaveOfAbsence.type} · ${formatShortDate(person.leaveOfAbsence.start)} – ${formatShortDate(person.leaveOfAbsence.end)}`}
+                  />
+                )}
+              </dl>
+            </Section>
+          </div>
+          {selfEdit && <p className="note">Managed by HR. Use Request correction if something is wrong.</p>}
         </Card>
       )}
 
       {activeTab === "org" && (
-        <Card title="Org structure">
-          <dl className="info-grid">
-            <Fact label="Legal entity" value={person.legalEntity} />
-            <Fact label="Business unit" value={person.businessUnit} />
-            <Fact label="Division" value={person.division} />
-            <Fact label="Department" value={person.department} />
-            <Fact label="Cost center" value={person.costCenter} />
-            <Fact label="Location" value={person.location} />
-            <Fact label="Country" value={person.countryName} />
-            <Fact label="Supervisory org" value={manager ? `${manager.fullName}'s team` : "Top of the company"} />
-          </dl>
+        <Card title="Org structure" className="pi-card">
+          <div className="pi-layout">
+            <Section icon={<Building2 size={16} />} title="Organization">
+              <dl className="pi-grid two">
+                <Item label="Legal entity" value={person.legalEntity} wide />
+                <Item label="Business unit" value={person.businessUnit} />
+                <Item label="Division" value={person.division} />
+                <Item label="Department" value={person.department} />
+                <Item label="Cost center" value={person.costCenter} />
+                <Item label="Location" value={person.location} />
+                <Item label="Country" value={person.countryName} />
+              </dl>
+            </Section>
+            <Section icon={<Network size={16} />} title="Reporting line" action={<Link to="/org-chart" className="btn-ghost btn-tiny">Org chart</Link>}>
+              <ol className="pi-chain">
+                {[...chain].reverse().map((p) => (
+                  <li key={p.id}>
+                    <PersonRow person={p} />
+                  </li>
+                ))}
+                <li>
+                  <PersonRow person={person} current note={isSelf ? "You" : undefined} />
+                </li>
+              </ol>
+              <p className="muted pi-foot">
+                {reports.length ? `${reports.length} direct report${reports.length === 1 ? "" : "s"}` : "No direct reports"} ·{" "}
+                {manager ? `${manager.fullName}'s team` : "Top of the company"}
+              </p>
+            </Section>
+          </div>
         </Card>
       )}
 
       {activeTab === "manager" && (
-        <div className="mgr-home-grid">
-          <Card title="Manager">
-            {manager ? (
-              <dl className="info-grid">
-                <Fact label="Name" value={<Link to={`/people/${manager.id}`}>{manager.fullName}</Link>} />
-                <Fact label="Title" value={manager.designation} />
-                <Fact label="Department" value={manager.department} />
-                <Fact label="Location" value={`${manager.location}, ${manager.countryName}`} />
-              </dl>
-            ) : (
-              <EmptyState title="Top of the company" />
+        <Card title="Manager" className="pi-card">
+          <div className="pi-layout">
+            <Section icon={<Users size={16} />} title="Reports to">
+              {manager ? (
+                <>
+                  <PersonRow person={manager} note={manager.department} />
+                  <dl className="pi-grid two" style={{ marginTop: 10 }}>
+                    <Item label="Email" value={manager.email} wide />
+                    <Item label="Location" value={`${manager.location}, ${manager.countryName}`} wide />
+                  </dl>
+                </>
+              ) : (
+                <p className="pi-missing">Top of the company</p>
+              )}
+            </Section>
+            <Section icon={<Network size={16} />} title={`Direct reports (${reports.length})`}>
+              {reports.length === 0 ? (
+                <p className="pi-missing">No direct reports</p>
+              ) : (
+                <div className="pi-people">
+                  {reports.slice(0, 12).map((r) => (
+                    <PersonRow key={r.id} person={r} />
+                  ))}
+                  {reports.length > 12 && <span className="muted">+{reports.length - 12} more</span>}
+                </div>
+              )}
+            </Section>
+            {peers.length > 0 && (
+              <Section icon={<Users size={16} />} title={`Same team (${peers.length})`} wide>
+                <div className="pi-people grid">
+                  {peers.slice(0, 9).map((p) => (
+                    <PersonRow key={p.id} person={p} />
+                  ))}
+                </div>
+                {peers.length > 9 && <p className="muted pi-foot">+{peers.length - 9} more</p>}
+              </Section>
             )}
-            {chain.length > 1 && (
-              <p className="muted">
-                Reporting line: {[...chain].reverse().map((p) => p.fullName).join(" › ")} › {person.fullName}
-              </p>
-            )}
-          </Card>
-          <Card title={`Direct reports (${reports.length})`}>
-            {reports.length === 0 ? (
-              <EmptyState title="No direct reports" />
-            ) : (
-              <ul className="todo">
-                {reports.slice(0, 10).map((r) => (
-                  <li key={r.id}>
-                    <Link to={`/people/${r.id}`}>{r.fullName}</Link> · {r.designation}
-                  </li>
-                ))}
-                {reports.length > 10 && <li className="muted">+{reports.length - 10} more</li>}
-              </ul>
-            )}
-          </Card>
-        </div>
+          </div>
+        </Card>
       )}
 
       {activeTab === "job" && (
-        <Card title="Job">
-          <dl className="info-grid">
-            <Fact label="Job title" value={person.designation} />
-            <Fact label="Job family" value={person.jobFamily} />
-            <Fact label="Job profile" value={jobProfileLabel(person.jobProfileId)} />
-            <Fact label="Position" value={positionLabel(person)} />
-            <Fact label="Grade" value={person.grade} />
-          </dl>
+        <Card title="Job" className="pi-card">
+          <div className="pi-layout">
+            <Section icon={<Briefcase size={16} />} title="Current job" wide>
+              <dl className="pi-grid">
+                <Item label="Job title" value={person.designation} />
+                <Item label="Grade" value={person.grade} />
+                <Item label="Job family" value={person.jobFamily} />
+                <Item label="Job profile" value={jobProfileLabel(person.jobProfileId)} />
+                <Item label="Position" value={positionLabel(person)} />
+                <Item label="Department" value={person.department} />
+                <Item label="In this role since" value={roleSince ? `${formatShortDate(roleSince)} · ${tenureText(roleSince, today)}` : ""} />
+                {access.work && career && <Item label="Next role" value={career.role.title} />}
+              </dl>
+            </Section>
+          </div>
         </Card>
       )}
 
@@ -729,19 +951,18 @@ export function Employee360View({
               empty={<EmptyState title="No leave policies" />}
             />
           </Card>
-          <Card title="Recent requests">
-            {leaveRequests.length === 0 ? (
-              <EmptyState title="No leave requests" />
-            ) : (
-              <ul className="todo">
-                {leaveRequests.map((l) => (
-                  <li key={l.id}>
-                    {l.code} · {formatShortDate(l.from)}
-                    {l.to !== l.from ? ` to ${formatShortDate(l.to)}` : ""} · <StatusBadge status={l.status} />
-                  </li>
-                ))}
-              </ul>
-            )}
+          <Card title="Recent requests" to={isSelf ? "/leave" : undefined}>
+            <DataTable
+              headers={["Type", "From", "To", "Applied", "Status"]}
+              rows={leaveRequests.map((l) => [
+                leaveName(l.code),
+                formatShortDate(l.from),
+                l.to !== l.from ? formatShortDate(l.to) : l.half ? `Half day (${l.half})` : "—",
+                l.appliedOn ? formatShortDate(l.appliedOn.slice(0, 10)) : "—",
+                <StatusBadge key={l.id} status={l.status} />,
+              ])}
+              empty={<EmptyState title="No leave requests" />}
+            />
           </Card>
         </div>
       )}
@@ -761,7 +982,25 @@ export function Employee360View({
           {goals.length === 0 ? (
             <EmptyState title="No goals this cycle" />
           ) : (
-            goals.map((g) => <Progress key={g.id} value={g.progress} label={`${g.title} · ${g.weight}%`} />)
+            <>
+              <MetricGrid>
+                <MetricCard label="Goals" value={goals.length} />
+                <MetricCard label="Overall progress" value={`${Math.round(goalProgress)}%`} />
+                <MetricCard label="Completed" value={goals.filter((g) => g.progress >= 100).length} />
+                <MetricCard label="Below 40%" value={goals.filter((g) => g.progress < 40).length} />
+              </MetricGrid>
+              <DataTable
+                headers={["Goal", "Type", "Target", "Weight", "Period", "Progress"]}
+                rows={goals.map((g) => [
+                  <strong key={`t-${g.id}`}>{g.title}</strong>,
+                  g.type,
+                  g.target || "—",
+                  `${g.weight}%`,
+                  g.period || "—",
+                  <Progress key={`p-${g.id}`} value={g.progress} label="" />,
+                ])}
+              />
+            </>
           )}
         </Card>
       )}
@@ -813,18 +1052,29 @@ export function Employee360View({
             )}
           </Card>
           <Card title="Certifications">
-            {certifications.length === 0 ? (
-              <EmptyState title="No certifications" />
-            ) : (
-              <ul className="todo">
-                {certifications.map((c) => (
-                  <li key={c.id}>
-                    {c.name} · {c.issuer} · {formatShortDate(c.earnedOn)}
-                    {c.expiresOn ? ` · expires ${formatShortDate(c.expiresOn)}` : ""}
-                  </li>
-                ))}
-              </ul>
-            )}
+            <DataTable
+              headers={["Certification", "Issued", "Expires", "Status", ""]}
+              rows={certifications.map((c) => [
+                <span key={`n-${c.id}`}>
+                  <strong>{c.name}</strong>
+                  <br />
+                  <span className="muted">{c.issuer}</span>
+                </span>,
+                formatShortDate(c.earnedOn),
+                c.expiresOn ? formatShortDate(c.expiresOn) : "No expiry",
+                c.expiresOn && c.expiresOn < today ? (
+                  <StatusBadge key={`s-${c.id}`} status="Expired" tone="danger" literal />
+                ) : c.verifiedBy ? (
+                  <StatusBadge key={`s-${c.id}`} status="Verified" tone="ok" literal />
+                ) : (
+                  <StatusBadge key={`s-${c.id}`} status="Not verified" tone="warn" literal />
+                ),
+                <button key={`v-${c.id}`} type="button" className="btn-ghost btn-tiny" onClick={() => setViewingCert(certificateFor(c))}>
+                  <Eye size={13} aria-hidden /> View
+                </button>,
+              ])}
+              empty={<EmptyState title="No certifications" />}
+            />
           </Card>
         </div>
       )}
@@ -930,18 +1180,18 @@ export function Employee360View({
       )}
 
       {activeTab === "docs" && access.documents && (
-        <Card title="Documents">
-          {documents.length === 0 ? (
-            <EmptyState title="No documents" />
-          ) : (
-            <ul className="todo">
-              {documents.map((d) => (
-                <li key={d.id}>
-                  {d.name} · {d.category} · {d.uploadedAt.slice(0, 10)}
-                </li>
-              ))}
-            </ul>
-          )}
+        <Card title={`Documents (${documents.length})`} to={isSelf ? "/documents" : undefined}>
+          <DataTable
+            headers={["Document", "Category", "Type", "Uploaded", "Expires"]}
+            rows={documents.map((d) => [
+              <strong key={d.id}>{d.name}</strong>,
+              d.category,
+              d.docType || "—",
+              d.uploadedAt ? formatShortDate(d.uploadedAt.slice(0, 10)) : "—",
+              d.expires ? formatShortDate(d.expires.slice(0, 10)) : "—",
+            ])}
+            empty={<EmptyState title="No documents" />}
+          />
         </Card>
       )}
 
@@ -968,6 +1218,7 @@ export function Employee360View({
         </Card>
       )}
 
+      <CertificateDialog doc={viewingCert} onClose={() => setViewingCert(null)} />
     </div>
   );
 }

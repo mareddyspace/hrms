@@ -180,8 +180,11 @@ export function NotificationCenterPage() {
   }
 
   function markAllRead() {
-    markNotificationsRead(feed.filter((i) => i.unread).flatMap((i) => i.ids), userId);
-    flash("All marked as read.");
+    const ids = feed.filter((i) => i.unread).flatMap((i) => i.ids);
+    markNotificationsRead(ids, userId);
+    // Read items stay in the list (only "Clear read" removes them), so leave the Unread-only view.
+    setUnreadOnly(false);
+    flash(`${ids.length} marked as read.`);
   }
 
   function clearRead() {
@@ -300,7 +303,14 @@ export function NotificationCenterPage() {
           feed.length === 0 ? (
             <EmptyState title="No notifications" />
           ) : unreadOnly && !needle && !category ? (
-            <EmptyState title="All caught up" />
+            <EmptyState
+              title="All caught up"
+              action={
+                <button type="button" className="btn-ghost" onClick={() => setUnreadOnly(false)}>
+                  Show all
+                </button>
+              }
+            />
           ) : (
             <EmptyState title="No matches" />
           )

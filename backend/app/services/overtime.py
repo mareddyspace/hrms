@@ -217,7 +217,12 @@ def comp_off_credit(db: Session, employee_id: str, year: int) -> tuple[float, fl
         LeaveRequest.from_date <= date(year, 12, 31))
     if first is not None:
         stmt = stmt.where(LeaveRequest.from_date < first)
-    return earned_comp_off(db, employee_id, year), float(db.scalar(stmt) or 0)
+    # Comp-off credited by a manager for working a rostered weekly off or holiday (app/services/shifts.py, 0025).
+    from app.services.shifts import roster_comp_off_days
+
+    roster, roster_used = roster_comp_off_days(db, employee_id, year, date.today())
+    before = max(0.0, float(db.scalar(stmt) or 0) - (roster_used if first is None else 0.0))
+    return earned_comp_off(db, employee_id, year) + roster, before
 
 
 def payable(db: Session, employee_ids: list[str], month: str) -> dict[str, list[OvertimeRequest]]:

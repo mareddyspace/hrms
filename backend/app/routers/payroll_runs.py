@@ -93,6 +93,7 @@ class PersonIn(BaseModel):
     bank_masked: str | None
     new_joiner: bool
     leaver: bool
+    declarations: list[dict[str, Any]] = Field(default_factory=list)  # verified tax declarations
 
 
 class LineOut(BaseModel):
@@ -392,3 +393,24 @@ def my_slips(db: DbSession, user: CurrentUserDep) -> list[MySlipOut]:
                       .where(PayrollRunLine.employee_id == emp.id, PayrollRun.status == "locked")
                       .order_by(PayrollRun.month.desc())).all()
     return [MySlipOut(run_id=run.id, month=run.month, slip=line.slip, gross=line.gross, net=line.net) for line, run in rows]
+
+
+@router.get("/my-slips/{run_id}/pdf")
+def my_slip_pdf(run_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> Response:
+    """The official PDF of my payslip from a locked run (only ever my own; amounts are never logged)."""
+    from app.services.payslip_pdf import payslip_pdf
+
+    emp = me(user)
+    run = db.get(PayrollRun, run_id)
+    line = db.scalar(select(PayrollRunLine).where(PayrollRunLine.run_id == run_id, PayrollRunLine.employee_id == emp.id)) if run else None
+    if run is None or line is None or run.status != "locked":
+        raise HTTPException(404, "Not found.")
+    data = payslip_pdf(emp=emp, month=run.month, currency=run.currency, legal_entity=run.legal_entity,
+                       payday=run.payday, run_id=run.id, approved_on=run.approved_at.date() if run.approved_at else None, line=line)
+    record_audit(db, actor_id=user.id, action="payslip_downloaded", entity="payroll_runs", entity_id=run.id, subject_id=emp.id,
+                 after={"month": run.month}, ip=client_ip(request))
+    db.commit()
+    name = f"Payslip-{run.month}-{emp.employee_code}.pdf"
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "private, no-store",
+                             "X-Content-Type-Options": "nosniff"})

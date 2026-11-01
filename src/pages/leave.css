@@ -1,0 +1,46 @@
+/* Leave & holidays additions (LeavePage.tsx, leaveParts.tsx). */
+.leave-side { display: grid; gap: 14px; align-content: start; min-width: 0; scroll-margin-top: 80px; }
+.lv-balances { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.lv-balance { border: 1px solid var(--line, #e2e8f0); border-radius: 10px; padding: 12px 14px; background: var(--surface, #fff); display: grid; gap: 6px; }
+.lv-balance header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.lv-balance header strong { font-size: 0.95rem; }
+.lv-available { margin: 0; font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
+.lv-available span { font-size: 0.8rem; font-weight: 500; color: var(--muted, #64748b); }
+.lv-bar { height: 6px; border-radius: 3px; background: var(--line, #e2e8f0); overflow: hidden; }
+.lv-bar span { display: block; height: 100%; background: var(--accent, #2563eb); }
+.lv-balance dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 0.82rem; }
+.lv-balance dl div { display: flex; justify-content: space-between; gap: 6px; }
+.lv-balance dt { color: var(--muted, #64748b); }
+.lv-balance dd { margin: 0; font-weight: 600; }
+.lv-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.lv-filters input { min-width: 180px; }
+.lv-row-actions { white-space: nowrap; display: flex; gap: 6px; justify-content: flex-end; }
+.lv-detail-row td { background: var(--surface-2, #f8fafc); }
+.lv-detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 4px 2px; }
+.lv-detail p { margin: 0 0 6px; }
+.lv-detail .muted { display: inline-block; min-width: 110px; }
+.lv-timeline { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 2px solid var(--line, #e2e8f0); display: grid; gap: 10px; }
+.lv-timeline li { position: relative; display: grid; gap: 2px; }
+.lv-timeline li::before { content: ""; position: absolute; left: -21px; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: #cbd5e1; border: 2px solid var(--surface, #fff); }
+.lv-timeline li.is-done::before { background: #16a34a; }
+.lv-timeline li.is-current::before { background: #f59e0b; }
+.lv-timeline li.is-rejected::before { background: #dc2626; }
+.lv-timeline .muted { min-width: 0; }
+.lv-file { display: grid; gap: 4px; }
+.lv-next-holiday { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft, #eef4ff); }
+.lv-next-holiday strong { font-size: 1.05rem; }
+.lv-holiday-list, .lv-policies { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.lv-holiday-list li { display: flex; gap: 10px; font-size: 0.88rem; }
+.lv-holiday-list li span:first-child { min-width: 92px; color: var(--muted, #64748b); }
+.lv-policies li { display: grid; gap: 2px; font-size: 0.88rem; }
+html[data-theme="night"] .lv-balance { background: #0f172a; border-color: #334155; }
+html[data-theme="night"] .lv-detail-row td { background: #111827; }
+html[data-theme="night"] .lv-next-holiday { background: #1e293b; }
+@media (max-width: 720px) {
+  .lv-detail { grid-template-columns: 1fr; }
+  .lv-balances { grid-template-columns: 1fr 1fr; }
+  .lv-row-actions { flex-direction: column; align-items: stretch; }
+}
+@media (max-width: 420px) {
+  .lv-balances { grid-template-columns: 1fr; }
+}

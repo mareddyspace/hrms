@@ -7,6 +7,7 @@ import {
   EmptyState,
   Field,
   FilterBar,
+  LoadingState,
   Page,
   StatusBadge,
   SubmitButton,
@@ -37,6 +38,8 @@ import {
   toggleTicketTask,
   personName,
   refreshTickets,
+  ticketsLoadError,
+  ticketsLoaded,
   setTicketStatus,
   toggleWatch,
   useTickets,
@@ -48,7 +51,7 @@ import {
 } from "../data/ticketStore.ts";
 import "./tickets.css";
 
-type View = "mine" | "assigned" | "team";
+type View = "mine" | "assigned" | "team" | "all";
 
 const STATUS_TONE: Record<TicketStatus, "ok" | "warn" | "danger" | "info" | "neutral"> = {
   Open: "info",
@@ -106,8 +109,9 @@ export function TicketsPage() {
   useEffect(() => {
     if (picked.current || tickets.length === 0) return;
     picked.current = true;
-    const order: View[] = isManager ? ["assigned", "team", "mine"] : ["assigned", "mine"];
-    setView(order.find((v) => counts[v] > 0) ?? "assigned");
+    const order: View[] = isManager ? ["assigned", "team", "mine", "all"] : ["assigned", "mine", "all"];
+    const allCount = visible.filter((t) => t.status !== "Closed").length;
+    setView(order.find((v) => (v === "all" ? allCount : counts[v]) > 0) ?? "all");
   }, [tickets.length, isManager, counts]);
 
   const rows = visible
@@ -116,7 +120,9 @@ export function TicketsPage() {
         ? t.requesterId === employee.id
         : view === "assigned"
           ? t.assigneeId === employee.id
-          : teamIds.has(t.requesterId) || (!!t.assigneeId && teamIds.has(t.assigneeId)),
+          : view === "all"
+            ? true
+            : teamIds.has(t.requesterId) || (!!t.assigneeId && teamIds.has(t.assigneeId)),
     )
     .filter((t) => (status === "all" ? true : status === "active" ? t.status !== "Closed" : t.status === status))
     .filter((t) => type === "all" || t.type === type)
@@ -161,6 +167,7 @@ export function TicketsPage() {
             ["assigned", `Assigned to me (${counts.assigned})`],
             ["mine", `My tickets (${counts.mine})`],
             ...(isManager ? ([["team", `Team (${counts.team})`]] as const) : []),
+            ["all", `All (${visible.filter((t) => t.status !== "Closed").length})`],
           ] as [View, string][]
         ).map(([id, label]) => (
           <button
@@ -228,8 +235,42 @@ export function TicketsPage() {
 
       <div className={selected ? "tk-layout with-detail" : "tk-layout"}>
         <Card>
-          {rows.length === 0 ? (
-            <EmptyState title="No tickets here" description="Change the filters or raise a ticket." />
+          {!ticketsLoaded() ? (
+            ticketsLoadError() ? (
+              <EmptyState
+                title="Tickets could not load"
+                description={ticketsLoadError() ?? undefined}
+                action={
+                  <ActionButton className="btn-ghost" onAction={() => refreshTickets().then(() => ticketsLoadError())}>
+                    Retry
+                  </ActionButton>
+                }
+              />
+            ) : (
+              <LoadingState label="Loading tickets…" />
+            )
+          ) : rows.length === 0 ? (
+            <EmptyState
+              title="No tickets here"
+              description="Change the filters or raise a ticket."
+              action={
+                status !== "all" || type !== "all" || priority !== "all" || when !== "any" || query ? (
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => {
+                      setStatus("all");
+                      setType("all");
+                      setPriority("all");
+                      setWhen("any");
+                      setQuery("");
+                    }}
+                  >
+                    Clear filters
+                  </button>
+                ) : undefined
+              }
+            />
           ) : (
             <ul className="tk-list">
               {rows.map((t) => (

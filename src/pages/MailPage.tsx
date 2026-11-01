@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Card, EmptyState, Page, SubmitButton, Tabs, notify as toast, useAction } from "../components/ui.tsx";
+import { ActionButton, EmptyState, Page, SubmitButton, notify as toast, useAction } from "../components/ui.tsx";
 import { usePortal } from "../store.tsx";
 import { managementChain } from "../demoAccounts.ts";
 import { allReportIds, getPerson } from "../data/peopleLocal.ts";
@@ -8,15 +8,19 @@ import { pushPersonTaskAlert } from "../data/collabLocal.ts";
 import { API_ENABLED } from "../api/client.ts";
 import {
   MAIL_CATEGORIES,
+  deleteDraft,
   inboxThreads,
   mailtoHref,
   markThreadRead,
+  saveDraft,
   sendMailShared,
   sentThreads,
   threadFor,
+  useDrafts,
   useMail,
 } from "../data/mailStore.ts";
-import type { MailCategory, MailThread } from "../data/mailStore.ts";
+import type { MailCategory, MailDraft, MailMessage, MailThread } from "../data/mailStore.ts";
+import { applyAll, applySuggestion, checkWriting, type WritingSuggestion } from "../data/writingCheck.ts";
 import "./mail.css";
 
 const HR_ID = "demo-hr-admin";
@@ -36,39 +40,68 @@ const LEAD_TEMPLATES: { label: string; subject: string; category: MailCategory }
   { label: "General", subject: "", category: "General" },
 ];
 
-type View = "inbox" | "sent" | "compose";
-
+type Folder = "inbox" | "sent" | "drafts" | "compose";
 type Recipient = { id: string; name: string; email: string; group: string };
 
-function when(iso: string, timeZone: string): string {
+/** What the compose view is editing. */
+interface ComposeState {
+  draftId?: string;
+  toIds: string[];
+  ccIds: string[];
+  subject: string;
+  body: string;
+  category: MailCategory;
+  threadId?: string;
+  /** Shown above the form: "Reply", "Forward", … */
+  mode: "new" | "reply" | "all" | "forward" | "draft";
+}
+
+const emptyCompose = (): ComposeState => ({ toIds: [], ccIds: [], subject: "", body: "", category: "General", mode: "new" });
+
+function fullStamp(iso: string, timeZone: string): string {
   try {
-    return new Date(iso).toLocaleString("en-GB", { timeZone, dateStyle: "medium", timeStyle: "short" });
+    return new Date(iso).toLocaleString("en-GB", { timeZone, weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   } catch {
     return iso;
   }
 }
 
-function replySubject(subject: string): string {
-  return /^re:/i.test(subject) ? subject : `Re: ${subject}`;
+function listStamp(iso: string, timeZone: string): string {
+  try {
+    const d = new Date(iso);
+    const day = (x: Date) => x.toLocaleDateString("en-CA", { timeZone });
+    if (day(d) === day(new Date())) return d.toLocaleTimeString("en-GB", { timeZone, hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("en-GB", { timeZone, day: "numeric", month: "short" });
+  } catch {
+    return iso;
+  }
+}
+
+const prefixed = (prefix: "Re" | "Fwd", subject: string) =>
+  new RegExp(`^${prefix}:`, "i").test(subject) ? subject : `${prefix}: ${subject}`;
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() || "?";
 }
 
 export function MailPage() {
   const { employee, demoAccounts, demoProfile } = usePortal();
   const messages = useMail();
+  const drafts = useDrafts(employee.id);
   const [params, setParams] = useSearchParams();
   const me = employee.id;
+  const tz = employee.timeZone;
 
-  const nameOf = (id: string) => getPerson(id)?.fullName ?? demoAccounts.find((a) => a.id === id)?.fullName ?? id;
+  const nameOf = (id: string) => (id === me ? employee.fullName : getPerson(id)?.fullName ?? demoAccounts.find((a) => a.id === id)?.fullName ?? id);
   const emailOf = (id: string) => getPerson(id)?.email ?? demoAccounts.find((a) => a.id === id)?.email ?? "";
   const canSignIn = (id: string) => demoAccounts.some((a) => a.id === id);
 
   const chain = useMemo(() => managementChain(me, demoAccounts), [me, demoAccounts]);
   const manager = chain[0];
-  // Only employees get the "Write to my manager" shortcut; anyone who leads others starts a plain new mail.
   const leadsOthers =
     demoProfile.role !== "employee" || allReportIds(me).length > 0 || demoAccounts.some((a) => a.reportsToId === me);
   const templates = leadsOthers ? LEAD_TEMPLATES : TEMPLATES;
-  const [picked, setPicked] = useState("");
 
   /** Reporting line above, HR, and (for managers) the people below. Not the whole company. */
   const recipients = useMemo<Recipient[]>(() => {
@@ -85,483 +118,607 @@ export function MailPage() {
     reports.forEach((id) => add(id, getPerson(id)?.fullName ?? demoAccounts.find((a) => a.id === id)?.fullName ?? id, "My team"));
     return out;
   }, [chain, me, demoAccounts]);
+  // Anyone already in a thread with me can be written to as well (reply / forward to them).
+  const knownIds = useMemo(() => {
+    const ids = new Set(recipients.map((r) => r.id));
+    for (const m of messages) if (m.fromId === me || m.toIds.includes(me) || m.ccIds.includes(me)) [m.fromId, ...m.toIds, ...m.ccIds].forEach((id) => ids.add(id));
+    ids.delete(me);
+    return ids;
+  }, [recipients, messages, me]);
+  const pickable = useMemo(() => {
+    const extra = [...knownIds].filter((id) => !recipients.some((r) => r.id === id)).map((id) => ({ id, name: nameOf(id), email: emailOf(id), group: "Recent" }));
+    return [...recipients, ...extra];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipients, knownIds]);
 
   const threadParam = params.get("thread");
-  const [view, setView] = useState<View>(() => (params.get("compose") ? "compose" : "inbox"));
+  const [folder, setFolder] = useState<Folder>(() => (params.get("compose") || params.get("to") ? "compose" : "inbox"));
   const [openId, setOpenId] = useState<string | null>(threadParam);
-
-  // Compose state
-  const [toId, setToId] = useState("");
-  const [ccIds, setCcIds] = useState<string[]>([]);
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-  const [category, setCategory] = useState<MailCategory>("General");
-  const [error, setError] = useState("");
-  const [sentNote, setSentNote] = useState<{ text: string; href: string } | null>(null);
+  const [query, setQuery] = useState("");
+  const [compose, setCompose] = useState<ComposeState>(emptyCompose);
 
   // Deep links: /mail?thread=…, /mail?compose=manager&subject=…, /mail?to=<id>
   useEffect(() => {
     if (threadParam) {
       setOpenId(threadParam);
-      setView(messages.some((m) => m.threadId === threadParam && m.fromId !== me) ? "inbox" : "sent");
+      setFolder(messages.some((m) => m.threadId === threadParam && m.fromId !== me) ? "inbox" : "sent");
     }
-    const compose = params.get("compose");
+    const c = params.get("compose");
     const to = params.get("to");
-    if (compose || to) {
-      setView("compose");
-      const target = to && recipients.some((r) => r.id === to) ? to : compose === "manager" ? manager?.id ?? "" : "";
-      setToId(target);
-      const presetSubject = params.get("subject");
-      if (presetSubject) setSubject(presetSubject.slice(0, 120));
+    if (c || to) {
+      const target = to && recipients.some((r) => r.id === to) ? to : c === "manager" ? manager?.id ?? "" : "";
+      setCompose({ ...emptyCompose(), toIds: target ? [target] : [], subject: (params.get("subject") ?? "").slice(0, 120) });
+      setFolder("compose");
     }
-    // Only react to the URL, not to every mail change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
   const inbox = useMemo(() => inboxThreads(messages, me), [messages, me]);
   const sent = useMemo(() => sentThreads(messages, me), [messages, me]);
+  const unread = inbox.reduce((n, t) => n + t.unread, 0);
   const open = openId ? threadFor(messages, me, openId) : undefined;
 
   useEffect(() => {
     if (open && open.unread > 0) markThreadRead(open.threadId, me);
   }, [open, me]);
 
-  function startCompose(target?: string, template?: (typeof TEMPLATES)[number]) {
-    setView("compose");
-    setSentNote(null);
-    setError("");
-    if (target !== undefined) setToId(target);
-    if (template) {
-      setSubject(template.subject);
-      setCategory(template.category);
-    }
+  const needle = query.trim().toLowerCase();
+  const matchesThread = (t: MailThread) =>
+    !needle ||
+    `${t.subject} ${t.messages.map((m) => `${m.fromName} ${m.body} ${m.toIds.map(nameOf).join(" ")}`).join(" ")}`.toLowerCase().includes(needle);
+  const list = (folder === "sent" ? sent : inbox).filter(matchesThread);
+  const draftList = drafts.filter((d) => !needle || `${d.subject} ${d.body} ${d.toIds.map(nameOf).join(" ")}`.toLowerCase().includes(needle));
+
+  function go(next: Folder) {
+    setFolder(next);
+    if (next !== "compose") setOpenId(null);
+    if (params.toString()) setParams({}, { replace: true });
   }
 
-  function newMail() {
-    setCcIds([]);
-    setSubject("");
-    setBody("");
-    setCategory("General");
-    startCompose("");
+  function startNew(to?: string) {
+    setCompose({ ...emptyCompose(), toIds: to ? [to] : [] });
+    setFolder("compose");
   }
 
-  function writeToManager() {
-    setCcIds([]);
-    setSubject("");
-    setBody("");
-    setCategory("General");
-    startCompose(manager?.id ?? "");
-  }
-
-  const sendAction = useAction();
-
-  function fail(text: string) {
-    setError(text);
-    return false;
-  }
-
-  async function onSend() {
-    setError("");
-    if (!toId) return fail("Choose who to send this to.");
-    if (!subject.trim()) return fail("Add a subject.");
-    if (!body.trim()) return fail("Write a message.");
-    if (!recipients.some((r) => r.id === toId)) return fail("You can only write to your reporting line, HR or your team here.");
-    const message = await sendMailShared({
-      fromId: me,
-      fromName: employee.fullName,
-      toIds: [toId],
-      ccIds: ccIds.filter((id) => recipients.some((r) => r.id === id)),
-      subject,
-      body,
-      category,
-    });
-    if (typeof message === "string") return fail(message);
-    notify(message.toIds.concat(message.ccIds), message.subject, message.threadId);
-    setSentNote({
-      text: `Sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.`,
-      href: mailtoHref(message.toIds.map(emailOf).filter(Boolean), message.ccIds.map(emailOf).filter(Boolean), message.subject, message.body),
-    });
-    toast(`Mail sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.`);
-    setSubject("");
-    setBody("");
-    setCcIds([]);
-    return true;
-  }
-
-  function notify(ids: string[], subj: string, threadId: string) {
-    if (API_ENABLED) return; // the server notifies the recipients
-    for (const id of ids) {
-      if (!canSignIn(id)) continue; // stored; they'll see it in Mail if they sign in
-      pushPersonTaskAlert({
-        recipientId: id,
-        title: `New mail from ${employee.fullName}`,
-        body: subj,
-        href: `/mail?thread=${encodeURIComponent(threadId)}`,
+  function startFrom(thread: MailThread, mode: "reply" | "all" | "forward") {
+    const latest = thread.latest;
+    const quote = `\n\n----- ${mode === "forward" ? "Forwarded message" : "Original message"} -----\nFrom: ${latest.fromName}\nDate: ${fullStamp(latest.sentAt, tz)}\nSubject: ${latest.subject}\nTo: ${latest.toIds.map(nameOf).join(", ")}\n\n${latest.body}`;
+    if (mode === "forward") {
+      setCompose({ ...emptyCompose(), subject: prefixed("Fwd", thread.subject), body: quote, category: thread.category ?? "General", mode });
+    } else {
+      const replyTo = latest.fromId === me ? latest.toIds : [latest.fromId];
+      const everyone = [...new Set([latest.fromId, ...latest.toIds, ...latest.ccIds])].filter((id) => id !== me && !replyTo.includes(id));
+      setCompose({
+        ...emptyCompose(),
+        toIds: replyTo,
+        ccIds: mode === "all" ? everyone : [],
+        subject: prefixed("Re", thread.subject),
+        body: quote,
+        category: thread.category ?? "General",
+        threadId: thread.threadId,
+        mode,
       });
     }
+    setFolder("compose");
   }
 
-  const tabs = [
-    { id: "inbox", label: `Inbox${inbox.some((t) => t.unread) ? ` (${inbox.reduce((n, t) => n + t.unread, 0)})` : ""}` },
-    { id: "sent", label: "Sent" },
-    { id: "compose", label: "Compose" },
-  ];
+  function openDraft(d: MailDraft) {
+    setCompose({ draftId: d.id, toIds: d.toIds, ccIds: d.ccIds, subject: d.subject, body: d.body, category: d.category ?? "General", threadId: d.threadId, mode: "draft" });
+    setFolder("compose");
+  }
 
-  const list = view === "sent" ? sent : inbox;
-  const toRecipient = recipients.find((r) => r.id === toId);
-  const groups = [...new Set(recipients.map((r) => r.group))];
+  function notifyLocal(ids: string[], subj: string, threadId: string) {
+    if (API_ENABLED) return; // the server notifies the recipients
+    for (const id of ids) {
+      if (!canSignIn(id)) continue;
+      pushPersonTaskAlert({ recipientId: id, title: `New mail from ${employee.fullName}`, body: subj, href: `/mail?thread=${encodeURIComponent(threadId)}` });
+    }
+  }
 
   return (
-    <Page
-      title="Mail"
-      subtitle={`Times in ${employee.timeZone}`}
-      action={
-        leadsOthers ? (
-          <button className="btn" type="button" onClick={newMail}>
-            New mail
+    <Page title="Mail">
+      <div className="mx-shell">
+        <nav className="mx-folders" aria-label="Mail folders">
+          <button type="button" className="btn mx-compose-btn" onClick={() => startNew(leadsOthers ? undefined : manager?.id)}>
+            Compose
           </button>
-        ) : manager ? (
-          <button className="btn" type="button" onClick={writeToManager}>
-            Write to my manager
-          </button>
-        ) : undefined
-      }
-    >
-      <Tabs
-        tabs={tabs}
-        value={view}
-        onChange={(id) => {
-          setView(id as View);
-          setSentNote(null);
-          if (id !== "compose") setOpenId(null);
-          if (params.toString()) setParams({}, { replace: true });
-        }}
-      />
+          {(
+            [
+              ["inbox", "Inbox", unread],
+              ["sent", "Sent", 0],
+              ["drafts", "Drafts", drafts.length],
+            ] as const
+          ).map(([id, label, count]) => (
+            <button key={id} type="button" className={folder === id ? "mx-folder active" : "mx-folder"} aria-current={folder === id ? "page" : undefined} onClick={() => go(id)}>
+              <span>{label}</span>
+              {count > 0 && <span className={id === "inbox" ? "mx-count strong" : "mx-count"}>{count}</span>}
+            </button>
+          ))}
+          <p className="mx-tz">Times in {tz}</p>
+        </nav>
 
-      {view === "compose" ? (
-        <Card title="New message">
-          <form className="mail-compose" onSubmit={sendAction.submit(onSend)}>
-            <div className="mail-templates" aria-label="Quick templates">
-              {templates.map((t) => (
-                <button
-                  key={t.label}
-                  type="button"
-                  className={picked === t.label ? "mail-chip picked" : "mail-chip"}
-                  aria-pressed={picked === t.label}
-                  onClick={() => {
-                    setPicked(t.label);
-                    startCompose(undefined, t);
-                  }}
-                >
-                  {picked === t.label ? `✓ ${t.label}` : t.label}
-                </button>
-              ))}
-            </div>
-            <div className="form-grid">
-              <label className="field">
-                <span>To</span>
-                <select value={toId} onChange={(e) => setToId(e.target.value)} required>
-                  <option value="">Choose…</option>
-                  {groups.map((g) => (
-                    <optgroup key={g} label={g}>
-                      {recipients
-                        .filter((r) => r.group === g)
-                        .map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.name}
-                          </option>
-                        ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Category</span>
-                <select value={category} onChange={(e) => setCategory(e.target.value as MailCategory)}>
-                  {MAIL_CATEGORIES.map((c) => (
-                    <option key={c}>{c}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Cc (optional)</span>
-                <select
-                  value=""
-                  onChange={(e) => e.target.value && setCcIds((ids) => (ids.includes(e.target.value) ? ids : [...ids, e.target.value]))}
-                >
-                  <option value="">Add…</option>
-                  {recipients
-                    .filter((r) => r.id !== toId && !ccIds.includes(r.id))
-                    .map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.name} · {r.group}
-                      </option>
+        {folder === "compose" ? (
+          <ComposeView
+            key={`${compose.draftId ?? ""}${compose.mode}${compose.threadId ?? ""}${compose.subject}`}
+            initial={compose}
+            me={me}
+            myName={employee.fullName}
+            pickable={pickable}
+            templates={templates}
+            nameOf={nameOf}
+            emailOf={emailOf}
+            canSignIn={canSignIn}
+            onSent={(m) => {
+              notifyLocal([...m.toIds, ...m.ccIds], m.subject, m.threadId);
+              setOpenId(m.threadId);
+              setFolder("sent");
+            }}
+            onClosed={() => go(compose.mode === "draft" ? "drafts" : "inbox")}
+          />
+        ) : (
+          <>
+            <section className="mx-list" aria-label={folder}>
+              <div className="mx-list-head">
+                <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${folder}`} aria-label={`Search ${folder}`} />
+              </div>
+              {folder === "drafts" ? (
+                draftList.length === 0 ? (
+                  <EmptyState title="No drafts" />
+                ) : (
+                  <ul className="mx-rows">
+                    {draftList.map((d) => (
+                      <li key={d.id}>
+                        <button type="button" className="mx-row" onClick={() => openDraft(d)}>
+                          <span className="mx-avatar draft" aria-hidden>
+                            ✎
+                          </span>
+                          <span className="mx-row-body">
+                            <span className="mx-row-top">
+                              <span className="mx-from mx-draft-label">Draft{d.toIds.length ? ` · To ${d.toIds.map(nameOf).join(", ")}` : ""}</span>
+                              <span className="mx-date">{listStamp(d.updatedAt, tz)}</span>
+                            </span>
+                            <span className="mx-subject">{d.subject || "(no subject)"}</span>
+                            <span className="mx-snippet">{d.body.replace(/\s+/g, " ").slice(0, 100) || "No text"}</span>
+                          </span>
+                        </button>
+                      </li>
                     ))}
-                </select>
-                {ccIds.length > 0 && (
-                  <span className="mail-cc-list">
-                    {ccIds.map((id) => (
-                      <button key={id} type="button" className="mail-cc" onClick={() => setCcIds((ids) => ids.filter((x) => x !== id))}>
-                        {nameOf(id)} ×
-                      </button>
-                    ))}
-                  </span>
-                )}
-              </label>
-              <label className="field">
-                <span>Subject</span>
-                <input value={subject} maxLength={120} onChange={(e) => setSubject(e.target.value)} required />
-              </label>
-              <label className="field wide">
-                <span>Message</span>
-                <textarea value={body} rows={8} onChange={(e) => setBody(e.target.value)} required />
-              </label>
-            </div>
-            {toRecipient && !canSignIn(toRecipient.id) && (
-              <p className="note">{toRecipient.name} isn't on the portal yet. The message is kept here; you can also send it from your email app.</p>
-            )}
-            {error && <p className="note err">{error}</p>}
-            {sentNote && (
-              <p className="note ok">
-                {sentNote.text}{" "}
-                <a href={sentNote.href} className="mail-link">
-                  Open in email app
-                </a>
-              </p>
-            )}
-            <div className="mail-actions">
-              <SubmitButton action={sendAction} className="btn">
-                Send
-              </SubmitButton>
-              <a
-                className="btn-ghost"
-                href={mailtoHref(
-                  toRecipient?.email ? [toRecipient.email] : [],
-                  ccIds.map(emailOf).filter(Boolean),
-                  subject,
-                  body,
-                )}
-                aria-disabled={!toRecipient?.email}
-                onClick={(e) => {
-                  if (!toRecipient?.email) e.preventDefault();
-                }}
-              >
-                Open in email app
-              </a>
-            </div>
-          </form>
-        </Card>
-      ) : (
-        <div className="mail-layout">
-          <Card className="mail-list-card">
-            {list.length === 0 ? (
-              <EmptyState
-                title={view === "sent" ? "Nothing sent yet" : "No mail yet"}
-                action={
-                  leadsOthers ? (
-                    <button className="btn" type="button" onClick={newMail}>
-                      New mail
+                  </ul>
+                )
+              ) : list.length === 0 ? (
+                <EmptyState
+                  title={needle ? "No mail matches" : folder === "sent" ? "Nothing sent yet" : "Inbox is empty"}
+                  action={
+                    <button className="btn-ghost" type="button" onClick={() => startNew()}>
+                      Compose
                     </button>
-                  ) : manager ? (
-                    <button className="btn" type="button" onClick={writeToManager}>
-                      Write to my manager
-                    </button>
-                  ) : undefined
-                }
-              />
-            ) : (
-              <ul className="mail-list">
-                {list.map((t) => (
-                  <ThreadRow
-                    key={t.threadId}
-                    thread={t}
-                    me={me}
-                    active={t.threadId === openId}
-                    timeZone={employee.timeZone}
-                    nameOf={nameOf}
-                    sentView={view === "sent"}
-                    onOpen={() => setOpenId(t.threadId)}
-                  />
-                ))}
-              </ul>
-            )}
-          </Card>
-          <div className="mail-reader">
-            {open ? (
-              <ThreadView
-                key={open.threadId}
-                thread={open}
-                me={me}
-                myName={employee.fullName}
-                timeZone={employee.timeZone}
-                nameOf={nameOf}
-                emailOf={emailOf}
-                onSent={(ids, subj) => notify(ids, subj, open.threadId)}
-                canSignIn={canSignIn}
-              />
-            ) : (
-              <Card>
-                <EmptyState title="Select a conversation" description="Open a message to read it and reply." />
-              </Card>
-            )}
-          </div>
-        </div>
-      )}
+                  }
+                />
+              ) : (
+                <ul className="mx-rows">
+                  {list.map((t) => {
+                    const latest = t.latest;
+                    const who =
+                      folder === "sent"
+                        ? `To: ${[...new Set(t.messages.filter((m) => m.fromId === me).flatMap((m) => m.toIds))].map(nameOf).join(", ")}`
+                        : latest.fromId === me
+                          ? `Me, ${t.messages.find((m) => m.fromId !== me)?.fromName ?? ""}`
+                          : latest.fromName;
+                    return (
+                      <li key={t.threadId}>
+                        <button type="button" className={`mx-row${t.threadId === openId ? " active" : ""}${t.unread ? " unread" : ""}`} onClick={() => setOpenId(t.threadId)}>
+                          <span className="mx-avatar" aria-hidden>
+                            {initials(folder === "sent" ? nameOf(latest.toIds[0] ?? "") : latest.fromId === me ? employee.fullName : latest.fromName)}
+                          </span>
+                          <span className="mx-row-body">
+                            <span className="mx-row-top">
+                              <span className="mx-from">
+                                {who}
+                                {t.messages.length > 1 && <span className="mx-thread-n">{t.messages.length}</span>}
+                              </span>
+                              <span className="mx-date">{listStamp(latest.sentAt, tz)}</span>
+                            </span>
+                            <span className="mx-subject">{t.subject}</span>
+                            <span className="mx-snippet">{latest.body.replace(/\s+/g, " ").slice(0, 110)}</span>
+                            {t.category && <span className="mx-cat">{t.category}</span>}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+
+            <section className="mx-reader" aria-label="Message">
+              {folder === "drafts" ? (
+                <EmptyState title="Open a draft to keep writing" />
+              ) : open ? (
+                <ThreadView thread={open} me={me} tz={tz} nameOf={nameOf} emailOf={emailOf} onReply={(mode) => startFrom(open, mode)} />
+              ) : (
+                <EmptyState title="Select a message" />
+              )}
+            </section>
+          </>
+        )}
+      </div>
     </Page>
-  );
-}
-
-function ThreadRow({
-  thread,
-  me,
-  active,
-  timeZone,
-  nameOf,
-  sentView,
-  onOpen,
-}: {
-  thread: MailThread;
-  me: string;
-  active: boolean;
-  timeZone: string;
-  nameOf: (id: string) => string;
-  sentView: boolean;
-  onOpen: () => void;
-}) {
-  const latest = thread.latest;
-  const who = sentView
-    ? `To ${[...new Set(thread.messages.filter((m) => m.fromId === me).flatMap((m) => m.toIds))].map(nameOf).join(", ")}`
-    : latest.fromId === me
-      ? `You → ${latest.toIds.map(nameOf).join(", ")}`
-      : latest.fromName;
-  return (
-    <li>
-      <button type="button" className={`mail-row${active ? " active" : ""}${thread.unread ? " unread" : ""}`} onClick={onOpen}>
-        <span className="mail-row-top">
-          <span className="mail-row-who">{who}</span>
-          <span className="mail-row-time">{when(latest.sentAt, timeZone)}</span>
-        </span>
-        <span className="mail-row-subject" title={thread.subject}>
-          {thread.subject}
-          {thread.messages.length > 1 && <span className="mail-count">{thread.messages.length}</span>}
-        </span>
-        <span className="mail-row-snippet">{latest.body.replace(/\s+/g, " ").slice(0, 90)}</span>
-        {thread.category && <span className="pill mail-cat">{thread.category}</span>}
-      </button>
-    </li>
   );
 }
 
 function ThreadView({
   thread,
   me,
-  myName,
-  timeZone,
+  tz,
   nameOf,
   emailOf,
-  onSent,
-  canSignIn,
+  onReply,
 }: {
   thread: MailThread;
   me: string;
-  myName: string;
-  timeZone: string;
+  tz: string;
   nameOf: (id: string) => string;
   emailOf: (id: string) => string;
-  onSent: (ids: string[], subject: string) => void;
-  canSignIn: (id: string) => boolean;
+  onReply: (mode: "reply" | "all" | "forward") => void;
 }) {
-  const [mode, setMode] = useState<"reply" | "all" | null>(null);
-  const [body, setBody] = useState("");
-  const [error, setError] = useState("");
-  const [note, setNote] = useState("");
   const latest = thread.latest;
+  const others = [...new Set([latest.fromId, ...latest.toIds, ...latest.ccIds])].filter((id) => id !== me);
+  const [expanded, setExpanded] = useState<string>(latest.id);
+  return (
+    <div className="mx-thread">
+      <header className="mx-thread-head">
+        <h2>{thread.subject}</h2>
+        {thread.category && <span className="mx-cat">{thread.category}</span>}
+      </header>
+      <ol className="mx-msgs">
+        {thread.messages.map((m: MailMessage) => {
+          const isOpen = expanded === m.id || m.id === latest.id;
+          return (
+            <li key={m.id} className={isOpen ? "mx-msg open" : "mx-msg"}>
+              <button type="button" className="mx-msg-head" onClick={() => setExpanded(isOpen && m.id !== latest.id ? "" : m.id)} aria-expanded={isOpen}>
+                <span className="mx-avatar" aria-hidden>
+                  {initials(m.fromName)}
+                </span>
+                <span className="mx-msg-who">
+                  <strong>{m.fromId === me ? `${m.fromName} (me)` : m.fromName}</strong>
+                  {emailOf(m.fromId) && <span className="muted"> &lt;{emailOf(m.fromId)}&gt;</span>}
+                  {!isOpen && <span className="mx-snippet"> {m.body.replace(/\s+/g, " ").slice(0, 80)}</span>}
+                </span>
+                <span className="mx-date">{fullStamp(m.sentAt, tz)}</span>
+              </button>
+              {isOpen && (
+                <>
+                  <dl className="mx-fields">
+                    <dt>From</dt>
+                    <dd>{m.fromName}</dd>
+                    <dt>To</dt>
+                    <dd>{m.toIds.map((id) => (id === me ? "me" : nameOf(id))).join(", ")}</dd>
+                    {m.ccIds.length > 0 && (
+                      <>
+                        <dt>Cc</dt>
+                        <dd>{m.ccIds.map((id) => (id === me ? "me" : nameOf(id))).join(", ")}</dd>
+                      </>
+                    )}
+                    <dt>Date</dt>
+                    <dd>{fullStamp(m.sentAt, tz)}</dd>
+                    <dt>Subject</dt>
+                    <dd>{m.subject}</dd>
+                  </dl>
+                  <div className="mx-body">{m.body}</div>
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      <div className="mx-reply-bar">
+        <button type="button" className="btn" onClick={() => onReply("reply")}>
+          Reply
+        </button>
+        {others.length > 1 && (
+          <button type="button" className="btn-ghost" onClick={() => onReply("all")}>
+            Reply all
+          </button>
+        )}
+        <button type="button" className="btn-ghost" onClick={() => onReply("forward")}>
+          Forward
+        </button>
+      </div>
+    </div>
+  );
+}
 
-  const replyTo = latest.fromId === me ? latest.toIds : [latest.fromId];
-  const allIds = [...new Set([latest.fromId, ...latest.toIds, ...latest.ccIds])].filter((id) => id !== me);
-  const toIds = replyTo;
-  const ccIds = mode === "all" ? allIds.filter((id) => !replyTo.includes(id)) : [];
-  const subject = replySubject(thread.subject);
+function ComposeView({
+  initial,
+  me,
+  myName,
+  pickable,
+  templates,
+  nameOf,
+  emailOf,
+  canSignIn,
+  onSent,
+  onClosed,
+}: {
+  initial: ComposeState;
+  me: string;
+  myName: string;
+  pickable: Recipient[];
+  templates: { label: string; subject: string; category: MailCategory }[];
+  nameOf: (id: string) => string;
+  emailOf: (id: string) => string;
+  canSignIn: (id: string) => boolean;
+  onSent: (m: MailMessage) => void;
+  onClosed: () => void;
+}) {
+  const [c, setC] = useState<ComposeState>(initial);
+  const [error, setError] = useState("");
+  const [showCc, setShowCc] = useState(initial.ccIds.length > 0);
+  const [picked, setPicked] = useState("");
+  const [check, setCheck] = useState<{ source: "ai" | "rules"; items: WritingSuggestion[]; text: string } | null>(null);
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const sendAction = useAction();
+  const groups = [...new Set(pickable.map((r) => r.group))];
+  const ids = useMemo(() => new Set(pickable.map((r) => r.id)), [pickable]);
+  const dirty = c.subject.trim() !== "" || c.body.trim() !== "" || c.toIds.length > 0;
 
-  const replyAction = useAction();
+  useEffect(() => {
+    // Replies open with the cursor above the quoted text.
+    if (initial.mode === "reply" || initial.mode === "all" || initial.mode === "forward") {
+      bodyRef.current?.focus();
+      bodyRef.current?.setSelectionRange(0, 0);
+    }
+  }, [initial.mode]);
+
+  const set = (patch: Partial<ComposeState>) => {
+    setC((prev) => ({ ...prev, ...patch }));
+    if (patch.body !== undefined) setCheck(null);
+  };
+
+  const addPerson = (field: "toIds" | "ccIds", id: string) => {
+    if (!id) return;
+    setC((prev) => ({ ...prev, [field]: prev[field].includes(id) ? prev[field] : [...prev[field], id] }));
+  };
+  const removePerson = (field: "toIds" | "ccIds", id: string) => setC((prev) => ({ ...prev, [field]: prev[field].filter((x) => x !== id) }));
 
   async function send() {
-    if (!body.trim()) {
-      setError("Write a reply.");
-      return false;
-    }
-    const message = await sendMailShared({ fromId: me, fromName: myName, toIds, ccIds, subject, body, category: thread.category, threadId: thread.threadId });
-    if (typeof message === "string") {
-      setError(message);
-      return false;
-    }
-    onSent([...message.toIds, ...message.ccIds], message.subject);
-    const offline = [...message.toIds, ...message.ccIds].filter((id) => !canSignIn(id));
-    setNote(
-      `Sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.` +
-        (offline.length ? ` ${offline.map(nameOf).join(", ")} can't sign in yet; use your email app to reach them too.` : ""),
-    );
-    toast(`Reply sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.`);
-    setBody("");
-    setMode(null);
     setError("");
+    const fail = (t: string) => {
+      setError(t);
+      return false;
+    };
+    if (c.toIds.length === 0) return fail("Add at least one recipient.");
+    if (!c.subject.trim()) return fail("Add a subject.");
+    if (!c.body.trim()) return fail("Write a message.");
+    if (c.toIds.some((id) => !ids.has(id))) return fail("You can only write to your reporting line, HR, your team or people already in your mail.");
+    const message = await sendMailShared({
+      fromId: me,
+      fromName: myName,
+      toIds: c.toIds,
+      ccIds: c.ccIds.filter((id) => ids.has(id)),
+      subject: c.subject,
+      body: c.body,
+      category: c.category,
+      threadId: c.threadId,
+    });
+    if (typeof message === "string") return fail(message);
+    if (c.draftId) await deleteDraft(c.draftId);
+    toast(`Mail sent to ${[...message.toIds, ...message.ccIds].map(nameOf).join(", ")}.`);
+    onSent(message);
     return true;
   }
 
+  async function save() {
+    const out = await saveDraft({ id: c.draftId, ownerId: me, toIds: c.toIds, ccIds: c.ccIds, subject: c.subject, body: c.body, category: c.category, threadId: c.threadId });
+    if (typeof out === "string") return out;
+    setC((prev) => ({ ...prev, draftId: out.id }));
+    return null;
+  }
+
+  async function runCheck() {
+    if (!c.body.trim()) return "Write something to check.";
+    const text = c.body;
+    const out = await checkWriting(text);
+    setCheck({ source: out.source, items: out.suggestions, text });
+    return null;
+  }
+
+  function accept(s: WritingSuggestion) {
+    if (!check) return;
+    const next = applySuggestion(c.body, s);
+    const shift = s.replacement.length - (s.end - s.start);
+    setC((prev) => ({ ...prev, body: next }));
+    setCheck({
+      ...check,
+      text: next,
+      items: check.items.filter((x) => x !== s).map((x) => (x.start >= s.end ? { ...x, start: x.start + shift, end: x.end + shift } : x)),
+    });
+  }
+
+  const offPortal = c.toIds.filter((id) => !canSignIn(id));
+  const title =
+    c.mode === "reply" ? "Reply" : c.mode === "all" ? "Reply all" : c.mode === "forward" ? "Forward" : c.mode === "draft" ? "Draft" : "New message";
+
   return (
-    <Card title={thread.subject} action={thread.category ? <span className="pill">{thread.category}</span> : undefined}>
-      <ol className="mail-thread">
-        {thread.messages.map((m) => (
-          <li key={m.id} className="mail-msg">
-            <div className="mail-msg-head">
-              <strong>{m.fromId === me ? "You" : m.fromName}</strong>
-              <span className="mail-row-time">{when(m.sentAt, timeZone)}</span>
-            </div>
-            <div className="mail-msg-to">
-              To {m.toIds.map((id) => (id === me ? "you" : nameOf(id))).join(", ")}
-              {m.ccIds.length > 0 && <> · Cc {m.ccIds.map((id) => (id === me ? "you" : nameOf(id))).join(", ")}</>}
-            </div>
-            <p className="mail-msg-body">{m.body}</p>
-          </li>
-        ))}
-      </ol>
-      {note && (
-        <p className="note ok">
-          {note}
-        </p>
+    <form className="mx-compose" onSubmit={sendAction.submit(send)}>
+      <header className="mx-compose-head">
+        <h2>{title}</h2>
+        {c.draftId && <span className="muted">Saved as draft</span>}
+      </header>
+      {c.mode === "new" && (
+        <div className="mail-templates" aria-label="Quick templates">
+          {templates.map((t) => (
+            <button
+              key={t.label}
+              type="button"
+              className={picked === t.label ? "mail-chip picked" : "mail-chip"}
+              aria-pressed={picked === t.label}
+              onClick={() => {
+                setPicked(t.label);
+                set({ subject: t.subject, category: t.category });
+              }}
+            >
+              {picked === t.label ? `✓ ${t.label}` : t.label}
+            </button>
+          ))}
+        </div>
       )}
-      {mode ? (
-        <form className="mail-reply" onSubmit={replyAction.submit(send)}>
-          <p className="note">
-            {mode === "all" ? "Reply all" : "Reply"} to {toIds.map(nameOf).join(", ")}
-            {ccIds.length > 0 && <> · Cc {ccIds.map(nameOf).join(", ")}</>}
-          </p>
-          <textarea value={body} rows={5} onChange={(e) => setBody(e.target.value)} aria-label="Reply" autoFocus />
-          {error && <p className="note err">{error}</p>}
-          <div className="mail-actions">
-            <SubmitButton action={replyAction} className="btn">
-              Send
-            </SubmitButton>
-            <a className="btn-ghost" href={mailtoHref(toIds.map(emailOf).filter(Boolean), ccIds.map(emailOf).filter(Boolean), subject, body)}>
-              Open in email app
-            </a>
-            <button className="btn-ghost" type="button" onClick={() => setMode(null)}>
-              Cancel
+      <div className="mx-field-row">
+        <label htmlFor="mx-to">To</label>
+        <div className="mx-people">
+          {c.toIds.map((id) => (
+            <button key={id} type="button" className="mx-person" onClick={() => removePerson("toIds", id)} aria-label={`Remove ${nameOf(id)}`}>
+              {nameOf(id)} ×
+            </button>
+          ))}
+          <select id="mx-to" value="" onChange={(e) => addPerson("toIds", e.target.value)} aria-label="Add recipient">
+            <option value="">Add…</option>
+            {groups.map((g) => (
+              <optgroup key={g} label={g}>
+                {pickable
+                  .filter((r) => r.group === g && !c.toIds.includes(r.id))
+                  .map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+        {!showCc && (
+          <button type="button" className="quiet-link" onClick={() => setShowCc(true)}>
+            Cc
+          </button>
+        )}
+      </div>
+      {showCc && (
+        <div className="mx-field-row">
+          <label htmlFor="mx-cc">Cc</label>
+          <div className="mx-people">
+            {c.ccIds.map((id) => (
+              <button key={id} type="button" className="mx-person" onClick={() => removePerson("ccIds", id)} aria-label={`Remove ${nameOf(id)}`}>
+                {nameOf(id)} ×
+              </button>
+            ))}
+            <select id="mx-cc" value="" onChange={(e) => addPerson("ccIds", e.target.value)} aria-label="Add Cc">
+              <option value="">Add…</option>
+              {pickable
+                .filter((r) => !c.toIds.includes(r.id) && !c.ccIds.includes(r.id))
+                .map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} · {r.group}
+                  </option>
+                ))}
+            </select>
+          </div>
+        </div>
+      )}
+      <div className="mx-field-row">
+        <label htmlFor="mx-subject">Subject</label>
+        <input id="mx-subject" value={c.subject} maxLength={300} onChange={(e) => set({ subject: e.target.value })} spellCheck />
+        <select value={c.category} onChange={(e) => set({ category: e.target.value as MailCategory })} aria-label="Category">
+          {MAIL_CATEGORIES.map((x) => (
+            <option key={x}>{x}</option>
+          ))}
+        </select>
+      </div>
+      <textarea
+        ref={bodyRef}
+        className="mx-body-input"
+        value={c.body}
+        rows={14}
+        spellCheck
+        lang="en"
+        onChange={(e) => set({ body: e.target.value })}
+        aria-label="Message"
+        placeholder="Write your message"
+      />
+
+      {check && (
+        <div className="mx-check" aria-live="polite">
+          <div className="mx-check-head">
+            <strong>{check.items.length ? `${check.items.length} suggestion${check.items.length === 1 ? "" : "s"}` : "No issues found"}</strong>
+            <span className="muted">{check.source === "ai" ? "HR Copilot" : "Built-in check"}</span>
+            {check.items.length > 1 && (
+              <button
+                type="button"
+                className="btn-ghost btn-tiny"
+                onClick={() => {
+                  setC((prev) => ({ ...prev, body: applyAll(prev.body, check.items) }));
+                  setCheck({ ...check, items: [] });
+                  toast("All suggestions applied.");
+                }}
+              >
+                Accept all
+              </button>
+            )}
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => setCheck(null)}>
+              Close
             </button>
           </div>
-        </form>
-      ) : (
-        <div className="mail-actions">
-          <button className="btn" type="button" onClick={() => setMode("reply")}>
-            Reply
-          </button>
-          {allIds.length > 1 && (
-            <button className="btn-ghost" type="button" onClick={() => setMode("all")}>
-              Reply all
-            </button>
+          {check.items.length > 0 && (
+            <ul>
+              {check.items.map((s, i) => (
+                <li key={`${s.start}-${i}`}>
+                  <span className="mx-check-pair">
+                    <del>{s.original.trim() ? s.original : "␣"}</del> → <ins>{s.replacement.trim() ? s.replacement : "␣"}</ins>
+                  </span>
+                  <span className="muted">{s.message}</span>
+                  <span className="mx-check-btns">
+                    <button type="button" className="btn btn-tiny" onClick={() => accept(s)}>
+                      Accept
+                    </button>
+                    <button type="button" className="btn-ghost btn-tiny" onClick={() => setCheck({ ...check, items: check.items.filter((x) => x !== s) })}>
+                      Ignore
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}
-    </Card>
+
+      {offPortal.length > 0 && <p className="note">{offPortal.map(nameOf).join(", ")} can't sign in yet; the mail is kept here.</p>}
+      {error && <p className="note err">{error}</p>}
+      <div className="mx-compose-actions">
+        <SubmitButton action={sendAction} className="btn">
+          Send
+        </SubmitButton>
+        <ActionButton className="btn-ghost" busyLabel="Checking…" doneLabel="Checked" toastError onAction={runCheck}>
+          Check grammar
+        </ActionButton>
+        <ActionButton className="btn-ghost" disabled={!dirty} success="Draft saved." toastError onAction={save}>
+          Save draft
+        </ActionButton>
+        <a
+          className="btn-ghost"
+          href={mailtoHref(c.toIds.map(emailOf).filter(Boolean), c.ccIds.map(emailOf).filter(Boolean), c.subject, c.body)}
+          aria-disabled={c.toIds.length === 0}
+          onClick={(e) => {
+            if (c.toIds.length === 0) e.preventDefault();
+          }}
+        >
+          Open in email app
+        </a>
+        <span className="mx-spacer" />
+        <ActionButton
+          className="btn-ghost mx-discard"
+          busyLabel="Discarding…"
+          doneLabel="Discarded"
+          success={c.draftId ? "Draft deleted." : undefined}
+          toastError
+          onAction={async () => {
+            if (dirty && !window.confirm(c.draftId ? "Delete this draft?" : "Discard this message?")) return false;
+            const err = c.draftId ? await deleteDraft(c.draftId) : null;
+            if (!err) onClosed();
+            return err;
+          }}
+        >
+          {c.draftId ? "Delete draft" : "Discard"}
+        </ActionButton>
+      </div>
+    </form>
   );
 }

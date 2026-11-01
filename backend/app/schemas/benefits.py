@@ -35,6 +35,9 @@ class BenefitPlanIn(BaseModel):
     mandatory: bool = False
     auto_enrolled: bool = False
     eligibility: PlanEligibilityRules = Field(default_factory=PlanEligibilityRules)
+    coverage: str | None = Field(default=None, max_length=4000)
+    terms: str | None = Field(default=None, max_length=8000)
+    legal_entity: str | None = Field(default=None, max_length=200)
 
 
 class BenefitPlanPatch(BaseModel):
@@ -46,6 +49,9 @@ class BenefitPlanPatch(BaseModel):
     covers_dependents: bool | None = None
     eligibility: PlanEligibilityRules | None = None
     active: bool | None = None
+    coverage: str | None = Field(default=None, max_length=4000)
+    terms: str | None = Field(default=None, max_length=8000)
+    legal_entity: str | None = Field(default=None, max_length=200)
 
 
 class BenefitPlanOut(_BenefitORM):
@@ -64,6 +70,10 @@ class BenefitPlanOut(_BenefitORM):
     eligibility: dict
     active: bool
     rules: list[str] = []
+    coverage: str | None = None
+    terms: str | None = None
+    legal_entity: str | None = None
+    documents: list[dict] = []
 
 
 class EligibilityCheckOut(BaseModel):
@@ -176,6 +186,12 @@ class DependentOut(_BenefitORM):
     verified_by: str | None
     verified_at: datetime | None
     covered_plan_ids: list[str] = []
+    doc_name: str | None = None
+    doc_type: str | None = None
+    doc_size: int | None = None
+    # Can this dependent be covered (relationship and age rules)? With the reason when not.
+    cover_eligible: bool = True
+    cover_note: str = ""
 
 
 class NomineeIn(BaseModel):

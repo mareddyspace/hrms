@@ -283,6 +283,10 @@ def run(reset_passwords: bool = False) -> dict[str, int]:
         stats.update(_seed_compliance(db))  # compliance calendar sample dates, visas, contract ends (0023)
         stats["bank_details_added"] = _seed_bank_details(db)  # payroll bank details, a few left missing (0023)
         stats["shared_collab_added"] = _seed_shared_collab(db)  # chats, mail, tasks, announcements, meetings (0022)
+        stats["announcements_added"] = _seed_announcements(db)  # company news per country / department (0027)
+        stats["desk_requests_added"] = _seed_desk_requests(db)  # sample help desk requests with replies (0027)
+        stats.update(_seed_project_details(db))  # project milestones, tasks, roles; shift locations (0025)
+        stats.update(_seed_pay_benefits(db))  # benefit plan details, tax declaration deadlines and samples (0026)
         db.commit()
         del cache
     return stats
@@ -429,6 +433,29 @@ def _seed_tickets(db: Session) -> int:
     return seed_samples(db)
 
 
+def _seed_project_details(db: Session) -> dict[str, int]:
+    """Project details from app/seed_projects.py. Fills empty fields; adds lists only to projects that have none."""
+    from app.seed_projects import seed
+
+    db.flush()
+    return seed(db)
+
+
+def _seed_announcements(db: Session) -> int:
+    """Holiday notices, policy updates, events, IT maintenance, wellness, joiners, CEO message. Insert-once by id."""
+    from app.services.announcement_samples import seed
+
+    db.flush()
+    return seed(db)
+
+
+def _seed_desk_requests(db: Session) -> int:
+    from app.services.desk_samples import seed
+
+    db.flush()
+    return seed(db)
+
+
 def _seed_shared_collab(db: Session) -> int:
     """Sample chats, mail, tasks, announcements and meetings (app/services/sharing.py). Insert-once by id."""
     from app.services.sharing import seed_samples
@@ -455,6 +482,13 @@ def _seed_bank_details(db: Session) -> int:
 
     db.flush()
     return seed_bank_details(db)
+
+
+def _seed_pay_benefits(db: Session) -> dict[str, int]:
+    from app.seed_pay_benefits import seed
+
+    db.flush()
+    return seed(db)
 
 
 if __name__ == "__main__":

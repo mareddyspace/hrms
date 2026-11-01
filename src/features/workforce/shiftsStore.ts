@@ -25,6 +25,7 @@ import {
   apiAssignShift,
   apiCancelSwap,
   apiDecideSwap,
+  apiGrantCompOff,
   apiPublishWeek,
   apiRequestSwap,
   apiRespondSwap,
@@ -52,6 +53,10 @@ export interface ShiftDef {
   end: string;
   weekendOnly: boolean;
   active: boolean;
+  /** Unpaid break inside the shift, in minutes (default 60). */
+  breakMinutes?: number;
+  /** Where the shift is worked. */
+  location?: string;
 }
 
 export interface ShiftAssignment {
@@ -128,11 +133,11 @@ export interface RosterContext {
 }
 
 const SEED_SHIFTS: ShiftDef[] = [
-  { id: "sh-morning", name: "Morning", start: "06:00", end: "14:00", weekendOnly: false, active: true },
-  { id: "sh-general", name: "General", start: "09:30", end: "18:30", weekendOnly: false, active: true },
-  { id: "sh-evening", name: "Evening", start: "14:00", end: "22:00", weekendOnly: false, active: true },
-  { id: "sh-night", name: "Night", start: "22:00", end: "06:00", weekendOnly: false, active: true },
-  { id: "sh-weekend", name: "Weekend support", start: "09:00", end: "17:00", weekendOnly: true, active: true },
+  { id: "sh-morning", name: "Morning", start: "06:00", end: "14:00", weekendOnly: false, active: true, breakMinutes: 60, location: "Kochi office" },
+  { id: "sh-general", name: "General", start: "09:30", end: "18:30", weekendOnly: false, active: true, breakMinutes: 60, location: "Kochi office" },
+  { id: "sh-evening", name: "Evening", start: "14:00", end: "22:00", weekendOnly: false, active: true, breakMinutes: 60, location: "Kochi office" },
+  { id: "sh-night", name: "Night", start: "22:00", end: "06:00", weekendOnly: false, active: true, breakMinutes: 60, location: "Kochi office" },
+  { id: "sh-weekend", name: "Weekend support", start: "09:00", end: "17:00", weekendOnly: true, active: true, breakMinutes: 60, location: "Kochi office" },
 ];
 
 function seedAssignments(): ShiftAssignment[] {
@@ -261,7 +266,8 @@ function composeState(api: ApiShiftData | null, local: ShiftState): ShiftState {
     weeks: [...weeks.values()],
     swaps: api.swaps,
     coverage: api.coverage,
-    credits: local.credits,
+    // Comp-off credits are kept by the API (mine and my team's); older browser-only credits are not shared.
+    credits: api.compOff ? [...api.compOff.credits, ...api.compOff.teamCredits] : local.credits,
     coverageAlerts: local.coverageAlerts,
     apiRosters: api.rosters,
   };
@@ -427,7 +433,7 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export function saveShift(
   actor: WorkforceActor,
-  input: { id?: string; name: string; start: string; end: string; weekendOnly: boolean },
+  input: { id?: string; name: string; start: string; end: string; weekendOnly: boolean; breakMinutes?: number; location?: string },
 ): WorkforceResult | Promise<WorkforceResult> {
   if (!isHrRole(actor.role)) return "Only HR can manage shift types.";
   const name = input.name.trim();
@@ -437,12 +443,16 @@ export function saveShift(
   if (input.start === input.end) return "Start and end time can't be the same.";
   const length = (toMinutes(input.end) - toMinutes(input.start) + 1440) % 1440;
   if (length < 4 * 60 || length > 12 * 60) return "A shift must be between 4 and 12 hours long.";
+  const breakMinutes = input.breakMinutes ?? 60;
+  if (!Number.isFinite(breakMinutes) || breakMinutes < 0 || breakMinutes > 240) return "The break must be 0 to 240 minutes.";
+  if (breakMinutes >= length) return "The break can't be as long as the shift.";
+  const location = (input.location ?? "").trim().slice(0, 100);
   if (API_ENABLED) {
     const s = getShiftState();
     if (s.shifts.some((x) => x.id !== input.id && x.name.toLowerCase() === name.toLowerCase())) return `A shift called "${name}" already exists.`;
     const existing = input.id ? s.shifts.find((x) => x.id === input.id) : undefined;
     if (input.id && !existing) return "That shift no longer exists.";
-    return apiRun(() => apiSaveShiftType({ ...input, name, active: existing?.active ?? true }), mirror);
+    return apiRun(() => apiSaveShiftType({ ...input, name, breakMinutes, location, active: existing?.active ?? true }), mirror);
   }
   return store.mutate((s) => {
     if (s.shifts.some((x) => x.id !== input.id && x.name.toLowerCase() === name.toLowerCase())) return `A shift called "${name}" already exists.`;
@@ -454,9 +464,9 @@ export function saveShift(
       if (upcoming.length && (existing.start !== input.start || existing.end !== input.end || existing.weekendOnly !== input.weekendOnly)) {
         return `${existing.name} is on ${upcoming.length} upcoming roster ${upcoming.length === 1 ? "day" : "days"} — clear those before changing its hours.`;
       }
-      Object.assign(existing, { name, start: input.start, end: input.end, weekendOnly: input.weekendOnly });
+      Object.assign(existing, { name, start: input.start, end: input.end, weekendOnly: input.weekendOnly, breakMinutes, location });
     } else {
-      s.shifts.push({ id: newId("sh"), name, start: input.start, end: input.end, weekendOnly: input.weekendOnly, active: true });
+      s.shifts.push({ id: newId("sh"), name, start: input.start, end: input.end, weekendOnly: input.weekendOnly, active: true, breakMinutes, location });
     }
     return null;
   });
@@ -772,6 +782,19 @@ export function compOffReason(date: string, holidays: Holiday[]): string | null 
 /** Past published shifts on weekly offs or holidays that this actor may still credit. */
 export function compOffCandidates(actor: WorkforceActor, ctx: RosterContext, state: ShiftState = getShiftState()): CompOffCandidate[] {
   const today = todayISO();
+  if (API_ENABLED) {
+    // The API lists my team's published off-day shifts not credited yet.
+    return (mirror.get()?.compOff?.candidates ?? []).map((c) => ({
+      assignment: state.assignments.find((a) => a.personId === c.personId && a.date === c.date) ?? {
+        id: `co-${c.personId}-${c.date}`,
+        personId: c.personId,
+        date: c.date,
+        shiftId: state.shifts.find((x) => x.name === c.shiftName)?.id ?? "",
+        managerId: actor.id,
+      },
+      reason: c.reason,
+    }));
+  }
   return state.assignments
     .filter(
       (a) =>
@@ -787,21 +810,15 @@ export function compOffCandidates(actor: WorkforceActor, ctx: RosterContext, sta
     .sort((x, y) => y.assignment.date.localeCompare(x.assignment.date));
 }
 
-export function grantCompOff(actor: WorkforceActor, ctx: RosterContext, personId: string, date: string): WorkforceResult {
+export function grantCompOff(actor: WorkforceActor, ctx: RosterContext, personId: string, date: string): WorkforceResult | Promise<WorkforceResult> {
   if (!canDecideFor(actor, personId)) return "Only someone above them in the reporting line can grant comp-off.";
   const today = todayISO();
   if (date >= today) return "Comp-off can be granted only after the day has passed.";
   if (addDaysISO(date, COMP_OFF_VALID_DAYS) < today) return `Too late — that day is more than ${COMP_OFF_VALID_DAYS} days ago.`;
   const reason = compOffReason(date, holidaysForPerson(ctx.holidays, personId));
   if (!reason) return `${fmt(date)} is a regular working day — no comp-off.`;
-  if (API_ENABLED) {
-    // Comp-off credits stay in this browser; the worked shift comes from the API roster.
-    const live = getShiftState();
-    const row = live.assignments.find((a) => a.personId === personId && a.date === date);
-    if (!row || !isPublished(live, row)) return `${personName(personId)} wasn't on the published roster on ${fmt(date)}.`;
-    if (leaveOn(personId, date, ctx.leaves)) return `${personName(personId)} was on approved leave that day.`;
-    if (live.credits.some((c) => c.personId === personId && c.workedDate === date)) return "Comp-off for that day is already granted.";
-  }
+  // Backend mode: the API checks the roster, leave and duplicates, keeps the credit and tells the person.
+  if (API_ENABLED) return apiRun(() => apiGrantCompOff(personId, date), mirror);
   return store.mutate((s) => {
     if (!API_ENABLED) {
       const row = s.assignments.find((a) => a.personId === personId && a.date === date);
@@ -822,6 +839,11 @@ export function grantCompOff(actor: WorkforceActor, ctx: RosterContext, personId
     notify(personId, "Comp-off credited", `1 comp-off day for working on ${fmt(date)}. Use it by ${fmt(addDaysISO(date, COMP_OFF_VALID_DAYS))}.`, ROUTE);
     return null;
   });
+}
+
+/** Backend mode: comp-off balance as the API counts it (null in browser-only mode). */
+export function apiCompOffSummary() {
+  return API_ENABLED ? mirror.get()?.compOff ?? null : null;
 }
 
 export function creditsFor(personId: string, state: ShiftState = getShiftState()): CompOffCredit[] {

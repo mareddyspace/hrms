@@ -1,26 +1,28 @@
-import { Link, useParams } from "react-router-dom";
-import { Card, Page, downloadText } from "../components/ui.tsx";
-import { legalEntityFor, money } from "../countryPay.ts";
-import { useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ActionButton, Banner, Card, Page, Tabs } from "../components/ui.tsx";
+import { legalEntityFor, money, payRulesFor, taxYearStartFor } from "../countryPay.ts";
 import { notify } from "../components/Toast.tsx";
 import type { IndiaRegime } from "../countryPay.ts";
 import {
   asDetailView,
   compareRegimes,
   estimateMonthSoFar,
+  paydayFor,
   taxYearSummary,
   type MonthSoFar,
   type PayslipDetailView,
   type PayslipInput,
 } from "../data/payslipGenerator.ts";
+import { annualBaseFor } from "../data/annualPay.ts";
+import { getRewardState, subscribeReward } from "../data/rewardLocal.ts";
 import { setTaxRegime, useTaxRegime } from "../data/taxRegime.ts";
-import { formatShortDate, parseISODate, toISO } from "../model.ts";
+import { formatShortDate, parseISODate, todayISO, toISO } from "../model.ts";
 import type { Employee, PayLine, PayslipView } from "../model.ts";
 import { usePortal } from "../store.tsx";
-
-function monthTitle(month: string) {
-  return parseISODate(`${month}-01`).toLocaleDateString("en-US", { month: "long", year: "numeric" });
-}
+import { STATUS_TEXT, downloadPayslip, monthTitle, slipBreakdown, slipStatus, type SlipStatus } from "../features/payroll/payslipDoc.ts";
+import { declConfig, myDeclarations, reloadDeclarations, useDeclarationsVersion } from "../features/taxdecl/taxDeclStore.ts";
+import "../features/payroll/payslips.css";
 
 /** First and last day of the payslip's month. */
 function payPeriod(month: string): { from: string; to: string } {
@@ -44,45 +46,13 @@ function basisText(slip: PayslipDetailView): string {
   return slip.basis === "hourly" && slip.hourlyRate ? `Hourly · ${money(slip.hourlyRate, slip.currency)}/h` : "Monthly salary";
 }
 
-function payslipText(payslip: PayslipView, employee: Employee): string {
-  const currency = payslip.currency ?? "INR";
-  const header = slipHeader(payslip, employee);
-  const detail = asDetailView(payslip);
-  const lines = (items: { name: string; amount: number }[]) => items.map((line) => `${line.name}: ${money(line.amount, currency)}`).join("\n");
-  return [
-    `Payslip — ${payslip.label}`,
-    header.entity,
-    `Pay period: ${header.period}`,
-    `${employee.fullName} (${employee.employeeCode})`,
-    `Country: ${header.country}`,
-    `Currency: ${currency}`,
-    ...(detail ? [`Pay basis: ${basisText(detail)}`] : []),
-    ...(payslip.paidDays != null ? [`Days paid: ${payslip.paidDays} of ${payslip.totalDays}${payslip.finalSettlement ? " (final settlement)" : ""}`] : []),
-    "",
-    "Earnings",
-    lines(payslip.earnings.filter((line) => line.amount > 0)),
-    `Gross: ${money(payslip.gross, currency)}`,
-    "",
-    "Deductions",
-    payslip.deductions.length ? lines(payslip.deductions) : "None",
-    `Total deductions: ${money(payslip.deductionTotal, currency)}`,
-    "",
-    `Net pay: ${money(payslip.net, currency)}`,
-    ...(detail
-      ? [
-          ...(detail.employerContributions.length ? ["", "Employer contributions", lines(detail.employerContributions)] : []),
-          "",
-          `Tax computation (${detail.tax.taxYear}) — ${detail.tax.basis}`,
-          `Annual gross: ${money(detail.tax.annualGross, currency)}`,
-          ...detail.tax.reliefs.map((r) => `Less ${r.name}: ${money(r.amount, currency)}`),
-          `Annual taxable income: ${money(detail.tax.annualTaxable, currency)}`,
-          `Annual tax: ${money(detail.tax.annualTax, currency)}`,
-          `This month: ${money(detail.tax.monthTax, currency)}`,
-          "",
-          `Year to date (${detail.ytd.taxYear}): gross ${money(detail.ytd.gross, currency)} · tax ${money(detail.ytd.tax, currency)} · net ${money(detail.ytd.net, currency)}`,
-        ]
-      : []),
-  ].join("\n");
+/** FINAL (locked payroll run) or ESTIMATED (worked out by the portal). */
+export function SlipTag({ status }: { status: SlipStatus }) {
+  return (
+    <span className={`slip-tag ${status}`} title={STATUS_TEXT[status]}>
+      {status === "final" ? "Final" : "Estimated"}
+    </span>
+  );
 }
 
 function LinesTable({ lines, currency, empty }: { lines: PayLine[]; currency?: string; empty: string }) {
@@ -144,15 +114,26 @@ export function PayslipBody({ payslip }: { payslip: PayslipView }) {
         <span>{money(payslip.net, currency)}</span>
       </div>
       {detail && detail.employerContributions.length > 0 && (
-        <p className="muted" style={{ margin: "12px 0 0" }}>
-          Employer pays on top: {detail.employerContributions.map((l) => `${l.name} ${money(l.amount, currency)}`).join(" · ")}
-        </p>
+        <section style={{ marginTop: 16 }}>
+          <h2 className="card-title">Employer contributions</h2>
+          <p className="muted" style={{ margin: "0 0 6px" }}>Paid by the company on top of your pay; not deducted.</p>
+          <div className="doc-table-wrap">
+            <table className="data pay-lines-table pay-employer-table">
+              <tbody>
+                {detail.employerContributions.map((l) => (
+                  <tr key={l.name}>
+                    <td>{l.name}</td>
+                    <td>{money(l.amount, currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
       {detail && (
-        <details style={{ marginTop: 16 }}>
-          <summary>
-            Tax computation · {detail.tax.taxYear}
-          </summary>
+        <details style={{ marginTop: 16 }} open>
+          <summary>Tax computation · {detail.tax.taxYear}</summary>
           <div className="doc-table-wrap">
             <table className="data pay-lines-table" style={{ marginTop: 8 }}>
               <tbody>
@@ -195,7 +176,7 @@ export function PayslipBody({ payslip }: { payslip: PayslipView }) {
         </details>
       )}
       {detail && (
-        <div className="pay-head" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "8px 16px", marginTop: 16 }}>
+        <div className="pay-head slip-stats" style={{ marginTop: 16 }}>
           <div>
             <div className="muted">YTD gross · {detail.ytd.taxYear}</div>
             <strong>{money(detail.ytd.gross, currency)}</strong>
@@ -214,9 +195,13 @@ export function PayslipBody({ payslip }: { payslip: PayslipView }) {
   );
 }
 
-/** India: new / old regime, with a full year's tax under each. Saving changes the payslip TDS. */
+/** India: new / old regime, with a full year's tax under each. Saving changes the payslip TDS (until the deadline). */
 export function RegimePicker({ input, showLink = true }: { input: PayslipInput; showLink?: boolean }) {
   const regime = useTaxRegime(input.employeeId);
+  const { demoProfile } = usePortal();
+  useDeclarationsVersion();
+  const cfg = declConfig({ id: input.employeeId, fullName: "", role: demoProfile.role, countryCode: input.countryCode });
+  const locked = cfg ? !cfg.regimeEditable : false;
   const [saving, setSaving] = useState(false);
   const both = compareRegimes({ ...input, regime });
   const c = "INR";
@@ -225,6 +210,7 @@ export function RegimePicker({ input, showLink = true }: { input: PayslipInput; 
     if (next === regime || saving) return;
     setSaving(true);
     const error = await setTaxRegime(input.employeeId, next);
+    if (!error) await reloadDeclarations();
     setSaving(false);
     notify(error ?? `${next === "new" ? "New" : "Old"} regime saved. Payslip tax updated.`, error ? "err" : "ok");
   }
@@ -232,18 +218,24 @@ export function RegimePicker({ input, showLink = true }: { input: PayslipInput; 
     <div className="regime-pick">
       <label className="field" style={{ maxWidth: 280, margin: 0 }}>
         <span>Tax regime</span>
-        <select value={regime} disabled={saving} onChange={(event) => void choose(event.target.value === "old" ? "old" : "new")}>
+        <select value={regime} disabled={saving || locked} onChange={(event) => void choose(event.target.value === "old" ? "old" : "new")}>
           <option value="new">New regime (default)</option>
           <option value="old">Old regime</option>
         </select>
       </label>
       <p className="muted" style={{ margin: "8px 0 0" }}>
-        Tax for the year · new {money(both.new.annualTax, c)} · old {money(both.old.annualTax, c)}
+        Estimated tax for the year · new {money(both.new.annualTax, c)} · old {money(both.old.annualTax, c)}
         {both.new.annualTax !== both.old.annualTax && ` · ${better} is lower by ${money(Math.abs(both.new.annualTax - both.old.annualTax), c)}`}
         {saving ? " · saving…" : ""}
       </p>
       <p className="muted" style={{ margin: "4px 0 0" }}>
-        Old regime counts verified declarations.{showLink && <> <Link to="/investment">Declarations</Link></>}
+        {cfg?.regimeNote ? `${cfg.regimeNote} ` : ""}Old regime counts verified declarations.
+        {showLink && (
+          <>
+            {" "}
+            <Link to="/investment">Declarations</Link>
+          </>
+        )}
       </p>
     </div>
   );
@@ -272,9 +264,9 @@ export function TaxYearCard({ input, slips }: { input: PayslipInput; slips: Pays
   return (
     <Card title="Tax this year">
       <p className="muted" style={{ margin: "0 0 12px" }}>
-        {sum.taxYear} · {sum.basis}
+        {sum.taxYear} · {sum.basis} · <SlipTag status="estimated" /> projection from payslips so far and today's pay
       </p>
-      <div className="pay-head" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "8px 16px" }}>
+      <div className="pay-head slip-stats">
         {stat("Tax paid so far", money(sum.ytdTax, c))}
         {stat("Projected for the year", money(sum.projectedTax, c))}
         {stat("Per month now", money(sum.monthTax, c))}
@@ -304,9 +296,9 @@ function MonthSoFarCard({ est }: { est: MonthSoFar }) {
   return (
     <Card title="This month so far">
       <p className="muted" style={{ margin: "0 0 12px" }}>
-        Earned so far, {spanText(est.from, est.to)} · estimate; paid on payday
+        Earned so far, {spanText(est.from, est.to)} · <SlipTag status="estimated" /> paid on payday
       </p>
-      <div className="pay-head" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "8px 16px" }}>
+      <div className="pay-head slip-stats">
         <div>
           <div className="muted">Gross</div>
           <strong>{money(est.gross, c)}</strong>
@@ -334,37 +326,83 @@ function MonthSoFarCard({ est }: { est: MonthSoFar }) {
   );
 }
 
-export function PayslipsPage() {
-  const { employee } = usePortal();
-  useTaxRegime(employee.id);
-  const { payslipViews, payInput } = usePortal();
-  const est = estimateMonthSoFar(payInput);
-  const lwd = payInput.lastWorkingDay;
-  const leaving = Boolean(lwd && lwd >= payInput.today);
+function taxYearOf(slip: PayslipView): string {
+  return asDetailView(slip)?.tax.taxYear ?? slip.month.slice(0, 4);
+}
+
+/** Monthly summary: basic, allowances, gross, deductions, tax, net; click a month for the full payslip. */
+function SummaryCard({ slips, employee, regime }: { slips: PayslipView[]; employee: Employee; regime?: string }) {
+  const navigate = useNavigate();
+  const years = [...new Set(slips.map(taxYearOf))];
+  const [year, setYear] = useState("");
+  const [status, setStatus] = useState<"" | SlipStatus>("");
+  const shown = slips.filter((s) => (!year || taxYearOf(s) === year) && (!status || slipStatus(s) === status));
+  const c = slips[0]?.currency;
+  const totals = shown.reduce(
+    (acc, s) => {
+      const b = slipBreakdown(s);
+      return { gross: acc.gross + b.gross, deductions: acc.deductions + b.deductions, tax: acc.tax + b.tax, net: acc.net + b.net };
+    },
+    { gross: 0, deductions: 0, tax: 0, net: 0 },
+  );
   return (
-    <Page title="My payslips">
-      {leaving && lwd && (
-        <Card>
-          <p style={{ margin: 0 }}>
-            <strong>Notice period</strong> · last working day {formatShortDate(lwd)}. Your final payslip covers 1–{dayMonth(lwd)} and
-            includes unused leave.
-          </p>
-        </Card>
-      )}
-      {est && <MonthSoFarCard est={est} />}
-      <TaxYearCard input={payInput} slips={payslipViews} />
-      <Card>
-        <div className="doc-table-wrap">
-          <table className="data doc-table pay-list">
-            <thead>
+    <Card title="Monthly payslips">
+      <div className="slip-filters">
+        <label>
+          Tax year
+          <select value={year} onChange={(e) => setYear(e.target.value)}>
+            <option value="">All years</option>
+            {years.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Figures
+          <select value={status} onChange={(e) => setStatus(e.target.value as "" | SlipStatus)}>
+            <option value="">Final and estimated</option>
+            <option value="final">Final only</option>
+            <option value="estimated">Estimated only</option>
+          </select>
+        </label>
+        <p className="slip-legend">
+          <span>
+            <SlipTag status="final" /> from the locked payroll run
+          </span>
+          <span>
+            <SlipTag status="estimated" /> worked out by TimeZ until payroll locks the month
+          </span>
+        </p>
+      </div>
+      <div className="doc-table-wrap scroll-x">
+        <table className="data doc-table pay-list pay-summary">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Figures</th>
+              <th className="num">Basic</th>
+              <th className="num">Allowances</th>
+              <th className="num">Gross</th>
+              <th className="num">Deductions</th>
+              <th className="num">Tax</th>
+              <th className="num">Net pay</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.length === 0 && (
               <tr>
-                <th>Month</th>
-                <th>Net pay</th>
-                <th></th>
+                <td colSpan={9} className="muted">
+                  No payslips match these filters.
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {payslipViews.map((payslip) => (
+            )}
+            {shown.map((payslip) => {
+              const b = slipBreakdown(payslip);
+              const cur = payslip.currency;
+              return (
                 <tr key={payslip.id}>
                   <td>
                     <Link to={`/payslips/${payslip.id}`}>{monthTitle(payslip.month)}</Link>
@@ -373,30 +411,432 @@ export function PayslipsPage() {
                       <span className="muted"> · {payslip.paidDays} of {payslip.totalDays} days</span>
                     )}
                   </td>
-                  <td>{money(payslip.net, payslip.currency)}</td>
+                  <td>
+                    <SlipTag status={slipStatus(payslip)} />
+                  </td>
+                  <td className="num">{money(b.basic, cur)}</td>
+                  <td className="num">
+                    {money(b.allowances, cur)}
+                    {b.other > 0 && <div className="muted">+ {money(b.other, cur)} one-off</div>}
+                  </td>
+                  <td className="num">{money(b.gross, cur)}</td>
+                  <td className="num">{money(b.deductions, cur)}</td>
+                  <td className="num">{money(b.tax, cur)}</td>
+                  <td className="num">
+                    <strong>{money(b.net, cur)}</strong>
+                  </td>
                   <td className="actions">
-                    <Link className="btn-ghost btn-tiny" to={`/payslips/${payslip.id}`}>
+                    <button className="btn-ghost btn-tiny" type="button" onClick={() => navigate(`/payslips/${payslip.id}`)}>
                       View
-                    </Link>
-                    <button
-                      className="btn-ghost btn-tiny"
-                      type="button"
-                      onClick={() => downloadText(`${monthTitle(payslip.month)} payslip.txt`, payslipText(payslip, employee))}
-                    >
-                      Download
                     </button>
+                    <ActionButton
+                      className="btn-ghost btn-tiny"
+                      busyLabel="Preparing…"
+                      doneLabel="Downloaded"
+                      onAction={() => downloadPayslip(payslip, employee, regime)}
+                      success={`${monthTitle(payslip.month)} payslip downloaded (PDF).`}
+                      toastError
+                    >
+                      Download PDF
+                    </ActionButton>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          {shown.length > 1 && (
+            <tfoot>
+              <tr>
+                <th colSpan={4}>Total · {shown.length} months</th>
+                <th className="num">{money(totals.gross, c)}</th>
+                <th className="num">{money(totals.deductions, c)}</th>
+                <th className="num">{money(totals.tax, c)}</th>
+                <th className="num">{money(totals.net, c)}</th>
+                <th></th>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+/** Pay record changes (Compensation) and month-on-month pay from the payslips. */
+function SalaryHistoryCard({ slips, employeeId }: { slips: PayslipView[]; employeeId: string }) {
+  const reward = useSyncExternalStore(subscribeReward, getRewardState, getRewardState);
+  const revisions = reward.history.filter((h) => h.employeeId === employeeId).sort((a, b) => b.effective.localeCompare(a.effective));
+  const base = annualBaseFor(employeeId);
+  const ordered = [...slips].sort((a, b) => a.month.localeCompare(b.month));
+  return (
+    <Card title="Salary history">
+      {revisions.length > 0 ? (
+        <div className="doc-table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Effective</th>
+                <th>Change</th>
+                <th>Grade</th>
+                <th className="num">Annual base</th>
+              </tr>
+            </thead>
+            <tbody>
+              {revisions.map((r) => (
+                <tr key={r.id}>
+                  <td>{formatShortDate(r.effective)}</td>
+                  <td>{r.event}</td>
+                  <td>{r.grade}</td>
+                  <td className="num">
+                    {r.base} {r.currency}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </Card>
+      ) : (
+        <p className="muted" style={{ marginTop: 0 }}>
+          {base ? `Current annual base on your pay record: ${money(base.amount, base.currency)}.` : "Payslips use your country's standard package for your role."}{" "}
+          <Link to="/compensation">Compensation</Link>
+        </p>
+      )}
+      <div className="doc-table-wrap scroll-x" style={{ marginTop: 12 }}>
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th className="num">Gross</th>
+              <th className="num">Net</th>
+              <th className="num">Change in gross</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ordered
+              .map((s, i) => {
+                const prev = ordered[i - 1];
+                const diff = prev ? s.gross - prev.gross : 0;
+                return (
+                  <tr key={s.id}>
+                    <td>
+                      {monthTitle(s.month)} <SlipTag status={slipStatus(s)} />
+                    </td>
+                    <td className="num">{money(s.gross, s.currency)}</td>
+                    <td className="num">{money(s.net, s.currency)}</td>
+                    <td className="num">{prev && diff !== 0 ? `${diff > 0 ? "+" : "−"}${money(Math.abs(diff), s.currency)}` : "—"}</td>
+                  </tr>
+                );
+              })
+              .reverse()}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function AnnualSummaryCard({ slips }: { slips: PayslipView[] }) {
+  const rows = new Map<string, { months: number; final: number; gross: number; deductions: number; tax: number; net: number; employer: number; currency?: string }>();
+  for (const s of slips) {
+    const y = taxYearOf(s);
+    const b = slipBreakdown(s);
+    const r = rows.get(y) ?? { months: 0, final: 0, gross: 0, deductions: 0, tax: 0, net: 0, employer: 0, currency: s.currency };
+    r.months += 1;
+    r.final += slipStatus(s) === "final" ? 1 : 0;
+    r.gross += b.gross;
+    r.deductions += b.deductions;
+    r.tax += b.tax;
+    r.net += b.net;
+    r.employer += b.employer;
+    rows.set(y, r);
+  }
+  return (
+    <Card title="Annual earnings summary">
+      <div className="doc-table-wrap scroll-x">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Tax year</th>
+              <th>Months</th>
+              <th className="num">Gross</th>
+              <th className="num">Deductions</th>
+              <th className="num">Tax</th>
+              <th className="num">Net</th>
+              <th className="num">Employer contributions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...rows].map(([y, r]) => (
+              <tr key={y}>
+                <td>{y}</td>
+                <td>
+                  {r.months} · {r.final} final{r.months - r.final ? `, ${r.months - r.final} estimated` : ""}
+                </td>
+                <td className="num">{money(r.gross, r.currency)}</td>
+                <td className="num">{money(r.deductions, r.currency)}</td>
+                <td className="num">{money(r.tax, r.currency)}</td>
+                <td className="num">{money(r.net, r.currency)}</td>
+                <td className="num">{money(r.employer, r.currency)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+/** Each deduction line month by month (statutory contributions, tax, recoveries). */
+function MonthlyDeductionsCard({ slips }: { slips: PayslipView[] }) {
+  const months = [...slips].sort((a, b) => a.month.localeCompare(b.month)).slice(-6);
+  const names = [...new Set(months.flatMap((s) => s.deductions.map((d) => d.name)))];
+  return (
+    <Card title="Monthly deductions">
+      <p className="muted" style={{ marginTop: 0 }}>Last {months.length} months.</p>
+      <div className="doc-table-wrap scroll-x">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Deduction</th>
+              {months.map((s) => (
+                <th key={s.id} className="num">
+                  {parseISODate(`${s.month}-01`).toLocaleDateString("en-GB", { month: "short", year: "2-digit" })}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {names.map((n) => (
+              <tr key={n}>
+                <td>{n}</td>
+                {months.map((s) => (
+                  <td key={s.id} className="num">
+                    {money(s.deductions.find((d) => d.name === n)?.amount ?? 0, s.currency)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr>
+              <th>Total</th>
+              {months.map((s) => (
+                <th key={s.id} className="num">
+                  {money(s.deductionTotal, s.currency)}
+                </th>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+const STATUTORY_NOTES: Record<string, string> = {
+  "Provident Fund": "12% of basic to your EPF account (EPF Act)",
+  "Professional Tax": "State professional tax",
+  TDS: "Income tax deducted at source",
+  "Employer PF": "Company's 12% of basic",
+  ESI: "Employees' State Insurance",
+};
+
+function StatutoryCard({ latest, countryCode }: { latest: PayslipView | undefined; countryCode: Employee["countryCode"] }) {
+  const detail = latest ? asDetailView(latest) : null;
+  const rules = payRulesFor(countryCode);
+  if (!latest) return null;
+  return (
+    <Card title="Statutory deductions">
+      <p className="muted" style={{ marginTop: 0 }}>
+        {rules.incomeTaxName ? `Income tax: ${rules.incomeTaxName}.` : "No personal income tax."} From your {monthTitle(latest.month)} payslip.
+      </p>
+      <div className="doc-table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Paid by</th>
+              <th className="num">This month</th>
+            </tr>
+          </thead>
+          <tbody>
+            {latest.deductions.map((d) => (
+              <tr key={`d-${d.name}`}>
+                <td>
+                  {d.name}
+                  {STATUTORY_NOTES[d.name] && <div className="muted">{STATUTORY_NOTES[d.name]}</div>}
+                </td>
+                <td>You</td>
+                <td className="num">{money(d.amount, latest.currency)}</td>
+              </tr>
+            ))}
+            {detail?.employerContributions.map((d) => (
+              <tr key={`e-${d.name}`}>
+                <td>
+                  {d.name}
+                  {STATUTORY_NOTES[d.name] && <div className="muted">{STATUTORY_NOTES[d.name]}</div>}
+                </td>
+                <td>Company</td>
+                <td className="num">{money(d.amount, latest.currency)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+/** Paydays this tax year and which months are final, estimated or still to come. */
+function PayrollCalendarCard({ slips, employee }: { slips: PayslipView[]; employee: Employee }) {
+  const rules = payRulesFor(employee.countryCode);
+  const today = todayISO();
+  const start = taxYearStartFor(rules, today);
+  const first = new Date(start, rules.taxYearStart.month - 1, 1);
+  const rows = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(first.getFullYear(), first.getMonth() + i, 1);
+    const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const slip = slips.find((s) => s.month === month);
+    const payday = paydayFor(month, employee.countryCode);
+    const state = slip ? (slipStatus(slip) === "final" ? "Paid · final" : "Estimated") : month === today.slice(0, 7) ? "In progress" : month < today.slice(0, 7) ? "Not on payroll" : "Upcoming";
+    return { month, payday, state, slip };
+  });
+  return (
+    <Card title={`Payroll calendar · ${rules.taxYearLabel(start)}`}>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Paid in {rules.currency} on the last working day of each month. Payroll locks the month after HR prepares it and a second person approves.
+      </p>
+      <div className="doc-table-wrap scroll-x">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Payday</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.month}>
+                <td>{r.slip ? <Link to={`/payslips/${r.slip.id}`}>{monthTitle(r.month)}</Link> : monthTitle(r.month)}</td>
+                <td>{formatShortDate(r.payday)}</td>
+                <td>{r.slip ? <SlipTag status={slipStatus(r.slip)} /> : <span className="muted">{r.state}</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function DeclarationHistoryCard() {
+  const { employee, demoProfile, state } = usePortal();
+  useDeclarationsVersion();
+  const items = myDeclarations({ id: employee.id, fullName: employee.fullName, role: demoProfile.role, countryCode: employee.countryCode }, state.investmentProofs);
+  return (
+    <Card title="Declaration history" action={<Link to="/investment">Tax declarations</Link>}>
+      {items.length === 0 ? (
+        <p className="muted" style={{ margin: 0 }}>No tax declarations yet.</p>
+      ) : (
+        <div className="doc-table-wrap scroll-x">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Tax year</th>
+                <th>Section</th>
+                <th>Item</th>
+                <th className="num">Declared</th>
+                <th className="num">Verified</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((d) => (
+                <tr key={d.id}>
+                  <td>{d.financialYear}</td>
+                  <td>{d.section}</td>
+                  <td>
+                    <Link to={`/investment?item=${encodeURIComponent(d.id)}`}>{d.title}</Link>
+                  </td>
+                  <td className="num">{money(d.amount, d.currency)}</td>
+                  <td className="num">{d.verifiedAmount != null ? money(d.verifiedAmount, d.currency) : "—"}</td>
+                  <td style={{ textTransform: "capitalize" }}>{d.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function PayslipsPage() {
+  const { employee } = usePortal();
+  const regime = useTaxRegime(employee.id);
+  useDeclarationsVersion();
+  const { payslipViews, payInput } = usePortal();
+  const [tab, setTab] = useState("payslips");
+  const est = estimateMonthSoFar(payInput);
+  const lwd = payInput.lastWorkingDay;
+  const leaving = Boolean(lwd && lwd >= payInput.today);
+  const rules = payRulesFor(employee.countryCode);
+  const taxYear = rules.taxYearLabel(taxYearStartFor(rules, todayISO()));
+  const finalCount = useMemo(() => payslipViews.filter((s) => slipStatus(s) === "final").length, [payslipViews]);
+  return (
+    <Page
+      title="My payslips"
+      subtitle={`${employee.countryName ?? "India"} · ${rules.currency} · tax year ${taxYear} · paid on the last working day`}
+    >
+      {leaving && lwd && (
+        <Card>
+          <p style={{ margin: 0 }}>
+            <strong>Notice period</strong> · last working day {formatShortDate(lwd)}. Your final payslip covers 1–{dayMonth(lwd)} and
+            includes unused leave.
+          </p>
+        </Card>
+      )}
+      <Banner
+        message={{
+          tone: "info",
+          text: `${finalCount} of ${payslipViews.length} months are FINAL (from a locked payroll run); the rest are ESTIMATED by TimeZ and may change when payroll locks the month. Only you can see your pay.`,
+        }}
+      />
+      <Tabs
+        tabs={[
+          { id: "payslips", label: "Payslips" },
+          { id: "salary", label: "Salary & earnings" },
+          { id: "tax", label: "Tax & deductions" },
+          { id: "calendar", label: "Payroll calendar" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      {tab === "payslips" && (
+        <>
+          {est && <MonthSoFarCard est={est} />}
+          <SummaryCard slips={payslipViews} employee={employee} regime={employee.countryCode === "IN" ? regime : undefined} />
+        </>
+      )}
+      {tab === "salary" && (
+        <>
+          <AnnualSummaryCard slips={payslipViews} />
+          <SalaryHistoryCard slips={payslipViews} employeeId={employee.id} />
+        </>
+      )}
+      {tab === "tax" && (
+        <>
+          <TaxYearCard input={payInput} slips={payslipViews} />
+          <MonthlyDeductionsCard slips={payslipViews} />
+          <StatutoryCard latest={payslipViews[0]} countryCode={employee.countryCode} />
+          <DeclarationHistoryCard />
+        </>
+      )}
+      {tab === "calendar" && <PayrollCalendarCard slips={payslipViews} employee={employee} />}
     </Page>
   );
 }
 
-/** Header facts for a payslip: entity, period, country, basis, days, currency. */
+/** Header facts for a payslip: entity, period, payment date, country, basis, days, currency. */
 export function PayslipHead({ payslip, person }: { payslip: PayslipView; person: Pick<Employee, "legalEntity" | "countryCode" | "countryName"> }) {
   const header = slipHeader(payslip, person);
   const detail = asDetailView(payslip);
@@ -410,6 +850,7 @@ export function PayslipHead({ payslip, person }: { payslip: PayslipView; person:
     <dl className="pay-head" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "8px 16px", margin: "0 0 16px" }}>
       {item("Legal entity", header.entity)}
       {item("Pay period", header.period)}
+      {item("Payment date", formatShortDate(paydayFor(payslip.month, person.countryCode)))}
       {item("Country", header.country)}
       {detail && item("Pay basis", basisText(detail))}
       {payslip.paidDays != null &&
@@ -423,27 +864,40 @@ export function PayslipHead({ payslip, person }: { payslip: PayslipView; person:
 export function PayslipDetail() {
   const { id } = useParams();
   const { employee } = usePortal();
-  useTaxRegime(employee.id);
+  const regime = useTaxRegime(employee.id);
+  useDeclarationsVersion();
   const { payslipViews } = usePortal();
-  const payslip = payslipViews.find((item) => item.id === id);
+  const index = payslipViews.findIndex((item) => item.id === id);
+  const payslip = payslipViews[index];
   if (!payslip) {
     return (
       <Page title="Payslip">
         <Card>
           <p className="empty">That payslip is not on this account.</p>
+          <Link to="/payslips">Back to payslips</Link>
         </Card>
       </Page>
     );
   }
+  const status = slipStatus(payslip);
+  const newer = payslipViews[index - 1];
+  const older = payslipViews[index + 1];
   return (
     <Page
       title={payslip.label}
-      subtitle={`${employee.fullName} · ${employee.employeeCode}`}
+      subtitle={`${employee.fullName} · ${employee.employeeCode}${employee.designation ? ` · ${employee.designation}` : ""}`}
       action={
         <span className="form-actions no-print">
-          <button className="btn-ghost" type="button" onClick={() => downloadText(`${payslip.label}.txt`, payslipText(payslip, employee))}>
-            Download
-          </button>
+          <ActionButton
+            className="btn-ghost"
+            busyLabel="Preparing…"
+            doneLabel="Downloaded"
+            onAction={() => downloadPayslip(payslip, employee, employee.countryCode === "IN" ? regime : undefined)}
+            success="Payslip downloaded (PDF)."
+            toastError
+          >
+            Download PDF
+          </ActionButton>
           <button className="btn" type="button" onClick={() => window.print()}>
             Print
           </button>
@@ -451,8 +905,21 @@ export function PayslipDetail() {
       }
     >
       <Card className="pay-sheet">
+        <div className="slip-banner">
+          <SlipTag status={status} />
+          <span>
+            {status === "final"
+              ? "Final figures from the locked payroll run for this month."
+              : "Estimated by TimeZ from your pay record, tax rules and verified declarations. The final payslip comes from the locked payroll run and may differ."}
+          </span>
+        </div>
         <PayslipHead payslip={payslip} person={employee} />
         <PayslipBody payslip={payslip} />
+        <nav className="slip-nav" aria-label="Other months">
+          {older ? <Link to={`/payslips/${older.id}`}>← {monthTitle(older.month)}</Link> : <span />}
+          <Link to="/payslips">All payslips</Link>
+          {newer ? <Link to={`/payslips/${newer.id}`}>{monthTitle(newer.month)} →</Link> : <span />}
+        </nav>
       </Card>
     </Page>
   );

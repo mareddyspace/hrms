@@ -149,7 +149,7 @@ def _proposal_finished(db: Session, instance: ApprovalInstance) -> None:
         proposal.record_id = record.id
         after |= {"record_id": record.id, "effective_date": effective}
         record_audit(db, actor_id=decider, action="comp_record_created", entity="compensation_record", entity_id=record.id,
-                     subject_id=proposal.employee_id, after={"effective_date": effective, "base_salary": record.base_salary,
+                     subject_id=proposal.employee_id, after={"effective_date": effective,
                                                              "currency": record.currency, "grade": record.grade,
                                                              "proposal_id": proposal.id})
         if proposal.bonus_amount:

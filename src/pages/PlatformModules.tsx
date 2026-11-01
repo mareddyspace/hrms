@@ -567,13 +567,17 @@ type ChatTurn = {
 
 export function AiCopilotPage() {
   const { employee, demoProfile } = usePortal();
+  const [askParams, setAskParams] = useSearchParams();
+  const requestedAgent = askParams.get("agent");
+  const activeAgent = AI_AGENTS.find((a) => a.id === requestedAgent && agentEnabled(a.id) && (!AGENT_ROLES[a.id] || AGENT_ROLES[a.id].includes(demoProfile.role)));
   const askCopilot = useAskCopilotAi();
   const persona = copilotPersonaFromRole(demoProfile.role);
-  const suggestions = COPILOT_SUGGESTIONS[persona];
+  const suggestions = activeAgent ? (requestedAgent === "document" && !canManageLetters(demoProfile) ? SELF_DOCUMENT_STARTERS : (AGENT_STARTERS[requestedAgent ?? ""] ?? COPILOT_SUGGESTIONS[persona])) : COPILOT_SUGGESTIONS[persona];
   const [prompt, setPrompt] = useState("");
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [chatError, setChatError] = useState("");
 
   const sendAction = useAction({ doneMs: 1200 });
 
@@ -588,10 +592,14 @@ export function AiCopilotPage() {
     setActiveId(botId);
     setPrompt("");
     setBusy(true);
+    setChatError("");
     try {
       const reply = await askCopilot(q, earlier);
       const botTurn: ChatTurn = { id: botId, role: "assistant", text: reply.answer.summary, answer: reply.answer, origin: reply.origin, model: reply.model };
       setHistory((prev) => prev.map((t) => (t.id === botId ? botTurn : t)));
+    } catch {
+      setHistory((prev) => prev.map((t) => (t.id === botId ? { ...t, text: "I couldn't get a response. Please try again." , pending: false } : t)));
+      setChatError("The assistant could not respond. Check your connection and try again.");
     } finally {
       setBusy(false);
     }
@@ -599,12 +607,11 @@ export function AiCopilotPage() {
   }
 
 
-  const [askParams, setAskParams] = useSearchParams();
   useEffect(() => {
     const linked = askParams.get("ask");
     if (!linked) return;
     void ask(linked);
-    setAskParams({}, { replace: true });
+    setAskParams(activeAgent ? { agent: activeAgent.id } : {}, { replace: true });
     // ask is stable enough for a one-off linked question
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askParams]);
@@ -619,7 +626,9 @@ export function AiCopilotPage() {
   }, [history]);
 
   return (
-    <Page title="AI Copilot">
+    <Page title={activeAgent ? `${activeAgent.name} Assistant` : "AI Copilot"} subtitle={activeAgent?.purpose}>
+      {requestedAgent && !activeAgent && <Banner message={{ tone: "err", text: "This assistant is unavailable or you do not have access to it." }} />}
+      {chatError && <Banner message={{ tone: "err", text: chatError }} />}
       <div className="copilot-layout">
         <aside className="copilot-history card">
           <h2 className="card-title">Conversation history</h2>
@@ -642,7 +651,7 @@ export function AiCopilotPage() {
         </aside>
 
         <div className="copilot-main stack">
-          <Card title="Suggested">
+          <Card title={activeAgent ? `Suggested questions · ${activeAgent.name}` : "Suggested"}>
             <div className="chip-row">
               {suggestions.map((s) => (
                 <button key={s} type="button" className="chip-btn" onClick={() => void ask(s)}>
@@ -785,9 +794,10 @@ export function AiAgentsPage() {
                 </dd>
               </div>
             </dl>
+            <Link className="btn" to={`/ai/copilot?agent=${encodeURIComponent(agent.id)}`}>Open assistant</Link>
             <div className="agent-starters">
               {startersFor(agent.id).map((q) => (
-                <Link key={q} className="btn-ghost btn-tiny" to={`/ai/copilot?ask=${encodeURIComponent(q)}`}>
+                <Link key={q} className="btn-ghost btn-tiny" to={`/ai/copilot?agent=${encodeURIComponent(agent.id)}&ask=${encodeURIComponent(q)}`}>
                   {q}
                 </Link>
               ))}

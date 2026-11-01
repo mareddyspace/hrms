@@ -9,7 +9,7 @@ const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
 /** "Edit profile" card for the signed-in employee: contact details and photo, confirmed with an OTP. */
-export function SelfProfileEditor({ onClose }: { onClose: () => void }) {
+export function SelfProfileEditor({ onClose, bare = false }: { onClose: () => void; /** Form only, for a dialog. */ bare?: boolean }) {
   const { employee } = usePortal();
   // Backend mode: start from the server record (masked mobile = keep), not the copy taken at sign-in.
   const [draft, setDraft] = useState(() =>
@@ -54,8 +54,7 @@ export function SelfProfileEditor({ onClose }: { onClose: () => void }) {
     reader.readAsDataURL(file);
   }
 
-  return (
-    <Card title="Edit profile">
+  const form = (
       <ProfileEditForm
         draft={draft}
         setDraft={(next) =>
@@ -70,6 +69,6 @@ export function SelfProfileEditor({ onClose }: { onClose: () => void }) {
         onCancel={onClose}
         onSaved={onClose}
       />
-    </Card>
   );
+  return bare ? form : <Card title="Edit profile">{form}</Card>;
 }

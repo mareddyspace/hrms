@@ -4,7 +4,8 @@ import uuid
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy import or_, select
 
 from app.db import utcnow
@@ -22,7 +23,9 @@ from app.services import leave as rules
 from app.services import leave_rules as eligibility
 from app.services import time_approvals as chain
 from app.services.activity import notify, record_audit
+from app.services import storage
 from app.services.scope import manager_chain_ids
+from app.services.uploads import UPLOAD_OPENAPI, clean_name, read_upload
 
 router = APIRouter(prefix="/leave", tags=["leave"])
 
@@ -58,15 +61,24 @@ def _snapshot(r: LeaveRequest) -> dict:
     }
 
 
-def _out(r: LeaveRequest, name: str | None, approval: dict | None = None) -> LeaveRequestOut:
+def _out(r: LeaveRequest, name: str | None, approval: dict | None = None, handover_name: str | None = None) -> LeaveRequestOut:
     out = LeaveRequestOut.model_validate(r)
     out.employee_name = name
     out.approval = approval
+    out.handover_name = handover_name
     return out
 
 
+def _handover_names(db: DbSession, rows: list[LeaveRequest]) -> dict[str, str]:
+    ids = {r.handover_to for r in rows if r.handover_to}
+    if not ids:
+        return {}
+    return dict(db.execute(select(Employee.id, Employee.full_name).where(Employee.id.in_(ids))).all())
+
+
 def _out_one(db: DbSession, user: CurrentUser, r: LeaveRequest, name: str | None) -> LeaveRequestOut:
-    return _out(r, name, chain.progress_map(db, chain.LEAVE, [r.id], user.employee_id).get(r.id))
+    return _out(r, name, chain.progress_map(db, chain.LEAVE, [r.id], user.employee_id).get(r.id),
+                _handover_names(db, [r]).get(r.handover_to or ""))
 
 
 @router.get("/policies", response_model=list[LeavePolicyOut])
@@ -137,7 +149,8 @@ def list_requests(
         stmt = stmt.where(LeaveRequest.status == status_filter)
     rows = db.execute(stmt.order_by(LeaveRequest.created_at.desc()).limit(limit)).all()
     approvals = chain.progress_map(db, chain.LEAVE, [r.id for r, _ in rows], user.employee_id)
-    return [_out(r, name, approvals.get(r.id)) for r, name in rows]
+    handovers = _handover_names(db, [r for r, _ in rows])
+    return [_out(r, name, approvals.get(r.id), handovers.get(r.handover_to or "")) for r, name in rows]
 
 
 @router.post("/requests", response_model=LeaveRequestOut, status_code=status.HTTP_201_CREATED)
@@ -147,6 +160,13 @@ def apply_leave(body: LeaveRequestIn, request: Request, db: DbSession, user: Cur
         days = rules.validate_new_request(db, emp, body.leave_code, body.from_date, body.to_date, body.half, body.reason)
     except rules.LeaveError as exc:
         raise HTTPException(422, str(exc)) from exc
+    handover = (body.handover_to or "").strip() or None
+    if handover:
+        cover = db.get(Employee, handover)
+        if handover == emp.id:
+            raise HTTPException(422, "Choose someone else to cover your work.")
+        if cover is None or cover.employment_status in ("Terminated", "Exited"):
+            raise HTTPException(422, "Choose a colleague to cover your work.")
 
     item = LeaveRequest(
         id=f"lv-{uuid.uuid4().hex[:12]}",
@@ -158,6 +178,7 @@ def apply_leave(body: LeaveRequestIn, request: Request, db: DbSession, user: Cur
         days=days,
         reason=body.reason.strip(),
         status="pending",
+        handover_to=handover,
     )
     db.add(item)
     db.flush()
@@ -169,6 +190,14 @@ def apply_leave(body: LeaveRequestIn, request: Request, db: DbSession, user: Cur
         db, actor_id=user.id, action="leave_applied", entity="leave_request", entity_id=item.id,
         subject_id=emp.id, after=_snapshot(item), ip=client_ip(request),
     )
+    if handover:
+        notify(
+            db,
+            recipient_id=handover,
+            title=f"{emp.full_name} asked you to cover",
+            body=f"Leave {item.from_date} to {item.to_date} (waiting for approval).",
+            href="/leave",
+        )
     db.commit()
     return _out_one(db, user, item, emp.full_name)
 
@@ -251,3 +280,102 @@ def cancel(request_id: str, request: Request, db: DbSession, user: CurrentUserDe
         )
     db.commit()
     return _out(item, emp.full_name)
+
+
+# ---------- supporting file (one per request) ----------
+@router.post("/requests/{request_id}/attachment", response_model=LeaveRequestOut, openapi_extra=UPLOAD_OPENAPI)
+async def upload_attachment(
+    request_id: str, request: Request, db: DbSession, user: CurrentUserDep,
+    filename: Annotated[str | None, Query(max_length=255)] = None,
+) -> LeaveRequestOut:
+    """The requester adds (or replaces) a PDF or image, e.g. a medical certificate. Max 5 MB."""
+    item = db.get(LeaveRequest, request_id)
+    if item is None or item.employee_id != user.employee_id:
+        raise NOT_FOUND
+    if item.status not in ("pending", "approved"):
+        raise HTTPException(409, f"This request is {item.status}.")
+    data, content_type, sha = await read_upload(request)
+    stored = storage.save(f"leave/{item.employee_id}", f"{item.id}-{sha[:8]}", data, content_type, sha)
+    old = item.attachment_path
+    item.attachment_path = stored.relative_path
+    item.attachment_type = stored.content_type
+    item.attachment_name = clean_name(filename, content_type)
+    record_audit(
+        db, actor_id=user.id, action="leave_attachment_added", entity="leave_request", entity_id=item.id,
+        subject_id=item.employee_id, after={"file_name": item.attachment_name, "sha256": sha}, ip=client_ip(request),
+    )
+    try:
+        db.commit()
+    except Exception:
+        storage.delete_quietly(stored.relative_path)
+        raise
+    if old and old != stored.relative_path:
+        storage.delete_quietly(old)
+    emp = db.get(Employee, item.employee_id)
+    return _out_one(db, user, item, emp.full_name if emp else None)
+
+
+@router.get("/requests/{request_id}/attachment", response_class=FileResponse)
+def download_attachment(request_id: str, db: DbSession, user: CurrentUserDep) -> Response:
+    item = db.get(LeaveRequest, request_id)
+    emp = db.get(Employee, item.employee_id) if item else None
+    if item is None or emp is None or not item.attachment_path:
+        raise NOT_FOUND
+    instance = chain.pending_instance(db, chain.LEAVE, item.id)
+    if not (item.employee_id == user.employee_id or user.scope.can_see(emp)
+            or user.employee_id in manager_chain_ids(db, emp.id) or chain.may_follow(db, user, instance)):
+        raise NOT_FOUND
+    try:
+        return storage.download(item.attachment_path, media_type=item.attachment_type or "application/octet-stream",
+                                filename=item.attachment_name)
+    except storage.FileMissing as exc:
+        raise HTTPException(410, "The file is no longer available.") from exc
+    except storage.StorageError as exc:
+        raise NOT_FOUND from exc
+
+
+# ---------- team calendar (privacy: teammates only see "On leave") ----------
+@router.get("/team-calendar")
+def team_calendar(
+    db: DbSession, user: CurrentUserDep,
+    from_date: Annotated[date, Query(alias="from")],
+    to_date: Annotated[date, Query(alias="to")],
+) -> list[dict]:
+    """Approved leave of the caller's teammates (same manager), reports and own, for [from, to] (max 92 days).
+    The type and reason are shown only for the caller's own leave, people in their reporting line, or to HR;
+    teammates appear as "On leave". Working from home is left out for teammates."""
+    emp = _me(user)
+    if to_date < from_date or (to_date - from_date).days > 92:
+        raise HTTPException(422, "Choose a range of at most three months.")
+    ids = {emp.id}
+    if emp.manager_id:
+        ids |= set(db.scalars(select(Employee.id).where(Employee.manager_id == emp.manager_id)))
+    ids |= set(user.scope.reports or ())
+    rows = db.execute(
+        select(LeaveRequest, Employee.full_name, Employee.manager_id)
+        .join(Employee, Employee.id == LeaveRequest.employee_id)
+        .where(LeaveRequest.employee_id.in_(ids), LeaveRequest.status.in_(("approved", "pending")),
+               LeaveRequest.from_date <= to_date, LeaveRequest.to_date >= from_date,
+               Employee.employment_status != "Terminated")
+        .order_by(LeaveRequest.from_date)
+    ).all()
+    out: list[dict] = []
+    reports = set(user.scope.reports or ())
+    for r, name, _mgr in rows:
+        detail = r.employee_id == emp.id or r.employee_id in reports or user.scope.is_hr
+        if not detail and (r.status != "approved" or r.leave_code in rules.WORKING_LEAVE):
+            continue
+        out.append({
+            "id": r.id if detail else f"away-{r.id[-8:]}",
+            "employee_id": r.employee_id,
+            "employee_name": name,
+            "from": r.from_date.isoformat(),
+            "to": r.to_date.isoformat(),
+            "half": r.half,
+            "status": r.status,
+            "detail": detail,
+            "leave_code": r.leave_code if detail else None,
+            "reason": r.reason if detail else None,
+            "label": "On leave" if not detail else None,
+        })
+    return out

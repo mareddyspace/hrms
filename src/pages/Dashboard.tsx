@@ -10,17 +10,18 @@ export function Dashboard() {
   const { demoProfile, employee } = usePortal();
   // Backend mode: wait for the server's directory instead of showing the local sample numbers for a moment.
   const loaded = useSyncExternalStore(subscribePeople, () => !API_ENABLED || usingApiPeople());
-  // If the server is slow or the directory can't load, show the home anyway after a while.
+  // Let the home render quickly from its existing role-scoped fallback while the server wakes.
   const [waited, setWaited] = useState(false);
   useEffect(() => {
     if (loaded) return;
-    const timer = window.setTimeout(() => setWaited(true), 15000);
+    const timer = window.setTimeout(() => setWaited(true), 2000);
     return () => window.clearTimeout(timer);
   }, [loaded]);
   const ready = loaded || waited;
   return (
     <>
       <PolicyAckBanner employeeId={employee.id} />
+      {!loaded && waited && <p className="note" role="status">Your home is ready. Syncing the latest company data…</p>}
       {ready ? <RoleHomeRouter profile={demoProfile} /> : <LoadingState label="Loading your home…" />}
     </>
   );

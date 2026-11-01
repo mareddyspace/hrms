@@ -3,7 +3,7 @@
  * other people in a conversation see them on their own sign-in. Local mode keeps using collabLocal.ts.
  */
 import type { Conversation } from "../data/collabData.ts";
-import { api, apiSessionAccount } from "./client.ts";
+import { api, apiRequest, apiSessionAccount } from "./client.ts";
 import { createApiMirror, errorText } from "./syncOps.ts";
 import { utcIso } from "./syncShared.ts";
 import { keepFresh } from "./syncShare.ts";
@@ -16,6 +16,7 @@ interface ConversationOut {
   participant_ids: string[];
   participant_names: string[];
   is_member: boolean;
+  created_by?: string | null;
   messages: { id: string; from_id: string; from_name: string; text: string; attachment_name: string | null; at: string; read_by: string[] }[];
 }
 
@@ -27,6 +28,7 @@ function fromApi(c: ConversationOut): Conversation {
     participantIds: c.participant_ids,
     participantNames: c.participant_names,
     restricted: c.restricted ?? undefined,
+    createdBy: c.created_by ?? undefined,
     messages: c.messages.map((m) => ({
       id: m.id,
       fromId: m.from_id,
@@ -99,6 +101,50 @@ export function findDirect(personId: string, list: Conversation[] = chatMirror.g
 export async function apiCreateGroup(title: string, memberIds: string[]): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   try {
     const row = upsert(await api.post<ConversationOut>("/chat/conversations", { kind: "group", title, member_ids: memberIds }));
+    return { ok: true, id: row.id };
+  } catch (e) {
+    return { ok: false, error: errorText(e) };
+  }
+}
+
+export async function apiAddGroupMembers(conversationId: string, memberIds: string[]): Promise<string | null> {
+  try {
+    upsert(await api.post<ConversationOut>(`/chat/conversations/${enc(conversationId)}/members`, { member_ids: memberIds }));
+    return null;
+  } catch (e) {
+    return errorText(e);
+  }
+}
+
+/** Removes someone (or me: leave). When I leave, the thread drops out of my list. */
+export async function apiRemoveGroupMember(conversationId: string, personId: string): Promise<string | null> {
+  try {
+    const out = await apiRequest<ConversationOut | null>(`/chat/conversations/${enc(conversationId)}/members/${enc(personId)}`, {
+      method: "DELETE",
+    });
+    if (out) upsert(out);
+    else chatMirror.set(chatMirror.get().filter((c) => c.id !== conversationId));
+    return null;
+  } catch (e) {
+    return errorText(e);
+  }
+}
+
+export async function apiRenameGroup(conversationId: string, title: string): Promise<string | null> {
+  try {
+    upsert(await apiRequest<ConversationOut>(`/chat/conversations/${enc(conversationId)}`, { method: "PUT", body: { title } }));
+    return null;
+  } catch (e) {
+    return errorText(e);
+  }
+}
+
+/** Opens (or reuses) the direct chat and waits for the server: the conversation id, or the error. */
+export async function apiOpenDirect(personId: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const existing = findDirect(personId);
+  if (existing) return { ok: true, id: existing.id };
+  try {
+    const row = upsert(await api.post<ConversationOut>("/chat/conversations", { kind: "direct", member_ids: [personId] }));
     return { ok: true, id: row.id };
   } catch (e) {
     return { ok: false, error: errorText(e) };

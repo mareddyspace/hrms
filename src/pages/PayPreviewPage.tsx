@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { declarationsAsProofs } from "../features/taxdecl/taxDeclStore.ts";
 import { Card, Field, Page } from "../components/ui.tsx";
 import { legalEntityFor, money } from "../countryPay.ts";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
@@ -123,7 +124,7 @@ export function PayPreviewPage() {
       employmentStatus: person.employmentStatus,
       annualBase: payslipAnnualBase(person.id, person.countryCode),
       regime: getTaxRegime(person.id),
-      investmentProofs: state.investmentProofs,
+      investmentProofs: declarationsAsProofs(state.investmentProofs),
       timesheets: state.timesheets,
       orgTimesheets: state.orgTimesheets,
     };

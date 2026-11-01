@@ -77,6 +77,8 @@ export interface Conversation {
   messages: ChatMessage[];
   /** When set, only authorized roles among participants may view the thread. */
   restricted?: "compensation" | "hr_confidential";
+  /** Who started a group (may remove other members). Unknown for older local groups. */
+  createdBy?: string;
 }
 
 export type AnnouncementScope = "Company" | "Country" | "Department" | "Team";
@@ -101,6 +103,12 @@ export interface Announcement {
   acknowledged?: boolean;
   serverCanManage?: boolean;
   receipts?: { audience: number; read: number; acknowledged: number };
+  /** Holiday | Policy | Event | IT | Wellness | People | Leadership | General */
+  category?: string;
+  /** Shown at the top of everyone's list. */
+  pinned?: boolean;
+  /** Local mode: who acknowledged a must-acknowledge post. */
+  acknowledgedBy?: string[];
 }
 
 export type NotifCategory =
@@ -371,6 +379,10 @@ export interface HrRequestComment {
   at: string;
   author: string;
   text: string;
+  /** Who wrote it (older comments only have the name). */
+  authorId?: string;
+  /** Routing / status lines written by the system (backend mode). */
+  system?: boolean;
 }
 
 export interface HrRequest {
@@ -401,6 +413,12 @@ export interface HrRequest {
   escalatedAt?: string;
   overdue?: boolean;
   files?: { id: string; name: string; contentType: string; size: number; at: string }[];
+  /** Finer topic within the category. */
+  subcategory?: string;
+  /** How the requester wants to be contacted. */
+  contactPreference?: "email" | "phone" | "chat";
+  /** Local mode: names of attached files (the files themselves stay on the device). */
+  attachments?: { name: string; size: number; at: string }[];
 }
 
 export interface FaqItem {
