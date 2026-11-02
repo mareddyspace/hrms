@@ -2,7 +2,7 @@ export { HelpPage } from "./CollabModules.tsx";
 import { useEffect, useState } from "react";
 import { DEMO_MODE } from "../demoMode.ts";
 import { Navigate, useNavigate } from "react-router-dom";
-import { SERVER_WAKING_EVENT } from "../api/client.ts";
+import { SERVER_WAKING_EVENT, wakeServer } from "../api/client.ts";
 import { Eye, EyeOff } from "lucide-react";
 import { COMPANY_NAME, PRODUCT_TAGLINE } from "../brand.ts";
 import { ActionButton, Banner, Card, Field, Page, SubmitButton, useAction } from "../components/ui.tsx";
@@ -29,6 +29,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   useEffect(() => {
     document.title = `Sign in · ${COMPANY_NAME}`;
+    void wakeServer();
   }, []);
   const [mode, setMode] = useState<"login" | "forgot">("login");
   const [email, setEmail] = useState(rememberedEmail ?? "");

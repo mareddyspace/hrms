@@ -199,6 +199,40 @@ export const SERVER_WAKING_EVENT = "timez:server-waking";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
+let wakeUp: Promise<void> | null = null;
+
+/** Starts waking a sleeping free server (the sign-in page calls this on open, so it wakes while the user types). */
+export function wakeServer(): Promise<void> {
+  if (!API_ENABLED || LOCAL_API) return Promise.resolve();
+  if (!wakeUp) {
+    wakeUp = (async () => {
+      for (const wait of [0, ...WAKE_RETRY_MS]) {
+        if (wait) await sleep(wait);
+        try {
+          const res = await fetch(`${API_URL}/health`, { cache: "no-store" });
+          if (res.ok) return;
+        } catch {
+          // still asleep
+        }
+      }
+    })();
+    // Ask again next time if the server falls asleep later.
+    void wakeUp.finally(() => window.setTimeout(() => (wakeUp = null), 60_000));
+  }
+  return wakeUp;
+}
+
+/** Waits for the server before a sign-in, saying "Waking up the server…" when that takes more than a moment. */
+async function serverReady(): Promise<void> {
+  const ready = wakeServer();
+  const slow = window.setTimeout(() => window.dispatchEvent(new Event(SERVER_WAKING_EVENT)), 1500);
+  try {
+    await ready;
+  } finally {
+    window.clearTimeout(slow);
+  }
+}
+
 async function send(path: string, options: RequestOptions): Promise<Response> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -473,6 +507,7 @@ export async function apiLogin(
   mfaCode?: string,
 ): Promise<{ me: MeOut; previousLoginAt: string | null; mustChangePassword: boolean }> {
   let out: TokenOut;
+  await serverReady();
   if (mfaCode && pendingMfa && pendingMfa.email === email.toLowerCase()) {
     try {
       out = await apiRequest<TokenOut>("/auth/mfa/verify", {
