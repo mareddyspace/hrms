@@ -179,3 +179,248 @@ html[data-theme="night"] {
   overflow-x: auto;
   max-width: 100%;
 }
+
+/* ───────────── Interaction (chartKit.tsx) ───────────── */
+
+.chart-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.chart-tip {
+  position: fixed;
+  z-index: 20;
+  pointer-events: none;
+  display: grid;
+  gap: 1px;
+  max-width: min(240px, calc(100vw - 24px));
+  padding: 6px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border, var(--line));
+  background: var(--card, #fff);
+  color: var(--ink, currentColor);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.16);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.chart-tip-title {
+  font-weight: 600;
+}
+
+.chart-tip-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tip-note {
+  color: var(--muted);
+}
+
+.chart-tip-action {
+  margin-top: 2px;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.chart-clickable {
+  cursor: pointer;
+}
+
+.chart-mark,
+.chart-row,
+.chart-seg,
+.chart-hover {
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.chart-has-active .chart-mark:not(.is-active),
+.chart-has-active .chart-seg:not(.is-active),
+.chart-has-active .chart-legend li:not(.is-active) {
+  opacity: 0.5;
+  transition: opacity 0.15s ease;
+}
+
+.chart-mark.is-active .chart-bar,
+.chart-mark.is-selected .chart-bar {
+  fill: var(--accent-bright);
+}
+
+.chart-mark:focus-visible .chart-bar,
+.chart-mark:focus-visible .chart-track {
+  stroke: var(--ink, currentColor);
+  stroke-width: 1.5;
+}
+
+.chart-seg.is-active {
+  stroke-width: 19;
+}
+
+.chart-seg:focus-visible {
+  stroke-width: 20;
+}
+
+.chart-hover.is-active {
+  fill: var(--accent-soft);
+  fill-opacity: 0.45;
+}
+
+.chart-dot.is-active {
+  r: 4.2;
+}
+
+/* Row bars: a little padding so the highlight has room, offset so the layout does not move. */
+.chart-row {
+  margin: -2px -4px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.chart-has-active .chart-row:not(.is-active) {
+  opacity: 0.6;
+}
+
+.chart-row.is-active,
+.chart-row.is-selected {
+  background: var(--accent-soft);
+}
+
+.chart-row.is-active .mini-bars-fill,
+.chart-row.is-active .tz-bar-fill,
+.chart-row.is-selected .mini-bars-fill,
+.chart-row.is-selected .tz-bar-fill {
+  background: var(--accent-bright);
+}
+
+.chart-row:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.chart-legend li.chart-clickable:hover .chart-legend-label,
+.chart-legend li.is-active .chart-legend-label {
+  text-decoration: underline;
+}
+
+.chart-legend li:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+.chart-legend-toggle {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 4px;
+  display: inline-grid;
+  grid-template-columns: 10px auto auto;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.chart-legend-toggle[aria-pressed="false"] {
+  opacity: 0.45;
+}
+
+.chart-legend-toggle[aria-pressed="false"] .chart-legend-label {
+  text-decoration: line-through;
+}
+
+.chart-legend-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.chart-empty-note {
+  margin: 8px 0;
+}
+
+/* Detail panel under a chart. */
+.chart-detail {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft, transparent);
+  font-size: 13px;
+  outline: none;
+}
+
+.chart-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.chart-detail-close {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.chart-detail-close:hover,
+.chart-detail-close:focus-visible {
+  color: var(--ink, currentColor);
+  background: var(--line);
+}
+
+.chart-detail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.chart-detail-list li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 10px;
+  min-width: 0;
+}
+
+.chart-detail-primary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chart-detail-secondary {
+  font-size: 12px;
+}
+
+.chart-detail-foot {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+/* Progress bars and survey legend share the chart interaction. */
+.dash-progress-track {
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dash-progress-track.is-active,
+.dash-progress-track:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.tp-trend-legend .chart-legend-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

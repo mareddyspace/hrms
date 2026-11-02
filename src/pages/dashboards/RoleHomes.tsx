@@ -25,6 +25,7 @@ import {
   waitingItems,
   workforceInsights,
   workforceStats,
+  businessUnitFor,
   type DayStatus,
   type RangeKey,
   type TeamMember,
@@ -95,6 +96,7 @@ import { DAY_STATUS_LABEL, DAY_TARGET, HALF_DAY_TARGET, dayRecordFor, useDayReco
 import { halfDayLeave as halfDayLeaveOn, leaveNameFor, plural } from "../../model.ts";
 import { countWaitingOnMe } from "../ApprovalsCenter.tsx";
 import { AuthShortcuts, DashGreeting, DateRangeFilter, MiniBars, ProgressBar, useDateRange } from "./widgets.tsx";
+import { ChartDetail, ChartWithDetail } from "./chartKit.tsx";
 import {
   CoverageRisksCard,
   HeadcountAnalysisCard,
@@ -1425,7 +1427,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
       label: "Country headcount",
       node: (
         <Card title="Country headcount">
-          <MiniBars items={(hrbp ? stats : global).byCountry.map((c) => ({ label: c.code, value: c.count }))} />
+          <MiniBars items={(hrbp ? stats : global).byCountry.map((c) => ({ label: c.code, title: c.name, value: c.count, to: `/directory?country=${encodeURIComponent(c.name)}`, action: "Open in directory" }))} share ariaLabel="Headcount by country" />
         </Card>
       ),
     },
@@ -1434,7 +1436,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
       label: "Headcount by department",
       node: (
         <Card title="Headcount by department">
-          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name, value: d.count }))} />
+          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name, value: d.count, to: `/directory?department=${encodeURIComponent(d.name)}`, action: "Open in directory" }))} share={stats.headcount} ariaLabel="Headcount by department" />
         </Card>
       ),
     },
@@ -1501,7 +1503,12 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
       label: "Recruitment pipeline",
       node: (
         <Card title={`Recruitment pipeline · ${funnel.reduce((n, s) => n + s.count, 0)}`} to={R.recruiting}>
-          <MiniBars items={funnel.map((s) => ({ label: s.stage, value: s.count }))} />
+          <MiniBars
+            items={funnel.map((s) => ({ label: s.stage, value: s.count, to: `/recruiting?stage=${encodeURIComponent(s.stage)}`, action: "Open candidates at this stage" }))}
+            share
+            ariaLabel="Candidates by pipeline stage"
+            empty="No candidates in the pipeline."
+          />
         </Card>
       ),
     },
@@ -1509,8 +1516,38 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
       id: "leave-trend",
       label: "Leave trends",
       node: (
-        <Card title="Leave trends · days">
-          <MiniBars items={leaveSeries.map((s) => ({ label: s.label, value: s.days }))} />
+        <Card title="Leave trends · days, 6 months">
+          <ChartWithDetail
+            chart={(selected, toggle) => (
+              <MiniBars
+                items={leaveSeries.map((s) => ({ label: s.label, value: s.days, note: `${s.requestIds.length} approved request${s.requestIds.length === 1 ? "" : "s"}` }))}
+                valueSuffix="d"
+                ariaLabel="Approved leave days per month"
+                empty="No approved leave in the last 6 months."
+                selected={selected}
+                onSelect={(item) => toggle(item.label)}
+                actionLabel={(item) => (selected === item.label ? "Hide requests" : "Show requests")}
+              />
+            )}
+            detail={(selected, close) => {
+              const month = leaveSeries.find((s) => s.label === selected);
+              const ids = new Set(month?.requestIds ?? []);
+              const reqs = state.leaveRequests.filter((r) => ids.has(r.id)).sort((a, b) => a.from.localeCompare(b.from));
+              return (
+                <ChartDetail
+                  title={`Leave in ${selected} · ${reqs.length}`}
+                  onClose={close}
+                  rows={reqs.map((r) => ({
+                    id: r.id,
+                    primary: personName(r.employeeId, data.people),
+                    to: `/people/${r.employeeId}`,
+                    secondary: `${leaveNameFor(state.leavePolicies, r.code, r.employeeId) ?? r.code} · ${formatShortDate(r.from)}${r.to !== r.from ? ` → ${formatShortDate(r.to)}` : ""}`,
+                  }))}
+                  more={{ to: R.leave, label: "Open leave" }}
+                />
+              );
+            }}
+          />
           {onLeaveNow > 0 && <p className="note">{onLeaveNow} {onLeaveNow === 1 ? "person has" : "people have"} the status On leave</p>}
         </Card>
       ),
@@ -1519,8 +1556,33 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
       id: "attendance-trend",
       label: "Attendance trends",
       node: (
-        <Card title="Attendance trends · weekly">
-          <MiniBars items={attendanceSeries.map((s) => ({ label: s.label, value: s.pct }))} valueSuffix="%" />
+        <Card title="Attendance trends · weekly, 6 weeks">
+          <ChartWithDetail
+            chart={(selected, toggle) => (
+              <MiniBars
+                items={attendanceSeries.map((s) => ({ label: s.label, title: `Week of ${s.label}`, value: s.pct, note: `${s.attended} of ${s.days} expected days attended` }))}
+                valueSuffix="%"
+                max={100}
+                ariaLabel="Attendance rate per week"
+                empty="No attendance records yet."
+                selected={selected}
+                onSelect={(item) => toggle(item.label)}
+                actionLabel={(item) => (selected === item.label ? "Hide absences" : "Show absences")}
+              />
+            )}
+            detail={(selected, close) => {
+              const week = attendanceSeries.find((s) => s.label === selected);
+              return (
+                <ChartDetail
+                  title={`Absent days · week of ${selected} · ${week?.absent.length ?? 0}`}
+                  onClose={close}
+                  rows={(week?.absent ?? []).map((a) => ({ id: `${a.id}-${a.date}`, primary: a.name, to: `/people/${a.id}`, secondary: formatShortDate(a.date) }))}
+                  empty="Nobody was absent without leave that week."
+                  more={{ to: R.attendance, label: "Open attendance" }}
+                />
+              );
+            }}
+          />
         </Card>
       ),
     },
@@ -1655,7 +1717,12 @@ export function RecruiterHome() {
       label: "Candidates by stage",
       node: (
         <Card title="Candidates by stage" to="/recruiting">
-          <MiniBars items={byStage.map(([stage, n]) => ({ label: stage, value: n }))} />
+          <MiniBars
+            items={byStage.map(([stage, n]) => ({ label: stage, value: n, to: `/recruiting?stage=${encodeURIComponent(stage)}`, action: "Open candidates at this stage" }))}
+            share
+            ariaLabel="Active candidates by stage"
+            empty="No active candidates."
+          />
         </Card>
       ),
     },
@@ -1757,7 +1824,7 @@ export function ExecutiveHome() {
       label: "Country distribution",
       node: (
         <Card title="Country distribution">
-          <MiniBars items={stats.byCountry.map((c) => ({ label: c.code, value: c.count }))} />
+          <MiniBars items={stats.byCountry.map((c) => ({ label: c.code, title: c.name, value: c.count, to: `/directory?country=${encodeURIComponent(c.name)}`, action: "Open in directory" }))} share ariaLabel="Headcount by country" />
         </Card>
       ),
     },
@@ -1766,7 +1833,28 @@ export function ExecutiveHome() {
       label: "Business units",
       node: (
         <Card title="Business units">
-          <MiniBars items={stats.byBusinessUnit.map((b) => ({ label: b.name.replace("TimeZ ", ""), value: b.count }))} />
+          <ChartWithDetail
+            chart={(selected, toggle) => (
+              <MiniBars
+                items={stats.byBusinessUnit.map((b) => ({ label: b.name.replace("TimeZ ", ""), title: b.name, value: b.count }))}
+                share
+                ariaLabel="Headcount by business unit"
+                selected={selected}
+                onSelect={(item) => toggle(item.label)}
+                actionLabel={(item) => (selected === item.label ? "Hide countries" : "Show countries")}
+              />
+            )}
+            detail={(selected, close) => {
+              const rows = stats.byCountry.filter((c) => c.count > 0 && businessUnitFor(c.code).replace("TimeZ ", "") === selected);
+              return (
+                <ChartDetail
+                  title={`${selected} · ${rows.reduce((n, c) => n + c.count, 0)} people`}
+                  onClose={close}
+                  rows={rows.map((c) => ({ id: c.code, primary: c.name, to: `/directory?country=${encodeURIComponent(c.name)}`, secondary: `${c.count} people` }))}
+                />
+              );
+            }}
+          />
         </Card>
       ),
     },
@@ -1775,7 +1863,7 @@ export function ExecutiveHome() {
       label: "Departments",
       node: (
         <Card title="Departments">
-          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name, value: d.count }))} />
+          <MiniBars items={stats.byDepartment.slice(0, 8).map((d) => ({ label: d.name, value: d.count, to: `/directory?department=${encodeURIComponent(d.name)}`, action: "Open in directory" }))} share={stats.headcount} ariaLabel="Headcount by department" />
         </Card>
       ),
     },
@@ -1912,7 +2000,9 @@ export function AdministrationHome() {
         <Card title="Headcount by country" to={R.directory}>
           {stats.headcount ? (
             <BarChart
-              data={countryData.map(({ label, title, value }) => ({ label, title, value }))}
+              data={countryData.map(({ label, title, value }) => ({ label, title, value, to: `/directory?country=${encodeURIComponent(title)}` }))}
+              showShare
+              actionLabel="Open in directory"
               ariaLabel={`Headcount by country: ${stats.byCountry.map((c) => `${c.name} ${c.count}`).join(", ")}.`}
             />
           ) : (
@@ -1927,7 +2017,8 @@ export function AdministrationHome() {
       node: (
         <Card title="Country distribution">
           <DonutChart
-            data={countryData}
+            data={countryData.map((d) => ({ ...d, to: `/directory?country=${encodeURIComponent(d.title)}` }))}
+            actionLabel="Open in directory"
             centerLabel="people"
             ariaLabel={`Workforce share by country: ${stats.byCountry
               .map((c) => `${c.name} ${stats.headcount ? Math.round((c.count / stats.headcount) * 100) : 0}%`)
@@ -1950,10 +2041,30 @@ export function AdministrationHome() {
       label: "Access by role",
       node: (
         <Card title="Admin modules by role" to={R.admin}>
+          <ChartWithDetail
+            chart={(selected, toggle) => (
           <HBarChart
             data={accessData}
+            selected={selected}
+            onSelect={(d) => toggle(d.title ?? d.label)}
+            actionLabel="Show modules"
             max={PERMISSION_ROWS.length}
             ariaLabel={`Admin modules each role can open, out of ${PERMISSION_ROWS.length}: ${accessData.map((d) => `${d.label} ${d.value}`).join(", ")}.`}
+          />
+            )}
+            detail={(selected, close) => {
+              const account = DEMO_ACCOUNTS.find((a) => `${a.personaLabel} (${a.fullName})` === selected);
+              const rows = account ? PERMISSION_ROWS.map(([id, label]) => ({ id, label, on: moduleAccess(account, id) })) : [];
+              return (
+                <ChartDetail
+                  title={`${selected} · ${rows.filter((r) => r.on).length} of ${rows.length}`}
+                  onClose={close}
+                  limit={PERMISSION_ROWS.length}
+                  rows={rows.map((r) => ({ id: r.id, primary: r.label, secondary: r.on ? "Can open" : "No access" }))}
+                  more={{ to: "/admin/roles", label: "Roles & permissions" }}
+                />
+              );
+            }}
           />
           <p className="chart-note muted">
             {DEMO_ACCOUNTS.length} sign-in accounts · out of {PERMISSION_ROWS.length} modules
@@ -1966,15 +2077,42 @@ export function AdministrationHome() {
       label: "Joiners vs exits",
       node: (
         <Card title="Joiners vs exits · 12 months">
+          <ChartWithDetail
+            chart={(selected, toggle) => (
           <LineChart
             labels={movement.labels}
             titles={movement.titles}
+            selectedIndex={selected === null ? null : Number(selected)}
+            onSelectIndex={(i) => toggle(String(i))}
+            actionLabel="Show joiners and exits"
             labelEvery={2}
             series={[
               { name: "Joiners", values: movement.joiners, color: "var(--accent)" },
               { name: "Exits", values: movement.exits, color: "var(--warn)", dashed: true },
             ]}
             ariaLabel={`Joiners and exits per month, ${movement.titles[0]} to ${movement.titles[movement.titles.length - 1]}: ${movement.joiners.reduce((a, b) => a + b, 0)} joiners, ${movement.exits.reduce((a, b) => a + b, 0)} exits.`}
+          />
+            )}
+            detail={(selected, close) => {
+              const key = movement.keys[Number(selected)];
+              const joined = data.people.filter((p) => p.dateOfJoining?.slice(0, 7) === key && p.dateOfJoining <= data.today);
+              const left = data.people
+                .filter((p) => p.employmentStatus === "Terminated")
+                .map((p) => ({ p, date: getExitDetails(p).exitDate }))
+                .filter((x) => x.date?.slice(0, 7) === key && x.date <= data.today);
+              return (
+                <ChartDetail
+                  title={`${movement.titles[Number(selected)]} · ${joined.length} joined, ${left.length} left`}
+                  onClose={close}
+                  rows={[
+                    ...joined.map((p) => ({ id: `j-${p.id}`, primary: p.fullName, to: `/people/${p.id}`, secondary: `Joined ${formatShortDate(p.dateOfJoining)}` })),
+                    ...left.map(({ p, date }) => ({ id: `x-${p.id}`, primary: p.fullName, to: `/people/${p.id}`, secondary: `Left ${formatShortDate(date ?? "")}` })),
+                  ]}
+                  empty="No joiners or exits that month."
+                  more={{ to: R.directory, label: "Open directory" }}
+                />
+              );
+            }}
           />
         </Card>
       ),
@@ -1984,12 +2122,28 @@ export function AdministrationHome() {
       label: "System activity",
       node: (
         <Card title="System activity · 14 days" to={R.admin}>
+          <ChartWithDetail
+            chart={(selected, toggle) => (
           <LineChart
             labels={activity.dates.map((d) => d.slice(8, 10))}
             titles={activity.dates.map(formatShortDate)}
+            selectedIndex={selected === null ? null : Number(selected)}
+            onSelectIndex={(i) => toggle(String(i))}
+            actionLabel="Show that day's events"
+            emptyText="No audit events in the last 14 days."
             labelEvery={3}
             series={[{ name: "Audit events", values: activity.counts, color: "var(--accent)" }]}
             ariaLabel={`Audit events per day over the last 14 days: ${activity.counts.reduce((a, b) => a + b, 0)} in total, most in a day ${Math.max(0, ...activity.counts)}.`}
+          />
+            )}
+            detail={(selected, close) => {
+              const day = activity.dates[Number(selected)];
+              const rows = [
+                ...auditTrail.filter((e) => String(e.at).slice(0, 10) === day).map((e) => ({ id: e.id, primary: `${e.action} ${e.entity}`, secondary: `${e.actorName} · ${String(e.at).slice(11, 16)}`, at: e.at })),
+                ...audit.filter((e) => String(e.at).slice(0, 10) === day).map((e) => ({ id: e.id, primary: `${e.action} · ${e.target}`, secondary: `${e.actor} · ${String(e.at).slice(11, 16)}`, at: e.at })),
+              ].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+              return <ChartDetail title={`${formatShortDate(day)} · ${rows.length} events`} onClose={close} rows={rows} empty="No events that day." more={{ to: "/admin/audit", label: "Open audit log" }} />;
+            }}
           />
           <p className="chart-note muted">{activity.counts.reduce((a, b) => a + b, 0)} audit events in 14 days</p>
         </Card>
@@ -2001,10 +2155,28 @@ export function AdministrationHome() {
       node: (
         <Card title="Integration status" to="/integrations">
           {integrations.length ? (
+            <ChartWithDetail
+              chart={(selected, toggle) => (
             <DonutChart
               data={integrationData}
+              selected={selected}
+              onSelect={(d) => toggle(d.label)}
+              actionLabel="Show integrations"
               centerLabel="integrations"
               ariaLabel={`Integration status: ${integrationData.map((d) => `${d.label} ${d.value}`).join(", ")}.`}
+            />
+              )}
+              detail={(selected, close) => {
+                const rows = integrations.filter((i) => i.status === selected);
+                return (
+                  <ChartDetail
+                    title={`${selected} · ${rows.length}`}
+                    onClose={close}
+                    rows={rows.map((i) => ({ id: i.id, primary: i.name, secondary: i.errorCount ? `${i.errorCount} errors` : i.category }))}
+                    more={{ to: "/integrations", label: "Open integrations" }}
+                  />
+                );
+              }}
             />
           ) : (
             <ChartEmpty>No integrations set up.</ChartEmpty>
@@ -2018,9 +2190,28 @@ export function AdministrationHome() {
       node: (
         <Card title="Tickets by status" to="/tickets">
           {tickets.length ? (
+            <ChartWithDetail
+              chart={(selected, toggle) => (
             <BarChart
               data={ticketData.map((d) => ({ label: d.label === "In progress" ? "Doing" : d.label, title: d.label, value: d.value }))}
+              showShare
+              selected={selected === "In progress" ? "Doing" : selected}
+              onSelect={(d) => toggle(d.title ?? d.label)}
+              actionLabel="Show tickets"
               ariaLabel={`Tickets by status: ${ticketData.map((d) => `${d.label} ${d.value}`).join(", ")}.`}
+            />
+              )}
+              detail={(selected, close) => {
+                const rows = tickets.filter((t) => t.status === selected);
+                return (
+                  <ChartDetail
+                    title={`${selected} tickets · ${rows.length}`}
+                    onClose={close}
+                    rows={rows.map((t) => ({ id: t.id, primary: t.title, to: `/tickets?id=${encodeURIComponent(t.id)}`, secondary: `${t.priority} · ${t.type}` }))}
+                    more={{ to: "/tickets", label: "Open tickets" }}
+                  />
+                );
+              }}
             />
           ) : (
             <ChartEmpty>No tickets yet.</ChartEmpty>

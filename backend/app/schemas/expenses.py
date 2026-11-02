@@ -9,8 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas import ORM
 
-EXPENSE_CATEGORIES = ("Travel", "Food", "Lodging", "Supplies", "Other")
-ExpenseCategory = Literal["Travel", "Food", "Lodging", "Supplies", "Other"]
+# Offered on the claim form; "Lodging" is still accepted for claims filed before Accommodation replaced it.
+EXPENSE_CATEGORIES = ("Travel", "Food", "Accommodation", "Transportation", "Internet", "Medical", "Supplies", "Other")
+ExpenseCategory = Literal["Travel", "Food", "Accommodation", "Transportation", "Internet", "Medical", "Supplies", "Other",
+                          "Lodging"]
+Details = Field(default=None, max_length=12)  # category-specific fields, e.g. {"merchant": "...", "nights": "2"}
 TravelMode = Literal["air", "rail", "road", "sea", "other"]
 Currency = Field(default=None, pattern=r"^[A-Z]{3}$")
 
@@ -48,6 +51,21 @@ class ExpenseClaimIn(BaseModel):
     description: str = Field(min_length=1, max_length=2000)
     trip_id: str | None = Field(default=None, max_length=64)
     receipt_ids: list[str] = Field(default_factory=list, max_length=10)
+    details: dict[str, str] | None = Details
+
+
+class ExpenseClaimEditIn(BaseModel):
+    """Changes to your own claim while nobody has decided it yet (or after a request for more information)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    category: ExpenseCategory | None = None
+    amount: float | None = Field(default=None, gt=0, le=100_000_000)
+    expense_date: date | None = Field(default=None, alias="date")
+    description: str | None = Field(default=None, min_length=1, max_length=2000)
+    trip_id: str | None = Field(default=None, max_length=64)
+    clear_trip: bool = False
+    details: dict[str, str] | None = Details
 
 
 class ExpensePayIn(BaseModel):
@@ -76,6 +94,9 @@ class ExpenseClaimOut(BaseModel):
     paid_by: str | None
     created_at: datetime
     receipts: list[ReceiptOut] = []
+    details: dict[str, str] | None = None
+    info_requested: bool = False
+    can_edit: bool = False
 
 
 class TravelRequestIn(BaseModel):
@@ -88,6 +109,13 @@ class TravelRequestIn(BaseModel):
     estimated_cost: float = Field(gt=0, le=100_000_000)
     currency: str | None = Currency
     advance_amount: float = Field(default=0, ge=0, le=100_000_000)
+    details: dict[str, str] | None = Field(default=None, max_length=20)  # mode fields, accommodation, advance reason
+
+
+class TravelBookingIn(BaseModel):
+    """Tickets / hotel once booked (the traveller, HR or a travel admin)."""
+
+    booking: dict[str, str] = Field(max_length=12)
 
 
 class TravelRequestOut(ORM):
@@ -108,3 +136,6 @@ class TravelRequestOut(ORM):
     approval_status: str | None = None
     current_step: int | None = None
     created_at: datetime
+    details: dict[str, str] | None = None
+    booking: dict[str, str] | None = None
+    info_requested: bool = False

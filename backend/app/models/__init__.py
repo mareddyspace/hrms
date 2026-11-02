@@ -41,13 +41,13 @@ __all__ += ["ExpenseClaim", "ExpenseReceipt", "JobFamily", "JobProfile", "Lifecy
 # Recruiting, onboarding, performance, learning (migration 0004)
 from app.models.recruiting import Candidate, CandidateStage, Interview, JobPosting, Offer, Requisition  # noqa: E402
 from app.models.onboarding import Joiner, OnboardingTask, OnboardingTemplateTask  # noqa: E402
-from app.models.performance import CheckIn, DevAction, Goal, PerfReview, Reviewer360, ReviewCycle  # noqa: E402
+from app.models.performance import CheckIn, DevAction, Goal, PerfFeedback, PerfReview, Reviewer360, ReviewCycle  # noqa: E402
 from app.models.learning import Certification, Course, EmployeeSkill, Enrollment  # noqa: E402
 
 __all__ += [
     "Candidate", "CandidateStage", "Certification", "CheckIn", "Course", "DevAction", "EmployeeSkill", "Enrollment",
     "Goal", "Interview", "JobPosting", "Joiner", "Offer", "OnboardingTask", "OnboardingTemplateTask", "PerfReview", "Requisition",
-    "Reviewer360", "ReviewCycle",
+    "PerfFeedback", "Reviewer360", "ReviewCycle",
 ]
 
 # HR cases, service desk, engagement & recognition, shifts, admin platform (migration 0006)
@@ -166,3 +166,8 @@ from app.models.desk import DeskFaqVote  # noqa: E402
 from app.models.sharing import MailDraft  # noqa: E402
 
 __all__ += ["DeskFaqVote", "MailDraft"]
+
+# Request comments / more-info requests / supporting files; expense, travel, cash advance and document extras (migration 0028)
+from app.models.request_extras import RequestAttachment, RequestComment  # noqa: E402
+
+__all__ += ["RequestAttachment", "RequestComment"]

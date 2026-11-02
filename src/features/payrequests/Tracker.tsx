@@ -66,17 +66,20 @@ export function DecideBar({
   onDecide,
   approveLabel = "Approve",
   extra,
+  onRequestInfo,
 }: {
   onDecide: (decision: "approve" | "reject", note: string) => Promise<string | null>;
   approveLabel?: string;
   extra?: ReactNode;
+  /** Ask the requester for more information (the note is the question); the request stays with you. */
+  onRequestInfo?: (note: string) => Promise<string | null>;
 }) {
   const [note, setNote] = useState("");
   return (
     <div className="pr-form">
       {extra}
       <Field label="Note">
-        <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Needed to decline" />
+        <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder={onRequestInfo ? "Needed to decline or ask for information" : "Needed to decline"} />
       </Field>
       <div className="pr-actions">
         <ActionButton
@@ -108,6 +111,23 @@ export function DecideBar({
         >
           Decline
         </ActionButton>
+        {onRequestInfo && (
+          <ActionButton
+            className="btn-ghost"
+            toastError
+            busyLabel="Sending…"
+            doneLabel="Asked"
+            success="Asked for more information."
+            onAction={async () => {
+              if (!note.trim()) return "Write the question in the note.";
+              const error = await onRequestInfo(note);
+              if (!error) setNote("");
+              return error ?? true;
+            }}
+          >
+            Request info
+          </ActionButton>
+        )}
       </div>
     </div>
   );

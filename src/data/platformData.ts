@@ -218,6 +218,14 @@ export interface CopilotContext {
   goals?: { cycle: string; items: { title: string; progress: number; weight: number }[]; weighted: number; review?: string };
   learning?: { title: string; mandatory: boolean; status: string; progress: number; due?: string }[];
   mandatoryCourses?: { title: string; audience: string; status: string; due?: string }[];
+  /** Career coach: the viewer's own skills, the next role on their track, its gaps and courses that close them. */
+  career?: {
+    currentRole: string;
+    skills: { name: string; level: string; target: string }[];
+    nextRole?: string;
+    gaps: { name: string; have: string; need: string; levels: number }[];
+    courses: { title: string; builds: string; hours: number; status?: string }[];
+  };
   expenses?: { kind: string; category: string; amount: number; currency: string; status: string; date: string }[];
   /**
    * "AI Employee 360": finds a colleague by name and returns their summary only when the viewer is HR,
@@ -246,7 +254,7 @@ export type CopilotPersonLookup =
   | { status: "not_found" }
   | { status: "ambiguous"; names: string[] };
 
-import { copilotAnswer, NO_DECISIONS } from "../features/copilot/answers.ts";
+import { copilotAnswer, isCareerQuestion, NO_DECISIONS } from "../features/copilot/answers.ts";
 
 export { summaryTarget } from "../features/copilot/answers.ts";
 
@@ -325,7 +333,8 @@ export function answerCopilot(question: string, input: CopilotContext | CopilotV
       };
     }
   }
-  const { requires, ...raw } = ctx.assist?.(question) ?? copilotAnswer(question, ctx);
+  // Career questions are about the asker's own skills, never analytics (assist would read "skill gaps" as a report).
+  const { requires, ...raw } = (isCareerQuestion(question) ? null : ctx.assist?.(question)) ?? copilotAnswer(question, ctx);
   const allowedLink = (l: { to: string }) => {
     const id = COPILOT_LINK_ACCESS[l.to];
     return !id || viewerHas(viewer, id);
@@ -344,73 +353,75 @@ export function answerCopilot(question: string, input: CopilotContext | CopilotV
 
 /* —— AI Agents —— */
 
-export type AgentDemoStatus = "Demo ready" | "Demo beta" | "Planned demo";
-
+/**
+ * Assistants: each opens the Copilot with its own focus and suggested questions. Same ids as the backend
+ * (app/services/ai_agents.py), which checks the role and the admin switch again on every question.
+ * Status is live (AI answers, or the built-in rules when AI is unavailable), not stored here.
+ */
 export interface AiAgentCard {
   id: string;
   name: string;
   audience: string;
   purpose: string;
   availability: string;
-  demoStatus: AgentDemoStatus;
 }
 
 export const AI_AGENTS: AiAgentCard[] = [
   {
     id: "employee",
-    name: "Employee agent",
-    audience: "Employees",
-    purpose: "Answers leave, policy, payslip and self-service questions.",
-    availability: "Copilot",
-    demoStatus: "Demo ready",
-  },
-  {
-    id: "manager",
-    name: "Manager agent",
-    audience: "Managers",
-    purpose: "Pending approvals, team attendance and skill coverage.",
-    availability: "Managers · Approvals",
-    demoStatus: "Demo ready",
-  },
-  {
-    id: "hr",
-    name: "HR agent",
-    audience: "HR / HRBP",
-    purpose: "HR cases, policy acknowledgements and workforce movements.",
-    availability: "HR",
-    demoStatus: "Demo beta",
-  },
-  {
-    id: "recruiter",
-    name: "Recruiter agent",
-    audience: "Recruiters",
-    purpose: "Pipeline stages, interview kits and offer deadlines.",
-    availability: "Recruiting module · Copilot prompts",
-    demoStatus: "Demo beta",
+    name: "Leave assistant",
+    audience: "Everyone",
+    purpose: "Leave balances, applying for leave, holidays, attendance and other self-service questions.",
+    availability: "Leave · Attendance · Copilot",
   },
   {
     id: "knowledge",
-    name: "Knowledge agent",
-    audience: "All staff",
-    purpose: "Retrieves answers from the policy knowledge base.",
-    availability: "Copilot · Policies screens",
-    demoStatus: "Demo ready",
+    name: "Policy assistant",
+    audience: "Everyone",
+    purpose: "Answers from the policies that apply to you, with the policy and section it used.",
+    availability: "Policies · Copilot",
   },
   {
-    id: "analytics",
-    name: "Analytics agent",
-    audience: "Leaders & HR",
-    purpose: "Headcount, attrition and capacity from Analytics.",
-    availability: "Analytics page · Copilot",
-    demoStatus: "Demo ready",
+    id: "career",
+    name: "Career coach",
+    audience: "Everyone",
+    purpose: "Your skills, the gaps for your next role and the courses that close them.",
+    availability: "Skills & career · Learning",
   },
   {
     id: "document",
-    name: "Document agent",
-    audience: "HR & employees",
-    purpose: "Finds letters and document checklists.",
-    availability: "Documents & Letters",
-    demoStatus: "Demo beta",
+    name: "Letter & document assistant",
+    audience: "Everyone (HR for others' letters)",
+    purpose: "Prepares letter requests for you to preview and confirm, and finds your documents.",
+    availability: "Documents & letters",
+  },
+  {
+    id: "manager",
+    name: "Manager assistant",
+    audience: "Managers",
+    purpose: "Who is away, approvals waiting on you, team attendance and overtime.",
+    availability: "Team · Approvals",
+  },
+  {
+    id: "hr",
+    name: "HR assistant",
+    audience: "HR",
+    purpose: "Workforce numbers, mandatory training, letters and movements.",
+    availability: "HR",
+  },
+  {
+    id: "recruiter",
+    name: "Recruiting assistant",
+    audience: "Recruiters and HR",
+    purpose: "Open roles, pipeline stages, joiners and hiring numbers.",
+    availability: "Recruiting",
+  },
+  {
+    id: "analytics",
+    name: "Analytics assistant",
+    audience: "Leaders and HR",
+    purpose: "Headcount, attrition, leave and attendance numbers within your access.",
+    availability: "Analytics",
   },
 ];
 

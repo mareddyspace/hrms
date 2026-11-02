@@ -403,6 +403,11 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
             <p className="profile-title">
               {person.designation}
               {person.department ? ` · ${person.department}` : ""}
+              {person.employeeCode ? (
+                <span className="muted" title="Employee ID">
+                  {" · "}ID {person.employeeCode}
+                </span>
+              ) : null}
             </p>
             <ul className="profile-chips">
               {hasLeft && <li className="profile-left-chip">No longer with the company</li>}
@@ -483,12 +488,11 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
                 <dt>Company</dt>
                 <dd>{person.legalEntity || "—"}</dd>
               </div>
-              {canSeePersonal && (
-                <div>
-                  <dt>Employee ID</dt>
-                  <dd>{person.employeeCode}</dd>
-                </div>
-              )}
+              {/* The employee ID is not sensitive: everyone sees it. */}
+              <div>
+                <dt>Employee ID</dt>
+                <dd>{person.employeeCode || "—"}</dd>
+              </div>
               {canSeePersonal && (
                 <div>
                   <dt>Employment</dt>

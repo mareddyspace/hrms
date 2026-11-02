@@ -95,7 +95,7 @@ export function payslipPdf(slip: PayslipView, employee: Employee, regime?: strin
     ["Payment date", fmt(paydayFor(slip.month, employee.countryCode))],
     ["Country · currency", `${employee.countryName ?? employee.countryCode ?? "India"} · ${c}`],
     ["Days paid", slip.paidDays != null ? `${slip.paidDays} of ${slip.totalDays}${slip.finalSettlement ? " (final settlement)" : ""}` : "Full month"],
-    ["Tax", detail ? `${detail.tax.basis}${regime ? ` · ${regime === "old" ? "old" : "new"} regime` : ""}` : "—"],
+    ["Tax", detail ? `${detail.tax.basis}${regime && !/regime/i.test(detail.tax.basis) ? ` · ${regime === "old" ? "old" : "new"} regime` : ""}` : "—"],
   ];
   facts.forEach(([k, v], i) => {
     const x = i % 2 === 0 ? L : 310;

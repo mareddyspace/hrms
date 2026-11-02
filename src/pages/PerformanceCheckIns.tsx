@@ -38,6 +38,7 @@ import {
   type TalentResult,
 } from "../data/talentLocal.ts";
 import { todayISO } from "../model.ts";
+import { ConfirmDialog } from "../components/ConfirmDialog.tsx";
 
 /** talentAction as a promise, so action buttons stay busy until the change (or backend call) finishes. */
 function talentRun(change: () => TalentResult, done: (result: TalentResult) => void): Promise<TalentResult> {
@@ -84,7 +85,7 @@ export function FeedbackPanel({
   const requestsForMe = feedback.filter((f) => f.kind === "Request" && f.toId === me.id && f.status === "Open");
   const myRequests = feedback.filter((f) => f.kind === "Request" && f.fromId === me.id);
 
-  function submit() {
+  async function submit() {
     const to = others.find((p) => p.id === toId);
     if (!to) {
       setBanner({ tone: "err", text: "Choose a colleague." });
@@ -94,16 +95,21 @@ export function FeedbackPanel({
       setBanner({ tone: "err", text: "Write at least 10 characters." });
       return false;
     }
-    const error = addFeedback({
-      kind,
-      fromId: me.id,
-      fromName: me.fullName,
-      toId: to.id,
-      toName: to.fullName,
-      message: message.trim(),
-      ...(kind === "Praise" ? { badge } : null),
-      ...(kind === "Request" ? { aboutName: me.fullName, status: "Open" as const } : null),
-    });
+    // Saved on the server in backend mode (the answer arrives asynchronously), in this browser otherwise.
+    const error = await talentRun(
+      () =>
+        addFeedback({
+          kind,
+          fromId: me.id,
+          fromName: me.fullName,
+          toId: to.id,
+          toName: to.fullName,
+          message: message.trim(),
+          ...(kind === "Praise" ? { badge } : null),
+          ...(kind === "Request" ? { aboutName: me.fullName, status: "Open" as const } : null),
+        }),
+      () => {},
+    );
     if (error) {
       setBanner({ tone: "err", text: error });
       return false;
@@ -536,18 +542,22 @@ export function Pending360Requests({ me, requests, onResult }: { me: TalentActor
 function Answer360Form({ me, review, onResult }: { me: TalentActor; review: PerfReview; onResult: Result }) {
   const [rating, setRating] = useState("4");
   const [comment, setComment] = useState("");
-  const sendAction = useAction();
+  const [confirming, setConfirming] = useState(false);
+  const send = () =>
+    talentRun(() => submit360Response(me, review.id, Number(rating), comment), (error) => {
+      onResult(error, `360 feedback sent for ${review.employeeName}.`);
+      if (!error) {
+        setComment("");
+        notify(`360 feedback sent for ${review.employeeName}.`);
+      }
+    });
   return (
     <form
       className="stack"
-      onSubmit={sendAction.submit(
-        () =>
-          talentRun(() => submit360Response(me, review.id, Number(rating), comment), (error) => {
-            onResult(error, `360 feedback sent for ${review.employeeName}.`);
-            if (!error) setComment("");
-          }),
-        { success: `360 feedback sent for ${review.employeeName}.` },
-      )}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (comment.trim().length >= 5) setConfirming(true);
+      }}
     >
       <strong>{review.employeeName}</strong>
       <div className="form-grid-2">
@@ -562,11 +572,23 @@ function Answer360Form({ me, review, onResult }: { me: TalentActor; review: Perf
           <textarea rows={2} maxLength={600} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="What they do well, and one thing to work on" />
         </Field>
       </div>
-      <div>
-        <SubmitButton action={sendAction} className="btn btn-tiny" disabled={comment.trim().length < 5}>
+      <div className="row-gap">
+        <button type="submit" className="btn btn-tiny" disabled={comment.trim().length < 5}>
           Send
-        </SubmitButton>
+        </button>
+        <span className="muted">Seen by {review.employeeName.split(" ")[0]}&apos;s managers and HR. {review.employeeName.split(" ")[0]} only sees an anonymous summary.</span>
       </div>
+      <ConfirmDialog
+        open={confirming}
+        title={`Send 360 feedback for ${review.employeeName}?`}
+        confirmLabel="Send"
+        onClose={() => setConfirming(false)}
+        onConfirm={send}
+      >
+        <p>
+          Rating {rating}/5. Your answer can&apos;t be changed after it is sent.
+        </p>
+      </ConfirmDialog>
     </form>
   );
 }
@@ -578,8 +600,26 @@ export function Reviewers360({ me, review, open, onResult }: { me: TalentActor; 
   const showAnswers = canSee360Responses(me, review);
   const options = reviewer360Options(review);
   const [pick, setPick] = useState("");
+  const isSelf = review.employeeId === me.id;
   return (
     <div className="stack">
+      {isSelf && review.summary360 && (
+        <div className="note">
+          <strong>
+            Anonymous summary · {review.summary360.responses} answers · average {review.summary360.averageRating}/5
+          </strong>
+          {review.summary360.comments.length > 0 && (
+            <ul>
+              {review.summary360.comments.map((c, i) => (
+                <li key={i}>{c}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {isSelf && !review.summary360 && list.some((r) => r.respondedOn) && (
+        <p className="muted">Answers stay with your managers and HR. You get an anonymous summary once your rating is released and at least 2 people answered.</p>
+      )}
       {list.length === 0 ? (
         <p className="muted">No reviewers yet.</p>
       ) : (

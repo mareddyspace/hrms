@@ -22,6 +22,7 @@ from app.models import (
     Goal,
     JobPosting,
     OnboardingTemplateTask,
+    PerfFeedback,
     Requisition,
     ReviewCycle,
 )
@@ -207,6 +208,25 @@ def _performance(db: Session) -> int:
     return added
 
 
+# Praise on the wall (front end: FEEDBACK_ITEMS in src/data/talentData.ts). Insert-once by id.
+PRAISE = [
+    ("fb-seed-1", "emp-ram", "emp-mahesh", "Ownership",
+     "Took the timesheet calendar from idea to release in two sprints and handled every review comment quickly.", "2026-10-09"),
+    ("fb-seed-2", "emp-mahesh", "demo-recruiter", "Teamwork",
+     "Thanks for lining up the frontend interview panel at short notice.", "2026-10-02"),
+]
+
+
+def _feedback(db: Session) -> int:
+    added = 0
+    for fid, sender, to, badge, message, day in PRAISE:
+        if db.get(PerfFeedback, fid) is None and db.get(Employee, sender) is not None and db.get(Employee, to) is not None:
+            db.add(PerfFeedback(id=fid, kind="praise", from_id=sender, to_id=to, badge=badge, message=message,
+                                created_at=datetime.combine(_d(day), time(10, 0), tzinfo=UTC)))
+            added += 1
+    return added
+
+
 def _learning(db: Session) -> int:
     for cid, title, provider, category, hours, mandatory, audience, skills in COURSES:
         values = {"id": cid, "title": title, "provider": provider, "category": category, "duration_hours": hours,
@@ -232,5 +252,7 @@ def seed(db: Session) -> dict[str, int]:
     stats["candidates_added"] = _candidates(db)
     stats["job_postings_added"] = _postings(db)
     stats["review_cycles_added"] = _performance(db)
+    db.flush()
+    stats["praise_added"] = _feedback(db)
     stats["courses"] = _learning(db)
     return stats

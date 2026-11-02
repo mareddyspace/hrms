@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
 from app.models import (
+    Account,
     ApprovalInstance,
     DocumentVersion,
     Employee,
@@ -27,6 +28,9 @@ from app.models import (
 )
 from app.schemas import DecisionIn
 from app.schemas.documents import (
+    DocCategoryIn,
+    DocCategoryOut,
+    DocVerifyIn,
     DocExpiryIn,
     DocRulesOut,
     DocVersionOut,
@@ -49,7 +53,7 @@ from app.services import approvals as engine
 from app.services import documents as docs
 from app.services import letters
 from app.services import storage
-from app.services.activity import record_audit
+from app.services.activity import notify, record_audit
 from app.services.approval_targets import start_about
 from app.services.decisions import NOT_FOUND, can_view, me, target
 from app.services.leave import today_for
@@ -122,10 +126,82 @@ def _store_version(db: DbSession, user: CurrentUser, doc: EmployeeDocument, data
     return version
 
 
+def _category_outs(db: DbSession) -> list[DocCategoryOut]:
+    return [DocCategoryOut(name=k, label=str(v["label"]), verification=bool(v["verification"]),
+                           employee_upload=bool(v["employee_upload"])) for k, v in docs.category_config(db).items()]
+
+
 @router.get("/rules", response_model=DocRulesOut)
-def document_rules(user: CurrentUserDep) -> DocRulesOut:
+def document_rules(db: DbSession, user: CurrentUserDep) -> DocRulesOut:
     return DocRulesOut(categories=list(docs.DOCUMENT_CATEGORIES), manager_categories=sorted(docs.MANAGER_CATEGORIES),
-                       max_bytes=docs.MAX_DOCUMENT_BYTES, content_types=sorted(docs.DOCUMENT_TYPES))
+                       max_bytes=docs.MAX_DOCUMENT_BYTES, content_types=sorted(docs.DOCUMENT_TYPES),
+                       category_config=_category_outs(db))
+
+
+@router.put("/categories", response_model=list[DocCategoryOut])
+def save_categories(body: list[DocCategoryIn], request: Request, db: DbSession, user: CurrentUserDep) -> list[DocCategoryOut]:
+    """HR / admin: rename categories, and choose which need verification and which employees may upload."""
+    if user.account.role not in (*HR_ROLES, "admin", "super_admin"):
+        raise HTTPException(403, "Only HR or an administrator can change document categories.")
+    from app.services.platform_settings import set_setting
+
+    saved = {}
+    for row in body:
+        if row.name not in docs.DOCUMENT_CATEGORIES:
+            raise HTTPException(422, f"Unknown category {row.name}.")
+        saved[row.name] = {"label": row.label.strip(), "verification": row.verification,
+                           "employee_upload": row.employee_upload and row.name != docs.LETTERS_CATEGORY}
+    before = set_setting(db, docs.CATEGORY_SETTING, saved, user.id)
+    record_audit(db, actor_id=user.id, action="document_categories_changed", entity="platform_setting",
+                 entity_id=docs.CATEGORY_SETTING, before={"value": before}, after={"value": saved}, ip=client_ip(request))
+    db.commit()
+    return _category_outs(db)
+
+
+@router.get("/verification-queue", response_model=list[EmployeeDocumentOut])
+def verification_queue(db: DbSession, user: CurrentUserDep) -> list[EmployeeDocumentOut]:
+    """HR: documents waiting for verification in your scope."""
+    if user.account.role not in HR_ROLES:
+        return []
+    rows = [d for d in db.scalars(select(EmployeeDocument).join(Employee, Employee.id == EmployeeDocument.employee_id)
+                                  .where(EmployeeDocument.verification_status == "pending", user.scope.employee_filter())
+                                  .order_by(EmployeeDocument.updated_at))]
+    return _doc_outs(db, rows, _today(user))
+
+
+@router.post("/{document_id}/verification", response_model=EmployeeDocumentOut)
+def verify_document(document_id: str, body: DocVerifyIn, request: Request, db: DbSession,
+                    user: CurrentUserDep) -> EmployeeDocumentOut:
+    doc, owner = _visible_doc(db, user, document_id)
+    if not docs.is_hr_for(user, owner) or owner.id == user.employee_id:
+        raise HTTPException(403, "Only HR can verify someone else's documents.")
+    if doc.verification_status != "pending":
+        raise HTTPException(409, "This document isn't waiting for verification.")
+    note = (body.note or "").strip()
+    if body.decision == "reject" and not note:
+        raise HTTPException(422, "Say why it is rejected, so they can upload a better copy.")
+    before = {"verification_status": doc.verification_status}
+    doc.verification_status = "verified" if body.decision == "verify" else "rejected"
+    doc.verification_note = note or None
+    doc.verified_by = (user.employee.full_name if user.employee else user.account.email)
+    from app.db import utcnow
+
+    doc.verified_at = utcnow()
+    record_audit(db, actor_id=user.id, action=f"document_{doc.verification_status}", entity="employee_document",
+                 entity_id=doc.id, subject_id=owner.id, before=before,
+                 after={"verification_status": doc.verification_status, "note": note}, ip=client_ip(request))
+    notify(db, recipient_id=owner.id, title=f"{doc.title} {doc.verification_status}",
+           body=note or ("HR checked it." if body.decision == "verify" else ""), href="/documents")
+    db.commit()
+    return _doc_outs(db, [doc], _today(user), with_versions=True)[0]
+
+
+def _ask_verification(db: DbSession, owner: Employee, doc: EmployeeDocument) -> None:
+    for hr_id in db.scalars(select(Account.employee_id).where(Account.role.in_(tuple(HR_ROLES)),
+                                                               Account.employee_id.is_not(None))):
+        if hr_id and hr_id != owner.id:
+            notify(db, recipient_id=hr_id, title=f"{owner.full_name} uploaded {doc.title}",
+                   body="It is waiting for verification.", href="/documents")
 
 
 @router.get("", response_model=list[EmployeeDocumentOut])
@@ -168,6 +244,7 @@ async def upload_document(
     employee_id: str | None = None,
     expiry_date: date | None = None,
     filename: Annotated[str | None, Query(max_length=255)] = None,
+    description: Annotated[str | None, Query(max_length=1000)] = None,
 ) -> EmployeeDocumentOut:
     """A new document (version 1) for yourself, or (HR) for someone in your scope."""
     if category not in docs.DOCUMENT_CATEGORIES:
@@ -179,12 +256,19 @@ async def upload_document(
         raise NOT_FOUND
     if not docs.can_upload_for(user, owner):
         raise HTTPException(403, "Only the employee or HR can add documents.")
+    if not docs.can_employee_upload(db, user, owner, category):
+        raise HTTPException(403, f"HR adds {docs.category_config(db)[category]['label'].lower()} documents.")
     data, content_type, _sha = await _read_upload(request)
+    pending = docs.needs_verification(db, user, owner, category)
     doc = EmployeeDocument(id=f"doc-{uuid.uuid4().hex[:12]}", employee_id=owner.id, category=category, title=title.strip(),
-                           current_version=0, expiry_date=expiry_date, uploaded_by=user.id)
+                           current_version=0, expiry_date=expiry_date, uploaded_by=user.id,
+                           description=(description or "").strip()[:1000] or None,
+                           verification_status="pending" if pending else None)
     db.add(doc)
     db.flush()
     version = _store_version(db, user, doc, data, content_type, filename)
+    if pending:
+        _ask_verification(db, owner, doc)
     record_audit(db, actor_id=user.id, action="document_uploaded", entity="employee_document", entity_id=doc.id,
                  subject_id=owner.id, after={"category": category, "title": doc.title, "version": 1, "expiry_date": expiry_date,
                                              "content_type": content_type, "sha256": version.sha256}, ip=client_ip(request))
@@ -208,10 +292,17 @@ async def upload_version(
         raise HTTPException(422, "Letters get new versions only when HR regenerates them.")
     if not docs.can_upload_for(user, owner):
         raise HTTPException(403, "Only the employee or HR can add versions.")
+    if not docs.can_employee_upload(db, user, owner, doc.category):
+        raise HTTPException(403, "HR updates documents in this category.")
     data, content_type, _sha = await _read_upload(request)
     version = _store_version(db, user, doc, data, content_type, filename)
     if expiry_date is not None:
         doc.expiry_date = expiry_date
+    if docs.needs_verification(db, user, owner, doc.category):
+        doc.verification_status, doc.verification_note, doc.verified_by, doc.verified_at = "pending", None, None, None
+        _ask_verification(db, owner, doc)
+    elif docs.is_hr_for(user, owner) and doc.verification_status in ("pending", "rejected"):
+        doc.verification_status = "verified"
     record_audit(db, actor_id=user.id, action="document_version_added", entity="employee_document", entity_id=doc.id,
                  subject_id=owner.id, after={"version": version.version, "expiry_date": doc.expiry_date, "sha256": version.sha256},
                  ip=client_ip(request))

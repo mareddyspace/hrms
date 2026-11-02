@@ -10,6 +10,7 @@ import { apiOnboardingAnalytics, countryCode, countryName, type OnboardingAnalyt
 import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
 import type { OnboardingJoiner, OnboardingTask } from "../../data/talentData.ts";
 import { todayISO } from "../../model.ts";
+import { BarList, ChartDetail, ChartWithDetail } from "../../pages/dashboards/chartKit.tsx";
 
 const OWNER_LABEL: Record<string, string> = { hr: "HR", it: "IT", manager: "Manager", employee: "Employee" };
 const STATUS_API: Record<OnboardingJoiner["overallStatus"], string> = {
@@ -73,20 +74,40 @@ export function useOnboardingAnalytics(country?: string): { data: OnboardingAnal
   return remote.key === key ? { data: remote.data, error: remote.error } : { data: null, error: "" };
 }
 
-function Bars({ items }: { items: { label: string; value: number }[] }) {
-  const peak = Math.max(1, ...items.map((i) => i.value));
+/** Joiners per month / country; picking a bar lists those joiners (each opens on the Onboarding page). */
+function JoinerBars({ items, joiners, match, title }: {
+  items: { label: string; value: number; key: string }[];
+  joiners: OnboardingJoiner[];
+  match: (j: OnboardingJoiner, key: string) => boolean;
+  title: (label: string, n: number) => string;
+}) {
   return (
-    <ul className="tz-bars" aria-label="Chart">
-      {items.map((item) => (
-        <li key={item.label}>
-          <span className="tz-bar-label">{item.label}</span>
-          <span className="tz-bar-track">
-            <span className="tz-bar-fill" style={{ width: `${Math.min(100, (item.value / peak) * 100)}%` }} />
-          </span>
-          <span className="tz-bar-value">{item.value}</span>
-        </li>
-      ))}
-    </ul>
+    <ChartWithDetail
+      chart={(selected, toggle) => (
+        <BarList
+          variant="tz"
+          items={items}
+          share
+          empty="No joiners in this scope."
+          selected={selected}
+          onSelect={(item) => toggle(item.label)}
+          actionLabel={(item) => (selected === item.label ? "Hide joiners" : "Show joiners")}
+        />
+      )}
+      detail={(selected, close) => {
+        const key = items.find((i) => i.label === selected)?.key ?? "";
+        const rows = joiners.filter((j) => match(j, key));
+        return (
+          <ChartDetail
+            title={title(selected, rows.length)}
+            onClose={close}
+            rows={rows.map((j) => ({ id: j.id, primary: j.name, to: `/onboarding?joiner=${encodeURIComponent(j.id)}`, secondary: `${j.role} · starts ${j.startDate} · ${j.overallStatus}` }))}
+            empty="These joiners are not loaded here yet."
+            more={{ to: "/onboarding", label: "Open onboarding" }}
+          />
+        );
+      }}
+    />
   );
 }
 
@@ -98,6 +119,8 @@ function monthLabel(ym: string): string {
 /** Analytics page → Onboarding tab. */
 export function OnboardingAnalyticsPanel({ country }: { country?: string }) {
   const { data, error } = useOnboardingAnalytics(country);
+  const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+  const scoped = talent.joiners.filter((j) => !country || countryCode(j.country) === country || j.country === country);
   if (error) return <EmptyState title="Onboarding analytics unavailable" description={error} />;
   if (!data) return <p className="muted">Loading…</p>;
   if (!data.total_joiners) return <EmptyState title="No joiners" description="No joiners in this scope yet." />;
@@ -112,10 +135,20 @@ export function OnboardingAnalyticsPanel({ country }: { country?: string }) {
       </MetricGrid>
       <div className="grid-2">
         <Card title="Joiners by start month">
-          <Bars items={data.joiners_by_month.map((m) => ({ label: monthLabel(m.month), value: m.count }))} />
+          <JoinerBars
+            items={data.joiners_by_month.map((m) => ({ label: monthLabel(m.month), value: m.count, key: m.month }))}
+            joiners={scoped}
+            match={(j, key) => j.startDate.slice(0, 7) === key}
+            title={(label, n) => `Starting in ${label} · ${n}`}
+          />
         </Card>
         <Card title="Joiners by country">
-          <Bars items={data.joiners_by_country.map((c) => ({ label: countryName(c.country_code), value: c.count }))} />
+          <JoinerBars
+            items={data.joiners_by_country.map((c) => ({ label: countryName(c.country_code), value: c.count, key: c.country_code }))}
+            joiners={scoped}
+            match={(j, key) => (countryCode(j.country) ?? j.country) === key}
+            title={(label, n) => `Joiners in ${label} · ${n}`}
+          />
         </Card>
         <Card title="Overdue tasks by owner">
           <DataTable

@@ -1,5 +1,5 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Card, EmptyState, FilterBar, Page, StatusBadge } from "../components/ui.tsx";
 import { FILTER_OPTIONS, type EmploymentStatus, type PersonRecord } from "../data/peopleData.ts";
 import { dataScopeFor, dataScopeLabel, personFilterFor, useAccessVersion } from "../data/accessControl.ts";
@@ -33,17 +33,23 @@ export function PeopleDirectoryPage() {
   const canEdit = canManagePeople(demoProfile.role);
   const basic = directoryFieldLevel(demoProfile) === "basic";
 
+  // Drill-downs from charts: ?country= (name or code), ?department=, ?location=, ?status=, ?businessUnit=, ?grade=
+  const [params] = useSearchParams();
+  const param = (k: string) => params.get(k) ?? "";
   const [q, setQ] = useState("");
-  const [country, setCountry] = useState("");
+  const [country, setCountry] = useState(() => {
+    const c = param("country");
+    return (c && people.find((p) => String(p.countryCode) === c)?.countryName) || c;
+  });
   const [legalEntity, setLegalEntity] = useState("");
-  const [department, setDepartment] = useState("");
+  const [department, setDepartment] = useState(() => param("department"));
   const [manager, setManager] = useState("");
   const [job, setJob] = useState("");
-  const [location, setLocation] = useState("");
-  const [status, setStatus] = useState<EmploymentStatus | "">("");
-  const [businessUnit, setBusinessUnit] = useState("");
+  const [location, setLocation] = useState(() => param("location"));
+  const [status, setStatus] = useState<EmploymentStatus | "">(() => param("status") as EmploymentStatus | "");
+  const [businessUnit, setBusinessUnit] = useState(() => param("businessUnit"));
   const [position, setPosition] = useState("");
-  const [grade, setGrade] = useState("");
+  const [grade, setGrade] = useState(() => param("grade"));
   const [sortKey, setSortKey] = useState<SortKey>("fullName");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [view, setView] = useState<ViewMode>("list");
@@ -102,7 +108,7 @@ export function PeopleDirectoryPage() {
       }
       if (needle) {
         const blob = basic
-          ? `${p.fullName} ${p.email} ${p.designation} ${p.department}`
+          ? `${p.fullName} ${p.employeeCode} ${p.email} ${p.designation} ${p.department}`
           : hrFilters
             ? `${p.fullName} ${p.employeeCode} ${p.email} ${p.designation} ${p.department} ${p.location} ${p.businessUnit} ${p.positionId} ${p.grade}`
             : `${p.fullName} ${p.employeeCode} ${p.email} ${p.designation} ${p.department} ${p.location}`;
@@ -157,6 +163,7 @@ export function PeopleDirectoryPage() {
   const sortable: [SortKey, string][] = basic
     ? [
         ["fullName", "Name"],
+        ["employeeCode", "Employee ID"],
         ["department", "Department"],
         ["countryName", "Country"],
       ]
@@ -190,7 +197,7 @@ export function PeopleDirectoryPage() {
             <input
               value={q}
               onChange={(e) => { setQ(e.target.value); setPage(0); }}
-              placeholder={basic ? "Name, email or title" : hrFilters ? "Name, ID, position, grade…" : "Name, ID, email or title"}
+              placeholder={basic ? "Name, ID, email or title" : hrFilters ? "Name, ID, position, grade…" : "Name, ID, email or title"}
             />
           </label>
           <label className="filter-label">
@@ -355,7 +362,7 @@ export function PeopleDirectoryPage() {
                         </div>
                       </div>
                     </td>
-                    {!basic && <td>{person.employeeCode}</td>}
+                    <td>{person.employeeCode || "—"}</td>
                     <td>{person.department}</td>
                     <td>{person.countryName}</td>
                     {!basic && (
@@ -387,7 +394,9 @@ export function PeopleDirectoryPage() {
               <strong>{person.fullName}</strong>
               <span>{person.designation}</span>
               <span className="muted">
-                {basic ? `${person.department} · ${person.countryName}` : `${person.employeeCode} · ${person.location}`}
+                {basic
+                  ? `${person.employeeCode ? `${person.employeeCode} · ` : ""}${person.department} · ${person.countryName}`
+                  : `${person.employeeCode} · ${person.location}`}
               </span>
               {!basic && <StatusBadge status={person.employmentStatus} tone={statusTone(person.employmentStatus)} />}
             </button>

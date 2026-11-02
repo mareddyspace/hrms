@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import JSON, Boolean, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base, TimestampMixin, UTCDateTime
+from app.db import Base, TimestampMixin, UTCDateTime, utcnow
 
 
 class ReviewCycle(TimestampMixin, Base):
@@ -102,3 +102,23 @@ class DevAction(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(200))
     due: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(16), default="not_started")  # not_started | in_progress | done
+
+
+class PerfFeedback(Base):
+    """Continuous feedback: public praise, private feedback, and requests for feedback (migration 0029).
+
+    Praise is visible to everyone; private feedback and requests only to the sender and the recipient.
+    """
+
+    __tablename__ = "perf_feedback"
+    __table_args__ = (Index("ix_perf_feedback_to_kind", "to_id", "kind"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), index=True)  # praise | feedback | request
+    from_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), index=True)
+    to_id: Mapped[str] = mapped_column(ForeignKey("employees.id"))
+    message: Mapped[str] = mapped_column(Text)
+    badge: Mapped[str | None] = mapped_column(String(40))
+    status: Mapped[str | None] = mapped_column(String(16))  # requests: open | answered
+    request_id: Mapped[str | None] = mapped_column(String(64))  # an answer: the request it answers
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)

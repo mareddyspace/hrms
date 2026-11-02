@@ -4,7 +4,7 @@
  */
 import type { Expense, ExpenseReceipt } from "../model.ts";
 import type { TravelInput, TravelMode, TravelRequest } from "../data/travelStore.ts";
-import { api } from "./client.ts";
+import { api, apiRequest } from "./client.ts";
 import {
   createMirror,
   downloadBlob,
@@ -46,6 +46,9 @@ export interface ExpenseClaimOut {
   paid_by: string | null;
   created_at: string;
   receipts: ReceiptOut[];
+  details?: Record<string, string> | null;
+  info_requested?: boolean;
+  can_edit?: boolean;
 }
 
 export interface TravelRequestOut {
@@ -66,6 +69,9 @@ export interface TravelRequestOut {
   approval_status: string | null;
   current_step: number | null;
   created_at: string;
+  details?: Record<string, string> | null;
+  booking?: Record<string, string> | null;
+  info_requested?: boolean;
 }
 
 export interface ExpenseRulesOut {
@@ -114,7 +120,10 @@ function toExpense(c: ExpenseClaimOut, instance: ApprovalInstanceOut | undefined
     status,
     submittedOn: utcIso(c.created_at).slice(0, 10),
     ...(flow ? { steps: flow.steps, currentStep: flow.currentStep, stepDecisions: flow.stepDecisions } : {}),
-    ...(c.receipts[0] ? { receipt: toReceipt(c.receipts[0]) } : {}),
+    ...(c.receipts[0] ? { receipt: toReceipt(c.receipts[0]), receipts: c.receipts.map(toReceipt) } : {}),
+    ...(c.details ? { details: c.details } : {}),
+    infoRequested: !!c.info_requested,
+    canEdit: !!c.can_edit,
     ...(c.trip_id ? { tripId: c.trip_id } : {}),
     ...(c.paid_on ? { paidOn: c.paid_on, paymentRef: c.payment_reference ?? "", paidById: c.paid_by ?? "", paidByName: nameOf(c.paid_by) } : {}),
     ...decisionOf(c.status, instance),
@@ -137,13 +146,16 @@ function toTrip(t: TravelRequestOut, instance: ApprovalInstanceOut | undefined):
     toCity: t.to_location,
     departOn: t.start_date,
     returnOn: t.end_date,
-    mode: TO_MODE[t.mode] ?? "Other",
+    mode: t.mode === "road" && t.details?.mode === "Bus" ? "Bus" : (TO_MODE[t.mode] ?? "Other"),
     estimatedCost: t.estimated_cost,
     currency: t.currency,
     advanceNeeded: t.advance_amount > 0,
     ...(t.advance_amount > 0 ? { advanceAmount: t.advance_amount } : {}),
     status,
     submittedOn: utcIso(t.created_at).slice(0, 10),
+    ...(t.details ? { details: t.details } : {}),
+    ...(t.booking ? { booking: t.booking } : {}),
+    infoRequested: !!t.info_requested,
     steps: flow.steps,
     currentStep: flow.currentStep,
     stepDecisions: flow.stepDecisions,
@@ -204,7 +216,16 @@ export const claimsMirror = createMirror<RawClaims, ApiClaimsState>(emptyClaims,
 
 /* ───────── Expense changes ───────── */
 
-export function apiAddExpense(input: { date: string; category: string; amount: number; description: string; tripId?: string; receiptId?: string }) {
+export function apiAddExpense(input: {
+  date: string;
+  category: string;
+  amount: number;
+  description: string;
+  tripId?: string;
+  receiptId?: string;
+  receiptIds?: string[];
+  details?: Record<string, string>;
+}) {
   return mutate(
     () =>
       api.post<ExpenseClaimOut>("/expenses", {
@@ -214,10 +235,41 @@ export function apiAddExpense(input: { date: string; category: string; amount: n
         date: input.date,
         description: input.description.trim(),
         trip_id: input.tripId || null,
-        receipt_ids: input.receiptId ? [input.receiptId] : [],
+        receipt_ids: [...new Set([...(input.receiptId ? [input.receiptId] : []), ...(input.receiptIds ?? [])])],
+        details: input.details && Object.keys(input.details).length ? input.details : null,
       }),
     claimsMirror,
   );
+}
+
+export function apiEditExpense(
+  id: string,
+  patch: { date?: string; category?: string; amount?: number; description?: string; tripId?: string | null; details?: Record<string, string> },
+) {
+  return mutate(
+    () =>
+      apiRequest<ExpenseClaimOut>(`/expenses/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: {
+          ...(patch.date ? { date: patch.date } : {}),
+          ...(patch.category ? { category: patch.category } : {}),
+          ...(patch.amount !== undefined ? { amount: patch.amount } : {}),
+          ...(patch.description !== undefined ? { description: patch.description.trim() } : {}),
+          ...(patch.tripId === null ? { clear_trip: true } : patch.tripId ? { trip_id: patch.tripId } : {}),
+          ...(patch.details ? { details: patch.details } : {}),
+        },
+      }),
+    claimsMirror,
+  );
+}
+
+/** Adds a receipt to your own claim while it is still submitted. */
+export function apiAddClaimReceipt(claimId: string, file: File) {
+  return mutate(() => uploadRaw<ReceiptOut>(`/expenses/${encodeURIComponent(claimId)}/receipts`, file, file.type || "application/octet-stream", file.name), claimsMirror);
+}
+
+export function apiSaveBooking(tripId: string, booking: Record<string, string>) {
+  return mutate(() => apiRequest<TravelRequestOut>(`/travel/${encodeURIComponent(tripId)}/booking`, { method: "PUT", body: { booking } }), claimsMirror);
 }
 
 export function apiDecideExpense(id: string, decision: "approve" | "reject", note?: string) {
@@ -265,6 +317,7 @@ export function apiSubmitTravel(input: TravelInput) {
         estimated_cost: input.estimatedCost,
         currency: /^[A-Z]{3}$/.test(input.currency) ? input.currency : null,
         advance_amount: input.advanceNeeded ? (input.advanceAmount ?? 0) : 0,
+        details: { ...(input.details ?? {}), mode: input.mode },
       }),
     claimsMirror,
   );

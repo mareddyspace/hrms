@@ -52,3 +52,17 @@
 .pol-home-banner ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .pol-home-banner li { display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .pol-home-banner p { margin: 2px 0 0; font-size: var(--text-sm); color: var(--muted); }
+.pol-detail-wrap { min-width: 0; scroll-margin-top: 72px; }
+.pol-article h2:focus { outline: none; }
+.pol-row { -webkit-tap-highlight-color: transparent; touch-action: manipulation; min-height: 40px; }
+.pol-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pol-title-link { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--accent); text-align: left; cursor: pointer; touch-action: manipulation; }
+.pol-title-link:hover { text-decoration: underline; }
+.pol-title-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.pol-track-row { cursor: pointer; }
+.pol-track-row:hover td, .pol-track-row.active td { background: var(--soft); }
+.pol-meter-wrap { display: inline-block; }
+.pol-meter-hit { display: inline-block; padding: 2px 4px; margin: -2px -4px; border-radius: 4px; touch-action: manipulation; }
+.pol-meter-hit.is-active, .pol-meter-hit:focus-visible { background: var(--accent-soft); outline: none; }
+.pol-meter-hit.is-active .pol-meter span { background: var(--accent-bright, var(--accent)); }
+.pol-track { scroll-margin-top: 72px; }

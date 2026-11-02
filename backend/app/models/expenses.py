@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
-from sqlalchemy import Date, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import JSON, Date, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, TimestampMixin
@@ -27,6 +28,7 @@ class ExpenseClaim(TimestampMixin, Base):
     paid_on: Mapped[date | None] = mapped_column(Date)
     payment_reference: Mapped[str | None] = mapped_column(String(100))
     paid_by: Mapped[str | None] = mapped_column(String(64))
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # migration 0028: category-specific fields
 
 
 class ExpenseReceipt(TimestampMixin, Base):

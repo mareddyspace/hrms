@@ -15,7 +15,7 @@ from sqlalchemy import select
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
 from app.models import ApprovalDecision, ApprovalInstance, CashAdvance, Employee, EncashmentRequest, SoftwareRequest, SoftwareTitle
 from app.schemas.self_service import (
-    CashIn, CashOut, CashPayIn, CashPolicyOut, DecisionIn, EncashIn, EncashOut, EncashPolicyOut, InstalmentOut, SoftwareIn,
+    CashIn, CashOut, CashPayIn, CashPolicyOut, CashSettlementDecisionIn, CashSettlementIn, DecisionIn, EncashIn, EncashOut, EncashPolicyOut, InstalmentOut, SoftwareIn,
     SoftwareOut, SoftwareTitleIn, SoftwareTitleOut, StepOut,
 )
 from app.services import approvals as engine
@@ -23,6 +23,7 @@ from app.services import self_service as rules
 from app.services.activity import record_audit
 from app.services.decisions import NOT_FOUND, me
 from app.services.leave import today_for
+from app.services.request_extras import open_info_ids
 from app.services.scope import manager_chain_ids
 from app.services.workflow_defaults import decide_http, is_approver, waiting_entity_ids
 
@@ -113,6 +114,8 @@ def _get(db: DbSession, user: CurrentUser, model: Any, row_id: str, extra: bool,
 
 
 def _decide(db: DbSession, user: CurrentUser, row: Any, body: DecisionIn, request: Request) -> None:
+    if body.decision == "reject" and not (body.note or "").strip():
+        raise HTTPException(422, "Add a comment saying why it is declined.")
     decide_http(db, rules.instance_of(db, row), user.employee_id, body.decision, body.note, user.id, client_ip(request))
     current = rules.stage_status(db, row, "")
     if row.status in rules.PENDING and current != row.status:
@@ -120,7 +123,10 @@ def _decide(db: DbSession, user: CurrentUser, row: Any, body: DecisionIn, reques
 
 
 # ---------- cash advances ----------
-def _cash_out(db: DbSession, user: CurrentUser, row: CashAdvance, emp: Employee) -> CashOut:
+def _cash_out(db: DbSession, user: CurrentUser, row: CashAdvance, emp: Employee,
+              open_info: set[str] | None = None) -> CashOut:
+    if open_info is None:
+        open_info = open_info_ids(db, "cash_advance", [row.id])
     today = today_for(emp)
     instance = rules.instance_of(db, row)
     return CashOut(
@@ -131,8 +137,20 @@ def _cash_out(db: DbSession, user: CurrentUser, row: CashAdvance, emp: Employee)
         can_withdraw=row.status in rules.PENDING and emp.id == user.employee_id,
         can_pay=row.status == "Approved" and emp.id != user.employee_id and rules.can_pay(user.account.role, user.scope.is_hr)
         and user.scope.can_see(emp),
-        paid_on=row.paid_on, paid_by=row.paid_by, reference=row.reference, outstanding=rules.outstanding(row, today),
+        paid_on=row.paid_on, paid_by=row.paid_by, reference=row.reference,
+        outstanding=0.0 if row.status == "Settled" else rules.outstanding(row, today),
         schedule=[InstalmentOut(**i) for i in rules.schedule(row, today)],
+        expected_settlement=row.expected_settlement, trip_id=row.trip_id, project=row.project,
+        settlement_status=row.settlement_status, settlement_spent=row.settlement_spent,
+        settlement_returned=row.settlement_returned, settlement_note=row.settlement_note, settlement_on=row.settlement_on,
+        settlement_reference=row.settlement_reference, settlement_verified_by=row.settlement_verified_by,
+        settlement_verified_on=row.settlement_verified_on, settlement_due=rules.settlement_due(row, today),
+        can_settle=row.status == "Paid" and emp.id == user.employee_id
+        and row.settlement_status not in ("Submitted", "Verified") and rules.settlement_due(row, today) > 0,
+        can_verify_settlement=row.settlement_status == "Submitted" and emp.id != user.employee_id
+        and rules.can_pay(user.account.role, user.scope.is_hr) and user.scope.can_see(emp),
+        settlement_overdue=rules.settlement_overdue(row, today),
+        info_requested=row.id in open_info,
     )
 
 
@@ -150,11 +168,49 @@ def cash_policy(db: DbSession, user: CurrentUserDep) -> CashPolicyOut:
 def list_cash(db: DbSession, user: CurrentUserDep, scope: Scope = "mine",
               limit: Annotated[int, Query(ge=1, le=500)] = 200) -> list[CashOut]:
     out = []
-    for row in _list(db, user, CashAdvance, rules.CASH, scope, _hr_or_admin(user), limit):
+    rows = _list(db, user, CashAdvance, rules.CASH, scope, _hr_or_admin(user), limit)
+    asked = open_info_ids(db, "cash_advance", [r.id for r in rows])
+    for row in rows:
         emp = db.get(Employee, row.employee_id)
         if emp is not None and _can_view(db, user, row, emp, _hr_or_admin(user)):
-            out.append(_cash_out(db, user, row, emp))
+            out.append(_cash_out(db, user, row, emp, asked))
     return out
+
+
+@cash_router.get("/{row_id}", response_model=CashOut)
+def get_cash(row_id: str, db: DbSession, user: CurrentUserDep) -> CashOut:
+    row, emp = _get(db, user, CashAdvance, row_id, _hr_or_admin(user))
+    return _cash_out(db, user, row, emp)
+
+
+@cash_router.post("/{row_id}/settlement", response_model=CashOut)
+def settle_cash(row_id: str, body: CashSettlementIn, request: Request, db: DbSession, user: CurrentUserDep) -> CashOut:
+    """The requester accounts for a paid advance: actual spend (receipts attached first) and any unspent money returned."""
+    row, emp = _get(db, user, CashAdvance, row_id, False)
+    if emp.id != user.employee_id:
+        raise HTTPException(403, "Only the person who received the advance can settle it.")
+    try:
+        rules.submit_settlement(db, row, emp, body.model_dump(), user.id, client_ip(request))
+    except rules.RequestError as exc:
+        db.rollback()
+        raise _err(exc) from exc
+    db.commit()
+    return _cash_out(db, user, row, emp)
+
+
+@cash_router.post("/{row_id}/settlement/decision", response_model=CashOut)
+def verify_settlement(row_id: str, body: CashSettlementDecisionIn, request: Request, db: DbSession,
+                      user: CurrentUserDep) -> CashOut:
+    row, emp = _get(db, user, CashAdvance, row_id, _hr_or_admin(user))
+    if not (rules.can_pay(user.account.role, user.scope.is_hr) and user.scope.can_see(emp)):
+        raise HTTPException(403, "Only finance or HR can verify a settlement.")
+    try:
+        rules.decide_settlement(db, row, me(user), user.id, body.decision, body.note, client_ip(request))
+    except rules.RequestError as exc:
+        db.rollback()
+        raise _err(exc) from exc
+    db.commit()
+    return _cash_out(db, user, row, emp)
 
 
 @cash_router.post("", response_model=CashOut, status_code=status.HTTP_201_CREATED)
@@ -204,7 +260,8 @@ def pay_cash(row_id: str, body: CashPayIn, request: Request, db: DbSession, user
 
 
 # ---------- leave encashment ----------
-def _encash_out(db: DbSession, user: CurrentUser, row: EncashmentRequest, emp: Employee) -> EncashOut:
+def _encash_out(db: DbSession, user: CurrentUser, row: EncashmentRequest, emp: Employee,
+                open_info: set[str] | None = None) -> EncashOut:
     instance = rules.instance_of(db, row)
     return EncashOut(
         id=row.id, employee_id=emp.id, employee_name=emp.full_name, leave_code=row.leave_code, days=row.days,
@@ -212,6 +269,8 @@ def _encash_out(db: DbSession, user: CurrentUser, row: EncashmentRequest, emp: E
         submitted_on=row.created_at.date(), payout_month=row.payout_month, steps=_steps(db, instance),
         can_decide=engine.can_act(db, instance, user.employee_id),
         can_withdraw=row.status in rules.PENDING and emp.id == user.employee_id,
+        paid=rules.encashment_paid(db, row, emp), year=row.year,
+        info_requested=row.id in (open_info if open_info is not None else open_info_ids(db, "encashment", [row.id])),
     )
 
 
@@ -224,11 +283,19 @@ def encash_policy(db: DbSession, user: CurrentUserDep) -> EncashPolicyOut:
 def list_encash(db: DbSession, user: CurrentUserDep, scope: Scope = "mine",
                 limit: Annotated[int, Query(ge=1, le=500)] = 200) -> list[EncashOut]:
     out = []
-    for row in _list(db, user, EncashmentRequest, rules.ENCASH, scope, _hr_or_admin(user), limit):
+    rows = _list(db, user, EncashmentRequest, rules.ENCASH, scope, _hr_or_admin(user), limit)
+    asked = open_info_ids(db, "encashment", [r.id for r in rows])
+    for row in rows:
         emp = db.get(Employee, row.employee_id)
         if emp is not None and _can_view(db, user, row, emp, _hr_or_admin(user)):
-            out.append(_encash_out(db, user, row, emp))
+            out.append(_encash_out(db, user, row, emp, asked))
     return out
+
+
+@encash_router.get("/{row_id}", response_model=EncashOut)
+def get_encash(row_id: str, db: DbSession, user: CurrentUserDep) -> EncashOut:
+    row, emp = _get(db, user, EncashmentRequest, row_id, _hr_or_admin(user))
+    return _encash_out(db, user, row, emp)
 
 
 @encash_router.post("", response_model=EncashOut, status_code=status.HTTP_201_CREATED)

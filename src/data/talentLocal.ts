@@ -22,6 +22,7 @@ import {
   REQUISITIONS,
   SKILL_LIBRARY,
   starterSkillsFor,
+  namedStarterSkills,
   type ApprovalStatus,
   type Candidate,
   type Certification,
@@ -226,6 +227,7 @@ export function getTalentState(): TalentState {
     goals: perf.goals,
     reviews: perf.reviews,
     oneOnOnes: [...cache.oneOnOnes.filter((m) => m.status === "Upcoming"), ...perf.checkIns],
+    feedback: perf.feedback,
     enrollments: learn.enrollments,
     certifications: learn.certifications,
     skillProfiles: learn.skillProfiles,
@@ -2168,6 +2170,19 @@ export function saveGoal(actor: TalentActor, input: GoalInput): TalentResult {
   });
 }
 
+/** Removes a goal (owner or someone above them, open cycles only). */
+export function deleteGoal(actor: TalentActor, id: string): TalentResult {
+  if (API_ENABLED) return viaApi(() => perfApi.apiDeleteGoal(id));
+  return guarded((s) => {
+    const row = s.goals.find((g) => g.id === id);
+    if (!row) return "Goal not found.";
+    if (!canEditGoal(actor, row)) return "Only the goal owner or their managers can remove this goal.";
+    if (cycleStatusOf(s, row.cycleId) === "Closed") return "This cycle is closed.";
+    s.goals = s.goals.filter((g) => g.id !== id);
+    return null;
+  });
+}
+
 export function updateGoalProgress(actor: TalentActor, id: string, progress: number): TalentResult {
   if (API_ENABLED) return viaApi(() => perfApi.apiGoalProgress(id, progress));
   return guarded((s) => {
@@ -2375,6 +2390,11 @@ function normalizeMessage(text: string): string {
 }
 
 export function addFeedback(item: Omit<FeedbackItem, "id" | "createdOn" | "createdAt">): TalentResult {
+  if (API_ENABLED) {
+    if (item.toId === item.fromId) return "Choose a colleague.";
+    if (normalizeMessage(item.message).length < 10) return "Write at least 10 characters.";
+    return viaApi(() => perfApi.apiGiveFeedback({ kind: item.kind, toId: item.toId, message: item.message, badge: item.badge }));
+  }
   return guarded((s) => {
     const now = Date.now();
     const today = todayISO();
@@ -2399,6 +2419,10 @@ export function addFeedback(item: Omit<FeedbackItem, "id" | "createdOn" | "creat
 
 /** Answer an open feedback request addressed to you: the reply goes privately to the person who asked. */
 export function answerFeedbackRequest(actor: TalentActor, requestId: string, message: string): TalentResult {
+  if (API_ENABLED) {
+    if (message.trim().length < 10) return "Write at least 10 characters.";
+    return viaApi(() => perfApi.apiAnswerFeedback(requestId, message));
+  }
   return guarded((s) => {
     const request = s.feedback.find((f) => f.id === requestId && f.kind === "Request");
     if (!request) return "Request not found.";
@@ -2527,8 +2551,10 @@ export const SKILL_LEVELS: readonly string[] = Object.keys(LEVEL_RANK);
 
 /** The starting list before the person edits it: department-based, the same one the profile page shows. */
 function startingSkills(employeeId: string): EmployeeSkill[] {
+  // Same order as the server (career.starter_skills): the named starter list first, else by department and grade.
+  const named = namedStarterSkills(employeeId);
   const person = getPerson(employeeId);
-  return structuredClone(person ? starterSkills(person) : starterSkillsFor(employeeId).skills);
+  return structuredClone(named ?? (person ? starterSkills(person) : starterSkillsFor(employeeId).skills));
 }
 
 /** The employee's saved skills profile, or their starting list until they change it. */

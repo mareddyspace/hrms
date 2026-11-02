@@ -740,7 +740,7 @@ export function TaxDeclarationsPage() {
                 <MetricCard
                   label="Projected tax for the year (estimate)"
                   value={money(regimeTax(tax.now), c)}
-                  hint={totals.pending > 0 ? `${money(regimeTax(tax.ifAll), c)} if pending items are verified` : isIndia ? `${regime === "old" ? "Old" : "New"} regime` : undefined}
+                  hint={totals.pending > 0 && !newRegime ? `${money(regimeTax(tax.ifAll), c)} if pending items are verified` : isIndia ? `${regime === "old" ? "Old" : "New"} regime` : undefined}
                 />
               )}
             </MetricGrid>

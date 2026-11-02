@@ -40,6 +40,7 @@ import { canRevealPersonal, personRevealer } from "../data/piiReveal.ts";
 import { isMasked } from "../utils/mask.ts";
 import { API_ENABLED } from "../api/client.ts";
 import { revealPersonDetail } from "../api/portalSync.ts";
+import { fetchDocuments, type RepoDocument } from "../api/syncRewards.ts";
 import { usePortal } from "../store.tsx";
 import { DraftTag } from "../features/ai/DraftTag.tsx";
 import { apiEmployeeSummary } from "../api/syncCareer.ts";
@@ -344,7 +345,32 @@ export function Employee360View({
   const monthly = rules.earnings.reduce((sum, line) => sum + line.amount, 0);
   const showPay = revealPay;
 
-  const documents = state.documents.filter((d) => d.employeeId === person.id);
+  const localDocuments = state.documents.filter((d) => d.employeeId === person.id);
+  // With the backend, documents come from the server, which returns only what this viewer may see
+  // (the person, HR in scope, and their managers for manager-visible categories).
+  const docsVisible = access.documents || (API_ENABLED && access.aboveInLine);
+  const [apiDocs, setApiDocs] = useState<{ id: string; rows: RepoDocument[]; error: string | null } | null>(null);
+  useEffect(() => {
+    if (!API_ENABLED || !docsVisible || tab !== "docs") return;
+    let live = true;
+    void fetchDocuments(isSelf ? undefined : person.id).then(({ data, error }) => {
+      if (live) setApiDocs({ id: person.id, rows: data, error });
+    });
+    return () => {
+      live = false;
+    };
+  }, [docsVisible, tab, person.id, isSelf]);
+  const apiDocsHere = apiDocs && apiDocs.id === person.id ? apiDocs : null;
+  const documents = API_ENABLED
+    ? (apiDocsHere?.rows ?? []).map((d) => ({
+        id: d.id,
+        name: d.title,
+        category: d.category,
+        docType: d.versions[0]?.fileName ?? "",
+        uploadedAt: d.updatedOn,
+        expires: d.expiryDate ?? "",
+      }))
+    : localDocuments.map((d) => ({ id: d.id, name: d.name, category: d.category, docType: d.docType, uploadedAt: d.uploadedAt, expires: d.expires }));
   const certificateFor = (c: (typeof certifications)[number]): CertificateDoc => ({
     id: c.id,
     kind: "professional",
@@ -404,7 +430,7 @@ export function Employee360View({
       : []),
     ...(access.compensation ? [{ id: "comp" as const, label: "Compensation" }] : []),
     ...(access.benefits ? [{ id: "benefits" as const, label: "Benefits" }] : []),
-    ...(access.documents ? [{ id: "docs" as const, label: "Documents" }] : []),
+    ...(docsVisible ? [{ id: "docs" as const, label: "Documents" }] : []),
     ...(access.work ? [{ id: "lifecycle" as const, label: "Lifecycle history" }] : []),
   ];
   const activeTab = tabs.some((t) => t.id === tab) ? tab : "personal";
@@ -615,6 +641,7 @@ export function Employee360View({
                 <Item label="Last name" value={person.lastName} />
                 <Item label="Preferred name" value={preferredName} />
                 <Item label="Work email" value={person.email} />
+                <Item label="Employee ID" value={person.employeeCode} />
               </dl>
               <p className="profile-private">
                 <Lock size={13} aria-hidden /> Visible to {firstName}, their managers and HR.
@@ -1179,8 +1206,13 @@ export function Employee360View({
         </div>
       )}
 
-      {activeTab === "docs" && access.documents && (
-        <Card title={`Documents (${documents.length})`} to={isSelf ? "/documents" : undefined}>
+      {activeTab === "docs" && docsVisible && (
+        <Card title={`Documents${API_ENABLED && !apiDocsHere ? "" : ` (${documents.length})`}`} to={isSelf ? "/documents" : undefined}>
+          {API_ENABLED && !apiDocsHere ? (
+            <p className="muted">Loading documents…</p>
+          ) : apiDocsHere?.error ? (
+            <p className="note err" role="alert">{apiDocsHere.error}</p>
+          ) : (
           <DataTable
             headers={["Document", "Category", "Type", "Uploaded", "Expires"]}
             rows={documents.map((d) => [
@@ -1192,6 +1224,7 @@ export function Employee360View({
             ])}
             empty={<EmptyState title="No documents" />}
           />
+          )}
         </Card>
       )}
 

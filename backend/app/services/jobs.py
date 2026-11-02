@@ -172,6 +172,12 @@ def run_all(db: Session, now: datetime | None = None) -> dict[str, Any]:
     from app.services.compliance_calendar import run_alerts  # HR: compliance items due in 7 days
 
     out["compliance_alerts"] = run_alerts(db, now.date(), _send)
+    from app.services.self_service import send_settlement_reminders  # cash advances past their settlement date
+
+    out["cash_settlement_reminders"] = send_settlement_reminders(db, now.date(), _send)
+    from app.services.documents import send_expiry_reminders  # documents expiring within 30 days, or expired
+
+    out["document_expiry_reminders"] = send_expiry_reminders(db, now.date(), _send)
     return out
 
 

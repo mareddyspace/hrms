@@ -5,20 +5,22 @@ Same rules as the front end (src/data/talentLocal.ts):
 - Goals: the owner or anyone above them; weights 1-100 and one person's goals in a cycle total at most 100.
 - Self-assessment: the employee, while the cycle is active. Manager assessment and rating: someone above the employee.
 - The rating is proposed by the manager and released by HR during calibration; the employee sees it only once released.
-- 360: the employee or their manager nominates up to 3 reviewers; answers are seen by the managers and HR, never the employee.
+- 360: the employee or their manager nominates up to 3 reviewers; answers are seen by the managers and HR. The employee
+  never sees who said what: once the rating is released and at least 2 people answered, an anonymous summary.
+- Feedback: praise is public; private feedback and feedback requests are seen by the sender and the recipient only.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import func, select
 
 from app.db import utcnow
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
-from app.models import CheckIn, DevAction, Employee, Goal, PerfReview, Reviewer360, ReviewCycle
+from app.models import CheckIn, DevAction, Employee, Goal, PerfFeedback, PerfReview, Reviewer360, ReviewCycle
 from app.schemas.talent import (
     AssessmentIn,
     OneOnOneIn,
@@ -28,6 +30,9 @@ from app.schemas.talent import (
     DevActionIn,
     DevActionOut,
     DevActionPatch,
+    PerfFeedbackAnswerIn,
+    PerfFeedbackIn,
+    PerfFeedbackOut,
     GoalIn,
     GoalOut,
     GoalProgressIn,
@@ -37,6 +42,7 @@ from app.schemas.talent import (
     Response360In,
     Reviewer360Out,
     ReviewOut,
+    Summary360Out,
 )
 from app.services.activity import notify, record_audit
 from app.services.decisions import NOT_FOUND, can_view, me, target
@@ -48,6 +54,8 @@ router = APIRouter(prefix="/performance", tags=["performance"])
 NEXT_STATUS = {"planning": "active", "active": "calibration", "calibration": "closed"}
 MAX_360 = 3
 MAX_DEV_ACTIONS = 12
+MIN_360_FOR_SUMMARY = 2  # fewer answers could identify who said what
+DAILY_PRAISE_LIMIT = 10
 
 
 # ---------- who ----------
@@ -280,6 +288,11 @@ def _review_out(db: DbSession, user: CurrentUser, review: PerfReview) -> ReviewO
             item.rating, item.comment = r.rating, r.comment
         rev_out.append(item)
     actions = list(db.scalars(select(DevAction).where(DevAction.review_id == review.id).order_by(DevAction.created_at)))
+    answered = [r for r in reviewers if r.responded_at and r.rating]
+    summary = None
+    if is_self and review.released and len(answered) >= MIN_360_FOR_SUMMARY:
+        summary = Summary360Out(responses=len(answered), average_rating=round(sum(r.rating or 0 for r in answered) / len(answered), 1),
+                                comments=sorted((r.comment or "").strip() for r in answered if (r.comment or "").strip()))
     return ReviewOut(
         id=review.id, cycle_id=review.cycle_id, employee_id=review.employee_id, employee_name=emp.full_name if emp else None,
         self_status=review.self_status,
@@ -288,7 +301,7 @@ def _review_out(db: DbSession, user: CurrentUser, review: PerfReview) -> ReviewO
         manager_text=review.manager_text if not is_self or review.manager_status == "submitted" else None,
         rating=(review.rating if review.released else None) if is_self else review.rating,
         released=review.released, released_at=review.released_at, feedback_360_status=_status_360(reviewers),
-        reviewers=rev_out, dev_actions=[DevActionOut.model_validate(a) for a in actions],
+        reviewers=rev_out, dev_actions=[DevActionOut.model_validate(a) for a in actions], summary_360=summary,
     )
 
 
@@ -561,3 +574,84 @@ def delete_action(action_id: str, request: Request, db: DbSession, user: Current
     db.commit()
     return Response(status_code=204)
 
+
+
+# ---------- continuous feedback ----------
+def _feedback_outs(db: DbSession, rows: list[PerfFeedback]) -> list[PerfFeedbackOut]:
+    ids = {r.from_id for r in rows} | {r.to_id for r in rows}
+    names = dict(db.execute(select(Employee.id, Employee.full_name).where(Employee.id.in_(ids))).all()) if ids else {}
+    return [PerfFeedbackOut(id=r.id, kind=r.kind, from_id=r.from_id, from_name=names.get(r.from_id), to_id=r.to_id,
+                        to_name=names.get(r.to_id), message=r.message, badge=r.badge, status=r.status, request_id=r.request_id,
+                        created_at=r.created_at) for r in rows]
+
+
+@router.get("/feedback", response_model=list[PerfFeedbackOut])
+def list_feedback(db: DbSession, user: CurrentUserDep) -> list[PerfFeedbackOut]:
+    """Praise for everyone; private feedback and requests I sent or received."""
+    praise = list(db.scalars(select(PerfFeedback).where(PerfFeedback.kind == "praise").order_by(PerfFeedback.created_at.desc()).limit(200)))
+    mine: list[PerfFeedback] = []
+    if user.employee_id:
+        mine = list(db.scalars(select(PerfFeedback).where(
+            PerfFeedback.kind.in_(("feedback", "request")),
+            (PerfFeedback.to_id == user.employee_id) | (PerfFeedback.from_id == user.employee_id),
+        ).order_by(PerfFeedback.created_at.desc()).limit(300)))
+    rows = sorted(praise + mine, key=lambda r: r.created_at, reverse=True)
+    return _feedback_outs(db, rows)
+
+
+@router.post("/feedback", response_model=PerfFeedbackOut, status_code=status.HTTP_201_CREATED)
+def give_feedback(body: PerfFeedbackIn, request: Request, db: DbSession, user: CurrentUserDep) -> PerfFeedbackOut:
+    sender = me(user)
+    to = db.get(Employee, body.to_id)
+    if to is None or to.id == sender.id or to.employment_status == "Terminated":
+        raise HTTPException(422, "Choose a colleague.")
+    message = " ".join(body.message.split())
+    if len(message) < 10:
+        raise HTTPException(422, "Write at least 10 characters.")
+    recent = db.scalar(select(PerfFeedback.id).where(
+        PerfFeedback.from_id == sender.id, PerfFeedback.to_id == to.id, PerfFeedback.message == message,
+        PerfFeedback.created_at >= utcnow() - timedelta(minutes=10)))
+    if recent:
+        raise HTTPException(409, "You already sent this message to them in the last 10 minutes.")
+    if body.kind == "praise":
+        start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        sent = db.scalar(select(func.count()).select_from(PerfFeedback).where(
+            PerfFeedback.kind == "praise", PerfFeedback.from_id == sender.id, PerfFeedback.created_at >= start)) or 0
+        if sent >= DAILY_PRAISE_LIMIT:
+            raise HTTPException(429, f"You can post up to {DAILY_PRAISE_LIMIT} praise messages a day.")
+    badge = ((body.badge or "").strip() or None) if body.kind == "praise" else None
+    row = PerfFeedback(id=f"fb-{uuid.uuid4().hex[:12]}", kind=body.kind, from_id=sender.id, to_id=to.id, message=message,
+                       badge=badge, status="open" if body.kind == "request" else None, created_at=utcnow())
+    db.add(row)
+    db.flush()
+    # The message itself stays out of the audit trail (private feedback).
+    record_audit(db, actor_id=user.id, action=f"feedback_{body.kind}_sent", entity="perf_feedback", entity_id=row.id,
+                 subject_id=to.id, ip=client_ip(request))
+    title = {"praise": f"{sender.full_name} praised you", "feedback": f"Private feedback from {sender.full_name}",
+             "request": f"{sender.full_name} asked for your feedback"}[body.kind]
+    notify(db, recipient_id=to.id, title=title, href="/evaluations")
+    db.commit()
+    return _feedback_outs(db, [row])[0]
+
+
+@router.post("/feedback/{feedback_id}/answer", response_model=PerfFeedbackOut, status_code=status.HTTP_201_CREATED)
+def answer_feedback(feedback_id: str, body: PerfFeedbackAnswerIn, request: Request, db: DbSession, user: CurrentUserDep) -> PerfFeedbackOut:
+    """Answer a request addressed to me: the answer goes privately to the person who asked."""
+    req = db.get(PerfFeedback, feedback_id)
+    if req is None or req.kind != "request" or req.to_id != user.employee_id:
+        raise HTTPException(404, "Request not found.")
+    if req.status == "answered":
+        raise HTTPException(409, "This request is already answered.")
+    message = " ".join(body.message.split())
+    if len(message) < 10:
+        raise HTTPException(422, "Write at least 10 characters.")
+    req.status = "answered"
+    row = PerfFeedback(id=f"fb-{uuid.uuid4().hex[:12]}", kind="feedback", from_id=req.to_id, to_id=req.from_id, message=message,
+                       request_id=req.id, created_at=utcnow())
+    db.add(row)
+    db.flush()
+    record_audit(db, actor_id=user.id, action="feedback_request_answered", entity="perf_feedback", entity_id=req.id,
+                 subject_id=req.from_id, ip=client_ip(request))
+    notify(db, recipient_id=req.from_id, title="Your feedback request was answered", href="/evaluations")
+    db.commit()
+    return _feedback_outs(db, [row])[0]

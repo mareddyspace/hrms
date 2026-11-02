@@ -214,12 +214,12 @@ export function leaveTrend(
   country: CountryCode | "ALL",
   today: string,
   months = 6,
-): { label: string; days: number }[] {
+): { label: string; days: number; from: string; to: string; requestIds: string[] }[] {
   const now = parseISODate(today);
   const buckets = Array.from({ length: months }, (_, i) => {
     const first = new Date(now.getFullYear(), now.getMonth() - (months - 1 - i), 1);
     const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
-    return { from: toISO(first), to: toISO(last), label: first.toLocaleDateString("en-GB", { month: "short" }), days: 0 };
+    return { from: toISO(first), to: toISO(last), label: first.toLocaleDateString("en-GB", { month: "short" }), days: 0, requestIds: [] as string[] };
   });
   const holidayCache = new Map<string, Set<string>>();
   for (const r of leaveRequests) {
@@ -230,10 +230,14 @@ export function leaveTrend(
     for (const b of buckets) {
       const from = r.from > b.from ? r.from : b.from;
       const to = r.to < b.to ? r.to : b.to;
-      if (from <= to) b.days += workingDays(from, to, holidayCache.get(code)!, weeklyOffFor(code));
+      if (from <= to) {
+        const n = workingDays(from, to, holidayCache.get(code)!, weeklyOffFor(code));
+        b.days += n;
+        if (n > 0) b.requestIds.push(r.id);
+      }
     }
   }
-  return buckets.map(({ label, days }) => ({ label, days }));
+  return buckets.map(({ label, days, from, to, requestIds }) => ({ label, days, from, to, requestIds }));
 }
 
 const ATTENDED = new Set(["present", "wfh", "missing_punch", "pending_correction"]);
@@ -253,8 +257,14 @@ export function attendanceAnalytics(
   const end = addDaysISO(today, -1);
   const start = addDaysISO(end, -(weeks * 7 - 1));
   const startMs = parseISODate(start).getTime();
-  const buckets = Array.from({ length: weeks }, (_, i) => ({ from: addDaysISO(start, i * 7), attended: 0, expected: 0 }));
+  const buckets = Array.from({ length: weeks }, (_, i) => ({
+    from: addDaysISO(start, i * 7),
+    attended: 0,
+    expected: 0,
+    absent: [] as { id: string; name: string; date: string }[],
+  }));
   const overtime = new Map<string, number>();
+  const overtimeBy = new Map<string, Map<string, { id: string; name: string; minutes: number }>>();
   for (const p of people) {
     const code = String(p.countryCode || "IN");
     const rows = buildAttendanceHistory({
@@ -274,12 +284,18 @@ export function attendanceAnalytics(
       if (row.overtimeMinutes > 0) {
         const dept = p.department || "Other";
         overtime.set(dept, (overtime.get(dept) ?? 0) + row.overtimeMinutes);
+        const m = overtimeBy.get(dept) ?? new Map<string, { id: string; name: string; minutes: number }>();
+        const cur = m.get(p.id) ?? { id: p.id, name: p.fullName, minutes: 0 };
+        cur.minutes += row.overtimeMinutes;
+        m.set(p.id, cur);
+        overtimeBy.set(dept, m);
       }
       if (!EXPECTED.has(row.kind)) continue;
       const b = buckets[Math.floor((parseISODate(row.date).getTime() - startMs) / (7 * 86400000))];
       if (!b) continue;
       b.expected += 1;
       if (ATTENDED.has(row.kind)) b.attended += 1;
+      else b.absent.push({ id: p.id, name: p.fullName, date: row.date });
     }
   }
   return {
@@ -289,9 +305,19 @@ export function attendanceAnalytics(
         label: parseISODate(b.from).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }),
         pct: Math.round((b.attended / b.expected) * 100),
         days: b.expected,
+        attended: b.attended,
+        from: b.from,
+        to: addDaysISO(b.from, 6),
+        absent: b.absent.sort((x, y) => y.date.localeCompare(x.date)),
       })),
     overtime: [...overtime.entries()]
-      .map(([label, minutes]) => ({ label, hours: Math.round(minutes / 60) }))
+      .map(([label, minutes]) => ({
+        label,
+        hours: Math.round(minutes / 60),
+        people: [...(overtimeBy.get(label)?.values() ?? [])]
+          .map((x) => ({ id: x.id, name: x.name, hours: Math.round((x.minutes / 60) * 10) / 10 }))
+          .sort((a, b) => b.hours - a.hours),
+      }))
       .filter((r) => r.hours > 0)
       .sort((a, b) => b.hours - a.hours)
       .slice(0, 8),
@@ -304,7 +330,7 @@ export function attendanceTrend(
   attendance: { sessions: TodaySession[]; corrections: AttendanceCorrection[] },
   today: string,
   weeks = 6,
-): { label: string; pct: number; days: number }[] {
+) {
   return attendanceAnalytics(people.map((p) => ({ ...p, department: "" })), state, attendance, today, weeks).trend;
 }
 

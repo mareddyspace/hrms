@@ -25,8 +25,8 @@ from app.services.scope import HR_ROLES, manager_chain_ids
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 DOCUMENT_TYPES = {**storage.ALLOWED_TYPES, DOCX: "docx"}
-DOCUMENT_CATEGORIES = ("Identity", "Education", "Employment", "Certifications", "Compliance", "Medical", "Payroll", "Letters",
-                       "Other")
+DOCUMENT_CATEGORIES = ("Personal", "Identity", "Education", "Employment", "Contracts", "Certifications", "Compliance",
+                       "Medical", "Payroll", "Policies", "Letters", "Other")
 MANAGER_CATEGORIES = frozenset({"Education", "Employment", "Certifications", "Compliance"})
 LETTERS_CATEGORY = "Letters"
 
@@ -97,3 +97,81 @@ def can_see_document(db: Session, user: CurrentUser, doc: EmployeeDocument, owne
 
 def can_upload_for(user: CurrentUser, owner: Employee) -> bool:
     return owner.id == user.employee_id or is_hr_for(user, owner)
+
+
+# ---------- category configuration and verification (migration 0028) ----------
+CATEGORY_SETTING = "document_categories"
+# Defaults: what each category is called on screen, whether an employee's own upload waits for HR verification, and
+# whether employees may upload it themselves (company policies and salary documents come from HR / payroll).
+DEFAULT_CATEGORY_CONFIG: dict[str, dict[str, object]] = {
+    "Personal": {"label": "Personal", "verification": False, "employee_upload": True},
+    "Identity": {"label": "Identity proofs", "verification": True, "employee_upload": True},
+    "Education": {"label": "Education certificates", "verification": True, "employee_upload": True},
+    "Employment": {"label": "Employment", "verification": True, "employee_upload": True},
+    "Contracts": {"label": "Contracts", "verification": False, "employee_upload": False},
+    "Certifications": {"label": "Certifications", "verification": True, "employee_upload": True},
+    "Compliance": {"label": "Compliance", "verification": False, "employee_upload": True},
+    "Medical": {"label": "Medical", "verification": False, "employee_upload": True},
+    "Payroll": {"label": "Salary documents", "verification": False, "employee_upload": False},
+    "Policies": {"label": "Company policies", "verification": False, "employee_upload": False},
+    "Letters": {"label": "Letters", "verification": False, "employee_upload": False},
+    "Other": {"label": "Other", "verification": False, "employee_upload": True},
+}
+EXPIRY_REMINDER_DAYS = (30, 7, 0)
+
+
+def category_config(db: Session) -> dict[str, dict[str, object]]:
+    """Defaults overlaid with what HR / admin saved (platform setting document_categories)."""
+    from app.services.platform_settings import get_setting
+
+    saved = get_setting(db, CATEGORY_SETTING) or {}
+    out: dict[str, dict[str, object]] = {}
+    for name, base in DEFAULT_CATEGORY_CONFIG.items():
+        mine = saved.get(name) if isinstance(saved, dict) else None
+        row = dict(base)
+        if isinstance(mine, dict):
+            if isinstance(mine.get("label"), str) and mine["label"].strip():
+                row["label"] = mine["label"].strip()[:60]
+            for key in ("verification", "employee_upload"):
+                if isinstance(mine.get(key), bool):
+                    row[key] = mine[key]
+        if name == LETTERS_CATEGORY:
+            row["employee_upload"] = False
+        out[name] = row
+    return out
+
+
+def needs_verification(db: Session, user: CurrentUser, owner: Employee, category: str) -> bool:
+    """An employee's own upload in a category that HR verifies (HR's own uploads count as verified)."""
+    return owner.id == user.employee_id and not is_hr_for(user, owner) and bool(category_config(db).get(category, {}).get("verification"))
+
+
+def can_employee_upload(db: Session, user: CurrentUser, owner: Employee, category: str) -> bool:
+    if is_hr_for(user, owner):
+        return category != LETTERS_CATEGORY
+    return bool(category_config(db).get(category, {}).get("employee_upload"))
+
+
+def send_expiry_reminders(db: Session, today, send) -> int:  # noqa: ANN001
+    """Documents expiring in 30 / 7 / 0 days (or already expired): one reminder to the owner per threshold."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.models import ReminderLog
+
+    sent = 0
+    for doc in db.scalars(select(EmployeeDocument).where(EmployeeDocument.expiry_date.is_not(None),
+                                                         EmployeeDocument.expiry_date <= today + timedelta(days=30))):
+        days = (doc.expiry_date - today).days
+        threshold = next((t for t in sorted(EXPIRY_REMINDER_DAYS) if days <= t), None)
+        if threshold is None:
+            continue
+        key = f"doc-expiry:{doc.id}:{doc.expiry_date}:{threshold}"
+        if db.scalar(select(ReminderLog.id).where(ReminderLog.item_key == key)) is not None:
+            continue
+        when = "has expired" if days < 0 else "expires today" if days == 0 else f"expires in {days} day{'s' if days != 1 else ''}"
+        if send(db, key, doc.employee_id, today, "document_expiry", f"{doc.title} {when}",
+                "Upload a renewed copy in Documents & letters.", "/documents"):
+            sent += 1
+    return sent

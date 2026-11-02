@@ -140,9 +140,10 @@ def test_employee_sees_only_basic_profile_of_others(client, babu):
         assert res.status_code == 200
         body = res.json()
         assert body["view"] == "basic"
-        for field in ("mobile", "personal_email", "date_of_birth", "grade", "employee_code", "address_line",
+        for field in ("mobile", "personal_email", "date_of_birth", "grade", "address_line",
                       "emergency_phone", "gender", "tax_regime"):
             assert field not in body, (target, field)
+        assert body["employee_code"]  # the employee ID is not sensitive: shown on every directory card
     text = client.get(f"{API}/people/emp-ram", headers=babu).text
     assert not [v for v in PII["emp-ram"] if v in text]
 

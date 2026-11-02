@@ -82,7 +82,11 @@ def test_balances_hide_other_gender_and_mark_ineligible(client, babu):
 def test_apply_checks_gender_notice_max_and_probation(client, babu, farhan):
     res = _apply(client, babu, "maternity", _workday(20))
     assert res.status_code == 422 and res.json()["detail"] == "Maternity leave: Only for female employees."
-    res = _apply(client, babu, "sabbatical", _workday(5))
+    # A working day inside the notice period (the next few days may hold a public holiday).
+    for ahead in range(3, 12):
+        res = _apply(client, babu, "sabbatical", _workday(ahead))
+        if "no working days" not in res.json()["detail"]:
+            break
     assert res.status_code == 422 and "30 days' notice" in res.json()["detail"]
 
     # A test type with tight limits, made through the admin API.

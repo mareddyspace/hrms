@@ -1,28 +1,12 @@
+import { DocumentRepository } from "../features/documents/DocumentRepository.tsx";
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { API_ENABLED } from "../api/client.ts";
 import { Link } from "react-router-dom";
 import { money } from "../countryPay.ts";
 import { asDetailView } from "../data/payslipGenerator.ts";
 import { PLAN_PAY_LINES } from "../data/taxRules.ts";
+import { apiSetNominees, apiWithdrawProposal, type Nominee } from "../api/syncRewards.ts";
 import {
-  apiSetDocumentExpiry,
-  apiSetNominees,
-  apiUploadDocument,
-  apiUploadVersion,
-  apiWithdrawProposal,
-  checkDocFile,
-  downloadDocument,
-  fetchDocRules,
-  fetchDocument,
-  fetchDocuments,
-  fetchExpiringDocuments,
-  fetchStatement,
-  type CompStatementOut,
-  type DocRules,
-  type Nominee,
-  type RepoDocument,
-} from "../api/syncRewards.ts";
-import { listPeople, subscribePeople } from "../data/peopleLocal.ts";import {
   ActionButton,
   Banner,
   Card,
@@ -37,12 +21,10 @@ import { listPeople, subscribePeople } from "../data/peopleLocal.ts";import {
   StatusBadge,
   SubmitButton,
   Tabs,
-  downloadText,
   notify,
   useAction,
 } from "../components/ui.tsx";
 import {
-  canManageLetters,
   canViewSalaryAmount,
   displayMoney,
   formatCompAmount,
@@ -51,11 +33,9 @@ import {
 } from "../data/peoplePermissions.ts";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import { stepRoles, roleLabel, useApprovalWorkflows, type ApprovalStep } from "../data/approvalWorkflows.ts";
-import { LEGAL_DISCLAIMER, LIFE_EVENT_TYPES, type Dependent, type GradeBand } from "../data/rewardData.ts";
+import { LIFE_EVENT_TYPES, type Dependent, type GradeBand } from "../data/rewardData.ts";
 import {
-  UPLOAD_EXTENSIONS,
   activeLifeEvent,
-  addLibraryDoc,
   benefitPlans,
   canAdminBenefits,
   canCloseLifeEventRow,
@@ -66,7 +46,6 @@ import {
   cancelEnrollment,
   dependentCover,
   uploadDependentDoc,
-  formatAmount,
   runRewardApi,
   type CompProposal,
   type RewardOutcome,
@@ -98,16 +77,16 @@ import {
   setOpenEnrollmentOverride,
   submitCompReview,
   subscribeReward,
-  validateUpload,
   verifyDependent,
 } from "../data/rewardLocal.ts";
 import { BandDialog, BonusDialog, CoverDialog, DependentDialog, NewCycleDialog, ProposeDialog } from "./RewardDialogs.tsx";
 import { downloadDependentDoc, downloadPlanFile, downloadPlanSummary, uploadPlanFile } from "../features/benefits/benefitDocs.ts";
-import { formatShortDate, parseISODate, todayISO, type DocumentGroup } from "../model.ts";
+import { formatShortDate, parseISODate, todayISO } from "../model.ts";
 import { MaskedValue } from "../components/MaskedValue.tsx";
 import { isRevealRole } from "../data/piiReveal.ts";
 import { isMasked } from "../utils/mask.ts";
 import { usePortal } from "../store.tsx";
+import { BonusesCard, PayHistoryCard, TotalRewardsCard } from "./CompensationParts.tsx";
 import { LetterHistoryPanel, LetterRequestsPanel, LetterViewerDialog, MyLettersPanel, type OpenLetter } from "./LettersPanel.tsx";
 
 function useReward() {
@@ -271,13 +250,7 @@ export function CompensationPage() {
       )}
 
       {tab === "history" && (
-        <Card title={compTeam ? "Compensation history" : "My pay history"}>
-          <DataTable
-            headers={[...(compTeam ? ["Employee"] : []), "Effective", "Event", "Grade", "Base"]}
-            rows={visibleHistory.map((row) => [...(compTeam ? [row.employeeName] : []), /^\d{4}-\d{2}-\d{2}$/.test(row.effective) ? formatShortDate(row.effective) : row.effective, row.event, row.grade, row.base])}
-            empty={<EmptyState title="No pay changes" description="Nothing recorded yet." />}
-          />
-        </Card>
+        <PayHistoryCard rows={visibleHistory} compTeam={compTeam} title={compTeam ? "Compensation history" : "My pay history"} />
       )}
 
       {tab === "cycles" && showCycles && (
@@ -405,7 +378,9 @@ export function CompensationPage() {
       )}
 
       {tab === "bonuses" && (
-        <Card
+        <BonusesCard
+          rows={visibleBonuses}
+          compTeam={compTeam}
           title={compTeam ? "Bonus and incentive records" : "My bonuses"}
           action={
             payHr ? (
@@ -414,38 +389,32 @@ export function CompensationPage() {
               </button>
             ) : undefined
           }
-        >
-          <DataTable
-            headers={[...(compTeam ? ["Employee"] : []), "Type", "Period", "Amount", "Status", ...(payHr ? [""] : [])]}
-            rows={visibleBonuses.map((b) => [
-              ...(compTeam ? [b.employeeName] : []),
-              b.type,
-              b.period,
-              b.amount,
-              <StatusBadge key={b.id} status={b.status} literal />,
-              ...(payHr
-                ? [
-                    b.status === "Accrued" && b.employeeId !== me.id ? (
-                      <span key={`${b.id}-a`} className="reward-actions">
-                        <ActionButton className="btn-ghost" doneLabel="Paid" onAction={() => report(setBonusStatus(me, b.id, "Paid"), `${b.employeeName}: bonus marked paid.`)}>
-                          Mark paid
-                        </ActionButton>
-                        <ActionButton className="btn-ghost" busyLabel="Updating…" doneLabel="Forfeited" onAction={() => report(setBonusStatus(me, b.id, "Forfeited"), `${b.employeeName}: bonus forfeited.`)}>
-                          Forfeit
-                        </ActionButton>
-                      </span>
-                    ) : (
-                      "—"
-                    ),
-                  ]
-                : []),
-            ])}
-            empty={<EmptyState title="No bonuses" description="Nothing recorded yet." />}
-          />
-        </Card>
+          renderAction={
+            payHr
+              ? (b) =>
+                  b.status === "Accrued" && b.employeeId !== me.id ? (
+                    <span className="reward-actions">
+                      <ActionButton className="btn-ghost" doneLabel="Paid" onAction={() => report(setBonusStatus(me, b.id, "Paid"), `${b.employeeName}: bonus marked paid.`)}>
+                        Mark paid
+                      </ActionButton>
+                      <ActionButton className="btn-ghost" busyLabel="Updating…" doneLabel="Forfeited" onAction={() => report(setBonusStatus(me, b.id, "Forfeited"), `${b.employeeName}: bonus forfeited.`)}>
+                        Forfeit
+                      </ActionButton>
+                    </span>
+                  ) : (
+                    "—"
+                  )
+              : undefined
+          }
+        />
       )}
 
-      {tab === "statement" && API_ENABLED && <TotalRewardsCard />}
+      {tab === "statement" && API_ENABLED && (
+        <TotalRewardsCard
+          selfId={me.id}
+          others={compTeam ? [...new Map(visibleHistory.map((h) => [h.employeeId, { id: h.employeeId, name: h.employeeName }])).values()].sort((x, y) => x.name.localeCompare(y.name)) : []}
+        />
+      )}
 
       {dialog === "cycle" && (
         <NewCycleDialog
@@ -472,63 +441,6 @@ function ApiLoadNote() {
   if (reward.api.error) return <Banner message={{ tone: "err", text: reward.api.error }} />;
   if (!reward.api.loaded) return <p className="note">Loading from the server…</p>;
   return null;
-}
-
-/** Backend mode: the signed-in employee's total rewards statement for a year. */
-function TotalRewardsCard() {
-  const thisYear = Number(todayISO().slice(0, 4));
-  const [year, setYear] = useState(thisYear);
-  const [data, setData] = useState<CompStatementOut | null | undefined>(undefined);
-  useEffect(() => {
-    let live = true;
-    setData(undefined);
-    void fetchStatement(year).then((out) => {
-      if (live) setData(out);
-    });
-    return () => {
-      live = false;
-    };
-  }, [year]);
-  const cur = data?.currency ?? "INR";
-  return (
-    <Card
-      title="Total rewards statement"
-      action={
-        <label className="filter-label">
-          Year
-          <select value={year} onChange={(e) => setYear(Number(e.target.value))}>
-            {[thisYear, thisYear - 1, thisYear - 2].map((y) => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
-        </label>
-      }
-    >
-      {data === undefined ? (
-        <p className="note">Loading…</p>
-      ) : data === null ? (
-        <EmptyState title="No statement" description="Nothing to show for this year." />
-      ) : (
-        <>
-          <MetricGrid>
-            <MetricCard label="Base salary" value={formatAmount(data.base_salary, cur)} hint={data.grade ? `Grade ${data.grade}` : undefined} />
-            <MetricCard label="Bonuses" value={formatAmount(data.bonus_total, cur)} />
-            <MetricCard label="Benefits (employer cost)" value={formatAmount(data.benefits_employer_cost, cur)} />
-            <MetricCard label="Total rewards" value={formatAmount(data.total_rewards, cur)} />
-          </MetricGrid>
-          <DataTable
-            headers={["Item", "Type", "Annual value"]}
-            rows={[
-              ["Base salary", data.base_effective_date ? `Since ${formatShortDate(data.base_effective_date)}` : "Base", formatAmount(data.base_salary, cur)],
-              ...data.bonuses.map((b) => [b.bonus_type, `Bonus · ${b.period}`, formatAmount(b.amount, b.currency)]),
-              ...data.benefits.map((b) => [b.plan_name, `Benefit · ${b.plan_type}`, formatAmount(b.employer_annual_cost, b.currency)]),
-            ]}
-          />
-          <p className="note">Benefits are shown at what the company pays for them each year.</p>
-        </>
-      )}
-    </Card>
-  );
 }
 
 /** True when anyone in the demo org reports (directly or not) to this person. */
@@ -1456,473 +1368,18 @@ export function BenefitsPage() {
 
 /* ───────────────────────────── DOCUMENTS & LETTERS ── */
 
-const KB = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
-
-function expiryText(d: RepoDocument): ReactNode {
-  if (!d.expiryDate) return "None";
-  const days = d.daysToExpiry;
-  const tone = days !== undefined && days < 0 ? "danger" : days !== undefined && days <= 30 ? "warn" : "neutral";
-  const label = days === undefined ? "" : days < 0 ? ` · expired ${-days}d ago` : days === 0 ? " · today" : ` · ${days}d`;
-  return tone === "neutral" ? (
-    formatShortDate(d.expiryDate)
-  ) : (
-    <StatusBadge key={`${d.id}-x`} status={`${formatShortDate(d.expiryDate)}${label}`} tone={tone} literal />
-  );
-}
-
-/** Backend mode: the document repository (uploads up to the server's size limit, versions, expiry, download). */
-function ApiDocumentsLibrary({ actor }: { actor: { id: string; fullName: string; role: string } }) {
-  const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
-  const hr = canManageLetters(actor as Parameters<typeof canManageLetters>[0]);
-  const [ownerId, setOwnerId] = useState(actor.id);
-  const [category, setCategory] = useState("");
-  const [rules, setRules] = useState<DocRules | null>(null);
-  const [docs, setDocs] = useState<RepoDocument[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [expiring, setExpiring] = useState<RepoDocument[]>([]);
-  const [selected, setSelected] = useState<RepoDocument | null>(null);
-  const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const [upload, setUpload] = useState<{ docId?: string; title?: string } | null>(null);
-  const [tick, setTick] = useState(0);
-  const reload = () => setTick((n) => n + 1);
-
-  useEffect(() => {
-    void fetchDocRules().then(setRules);
-  }, []);
-  useEffect(() => {
-    let live = true;
-    setDocs(null);
-    void fetchDocuments(ownerId === actor.id ? undefined : ownerId).then(({ data, error }) => {
-      if (!live) return;
-      setDocs(data);
-      setLoadError(error);
-    });
-    void fetchExpiringDocuments(60).then((rows) => live && setExpiring(rows));
-    return () => {
-      live = false;
-    };
-  }, [ownerId, actor.id, tick]);
-
-  async function openDoc(id: string) {
-    const full = await fetchDocument(id);
-    if (!full) return setMsg({ tone: "err", text: "That document isn't available." });
-    setSelected(full);
-  }
-
-  async function download(d: RepoDocument, version?: number) {
-    const v = d.versions.find((x) => x.version === (version ?? d.currentVersion));
-    const err = await downloadDocument(d.id, v?.fileName ?? `${d.title}.pdf`, version);
-    if (err) setMsg({ tone: "err", text: err });
-  }
-
-  const shown = (docs ?? []).filter((d) => !category || d.category === category);
-  // HR picks anyone; managers pick from the people below them (they see manager-visible categories only).
-  const pickable = hr ? people : people.filter((p) => p.id === actor.id || isAboveInLine(actor.id, p.id) || p.managerId === actor.id);
-  const sortedPeople = [...pickable].sort((a, b) => a.fullName.localeCompare(b.fullName));
-  const mine = ownerId === actor.id;
-
-  return (
-    <div className="stack">
-      <div className="mgr-home-grid">
-        <Card
-          title="Document repository"
-          action={
-            mine || hr ? (
-              <button type="button" className="btn" onClick={() => setUpload({})}>
-                Upload document
-              </button>
-            ) : undefined
-          }
-        >
-          <FilterBar>
-            {sortedPeople.length > 1 && (
-              <label className="filter-label">
-                Employee
-                <select value={ownerId} onChange={(e) => (setOwnerId(e.target.value), setSelected(null))}>
-                  {!sortedPeople.some((p) => p.id === actor.id) && <option value={actor.id}>{actor.fullName}</option>}
-                  {sortedPeople.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.id === actor.id ? `${p.fullName} (you)` : `${p.fullName} · ${p.employeeCode}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <label className="filter-label">
-              Category
-              <select value={category} onChange={(e) => setCategory(e.target.value)}>
-                <option value="">All</option>
-                {(rules?.categories ?? []).map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-          </FilterBar>
-          <Banner message={msg} />
-          {loadError && <Banner message={{ tone: "err", text: loadError }} />}
-          <DataTable
-            headers={["Document", "Category", "Version", "Expires", "Updated", ""]}
-            rows={shown.map((d) => [
-              d.title,
-              d.category,
-              `v${d.currentVersion}`,
-              expiryText(d),
-              d.updatedOn ? formatShortDate(d.updatedOn.slice(0, 10)) : "—",
-              <span key={d.id} className="reward-actions">
-                <button type="button" className="quiet-link" onClick={() => void openDoc(d.id)}>
-                  Details
-                </button>
-                <button type="button" className="quiet-link" onClick={() => void download(d)}>
-                  Download
-                </button>
-              </span>,
-            ])}
-            empty={docs === null ? <p className="note">Loading…</p> : <EmptyState title="No documents" description="Upload a document or pick another category." />}
-          />
-          <p className="note">
-            {rules ? `PDF, Word (.docx) or images · up to ${KB(rules.maxBytes)}. ` : ""}Older versions stay available after you upload a new one.
-          </p>
-        </Card>
-        <Card title={selected ? selected.title : "Details"}>
-          {!selected ? (
-            <EmptyState title="Select a document" />
-          ) : (
-            <ApiDocumentDetail
-              doc={selected}
-              canEdit={selected.category !== "Letters" && (selected.employeeId === actor.id || hr)}
-              onDownload={(v) => void download(selected, v)}
-              onNewVersion={() => setUpload({ docId: selected.id, title: selected.title })}
-              onChanged={async (text) => {
-                setMsg({ tone: "ok", text });
-                reload();
-                setSelected(await fetchDocument(selected.id));
-              }}
-              onError={(text) => setMsg({ tone: "err", text })}
-            />
-          )}
-        </Card>
-      </div>
-      {expiring.length > 0 && (
-        <Card title="Expiring in the next 60 days">
-          <DataTable
-            headers={["Employee", "Document", "Category", "Expires", ""]}
-            rows={expiring.map((d) => [
-              d.employeeName,
-              d.title,
-              d.category,
-              expiryText(d),
-              <button key={d.id} type="button" className="quiet-link" onClick={() => void download(d)}>
-                Download
-              </button>,
-            ])}
-          />
-        </Card>
-      )}
-      {upload && rules && (
-        <ApiUploadDialog
-          rules={rules}
-          documentId={upload.docId}
-          title={upload.title}
-          employeeId={mine ? undefined : ownerId}
-          onClose={() => setUpload(null)}
-          onDone={async (text) => {
-            const docId = upload.docId;
-            setUpload(null);
-            setMsg({ tone: "ok", text });
-            reload();
-            if (docId) setSelected(await fetchDocument(docId));
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function ApiDocumentDetail({
-  doc,
-  canEdit,
-  onDownload,
-  onNewVersion,
-  onChanged,
-  onError,
-}: {
-  doc: RepoDocument;
-  canEdit: boolean;
-  onDownload: (version?: number) => void;
-  onNewVersion: () => void;
-  onChanged: (text: string) => void;
-  onError: (text: string) => void;
-}) {
-  const [expiry, setExpiry] = useState(doc.expiryDate ?? "");
-  useEffect(() => setExpiry(doc.expiryDate ?? ""), [doc.id, doc.expiryDate]);
-  const expiryAct = useAction();
-
-  async function saveExpiry() {
-    const err = await apiSetDocumentExpiry(doc.id, expiry || null);
-    if (err) {
-      onError(err);
-      return false;
-    }
-    const text = expiry ? `Expiry set to ${formatShortDate(expiry)}.` : "Expiry removed.";
-    notify(text);
-    onChanged(text);
-    return true;
-  }
-  return (
-    <div className="stack">
-      <dl className="info-grid">
-        <div className="info-fact"><dt>Employee</dt><dd>{doc.employeeName}</dd></div>
-        <div className="info-fact"><dt>Category</dt><dd>{doc.category}</dd></div>
-        <div className="info-fact"><dt>Expires</dt><dd>{expiryText(doc)}</dd></div>
-        <div className="info-fact"><dt>Added by</dt><dd>{doc.uploadedBy || "—"}</dd></div>
-      </dl>
-      <DataTable
-        headers={["Version", "File", "Size", "Uploaded", ""]}
-        rows={[...doc.versions].reverse().map((v) => [
-          v.version === doc.currentVersion ? `v${v.version} (current)` : `v${v.version}`,
-          v.fileName,
-          KB(v.sizeBytes),
-          `${v.on ? formatShortDate(v.on.slice(0, 10)) : "—"}${v.uploadedBy ? ` · ${v.uploadedBy}` : ""}`,
-          <button key={v.id} type="button" className="quiet-link" onClick={() => onDownload(v.version)}>
-            Download
-          </button>,
-        ])}
-      />
-      {canEdit && (
-        <form
-          className="form-actions"
-          onSubmit={expiryAct.submit(saveExpiry)}
-        >
-          <label className="filter-label">
-            Expiry date
-            <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-          </label>
-          <SubmitButton action={expiryAct} className="btn-ghost">
-            Save expiry
-          </SubmitButton>
-          <button type="button" className="btn" onClick={onNewVersion}>
-            Upload new version
-          </button>
-        </form>
-      )}
-    </div>
-  );
-}
-
-function ApiUploadDialog({
-  rules,
-  documentId,
-  title: existingTitle,
-  employeeId,
-  onClose,
-  onDone,
-}: {
-  rules: DocRules;
-  documentId?: string;
-  title?: string;
-  employeeId?: string;
-  onClose: () => void;
-  onDone: (text: string) => void;
-}) {
-  const categories = rules.categories.filter((c) => c !== "Letters");
-  const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState(existingTitle ?? "");
-  const [category, setCategory] = useState(categories[0] ?? "Other");
-  const [expiry, setExpiry] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const uploadAct = useAction();
-
-  function pick(next: File | null) {
-    setError(null);
-    setFile(next);
-    if (!next) return;
-    const invalid = checkDocFile(next, rules);
-    if (invalid) {
-      setError(invalid);
-      setFile(null);
-      return;
-    }
-    if (!documentId && !title.trim()) setTitle(next.name.replace(/\.[^.]+$/, ""));
-  }
-
-  async function save() {
-    if (!file) return false;
-    const err = documentId
-      ? await apiUploadVersion(documentId, file, expiry || undefined)
-      : await apiUploadDocument(file, { category, title, employeeId, expiryDate: expiry || undefined });
-    if (err) {
-      setError(err);
-      return false;
-    }
-    const text = documentId ? `New version of ${existingTitle ?? "the document"} uploaded.` : `${title.trim()} uploaded.`;
-    notify(text);
-    onDone(text);
-    return true;
-  }
-
-  return (
-    <Dialog open title={documentId ? `New version · ${existingTitle ?? ""}` : "Upload document"} onClose={onClose}>
-      <form className="stack" onSubmit={uploadAct.submit(save)}>
-        <Field label="File">
-          <input type="file" accept={rules.contentTypes.join(",")} onChange={(e) => pick(e.target.files?.[0] ?? null)} />
-        </Field>
-        <p className="note">
-          PDF, Word (.docx) or image · max {KB(rules.maxBytes)}.{file ? ` ${file.name} · ${KB(file.size)}` : ""}
-        </p>
-        {!documentId && (
-          <>
-            <Field label="Title">
-              <input value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} required />
-            </Field>
-            <Field label="Category">
-              <select value={category} onChange={(e) => setCategory(e.target.value)}>
-                {categories.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </Field>
-          </>
-        )}
-        <Field label={documentId ? "New expiry date (optional)" : "Expiry date (optional)"}>
-          <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-        </Field>
-        {error && <Banner message={{ tone: "err", text: error }} />}
-        <div className="dialog-actions">
-          <button type="button" className="btn-ghost" onClick={onClose}>
-            Cancel
-          </button>
-          <SubmitButton action={uploadAct} className="btn" disabled={!file || (!documentId && !title.trim())}>
-            Upload
-          </SubmitButton>
-        </div>
-      </form>
-    </Dialog>
-  );
-}
-
-/** Library categories → portal DocumentGroup for the ESS mirror. */
-const PORTAL_GROUP: Record<string, DocumentGroup> = {
-  Identity: "Immigration",
-  Compliance: "Employment",
-  Onboarding: "Onboarding",
-  Benefits: "Employment",
-  Other: "Employment",
-};
-
+/**
+ * Documents & letters: the document repository (both modes: src/features/documents/DocumentRepository.tsx) and the
+ * letter panels (src/pages/LettersPanel.tsx).
+ */
 export function DocumentsLettersPage() {
-  const { demoProfile, employee, state, addDocument } = usePortal();
-  const reward = useReward();
+  const { demoProfile, employee, state } = usePortal();
   const [tab, setTab] = useState("library");
-  const [category, setCategory] = useState("");
-  const [previewId, setPreviewId] = useState<string | null>(null);
   const [openLetter, setOpenLetter] = useState<OpenLetter>(null);
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [uploadName, setUploadName] = useState("");
-  const [uploadCategory, setUploadCategory] = useState("Identity");
-  const [uploadPreview, setUploadPreview] = useState("");
-  const [uploadFileLabel, setUploadFileLabel] = useState("");
-  const [uploadError, setUploadError] = useState("");
-  const uploadAct = useAction();
-
-  const canLetters = canManageLetters(demoProfile);
   const portalDocs = state.documents.filter((d) => d.employeeId === employee.id);
 
-  const library = reward.library.filter((d) => {
-    if (canLetters) return !category || d.category === category;
-    return d.employeeId === employee.id && (!category || d.category === category);
-  });
-
-  const previewDoc = library.find((d) => d.id === previewId) ?? null;
-  const categories = [...new Set(reward.library.map((d) => d.category))];
-
-  function resetUpload() {
-    setUploadName("");
-    setUploadPreview("");
-    setUploadFileLabel("");
-    setUploadError("");
-  }
-
-  function onFilePicked(file: File | null) {
-    resetUpload();
-    if (!file) return;
-    const invalid = validateUpload(file);
-    if (invalid) {
-      setUploadError(invalid);
-      return;
-    }
-    setUploadName(file.name.replace(/\.[^.]+$/, ""));
-    setUploadFileLabel(`${file.name} · ${(file.size / 1024).toFixed(0)} KB`);
-    const reader = new FileReader();
-    if (file.type.startsWith("text/") || /\.(txt|csv)$/i.test(file.name)) {
-      reader.onload = () => {
-        const text = String(reader.result ?? "").slice(0, 4000);
-        setUploadPreview(`Preview of ${file.name}:\n\n${text || "(empty file)"}`);
-      };
-      reader.readAsText(file);
-    } else if (file.type.startsWith("image/")) {
-      reader.onload = () => {
-        setUploadPreview(String(reader.result ?? ""));
-      };
-      reader.readAsDataURL(file);
-    } else {
-      setUploadPreview(`File details\nName: ${file.name}\nType: ${file.type || "unknown"}\nSize: ${file.size} bytes`);
-    }
-  }
-
-  function saveUpload() {
-    if (!uploadName.trim() || uploadError) return false;
-    const error = addLibraryDoc({
-      employeeId: employee.id,
-      employeeName: employee.fullName,
-      name: uploadName.trim(),
-      category: uploadCategory,
-      docType: "Upload",
-      uploadedBy: employee.fullName,
-      sizeLabel: uploadFileLabel || "—",
-      preview: uploadPreview || uploadName.trim(),
-      isDemoFile: false,
-    });
-    if (error) {
-      setUploadError(error);
-      return false;
-    }
-    // Mirror a short metadata line into portal documents (never the binary data URL)
-    const mirrorError = addDocument({
-      name: uploadName.trim(),
-      category: PORTAL_GROUP[uploadCategory] ?? "Employment",
-      docType: "Upload",
-      expires: "",
-      body: `${uploadCategory} upload · ${uploadFileLabel || uploadName.trim()} · stored in the document library.`,
-    });
-    if (mirrorError) {
-      setUploadError(`Saved to the library, but not to My ESS documents: ${mirrorError}`);
-      return false;
-    }
-    notify(`${uploadName.trim()} saved to the document library.`);
-    setUploadOpen(false);
-    resetUpload();
-    return true;
-  }
-
   return (
-    <Page
-      title="Documents & letters"
-      action={
-        API_ENABLED ? undefined : (
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              resetUpload();
-              setUploadOpen(true);
-            }}
-          >
-            Upload document
-          </button>
-        )
-      }
-    >
-
+    <Page title="Documents & letters">
       <Tabs
         tabs={[
           { id: "library", label: "Document library" },
@@ -1934,81 +1391,7 @@ export function DocumentsLettersPage() {
         onChange={setTab}
       />
 
-      {tab === "library" && API_ENABLED && <ApiDocumentsLibrary actor={demoProfile} />}
-
-      {tab === "library" && !API_ENABLED && (
-        <div className="mgr-home-grid">
-          <Card title="Employee document library">
-            <FilterBar>
-              <label className="filter-label">
-                Category
-                <select value={category} onChange={(e) => setCategory(e.target.value)}>
-                  <option value="">All</option>
-                  {categories.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </label>
-            </FilterBar>
-            <DataTable
-              headers={["Document", "Employee", "Category", "Type", "Uploaded", "Size", ""]}
-              rows={library.map((d) => [
-                <>
-                  {d.name}
-                </>,
-                d.employeeName,
-                d.category,
-                d.docType,
-                formatShortDate(d.uploadedAt.slice(0, 10)),
-                d.sizeLabel,
-                <button key={d.id} type="button" className="quiet-link" onClick={() => setPreviewId(d.id)}>
-                  Preview
-                </button>,
-              ])}
-              empty={<EmptyState title="No documents" description="Upload a document or switch category." />}
-            />
-          </Card>
-          <Card title="Preview">
-            {!previewDoc ? (
-              <EmptyState title="Select a document" />
-            ) : previewDoc.preview.startsWith("data:image") ? (
-              <div>
-                <p className="note">{previewDoc.name}</p>
-                <img src={previewDoc.preview} alt="" style={{ maxWidth: "100%", borderRadius: 8 }} />
-              </div>
-            ) : (
-              <pre className="doc-preview-pre">{previewDoc.preview}</pre>
-            )}
-            {previewDoc?.letterId && (
-              <button
-                type="button"
-                className="btn"
-                style={{ marginTop: 8, marginRight: 8 }}
-                onClick={() => setOpenLetter({ letterId: previewDoc.letterId!, docId: previewDoc.docId })}
-              >
-                Open letter
-              </button>
-            )}
-            {previewDoc && !previewDoc.letterId && (
-              <button
-                type="button"
-                className="btn-ghost"
-                style={{ marginTop: 8 }}
-                onClick={() =>
-                  downloadText(
-                    `${previewDoc.name}.txt`,
-                    previewDoc.preview.startsWith("data:")
-                      ? `${previewDoc.name}\n${LEGAL_DISCLAIMER}`
-                      : previewDoc.preview,
-                  )
-                }
-              >
-                Download
-              </button>
-            )}
-          </Card>
-        </div>
-      )}
+      {tab === "library" && <DocumentRepository actor={demoProfile} />}
 
       {tab === "letters" && <LetterRequestsPanel actor={demoProfile} onOpen={setOpenLetter} />}
 
@@ -2017,50 +1400,24 @@ export function DocumentsLettersPage() {
       {tab === "personal" && (
         <>
           <MyLettersPanel actor={demoProfile} onOpen={setOpenLetter} />
+          {portalDocs.length > 0 && (
+            <Card title="My ESS documents">
+              <DataTable
+                headers={["Name", "Category", "Type", "Expires"]}
+                rows={portalDocs.map((d) => [d.name, d.category, d.docType, d.expires || "None"])}
+              />
+            </Card>
+          )}
           <Card title="My documents">
-            <DataTable
-              headers={["Name", "Category", "Type", "Expires"]}
-              rows={portalDocs.map((d) => [d.name, d.category, d.docType, d.expires || "None"])}
-              empty={<EmptyState title="No ESS documents" />}
-            />
+            <p className="note">Your uploaded and HR-issued documents, with preview, versions and download, are in the Document library tab.</p>
+            <button type="button" className="btn-ghost" onClick={() => setTab("library")}>
+              Open my document library
+            </button>
           </Card>
         </>
       )}
 
       <LetterViewerDialog actor={demoProfile} open={openLetter} onClose={() => setOpenLetter(null)} />
-
-      <Dialog open={uploadOpen} title="Upload document" onClose={() => setUploadOpen(false)}>
-        <form className="stack" onSubmit={uploadAct.submit(saveUpload)}>
-          <Field label="File">
-            <input
-              type="file"
-              accept={UPLOAD_EXTENSIONS.map((ext) => `.${ext}`).join(",")}
-              onChange={(e) => onFilePicked(e.target.files?.[0] ?? null)}
-            />
-          </Field>
-          <p className="note">PDF, PNG, JPG, WEBP, TXT or CSV · max 2 MB.</p>
-          {uploadFileLabel && <p className="note">{uploadFileLabel}</p>}
-          {uploadError && <Banner message={{ tone: "err", text: uploadError }} />}
-          <Field label="Display name">
-            <input value={uploadName} onChange={(e) => setUploadName(e.target.value)} required />
-          </Field>
-          <Field label="Category">
-            <select value={uploadCategory} onChange={(e) => setUploadCategory(e.target.value)}>
-              {Object.keys(PORTAL_GROUP).map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </Field>
-          <div className="dialog-actions">
-            <button type="button" className="btn-ghost" onClick={() => setUploadOpen(false)}>
-              Cancel
-            </button>
-            <SubmitButton action={uploadAct} className="btn" disabled={!uploadName.trim() || !!uploadError}>
-              Save to library
-            </SubmitButton>
-          </div>
-        </form>
-      </Dialog>
     </Page>
   );
 }

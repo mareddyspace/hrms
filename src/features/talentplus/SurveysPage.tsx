@@ -48,6 +48,7 @@ import {
   type SurveyPhase,
   type SurveyResponse,
 } from "./surveysStore.ts";
+import { useChartTip } from "../../pages/dashboards/chartKit.tsx";
 import "./talentplus.css";
 import "./engagementTrend.css";
 
@@ -296,6 +297,34 @@ function ResultsView({ survey, responses, scope }: { survey: Survey; responses: 
   );
 }
 
+/** 1–5 rating spread: hover, tap or focus a row for its count and share. */
+function RatingBars({ counts, answered }: { counts: number[]; answered: number }) {
+  const tip = useChartTip();
+  return (
+    <div className={`chart-wrap tp-bars${tip.activeKey ? " chart-has-active" : ""}`} ref={tip.wrapRef}>
+      {[5, 4, 3, 2, 1].map((n) => {
+        const count = counts[n - 1];
+        const pct = answered ? Math.round((count / answered) * 100) : 0;
+        const key = String(n);
+        return (
+          <div
+            key={n}
+            className={`tp-bar chart-row${tip.activeKey === key ? " is-active" : ""}`}
+            {...tip.bind(key, { title: `Rating ${n}`, value: `${count} ${count === 1 ? "answer" : "answers"}`, share: pct })}
+          >
+            <span>{n}</span>
+            <div className="tp-bar-track">
+              <div className="tp-bar-fill" style={{ width: `${pct}%` }} />
+            </div>
+            <span>{count}</span>
+          </div>
+        );
+      })}
+      {tip.tooltip}
+    </div>
+  );
+}
+
 function QuestionCards({ summary }: { summary: QuestionResult[] }) {
   return (
     <>
@@ -303,19 +332,7 @@ function QuestionCards({ summary }: { summary: QuestionResult[] }) {
         <Card key={r.question.id} title={r.question.prompt}>
           {r.kind === "rating" && (
             <div className="tp-bars">
-              {[5, 4, 3, 2, 1].map((n) => {
-                const count = r.counts[n - 1];
-                const pct = r.answered ? Math.round((count / r.answered) * 100) : 0;
-                return (
-                  <div key={n} className="tp-bar">
-                    <span>{n}</span>
-                    <div className="tp-bar-track">
-                      <div className="tp-bar-fill" style={{ width: `${pct}%` }} />
-                    </div>
-                    <span>{count}</span>
-                  </div>
-                );
-              })}
+              <RatingBars counts={r.counts} answered={r.answered} />
               <p className="muted">Average {r.average} from {r.answered} answers</p>
             </div>
           )}
@@ -407,6 +424,8 @@ const signed = (n: number | null) => (n === null ? "—" : n > 0 ? `+${n}` : Str
 const shortTitle = (title: string) => title.replace(/^Quarterly pulse — /, "");
 
 function TrendChart({ points }: { points: EngagementPoint[] }) {
+  const tip = useChartTip();
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const W = 560;
   const H = 200;
   const pad = { l: 36, r: 16, t: 14, b: 30 };
@@ -424,9 +443,12 @@ function TrendChart({ points }: { points: EngagementPoint[] }) {
     { key: "engagement", label: "Engagement (0–100)", color: "var(--accent)", pick: (p: EngagementPoint) => p.engagement },
     { key: "enps", label: "eNPS (−100 to +100)", color: "var(--warn)", pick: (p: EngagementPoint) => p.enps },
   ];
+  const shown = series.filter((s) => !hidden.has(s.key));
+  const active = tip.activeKey === null ? null : Number(tip.activeKey);
   return (
     <figure className="tp-trend">
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Engagement and eNPS by survey">
+      <div className="chart-wrap" ref={tip.wrapRef}>
+      <svg viewBox={`0 0 ${W} ${H}`} role="group" aria-label="Engagement and eNPS by survey">
         {[100, 50, 0, -50, -100].map((v) => (
           <g key={v}>
             <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke="var(--line)" strokeDasharray={v === 0 ? undefined : "3 4"} />
@@ -438,25 +460,56 @@ function TrendChart({ points }: { points: EngagementPoint[] }) {
             {shortTitle(p.title).slice(0, 18)}
           </text>
         ))}
-        {series.map((s) => (
-          <g key={s.key}>
+        {active !== null && <line x1={x(active)} x2={x(active)} y1={pad.t} y2={H - pad.b} stroke="var(--line)" strokeDasharray="3 3" aria-hidden="true" />}
+        {shown.map((s) => (
+          <g key={s.key} aria-hidden="true">
             <path d={line(s.pick)} fill="none" stroke={s.color} strokeWidth="2" />
             {points.map((p, i) => {
               const v = s.pick(p);
-              return v === null ? null : (
-                <circle key={p.surveyId} cx={x(i)} cy={y(v)} r="3.5" fill={s.color}>
-                  <title>{`${p.title}: ${s.key === "enps" ? signed(v) : v}`}</title>
-                </circle>
-              );
+              return v === null ? null : <circle key={p.surveyId} cx={x(i)} cy={y(v)} r={active === i ? 5 : 3.5} fill={s.color} />;
             })}
           </g>
         ))}
+        {points.map((p, i) => {
+          const half = points.length > 1 ? step / 2 : (W - pad.l - pad.r) / 2;
+          return (
+            <rect
+              key={`h-${p.surveyId}`}
+              className={`chart-hover${active === i ? " is-active" : ""}`}
+              x={x(i) - half}
+              y={pad.t}
+              width={half * 2}
+              height={H - pad.t - pad.b}
+              {...tip.bind(String(i), {
+                title: p.title,
+                value: `Engagement ${p.engagement === null ? "—" : p.engagement} · eNPS ${signed(p.enps)}`,
+                note: `${p.responses} responses · closed ${formatShortDate(p.closedOn)}`,
+              })}
+            />
+          );
+        })}
       </svg>
+      {tip.tooltip}
+      </div>
       <figcaption className="tp-trend-legend">
         {series.map((s) => (
-          <span key={s.key}>
-            <i style={{ background: s.color }} /> {s.label}
-          </span>
+          <button
+            key={s.key}
+            type="button"
+            className="chart-legend-toggle"
+            aria-pressed={!hidden.has(s.key)}
+            title={hidden.has(s.key) ? `Show ${s.label}` : `Hide ${s.label}`}
+            onClick={() =>
+              setHidden((h) => {
+                const next = new Set(h);
+                if (next.has(s.key)) next.delete(s.key);
+                else if (series.length - next.size > 1) next.add(s.key);
+                return next;
+              })
+            }
+          >
+            <i style={{ background: s.color }} /> <span className="chart-legend-label">{s.label}</span>
+          </button>
         ))}
       </figcaption>
     </figure>

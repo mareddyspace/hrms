@@ -38,7 +38,8 @@ def test_enroll_cancel_and_history(client, babu, farhan):
     res = client.post(f"{API}/enrollments", json={"plan_id": "bp-in-life"}, headers=babu)
     assert res.status_code in (201, 409), res.text
     mine = [e for e in client.get(f"{API}/enrollments", headers=babu).json() if e["plan_id"] == "bp-in-life"][0]
-    if mine["status"] == "requested":
+    fresh = mine["status"] == "requested"  # an earlier test may already have taken Babu through this plan
+    if fresh:
         res = client.post(f"{API}/enrollments/{mine['id']}/cancel", headers=babu)
         assert res.status_code == 200 and res.json()["status"] == "cancelled"
         assert client.post(f"{API}/enrollments/{mine['id']}/cancel", headers=babu).status_code == 409
@@ -52,7 +53,9 @@ def test_enroll_cancel_and_history(client, babu, farhan):
         assert client.post(f"{API}/enrollments/{pf[0]['id']}/cancel", headers=babu).status_code == 409
     history = client.get(f"{API}/history", headers=babu).json()
     events = {h["event"] for h in history}
-    assert "Enrollment requested" in events and "Enrollment cancelled" in events and "Enrolled" in events
+    assert "Enrolled" in events
+    if fresh:
+        assert "Enrollment requested" in events and "Enrollment cancelled" in events
     # Someone else's history: HR yes, a manager no.
     assert client.get(f"{API}/history", params={"employee_id": "emp-mahesh"}, headers=farhan).status_code == 200
 

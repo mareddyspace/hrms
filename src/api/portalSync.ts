@@ -51,7 +51,7 @@ function toPerson(p: PersonOut): PersonRecord {
     ...(lastWorkingDay ? { lastWorkingDay, ...(raw === "Exited" ? { exitDate: lastWorkingDay } : {}) } : {}),
     ...(full?.tax_regime === "old" || full?.tax_regime === "new" ? { taxRegime: full.tax_regime } : {}),
     id: p.id,
-    employeeCode: full?.employee_code ?? "",
+    employeeCode: full?.employee_code ?? p.employee_code ?? "",
     fullName: p.full_name,
     email: p.email,
     personalEmail: full?.personal_email ?? "",

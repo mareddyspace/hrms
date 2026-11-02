@@ -1,9 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { API_ENABLED, api, hasTokens } from "../../api/client.ts";
 import { appendAuditEntries } from "../../data/auditTrail.ts";
 import { answerCopilot, type CopilotAnswer, type CopilotContext, type CopilotSource } from "../../data/platformData.ts";
 import { usePortal } from "../../store.tsx";
-import { summaryTarget } from "./answers.ts";
+import { isCareerQuestion, summaryTarget } from "./answers.ts";
 import { logCopilotAction } from "./assist.ts";
 import { useCopilotContext } from "./copilotContext.ts";
 import { policyHref } from "./policyAnswers.ts";
@@ -93,6 +93,7 @@ const HISTORY_TURNS = 6;
 function keepBuiltIn(question: string, ctx: CopilotContext, builtIn: CopilotAnswer): boolean {
   if (builtIn.denied || builtIn.action || builtIn.letterDraft || builtIn.chart) return true;
   if (summaryTarget(question)) return true;
+  if (isCareerQuestion(question)) return false;
   return Boolean(ctx.assist?.(question));
 }
 
@@ -126,7 +127,7 @@ function fromAi(out: AiAnswerOut): CopilotAnswer {
  * built-in answer (exactly as useAskCopilot) when AI is off, every model failed, or the request errored.
  * The backend audits the questions it receives; questions it never saw are audited here as before.
  */
-export function useAskCopilotAi(): (question: string, history?: CopilotHistoryTurn[]) => Promise<CopilotReply> {
+export function useAskCopilotAi(agent?: string): (question: string, history?: CopilotHistoryTurn[]) => Promise<CopilotReply> {
   const { employee } = usePortal();
   const buildContext = useCopilotContext();
   return useCallback(
@@ -147,6 +148,8 @@ export function useAskCopilotAi(): (question: string, history?: CopilotHistoryTu
             .filter((t) => t.content.trim())
             .slice(-HISTORY_TURNS)
             .map((t) => ({ role: t.role, content: t.content.slice(0, 1000) })),
+          // The server checks the assistant against the role and the admin switch, then adds its focus.
+          ...(agent ? { agent } : {}),
         });
         // A busy free model can take long; after a short wait show the built-in answer instead.
         const out = await Promise.race([
@@ -162,6 +165,49 @@ export function useAskCopilotAi(): (question: string, history?: CopilotHistoryTu
         return builtInReply(false);
       }
     },
-    [buildContext, employee.id, employee.fullName],
+    [buildContext, employee.id, employee.fullName, agent],
   );
+}
+
+/* ───────── Assistant status (AI Agents) ───────── */
+
+export type AgentMode = "ai" | "builtin";
+
+interface AgentStatusOut {
+  id: string;
+  name: string;
+  available: boolean;
+  mode: AgentMode;
+}
+
+/**
+ * Live status of each assistant for this person: "ai" when the server answers with the AI model, "builtin" when AI
+ * is unavailable (no key, or local mode) and the portal's rule-based answers are used. null while loading.
+ * Assistants the server leaves out (not for this role) or marks unavailable are listed in `hidden`.
+ */
+export function useAgentStatus(): { modes: Record<string, AgentMode> | null; hidden: Set<string>; error: boolean } {
+  const [state, setState] = useState<{ modes: Record<string, AgentMode> | null; hidden: Set<string>; error: boolean }>(() =>
+    API_ENABLED && hasTokens() ? { modes: null, hidden: new Set(), error: false } : { modes: {}, hidden: new Set(), error: false },
+  );
+  useEffect(() => {
+    if (!API_ENABLED || !hasTokens()) return;
+    let live = true;
+    api
+      .get<AgentStatusOut[]>("/ai/agents")
+      .then((rows) => {
+        if (!live) return;
+        const modes: Record<string, AgentMode> = {};
+        const hidden = new Set<string>();
+        for (const r of rows) {
+          modes[r.id] = r.mode;
+          if (!r.available) hidden.add(r.id);
+        }
+        setState({ modes, hidden, error: false });
+      })
+      .catch(() => live && setState({ modes: {}, hidden: new Set(), error: true }));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return state;
 }

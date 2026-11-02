@@ -5,9 +5,12 @@ import { useProfileCode } from "../../components/ProfileCodeDialog.tsx";
 import { ActionButton, Banner, Field, notify } from "../../components/ui.tsx";
 import type { CopilotAction, CopilotAnswer, CopilotChart as Chart, CopilotLetterDraft } from "../../data/platformData.ts";
 import { requestLetter } from "../../data/letterService.ts";
+import { apiRequestLetter } from "../../api/syncRewards.ts";
+import { runRewardApi } from "../../data/rewardLocal.ts";
 import { maskAddress, maskMobile, type LeaveCode, type LeaveHalf } from "../../model.ts";
 import { usePortal } from "../../store.tsx";
 import { logCopilotAction } from "./assist.ts";
+import { useChartTip } from "../../pages/dashboards/chartKit.tsx";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -31,8 +34,9 @@ export function CopilotExtras({ answer }: { answer: CopilotAnswer }) {
 
 /* ───────────── chart ───────────── */
 
-/** Horizontal bars, inline SVG. Values are also in the table above, so the chart is decorative for screen readers. */
+/** Horizontal bars, inline SVG. Hover, tap or focus a bar for its full label and value (also in the table above). */
 export function CopilotBarChart({ chart }: { chart: Chart }) {
+  const tip = useChartTip();
   const bars = chart.bars.slice(0, 10);
   if (!bars.length) return null;
   const max = Math.max(...bars.map((b) => b.value), 1);
@@ -46,13 +50,18 @@ export function CopilotBarChart({ chart }: { chart: Chart }) {
       <figcaption className="note" style={{ marginBottom: 4 }}>
         {chart.title}
       </figcaption>
-      <svg viewBox={`0 0 320 ${height}`} width="100%" style={{ maxWidth: 480, display: "block" }} role="img" aria-label={`${chart.title}: ${bars.map((b) => `${b.label} ${b.value}`).join(", ")}`}>
+      <div className={`chart-wrap${tip.activeKey ? " chart-has-active" : ""}`} ref={tip.wrapRef} style={{ maxWidth: 480 }}>
+      <svg viewBox={`0 0 320 ${height}`} width="100%" style={{ maxWidth: 480, display: "block" }} role="group" aria-label={`${chart.title}: ${bars.map((b) => `${b.label} ${b.value}`).join(", ")}`}>
         {bars.map((b, i) => {
           const y = i * rowH + 4;
           const w = Math.max(2, Math.round((b.value / max) * barW));
           return (
-            <g key={`${b.label}-${i}`}>
-              <title>{`${b.label}: ${b.value}${chart.unit ?? ""}`}</title>
+            <g
+              key={`${b.label}-${i}`}
+              className={`chart-mark${tip.activeKey === String(i) ? " is-active" : ""}`}
+              {...tip.bind(String(i), { title: b.label, value: `${b.value}${chart.unit ?? ""}` })}
+            >
+              <rect x={0} y={y} width={320} height={rowH - 2} fill="transparent" />
               <text x={labelW - 6} y={y + 12} textAnchor="end" fontSize="10" style={{ fill: "var(--muted)" }}>
                 {short(b.label)}
               </text>
@@ -64,11 +73,18 @@ export function CopilotBarChart({ chart }: { chart: Chart }) {
           );
         })}
       </svg>
+      {tip.tooltip}
+      </div>
     </figure>
   );
 }
 
 /* ───────────── letter draft ───────────── */
+
+/** HR roles may prepare letters for other people (the server checks again). */
+function requestAllowedForOthers(role: string): boolean {
+  return ["hr", "hr_admin", "hrbp", "super_admin"].includes(role);
+}
 
 function LetterDraftPanel({ draft }: { draft: CopilotLetterDraft }) {
   const { demoProfile, employee } = usePortal();
@@ -78,18 +94,24 @@ function LetterDraftPanel({ draft }: { draft: CopilotLetterDraft }) {
   const [message, setMessage] = useState<Msg>(null);
   const stillMissing = draft.missing.filter((m) => !(draft.detailsLabel && m === draft.detailsLabel && details.trim()) && !(m === "Effective date" && effective));
 
-  function send() {
+  async function send() {
     if (draft.detailsLabel && !details.trim()) {
       setMessage({ tone: "err", text: `Add ${draft.detailsLabel.toLowerCase()}.` });
       return false;
     }
-    const error = requestLetter(demoProfile, {
+    const input = {
       employeeId: draft.employeeId,
       type: draft.type,
       note: "Prepared with Copilot",
       details: draft.detailsLabel ? details : undefined,
       effectiveDate: effective || undefined,
-    });
+    };
+    // Backend mode: wait for the server (it checks who may request which letter) so a refusal is shown, not lost.
+    const error = API_ENABLED
+      ? draft.employeeId !== demoProfile.id && !requestAllowedForOthers(demoProfile.role)
+        ? "You can only request letters for yourself."
+        : await runRewardApi(apiRequestLetter(input), ["letters"])
+      : requestLetter(demoProfile, input);
     if (error) {
       setMessage({ tone: "err", text: error });
       return false;

@@ -25,6 +25,12 @@ class EmployeeDocument(TimestampMixin, Base):
     expiry_date: Mapped[date | None] = mapped_column(Date)
     letter_request_id: Mapped[str | None] = mapped_column(String(64), index=True)
     uploaded_by: Mapped[str | None] = mapped_column(String(64))
+    # Migration 0028: what it is, and HR verification (None = not needed | pending | verified | rejected).
+    description: Mapped[str | None] = mapped_column(Text)
+    verification_status: Mapped[str | None] = mapped_column(String(16))
+    verification_note: Mapped[str | None] = mapped_column(Text)
+    verified_by: Mapped[str | None] = mapped_column(String(64))
+    verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class DocumentVersion(Base):

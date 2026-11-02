@@ -27,7 +27,8 @@ import {
   type PayslipView,
   type PortalState,
 } from "../../model.ts";
-import type { getTalentState } from "../../data/talentLocal.ts";
+import { courseCatalog, courseOpenTo, skillProfileFor, type getTalentState } from "../../data/talentLocal.ts";
+import { careerTarget } from "../../data/careerProfile.ts";
 import { dayStatusOf, waitingDays } from "../../data/timesheetDays.ts";
 
 type TalentState = ReturnType<typeof getTalentState>;
@@ -195,6 +196,31 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
   const enrollments = src.talent.enrollments.filter((e) => e.employeeId === me);
   const courseTitle = (id: string) => COURSES.find((c) => c.id === id)?.title ?? "Course";
 
+  // Career coach: own skills, the next role on the track, its gaps and open courses for them.
+  const mySkills = skillProfileFor(src.talent, me);
+  const record = people.find((p) => p.id === me);
+  const target = careerTarget(
+    { id: me, department: record?.department ?? employee.department ?? "", designation: record?.designation ?? employee.designation ?? "", grade: record?.grade ?? "" },
+    mySkills,
+  );
+  const gapSkills = (target?.gaps ?? []).filter((g) => g.gap > 0);
+  const learner = { id: viewer.id, fullName: viewer.fullName, role: viewer.role, department: record?.department ?? employee.department };
+  const careerCourses = courseCatalog()
+    .filter((c) => c.skills.some((s) => gapSkills.some((g) => g.skillId === s)) && courseOpenTo(c, learner))
+    .map((c) => {
+      const e = enrollments.find((x) => x.courseId === c.id);
+      return {
+        title: c.title,
+        builds: gapSkills.filter((g) => c.skills.includes(g.skillId)).map((g) => g.name).join(", "),
+        hours: c.durationHours,
+        status: e ? `${e.status} ${e.progress}%` : undefined,
+        done: e?.status === "Completed",
+      };
+    })
+    .filter((c) => !c.done)
+    .slice(0, 5)
+    .map(({ done: _done, ...rest }) => rest);
+
   const thisWeek = mondayOf(today);
   const sheets = state.timesheets.filter((t) => t.employeeId === me);
   const weekRow = (weekStart: string) => {
@@ -295,6 +321,13 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
       progress: e.progress,
       due: e.due,
     })),
+    career: {
+      currentRole: record?.designation ?? employee.designation ?? "",
+      skills: mySkills.map((s) => ({ name: s.skillName, level: s.level, target: s.targetLevel })),
+      nextRole: target?.role.title,
+      gaps: (target?.gaps ?? []).map((g) => ({ name: g.name, have: g.have, need: g.need, levels: Math.max(0, g.gap) })),
+      courses: careerCourses,
+    },
     mandatoryCourses: COURSES.filter((c) => c.mandatory).map((c) => {
       const mineEnr = enrollments.find((e) => e.courseId === c.id);
       return { title: c.title, audience: c.audience, status: mineEnr?.status ?? "Not assigned", due: mineEnr?.due };

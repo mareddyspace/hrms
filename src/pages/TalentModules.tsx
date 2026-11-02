@@ -18,6 +18,7 @@ import {
   Page,
   StatusBadge,
   Tabs,
+  LoadingState,
   notify,
 } from "../components/ui.tsx";
 import {
@@ -30,6 +31,7 @@ import {
   starterSkillsFor,
   awaitingFeedback,
   type Certification,
+  type Course,
   type Enrollment,
   type OfferRecord,
   type OfferStatus,
@@ -123,8 +125,11 @@ import {
   subscribeTalent,
   updateEnrollmentProgress,
   updateGoalProgress,
+  deleteGoal,
   verifyCertificationRenewal,
 } from "../data/talentLocal.ts";
+import { ConfirmDialog } from "../components/ConfirmDialog.tsx";
+import { learningMirror, performanceMirror } from "../api/syncTalentPerf.ts";
 import { accountHasNavAccess } from "../demoAccounts.ts";
 import { candidateAccess } from "../data/rbac.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
@@ -148,6 +153,7 @@ import { CandidateCards, CandidatePipelineView, CompareCandidates, MyPipeline, P
 import { OfferAnswerLink, OfferLetterButton, PostingPanel, RequisitionChain, ScorecardForm, StageCounts } from "./recruiting/HiringChain.tsx";
 import { canSeeTeamInterests, CareerInterestsPanel, MySkillsPanel, RoleMatchesPanel, SkillsLibraryPanel, TeamInterestsPanel } from "./CareerPanels.tsx";
 import { apiTargetRoles } from "../api/syncCareer.ts";
+import { MiniBars } from "./dashboards/widgets.tsx";
 
 function useTalent() {
   return useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
@@ -187,23 +193,6 @@ function ProgressSlider({
     else onCommit(draft, () => setDraft(null));
   };
   return <input {...rest} type="range" value={draft ?? value} onChange={(e) => setDraft(Number(e.target.value))} onPointerUp={commit} onKeyUp={commit} onBlur={commit} />;
-}
-
-function MiniBars({ items }: { items: { label: string; value: number }[] }) {
-  const max = Math.max(...items.map((i) => i.value), 1);
-  return (
-    <ul className="mini-bars">
-      {items.map((item) => (
-        <li key={item.label}>
-          <span className="mini-bars-label">{item.label}</span>
-          <div className="mini-bars-track">
-            <div className="mini-bars-fill" style={{ width: `${(item.value / max) * 100}%` }} />
-          </div>
-          <span className="mini-bars-value">{item.value}</span>
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 /* ───────────────────────────── RECRUITING ── */
@@ -316,9 +305,9 @@ export function RecruitingPage() {
   const { demoProfile } = usePortal();
   const actor = demoProfile;
   const { matchesRegion, t } = useLocale();
-  // Links from notifications: ?candidate=, ?req=, ?tab=
+  // Links from notifications: ?candidate=, ?req=, ?tab=; from charts: ?stage= (opens the Pipeline tab filtered)
   const [params, setParams] = useSearchParams();
-  const [tab, setTab] = useState(() => params.get("tab") ?? (params.get("req") ? "reqs" : actor.role === "recruiter" ? "mine" : "reqs"));
+  const [tab, setTab] = useState(() => params.get("tab") ?? (params.get("req") ? "reqs" : params.get("stage") ? "pipeline" : actor.role === "recruiter" ? "mine" : "reqs"));
   const [openCand, setOpenCand] = useState<string | null>(() => params.get("candidate"));
   const [assignTo, setAssignTo] = useState(DEFAULT_RECRUITER_ID);
   const [raiseOpen, setRaiseOpen] = useState(false);
@@ -328,7 +317,12 @@ export function RecruitingPage() {
     const cand = params.get("candidate");
     const reqParam = params.get("req");
     const tabParam = params.get("tab");
-    if (!cand && !reqParam && !tabParam) return;
+    const stageParam = params.get("stage");
+    if (!cand && !reqParam && !tabParam && !stageParam) return;
+    if (stageParam) {
+      setStageFilter(stageParam);
+      if (!tabParam) setTab("pipeline");
+    }
     if (cand) setOpenCand(cand);
     if (reqParam) {
       setSelectedReq(reqParam);
@@ -340,7 +334,7 @@ export function RecruitingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
   const [q, setQ] = useState("");
-  const [stageFilter, setStageFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState(() => params.get("stage") ?? "");
   const [selectedCand, setSelectedCand] = useState(talent.candidates[0]?.id ?? "");
   const [selectedReq, setSelectedReq] = useState(() => params.get("req") ?? talent.requisitions[0]?.id ?? "");
   const [fbInterview, setFbInterview] = useState("");
@@ -411,9 +405,15 @@ export function RecruitingPage() {
   const offerCurrency = TIMEZ_COUNTRIES.find((c) => c.name === offerReq?.country)?.currency ?? "";
   const offerBand = offerReq && offerForm.grade ? bandFor({ grade: offerForm.grade }, offerReq) : undefined;
 
+  // Counted before the stage filter, so picking a stage keeps the other bars (and their numbers) visible.
+  const stageBase = canSeeCandidates
+    ? talent.candidates.filter(
+        (c) => accessFor(c) !== "hidden" && matchesRegion(undefined, c.country) && (!q || `${c.name} ${c.role} ${c.email}`.toLowerCase().includes(q.toLowerCase())),
+      )
+    : [];
   const stageCounts = PIPELINE_STAGES.map((stage) => ({
     label: stage.replace("Final Review", "Final"),
-    value: candidates.filter((c) => c.stage === stage).length,
+    value: stageBase.filter((c) => c.stage === stage).length,
   }));
 
   const approvedReqs = scopeReqs.filter((r) => r.approvalStatus === "Approved");
@@ -735,7 +735,15 @@ export function RecruitingPage() {
       {tab === "pipeline" && (
         <div className="stack">
           <Card title="Recruitment pipeline">
-            <MiniBars items={stageCounts} />
+            <MiniBars
+              items={stageCounts}
+              share
+              ariaLabel="Candidates by pipeline stage"
+              empty="No candidates in the pipeline."
+              selected={stageFilter ? stageFilter.replace("Final Review", "Final") : null}
+              actionLabel={(item) => (stageFilter && item.label === stageFilter.replace("Final Review", "Final") ? "Clear the stage filter" : "Show only this stage")}
+              onSelect={(_, i) => setStageFilter((f) => (f === PIPELINE_STAGES[i] ? "" : PIPELINE_STAGES[i]))}
+            />
           </Card>
           <Card title="Candidates">
             {canSeeCandidates ? (
@@ -1401,26 +1409,40 @@ function AssessmentEditor({
   status,
   editable,
   onSave,
+  confirmTitle = "Submit assessment?",
+  confirmText = "Once submitted it can't be edited.",
 }: {
   text?: string;
   status: PerfReview["selfStatus"];
   editable: boolean;
   onSave: (text: string, submit: boolean) => Promise<TalentResult>;
+  confirmTitle?: string;
+  confirmText?: string;
 }) {
   const [draft, setDraft] = useState(text ?? "");
+  const [confirming, setConfirming] = useState(false);
   if (!editable) return <p className="muted">{text || "—"}</p>;
+  const short = draft.trim().length < 10;
   return (
     <div className="stack">
       <textarea aria-label="Summary" rows={3} maxLength={1000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Summary…" />
       <div className="row-gap">
-        <ActionButton className="btn-ghost btn-tiny" success="Draft saved." onAction={() => onSave(draft, false)}>
+        <ActionButton className="btn-ghost btn-tiny" success="Draft saved." disabled={!draft.trim()} onAction={() => onSave(draft, false)}>
           Save draft
         </ActionButton>
-        <ActionButton className="btn btn-tiny" disabled={draft.trim().length < 10} onAction={() => onSave(draft, true)}>
+        <button type="button" className="btn btn-tiny" disabled={short} onClick={() => setConfirming(true)}>
           Submit
-        </ActionButton>
-        {status === "Draft" && <span className="muted">Draft saved</span>}
+        </button>
+        {short ? (
+          <span className="muted">At least 10 characters to submit ({draft.trim().length}/10)</span>
+        ) : (
+          <span className="muted">{draft.trim().length}/1000</span>
+        )}
+        {status === "Draft" && <span className="muted">· Draft saved</span>}
       </div>
+      <ConfirmDialog open={confirming} title={confirmTitle} confirmLabel="Submit" onClose={() => setConfirming(false)} onConfirm={() => onSave(draft, true)}>
+        <p>{confirmText}</p>
+      </ConfirmDialog>
     </div>
   );
 }
@@ -1484,8 +1506,24 @@ function GoalDialog({
   const set = (patch: Partial<GoalInput>) => setForm((f) => ({ ...f, ...patch }));
   const talent = useTalent();
   const others = goalWeightTotal(talent.goals, form.ownerId, form.cycleId, form.id);
+  const weight = Math.round(Number(form.weight));
+  const total = others + (Number.isFinite(weight) ? weight : 0);
+  const room = Math.max(0, 100 - others);
+  const weightError =
+    !Number.isFinite(weight) || weight < 1 || weight > 100
+      ? "Weight must be between 1 and 100."
+      : total > 100
+        ? room > 0
+          ? `Too much: other goals use ${others}%, so at most ${room}% is left.`
+          : `Other goals already use 100%. Lower one of them (or remove it) first.`
+        : "";
+  const missing = !form.title.trim() ? "Enter a goal title." : !form.target.trim() ? "Enter a target." : "";
 
   function save() {
+    if (weightError || missing) {
+      setError(weightError || missing);
+      return Promise.resolve(weightError || missing);
+    }
     return talentRun(() => saveGoal(actor, form), (err) => {
       if (err) setError(err);
       else onClose(form.id ? "Goal updated." : "Goal added.");
@@ -1519,9 +1557,19 @@ function GoalDialog({
           <input value={form.period} maxLength={40} onChange={(e) => set({ period: e.target.value })} />
         </Field>
         <Field label={`Weight % (others: ${others}%)`}>
-          <input type="number" min={1} max={100} value={form.weight} onChange={(e) => set({ weight: Number(e.target.value) })} />
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={Number.isFinite(form.weight) ? form.weight : ""}
+            aria-invalid={!!weightError}
+            onChange={(e) => set({ weight: e.target.value === "" ? Number.NaN : Number(e.target.value) })}
+          />
         </Field>
       </div>
+      <p className={weightError ? "note err" : "muted"} role={weightError ? "alert" : undefined}>
+        {weightError || `Total with this goal: ${total}% of 100%${total < 100 ? ` (${100 - total}% still unallocated)` : ""}.`}
+      </p>
       {error && <Banner message={{ tone: "err", text: error }} />}
       <div className="dialog-actions">
         <button type="button" className="btn-ghost" onClick={() => onClose()}>
@@ -1530,6 +1578,7 @@ function GoalDialog({
         <ActionButton
           className="btn"
           onAction={save}
+          disabled={!!weightError}
           success={form.id ? "Goal updated." : `Goal added for ${owners.find((o) => o.id === form.ownerId)?.name ?? "you"}.`}
         >
           Save
@@ -1545,9 +1594,14 @@ export function PerformancePage() {
   const talent = useTalent();
   const [tab, setTab] = useState("goals");
   const cycles = allCycles(talent);
-  const [cycleId, setCycleId] = useState(cycles[0]?.id ?? "");
+  const [pickedCycleId, setCycleId] = useState("");
+  // Backend mode loads cycles after the first render: until one is picked, follow the active cycle (else the first).
+  const cycleId = cycles.some((c) => c.id === pickedCycleId)
+    ? pickedCycleId
+    : (cycles.find((c) => cycleStatusOf(talent, c.id) === "Active") ?? cycles[0])?.id ?? "";
   const [notice, setNotice] = useState<Notice>(null);
   const [goalForm, setGoalForm] = useState<GoalInput | null>(null);
+  const [removing, setRemoving] = useState<{ id: string; title: string } | null>(null);
   const [cycleOpen, setCycleOpen] = useState(false);
   const cycle = cycles.find((c) => c.id === cycleId) ?? cycles[0];
   const status = cycleStatusOf(talent, cycleId);
@@ -1555,6 +1609,8 @@ export function PerformancePage() {
   const closed = status === "Closed";
   const hr = isHrRole(actor.role);
   const inCycle = inReviewCycle(actor.id);
+  // Backend mode: nothing to act on until the first load from the server arrives.
+  const loading = API_ENABLED && !performanceMirror.loaded();
 
   const goals = talent.goals.filter((g) => g.cycleId === cycleId && canViewReview(actor, g.ownerId));
   // Pre-boarding joiners aren't reviewed until they start.
@@ -1641,8 +1697,9 @@ export function PerformancePage() {
       />
 
       <Banner message={notice} />
+      {loading && <LoadingState label="Loading performance data…" />}
 
-      {tab === "goals" && (
+      {tab === "goals" && !loading && (
         <Card
           title="Goals, OKRs and KPIs"
           action={
@@ -1682,12 +1739,12 @@ export function PerformancePage() {
                   disabled={!editable}
                   onCommit={(v, settled) => talentAction(() => updateGoalProgress(actor, g.id, v), (res) => {
                     settled();
-                    run(res);
+                    run(res, `Progress for "${g.title}" saved: ${v}%.`);
                   })}
                 />,
                 editable ? (
+                  <span key={`${g.id}-e`} className="row-gap">
                   <button
-                    key={`${g.id}-e`}
                     type="button"
                     className="btn-ghost btn-tiny"
                     onClick={() =>
@@ -1705,6 +1762,10 @@ export function PerformancePage() {
                   >
                     Edit
                   </button>
+                  <button type="button" className="btn-ghost btn-tiny" onClick={() => setRemoving({ id: g.id, title: g.title })}>
+                    Remove
+                  </button>
+                  </span>
                 ) : (
                   ""
                 ),
@@ -1714,6 +1775,20 @@ export function PerformancePage() {
           />
         </Card>
       )}
+
+      <ConfirmDialog
+        open={!!removing}
+        title="Remove goal?"
+        confirmLabel="Remove"
+        onClose={() => setRemoving(null)}
+        onConfirm={() =>
+          removing ? talentRun(() => deleteGoal(actor, removing.id), (res) => run(res, `Goal "${removing.title}" removed.`)) : null
+        }
+      >
+        <p>
+          &ldquo;{removing?.title}&rdquo; and its progress will be removed. Its weight becomes free for other goals.
+        </p>
+      </ConfirmDialog>
 
       {cycleOpen && (
         <CycleDialog
@@ -1762,6 +1837,8 @@ export function PerformancePage() {
                     text={r.selfText}
                     status={r.selfStatus}
                     editable={r.employeeId === actor.id && r.selfStatus !== "Submitted" && status === "Active"}
+                    confirmTitle="Submit your self-assessment?"
+                    confirmText="It goes to your manager and can't be edited afterwards."
                     onSave={(text, submit) =>
                       talentRun(() => saveSelfAssessment(actor, r.id, text, submit), (res) => {
                         run(res, submit ? "Self-assessment submitted." : "Draft saved.");
@@ -1799,6 +1876,8 @@ export function PerformancePage() {
                         text={r.managerText}
                         status={r.managerStatus}
                         editable={writer && r.managerStatus !== "Submitted" && status === "Active"}
+                        confirmTitle={`Submit the manager assessment for ${r.employeeName}?`}
+                        confirmText="It can't be edited afterwards. The employee sees it once the rating is released."
                         onSave={(text, submit) =>
                           talentRun(() => saveManagerAssessment(actor, r.id, text, submit), (res) => {
                             run(res, submit ? "Manager assessment submitted." : "Draft saved.");
@@ -1828,6 +1907,10 @@ export function PerformancePage() {
                   <li key={r.id} className="feedback-item">
                     <div className="row-between">
                       <strong>{r.employeeName}</strong>
+                      {API_ENABLED ? (
+                        // Backend: the status follows the reviewers' answers.
+                        <StatusBadge status={r.feedback360Status} tone={r.feedback360Status === "Complete" ? "ok" : r.feedback360Status === "In progress" ? "info" : "neutral"} literal />
+                      ) : (
                       <select
                         aria-label="360 feedback status"
                         value={r.feedback360Status}
@@ -1838,6 +1921,7 @@ export function PerformancePage() {
                           <option key={s} value={s}>{s}</option>
                         ))}
                       </select>
+                      )}
                     </div>
                     <Reviewers360 me={actor} review={r} open={status === "Planning" || status === "Active"} onResult={run} />
                   </li>
@@ -1869,7 +1953,12 @@ export function PerformancePage() {
                     value={r.rating ?? ""}
                     disabled={!ready}
                     title={!ready ? "Needs both assessments submitted" : undefined}
-                    onChange={(e) => talentAction(() => setRating(actor, r.id, e.target.value || undefined), (res) => run(res))}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      talentAction(() => setRating(actor, r.id, value || undefined), (res) =>
+                        run(res, value ? `Rating "${value}" proposed for ${r.employeeName}. HR releases it after calibration.` : `Rating cleared for ${r.employeeName}.`),
+                      );
+                    }}
                   >
                     <option value="">Select…</option>
                     {RATINGS.map((s) => (
@@ -2019,6 +2108,7 @@ export function LearningPage() {
     (e) => e.employeeId !== employee.id && (hr || isAboveInChain(demoProfile.id, e.employeeId)),
   );
   const showTeam = hr || teamEnrollments.length > 0;
+  const loadingLearning = API_ENABLED && !learningMirror.loaded();
 
   return (
     <Page title="Learning">
@@ -2081,6 +2171,7 @@ export function LearningPage() {
       />
 
       <Banner message={notice} />
+      {loadingLearning && <LoadingState label="Loading courses and your learning…" />}
 
       {tab === "catalog" && (
         <Card title="Course catalog">
@@ -2122,18 +2213,33 @@ export function LearningPage() {
       {tab === "paths" && (
         <Card title="Learning paths">
           <DataTable
-            headers={["Path", "Audience", "Courses", "Your progress", "Action"]}
+            headers={["Path", "Audience", "Courses", "Status", "Your progress", "Action"]}
             rows={LEARNING_PATHS.map((p) => {
-              const isDone = (id: string) => mine.some((e) => e.courseId === id && e.status === "Completed");
+              const enrolment = (id: string) => mine.find((e) => e.courseId === id);
+              const isDone = (id: string) => enrolment(id)?.status === "Completed";
               const done = p.courses.filter(isDone).length;
+              // Average of the courses' progress (completed = 100%, not enrolled = 0%).
+              const pct = p.courses.reduce((sum, id) => sum + (isDone(id) ? 100 : enrolment(id)?.progress ?? 0), 0) / p.courses.length;
+              const started = p.courses.some((id) => enrolledCourseIds.has(id));
+              const pathStatus = done === p.courses.length ? "Completed" : started ? "In progress" : "Not started";
+              const startable = p.courses.some((id) => !enrolledCourseIds.has(id) && courseCatalog().some((c) => c.id === id && courseOpenTo(c, demoProfile)));
               return [
                 p.title,
                 p.audience,
                 p.courses
-                  .map((id) => `${isDone(id) ? "✓ " : ""}${courseCatalog().find((c) => c.id === id)?.title ?? id}`)
+                  .map((id) => {
+                    const e = enrolment(id);
+                    const title = courseCatalog().find((c) => c.id === id)?.title ?? id;
+                    return isDone(id) ? `✓ ${title}` : e ? `${title} (${e.progress}%)` : title;
+                  })
                   .join(" · "),
-                <Progress key={p.id} value={(done / p.courses.length) * 100} label={`${done} of ${p.courses.length} courses`} />,
-                p.courses.every((id) => enrolledCourseIds.has(id)) ? <span key={`${p.id}-status`} className="muted">All courses enrolled</span> : <ActionButton key={`${p.id}-enroll`} className="btn-ghost" busyLabel="Enrolling…" success={`Learning path ${p.title} started.`} onAction={async () => {
+                <StatusBadge key={`${p.id}-st`} status={pathStatus} tone={pathStatus === "Completed" ? "ok" : pathStatus === "In progress" ? "info" : "neutral"} literal />,
+                <Progress key={p.id} value={pct} label={`${done} of ${p.courses.length} completed`} />,
+                pathStatus === "Completed" ? <span key={`${p.id}-status`} className="muted">Path complete</span> : !startable ? (started ? (
+                  <button key={`${p.id}-go`} type="button" className="btn-ghost" onClick={() => { setTab("mine"); setNotice(null); }}>
+                    Continue in My learning
+                  </button>
+                ) : <span key={`${p.id}-status`} className="muted">Not for your role</span>) : <ActionButton key={`${p.id}-enroll`} className="btn-ghost" busyLabel="Enrolling…" success={`Learning path ${p.title} started.`} onAction={async () => {
                   const missing = p.courses.filter((id) => !enrolledCourseIds.has(id) && courseCatalog().some((c) => c.id === id && courseOpenTo(c, demoProfile)));
                   if (!missing.length) { setNotice({ tone: "err", text: "No available courses remain in this path." }); return "No available courses remain in this path."; }
                   for (const id of missing) {
@@ -2142,7 +2248,7 @@ export function LearningPage() {
                   }
                   setNotice({ tone: "ok", text: `Enrolled in ${missing.length} course${missing.length === 1 ? "" : "s"} from ${p.title}.` });
                   return null;
-                }}>Start path</ActionButton>,
+                }}>{started ? "Enroll in the rest" : "Start path"}</ActionButton>,
               ];
             })}
           />
@@ -2186,7 +2292,7 @@ export function LearningPage() {
                         aria-label="Progress"
                         onCommit={(v, settled) => talentAction(() => updateEnrollmentProgress(demoProfile, e.id, v), (res) => {
                           settled();
-                          setNotice(noticeFor(res));
+                          setNotice(noticeFor(res, `Progress saved: ${course?.title ?? "course"} at ${v}%.`));
                         })}
                       />
                       {e.progress >= SELF_PROGRESS_CAP && <span className="muted">Waiting for HR to confirm</span>}
@@ -2387,7 +2493,7 @@ export function SkillsCareerPage() {
   const { demoProfile } = usePortal();
   const talent = useTalent();
   const [tab, setTab] = useState("profile");
-  const [notice] = useState<Notice>(null);
+  const [notice, setNotice] = useState<Notice>(null);
   const track = starterSkillsFor(demoProfile.id).track;
   const roles = (apiTargetRoles() ?? TARGET_ROLES).filter((t) => t.track === track);
   const [targetId, setTargetId] = useState(roles[0]?.id ?? "");
@@ -2405,15 +2511,36 @@ export function SkillsCareerPage() {
   }, [target, skills]);
 
   const myEnrollments = talent.enrollments.filter((e) => e.employeeId === demoProfile.id);
+  // Courses that build a skill: open to me and not completed yet.
+  const coursesFor = (skillId: string) =>
+    courseCatalog().filter(
+      (c) => c.skills.includes(skillId) && courseOpenTo(c, demoProfile) && !myEnrollments.some((e) => e.courseId === c.id && e.status === "Completed"),
+    );
   const recommendations = useMemo(() => {
-    const needing = new Set(gaps.filter((g) => g.gap > 0).map((g) => g.skillId));
-    return courseCatalog().filter(
-      (c) =>
-        c.skills.some((s) => needing.has(s)) &&
-        courseOpenTo(c, demoProfile) &&
-        !myEnrollments.some((e) => e.courseId === c.id && e.status === "Completed"),
-    ).slice(0, 4);
+    const needing = gaps.filter((g) => g.gap > 0).sort((a, b) => b.gap - a.gap);
+    const out: { course: Course; skills: string[] }[] = [];
+    for (const g of needing) {
+      for (const c of courseCatalog().filter(
+        (x) => x.skills.includes(g.skillId) && courseOpenTo(x, demoProfile) && !myEnrollments.some((e) => e.courseId === x.id && e.status === "Completed"),
+      )) {
+        const hit = out.find((o) => o.course.id === c.id);
+        if (hit) hit.skills.push(g.name);
+        else out.push({ course: c, skills: [g.name] });
+      }
+    }
+    return out.slice(0, 6);
   }, [gaps, demoProfile, myEnrollments]);
+  const enrollFor = (c: Course) =>
+    talentRun(() => enrollInCourse(demoProfile, c.id), (res) => setNotice(noticeFor(res, `Enrolled in ${c.title}. Track it in Learning → My learning.`)));
+  const courseAction = (c: Course) => {
+    const e = myEnrollments.find((x) => x.courseId === c.id);
+    if (e) return <span key={`${c.id}-st`} className="muted">{e.status} · {e.progress}%</span>;
+    return (
+      <ActionButton key={`${c.id}-en`} className="btn-ghost btn-tiny" busyLabel="Enrolling…" doneLabel="Enrolled" onAction={() => enrollFor(c)}>
+        Enroll
+      </ActionButton>
+    );
+  };
 
   const seesTeamInterests = canSeeTeamInterests(demoProfile);
 
@@ -2430,7 +2557,10 @@ export function SkillsCareerPage() {
           ...(seesTeamInterests ? [{ id: "team", label: "Team interests" }] : []),
         ]}
         value={tab}
-        onChange={setTab}
+        onChange={(id) => {
+          setTab(id);
+          setNotice(null);
+        }}
       />
 
       <Banner message={notice} />
@@ -2462,18 +2592,39 @@ export function SkillsCareerPage() {
             </FilterBar>
             <Card title={`Skill gap vs ${target.title}`}>
               <DataTable
-                headers={["Skill", "You have", "Role needs", "Gap"]}
-                rows={gaps.map((g) => [
-                  g.name,
-                  g.have,
-                  g.need,
-                  g.gap <= 0 ? (
-                    <StatusBadge key={g.skillId} status="On track" tone="ok" />
-                  ) : (
-                    <StatusBadge key={g.skillId} status={`+${g.gap} level${g.gap > 1 ? "s" : ""}`} tone="warn" />
-                  ),
-                ])}
+                headers={["Skill", "You have", "Role needs", "Gap", "Courses that help"]}
+                rows={gaps.map((g) => {
+                  const courses = g.gap > 0 ? coursesFor(g.skillId) : [];
+                  return [
+                    g.name,
+                    g.have,
+                    g.need,
+                    g.gap <= 0 ? (
+                      <StatusBadge key={g.skillId} status="On track" tone="ok" />
+                    ) : (
+                      <StatusBadge key={g.skillId} status={`+${g.gap} level${g.gap > 1 ? "s" : ""}`} tone="warn" />
+                    ),
+                    g.gap <= 0 ? (
+                      "—"
+                    ) : courses.length === 0 ? (
+                      <span key={`${g.skillId}-c`} className="muted">No course open to you yet: practise on the job</span>
+                    ) : (
+                      <span key={`${g.skillId}-c`} className="stack">
+                        {courses.map((c) => (
+                          <span key={c.id} className="row-gap">
+                            {c.title} ({c.durationHours}h) {courseAction(c)}
+                          </span>
+                        ))}
+                      </span>
+                    ),
+                  ];
+                })}
               />
+              <p className="muted">
+                {gaps.filter((g) => g.gap > 0).length
+                  ? `${gaps.filter((g) => g.gap > 0).length} of ${gaps.length} skills to build. Update your levels in My skills profile as you grow.`
+                  : "You meet every skill this role needs."}
+              </p>
             </Card>
           </div>
         ))}
@@ -2483,16 +2634,14 @@ export function SkillsCareerPage() {
           {recommendations.length === 0 ? (
             <EmptyState title="Nothing to suggest" description="No open courses match your skill gaps." />
           ) : (
-            <ul className="todo">
-              {recommendations.map((c) => (
-                <li key={c.id}>
-                  {c.title} · {c.category} · {c.durationHours}h
-                  {myEnrollments.some((e) => e.courseId === c.id) ? " · Enrolled " : " "}
-                  <Link to="/programs">Open learning</Link>
-                </li>
-              ))}
-            </ul>
+            <DataTable
+              headers={["Course", "Builds", "Category", "Hours", ""]}
+              rows={recommendations.map(({ course: c, skills: builds }) => [c.title, builds.join(", "), c.category, String(c.durationHours), courseAction(c)])}
+            />
           )}
+          <p className="muted">
+            Based on your gaps for {target?.title ?? "your next role"}. <Link to="/programs">Open learning</Link>
+          </p>
         </Card>
       )}
     </Page>

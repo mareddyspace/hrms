@@ -2,6 +2,9 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { dateRangeLabel, type DateRangeKey } from "../../data/dashboardMock.ts";
 import type { NavAccessId } from "../../demoAccounts.ts";
+import { BarList, useChartTip, type BarItem } from "./chartKit.tsx";
+
+type BarListProps = Parameters<typeof BarList>[0];
 
 export function DashGreeting({
   title,
@@ -96,45 +99,41 @@ export function useDateRange(initial: DateRangeKey = "30d") {
 
 export function ProgressBar({ value, label }: { value: number; label?: string }) {
   const pct = Math.max(0, Math.min(100, Math.round(value)));
+  const tip = useChartTip();
   return (
-    <div className="dash-progress">
+    <div className="dash-progress chart-wrap" ref={tip.wrapRef}>
       {label && (
         <div className="dash-progress-meta">
           <span>{label}</span>
           <span>{pct}%</span>
         </div>
       )}
-      <div className="dash-progress-track" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} role="progressbar">
+      <div
+        className={`dash-progress-track${tip.activeKey ? " is-active" : ""}`}
+        {...tip.bind("bar", { title: label ?? "Progress", value: `${pct}%` })}
+        role="progressbar"
+        aria-label={label ? `${label}: ${pct}%` : `${pct}%`}
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
         <div className="dash-progress-fill" style={{ width: `${pct}%` }} />
       </div>
+      {tip.tooltip}
     </div>
   );
 }
 
+/** Row bars (label · bar · value). Rows with `to` drill down; `onSelect` opens details; otherwise hover/tap shows the value. */
 export function MiniBars({
   items,
   valueSuffix = "",
+  ...rest
 }: {
-  items: { label: string; value: number }[];
+  items: BarItem[];
   valueSuffix?: string;
-}) {
-  const max = Math.max(...items.map((i) => i.value), 1);
-  return (
-    <ul className="mini-bars">
-      {items.map((item) => (
-        <li key={item.label}>
-          <span className="mini-bars-label" title={item.label}>{item.label}</span>
-          <div className="mini-bars-track">
-            <div className="mini-bars-fill" style={{ width: `${(item.value / max) * 100}%` }} />
-          </div>
-          <span className="mini-bars-value">
-            {item.value}
-            {valueSuffix}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
+} & Omit<BarListProps, "items" | "valueSuffix" | "variant">) {
+  return <BarList items={items} valueSuffix={valueSuffix} variant="mini" {...rest} />;
 }
 
 export function PlaceholderPanel({ title, detail }: { title: string; detail: string }) {
@@ -174,23 +173,26 @@ export function SoftTabs({
 }
 
 /** Bar list with a count and its share of the total. */
-export function ShareBars({ items }: { items: { label: string; count: number; pct: number }[] }) {
-  const max = Math.max(...items.map((i) => i.count), 1);
+export function ShareBars({
+  items,
+  ...rest
+}: { items: (Omit<BarItem, "value"> & { count: number; pct: number })[] } & Omit<BarListProps, "items" | "variant" | "share">) {
+  const total = items.reduce((n, i) => n + i.count, 0);
   return (
-    <ul className="mini-bars">
-      {items.map((item) => (
-        <li key={item.label} style={{ gridTemplateColumns: "minmax(72px, 120px) 1fr auto" }}>
-          <span className="mini-bars-label" title={item.label}>
-            {item.label}
+    <BarList
+      variant="mini"
+      share={total}
+      rowStyle={{ gridTemplateColumns: "minmax(72px, 120px) 1fr auto" }}
+      items={items.map(({ count, pct, ...item }) => ({
+        ...item,
+        value: count,
+        display: (
+          <span style={{ whiteSpace: "nowrap" }}>
+            {count} <span className="muted">· {pct}%</span>
           </span>
-          <div className="mini-bars-track">
-            <div className="mini-bars-fill" style={{ width: `${(item.count / max) * 100}%` }} />
-          </div>
-          <span className="mini-bars-value" style={{ whiteSpace: "nowrap" }}>
-            {item.count} <span className="muted">· {item.pct}%</span>
-          </span>
-        </li>
-      ))}
-    </ul>
+        ),
+      }))}
+      {...rest}
+    />
   );
 }

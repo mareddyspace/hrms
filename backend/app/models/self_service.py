@@ -30,6 +30,19 @@ class CashAdvance(TimestampMixin, Base):
     paid_on: Mapped[date | None] = mapped_column(Date)
     paid_by: Mapped[str | None] = mapped_column(String(64))
     reference: Mapped[str | None] = mapped_column(String(64))
+    # Migration 0028: when the spend is accounted for, what it is for, and the settlement (actual spend with receipts,
+    # unspent balance returned). settlement_status: None | Submitted | Verified | Rejected.
+    expected_settlement: Mapped[date | None] = mapped_column(Date)
+    trip_id: Mapped[str | None] = mapped_column(String(64))
+    project: Mapped[str | None] = mapped_column(String(120))
+    settlement_status: Mapped[str | None] = mapped_column(String(16))
+    settlement_spent: Mapped[float | None] = mapped_column(Float)
+    settlement_returned: Mapped[float | None] = mapped_column(Float)
+    settlement_note: Mapped[str | None] = mapped_column(Text)
+    settlement_on: Mapped[date | None] = mapped_column(Date)
+    settlement_reference: Mapped[str | None] = mapped_column(String(64))
+    settlement_verified_by: Mapped[str | None] = mapped_column(String(64))
+    settlement_verified_on: Mapped[date | None] = mapped_column(Date)
 
 
 class EncashmentRequest(TimestampMixin, Base):

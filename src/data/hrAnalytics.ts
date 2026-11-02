@@ -111,6 +111,34 @@ export function headcountBreakdown(
   return { rows, total, note };
 }
 
+/** Active people in scope behind one headcountBreakdown row (managers for "span"). */
+export function headcountMembers(
+  scopePeople: readonly PersonRecord[],
+  allPeople: readonly PersonRecord[],
+  dim: HeadcountDim,
+  label: string,
+  today: string,
+): PersonRecord[] {
+  const people = scopePeople.filter(active);
+  const norm = (v: string | undefined) => v || "Not set";
+  if (dim === "span") {
+    const reports = new Map<string, number>();
+    for (const p of allPeople) if (active(p) && p.managerId) reports.set(p.managerId, (reports.get(p.managerId) ?? 0) + 1);
+    return people.filter((p) => (reports.get(p.id) ?? 0) > 0 && spanBand(reports.get(p.id)!) === label);
+  }
+  const key = (p: PersonRecord): string => {
+    if (dim === "location") return norm(p.location);
+    if (dim === "country") return norm(p.countryName || String(p.countryCode));
+    if (dim === "department") return norm(p.department);
+    if (dim === "grade") return norm(p.grade);
+    if (dim === "gender") return norm(p.gender);
+    if (dim === "type") return norm(p.employmentType);
+    if (dim === "status") return norm(p.employmentStatus);
+    return norm(p.dateOfJoining ? tenureBand(p.dateOfJoining, today) : "");
+  };
+  return people.filter((p) => key(p) === label);
+}
+
 /* ───────────── New hiring ───────────── */
 
 export function recentJoiners(people: readonly PersonRecord[], today: string, days: number): PersonRecord[] {
@@ -121,7 +149,7 @@ export function recentJoiners(people: readonly PersonRecord[], today: string, da
 }
 
 /** People joining per calendar month for the last `months` months (including people who have since left). */
-export function monthlyHires(people: readonly PersonRecord[], today: string, months = 12): { label: string; value: number }[] {
+export function monthlyHires(people: readonly PersonRecord[], today: string, months = 12): { label: string; value: number; from: string; to: string }[] {
   const now = parseISODate(today);
   return Array.from({ length: months }, (_, i) => {
     const first = new Date(now.getFullYear(), now.getMonth() - (months - 1 - i), 1);
@@ -130,6 +158,8 @@ export function monthlyHires(people: readonly PersonRecord[], today: string, mon
     return {
       label: first.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }),
       value: people.filter((p) => p.dateOfJoining >= from && p.dateOfJoining <= to && p.dateOfJoining <= today).length,
+      from,
+      to,
     };
   });
 }
@@ -234,6 +264,7 @@ export function lateArrivals(
   const startMs = parseISODate(start).getTime();
   const buckets = Array.from({ length: weeks }, (_, i) => ({ from: addDaysISO(start, i * 7), late: 0, attended: 0 }));
   const todayLate: { person: PersonRecord; checkIn: string; minutes: number }[] = [];
+  const lateRows: { person: PersonRecord; date: string; checkIn: string; minutes: number }[] = [];
   const byLocation = new Map<string, number>();
   const byDept = new Map<string, number>();
   for (const p of sample) {
@@ -257,6 +288,7 @@ export function lateArrivals(
       if (b) b.attended += 1;
       if (r.lateMinutes <= 0) continue;
       if (b) b.late += 1;
+      lateRows.push({ person: p, date: r.date, checkIn: r.checkIn, minutes: r.lateMinutes });
       byLocation.set(p.location || "Not set", (byLocation.get(p.location || "Not set") ?? 0) + 1);
       byDept.set(p.department || "Not set", (byDept.get(p.department || "Not set") ?? 0) + 1);
       if (r.date === today) todayLate.push({ person: p, checkIn: r.checkIn, minutes: r.lateMinutes });
@@ -273,7 +305,11 @@ export function lateArrivals(
       label: parseISODate(b.from).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }),
       value: b.late,
       pct: pct(b.late, b.attended),
+      from: b.from,
+      to: addDaysISO(b.from, 6),
     })),
+    /** Every late check-in in the window, latest first (for drill-down lists). */
+    rows: lateRows.sort((a, b) => b.date.localeCompare(a.date) || b.minutes - a.minutes),
     totalLate,
     latePct: pct(totalLate, totalAttended),
     byLocation: top(byLocation),

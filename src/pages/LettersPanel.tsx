@@ -13,7 +13,7 @@ import {
   type LetterPreviewOut,
 } from "../api/syncRewards.ts";
 import { LetterDownloadButtons, LetterFrame, printLetter } from "../components/LetterDocument.tsx";
-import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, FilterBar, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import {
   approveLetter,
   canApproveLetterRow,
@@ -47,7 +47,9 @@ import type { LetterRequest, LetterType } from "../data/rewardData.ts";
 import { getRewardState, nextLetterStatuses, runRewardApi, setLetterStatus, subscribeReward } from "../data/rewardLocal.ts";
 import type { DemoAccount } from "../demoAccounts.ts";
 import { getExitState, subscribeExits } from "../features/lifecycle/exitStore.ts";
-import { todayISO } from "../model.ts";
+import { formatShortDate, todayISO } from "../model.ts";
+import { Tracker, type Stage } from "../features/payrequests/Tracker.tsx";
+import { CsvButton } from "../features/payrequests/requestKit.tsx";
 
 type Msg = { tone: "ok" | "err"; text: string } | null;
 export type OpenLetter = { letterId: string; docId?: string } | null;
@@ -457,14 +459,73 @@ export function LetterRequestsPanel({ actor, onOpen }: { actor: DemoAccount; onO
 export function LetterHistoryPanel({ actor, onOpen }: { actor: DemoAccount; onOpen: (open: OpenLetter) => void }) {
   const reward = useLetterData();
   const letters = reward.letters.filter((l) => visibleTo(actor, l));
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const statuses = [...new Set(letters.map((l) => l.status))].sort();
+  const shown = letters.filter(
+    (l) =>
+      (!q.trim() || `${l.id} ${l.employeeName} ${label(l.type)} ${l.requestedBy} ${l.note}`.toLowerCase().includes(q.trim().toLowerCase())) &&
+      (!status || l.status === status) &&
+      (!from || l.requestedOn >= from) &&
+      (!to || l.requestedOn <= to),
+  );
+  const opened = shown.find((l) => l.id === openId) ?? null;
+  const stagesOf = (l: LetterRequest): Stage[] => {
+    const rejected = l.status === "Rejected" || l.status === "Cancelled";
+    const issued = l.status === "Issued" || !!l.api?.issues.length || !!l.issued?.length;
+    const decided = !!l.decidedOn || issued;
+    return [
+      { label: "Requested", state: "done", detail: `${formatShortDate(l.requestedOn)} · ${l.requestedBy}` },
+      {
+        label: rejected ? l.status : "Approved",
+        state: rejected ? "declined" : decided ? "done" : "current",
+        detail: [l.approver, l.decidedOn ? formatShortDate(l.decidedOn) : ""].filter(Boolean).join(" · ") || (rejected ? undefined : "Waiting"),
+      },
+      ...(rejected ? [] : [{ label: "Issued", state: (issued ? "done" : decided ? "current" : "todo") as Stage["state"], detail: l.api?.issues.at(-1)?.referenceNo ?? currentIssue(l)?.docId }]),
+    ];
+  };
   return (
     <Card title="Request and approval history">
+      <FilterBar>
+        <label className="filter-label">
+          Search
+          <input type="search" value={q} placeholder="ID, employee, letter" onChange={(e) => setQ(e.target.value)} />
+        </label>
+        <label className="filter-label">
+          Status
+          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="">All</option>
+            {statuses.map((x) => (
+              <option key={x}>{x}</option>
+            ))}
+          </select>
+        </label>
+        <label className="filter-label">
+          Requested from
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <label className="filter-label">
+          to
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+        </label>
+        <CsvButton
+          filename={`letter-requests-${todayISO()}.csv`}
+          headers={["Request ID", "Requested", "Employee", "Letter", "By", "Status", "Approver", "Decided", "Reference", "Note"]}
+          rows={() => shown.map((l) => [l.id.toUpperCase(), l.requestedOn, l.employeeName, label(l.type), l.requestedBy, l.status, l.approver ?? "", l.decidedOn ?? "", l.api?.issues.at(-1)?.referenceNo ?? currentIssue(l)?.docId ?? "", l.note])}
+        />
+      </FilterBar>
       <DataTable
-        headers={["Requested", "Employee", "Letter", "By", "Status", "Approver", "Decided", "Document", "Note"]}
-        rows={letters.map((l) => {
+        headers={["Request ID", "Requested", "Employee", "Letter", "By", "Status", "Approver", "Decided", "Document", "Comments"]}
+        rows={shown.map((l) => {
           const issue = currentIssue(l);
           const apiIssue = l.api?.issues.at(-1);
           return [
+            <button key={`${l.id}-t`} type="button" className="quiet-link" aria-pressed={openId === l.id} onClick={() => setOpenId(openId === l.id ? null : l.id)}>
+              {l.id.toUpperCase()}
+            </button>,
             l.requestedOn,
             l.employeeName,
             label(l.type),
@@ -483,11 +544,29 @@ export function LetterHistoryPanel({ actor, onOpen }: { actor: DemoAccount; onOp
             ) : (
               "—"
             ),
-            l.note,
+            l.note || "—",
           ];
         })}
-        empty={<EmptyState title="No letter requests" />}
+        empty={<EmptyState title={letters.length ? "No requests match these filters" : "No letter requests"} />}
       />
+      {opened && (
+        <div className="pr-item" style={{ marginTop: 12 }}>
+          <div className="pr-item-head">
+            <div>
+              <h3>
+                {label(opened.type)} · {opened.employeeName}
+              </h3>
+              <p>
+                <span className="pr-id">{opened.id.toUpperCase()}</span>
+                {opened.details ? ` · ${opened.details}` : ""}
+              </p>
+            </div>
+            <StatusBadge status={opened.status} literal />
+          </div>
+          <Tracker stages={stagesOf(opened)} label="Letter request timeline" />
+          {opened.note && <p className="muted" style={{ margin: 0 }}>Comments: {opened.note}</p>}
+        </div>
+      )}
     </Card>
   );
 }

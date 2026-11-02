@@ -39,6 +39,7 @@ ENCASHABLE = ("pto",)
 ENCASH_MAX_DAYS_A_YEAR = 10.0
 ENCASH_KEEP_DAYS = 5.0
 ENCASH_CUTOFF_DAY = 20
+SETTLEMENT_MAX_DAYS = 90
 WORKING_DAYS_A_MONTH = 22
 IT_ROLES = ("admin", "super_admin", "it_admin")
 
@@ -76,9 +77,28 @@ def role_of(db: Session, emp: Employee) -> str:
     return db.scalar(select(Account.role).where(Account.employee_id == emp.id)) or "employee"
 
 
-def basic_monthly(db: Session, emp: Employee) -> float:
+def pay_basis(db: Session, emp: Employee, on: date | None = None) -> tuple[float, str, float]:
+    """(basic monthly pay, source, annual pay) from the same annual pay as the payslips and payroll runs: the current
+    compensation record in the pay currency, else the country's standard package for the role. Basic is the first pay
+    line's share of that package (src/data/payslipGenerator.ts: country earnings x annual / standard annual)."""
+    from app.services.overtime import STANDARD_MONTHLY, annual_pay
+
+    day = on or today_for(emp)
+    annual = annual_pay(db, emp, day)
+    standard = STANDARD_MONTHLY.get(emp.country_code, STANDARD_MONTHLY["IN"]) * 12
     base = BASIC_MONTHLY.get(emp.country_code, BASIC_MONTHLY["IN"])
-    return round(base * ROLE_SCALE.get(role_of(db, emp), 1.15))
+    from app.models import CompensationRecord
+
+    has_record = db.scalar(select(CompensationRecord.id).where(
+        CompensationRecord.employee_id == emp.id, CompensationRecord.effective_date <= day,
+        CompensationRecord.currency == emp.currency).limit(1)) is not None
+    basic = round(base * annual / standard) if standard else round(base * ROLE_SCALE.get(role_of(db, emp), 1.15))
+    return float(basic), "compensation" if has_record else "standard", float(annual)
+
+
+def basic_monthly(db: Session, emp: Employee) -> float:
+    """One month's basic pay as on the payslips (see pay_basis)."""
+    return pay_basis(db, emp)[0]
 
 
 def has_manager(db: Session, emp: Employee) -> bool:
@@ -149,10 +169,10 @@ def month_key(day: date) -> str:
 def cash_limit(db: Session, emp: Employee) -> dict[str, Any]:
     from app.services.expenses import limits_for
 
-    basic = basic_monthly(db, emp)
+    basic, source, annual = pay_basis(db, emp)
     cap = float(limits_for(emp.country_code)["max_cash_advance"])
     return {"limit": float(min(basic, cap)), "basic_monthly": float(basic), "country_cap": cap, "currency": emp.currency,
-            "max_instalments": MAX_INSTALMENTS}
+            "max_instalments": MAX_INSTALMENTS, "pay_source": source, "annual_pay": annual}
 
 
 def schedule(row: CashAdvance, today: date) -> list[dict[str, Any]]:
@@ -180,6 +200,109 @@ def is_open(row: CashAdvance, today: date) -> bool:
     return row.status in (*PENDING, "Approved") or (row.status == "Paid" and outstanding(row, today) > 0)
 
 
+def recovered_so_far(row: CashAdvance, today: date) -> float:
+    return round(sum(i["amount"] for i in schedule(row, today) if i["recovered"]), 2)
+
+
+def settlement_due(row: CashAdvance, today: date) -> float:
+    """What a settlement must account for: the advance less what pay has already recovered."""
+    if row.status != "Paid":
+        return 0.0
+    return round(max(0.0, row.amount - recovered_so_far(row, today)), 2)
+
+
+def settlement_overdue(row: CashAdvance, today: date) -> bool:
+    return (row.status == "Paid" and row.expected_settlement is not None and row.expected_settlement < today
+            and row.settlement_status not in ("Submitted", "Verified") and settlement_due(row, today) > 0)
+
+
+def submit_settlement(db: Session, row: CashAdvance, emp: Employee, data: dict[str, Any], actor_id: str,
+                      ip: str | None) -> None:
+    """Actual spend (with receipts) plus the unspent balance returned must account for what is still due."""
+    from app.models import RequestAttachment
+
+    today = today_for(emp)
+    if row.status != "Paid":
+        raise RequestError("Only a paid advance can be settled.")
+    if row.settlement_status in ("Submitted", "Verified"):
+        raise RequestError(f"The settlement is already {row.settlement_status.lower()}.")
+    spent = round(float(data.get("spent") or 0), 2)
+    returned = round(float(data.get("returned") or 0), 2)
+    due = settlement_due(row, today)
+    if spent < 0 or returned < 0:
+        raise RequestError("Amounts can't be negative.")
+    if spent > due:
+        raise RequestError(f"You can account for up to {due:,.2f} {row.currency}. Claim anything more as a reimbursement.")
+    if abs(spent + returned - due) > 0.01:
+        raise RequestError(f"Spent plus returned must equal {due:,.2f} {row.currency} (the advance less what pay has recovered).")
+    if returned > 0 and not (data.get("reference") or "").strip():
+        raise RequestError("Add the reference of the transfer that returned the unspent money.")
+    if spent > 0 and not db.scalar(select(RequestAttachment.id).where(
+            RequestAttachment.entity_type == "cash_advance", RequestAttachment.entity_id == row.id,
+            RequestAttachment.purpose == "settlement")):
+        raise RequestError("Attach the receipts for what you spent first.")
+    row.settlement_status = "Submitted"
+    row.settlement_spent, row.settlement_returned = spent, returned
+    row.settlement_note = (data.get("note") or "").strip()[:1000] or None
+    row.settlement_reference = (data.get("reference") or "").strip()[:64] or None
+    row.settlement_on = today
+    row.settlement_verified_by = None
+    row.settlement_verified_on = None
+    record_audit(db, actor_id=actor_id, action="cash_advance_settlement_submitted", entity="cash_advances",
+                 entity_id=row.id, subject_id=row.employee_id, after={"spent": spent, "returned": returned}, ip=ip)
+    for rid in settlement_verifier_ids(db, row.employee_id):
+        notify(db, recipient_id=rid, title=f"{emp.full_name} settled a cash advance",
+               body=f"Spent {spent:,.2f} {row.currency}, returned {returned:,.2f} {row.currency}. Verify it.",
+               href=f"/cash?open={row.id}")
+
+
+def settlement_verifier_ids(db: Session, employee_id: str) -> list[str]:
+    ids = db.scalars(select(Account.employee_id).where(Account.role.in_(("finance", "hr_admin", "hr")),
+                                                       Account.employee_id.is_not(None)))
+    return [i for i in dict.fromkeys(ids) if i and i != employee_id]
+
+
+def decide_settlement(db: Session, row: CashAdvance, actor: Employee, actor_id: str, decision: str, note: str | None,
+                      ip: str | None) -> None:
+    if row.settlement_status != "Submitted":
+        raise RequestError("There is no settlement waiting to be verified.")
+    if actor.id == row.employee_id:
+        raise RequestError("You can't verify your own settlement.")
+    if decision == "reject" and not (note or "").strip():
+        raise RequestError("Add a note saying what is missing.")
+    today = today_for(actor)
+    row.settlement_status = "Verified" if decision == "verify" else "Rejected"
+    row.settlement_verified_by = actor.full_name
+    row.settlement_verified_on = today
+    if note and note.strip():
+        row.settlement_note = ((row.settlement_note or "") + f"\n{actor.full_name}: {note.strip()}").strip()[:2000]
+    if decision == "verify":
+        row.status = "Settled"
+    record_audit(db, actor_id=actor_id,
+                 action=f"cash_advance_settlement_{'verified' if decision == 'verify' else 'rejected'}",
+                 entity="cash_advances", entity_id=row.id, subject_id=row.employee_id,
+                 after={"settlement_status": row.settlement_status, "status": row.status}, ip=ip)
+    notify(db, recipient_id=row.employee_id,
+           title="Cash advance settled" if decision == "verify" else "Cash advance settlement sent back",
+           body="Nothing more will be recovered from your pay." if decision == "verify" else (note or "").strip()[:300],
+           href=f"/cash?open={row.id}")
+
+
+def send_settlement_reminders(db: Session, today: date, send: Any) -> int:
+    """Daily: paid advances past their expected settlement date with no settlement yet (send dedupes per day)."""
+    sent = 0
+    for row in db.scalars(select(CashAdvance).where(CashAdvance.status == "Paid", CashAdvance.expected_settlement < today)):
+        if not settlement_overdue(row, today):
+            continue
+        days = (today - row.expected_settlement).days
+        if send(db, f"cash-settle:{row.id}", row.employee_id, today, "cash_settlement",
+                "Cash advance settlement overdue",
+                f"Your {row.amount:,.0f} {row.currency} advance is {days} day{'s' if days != 1 else ''} past its settlement "
+                "date. Add receipts and return any unspent money.", f"/cash?open={row.id}"):
+            sent += 1
+    return sent
+
+
 def create_cash(db: Session, emp: Employee, data: dict[str, Any], actor_id: str, ip: str | None) -> CashAdvance:
     today = today_for(emp)
     amount = float(data["amount"])
@@ -198,12 +321,28 @@ def create_cash(db: Session, emp: Employee, data: dict[str, Any], actor_id: str,
     category = (data.get("category") or "").strip()
     if category not in CASH_CATEGORIES:
         raise RequestError("Choose a purpose.")
+    currency = (data.get("currency") or emp.currency).upper()
+    if currency != emp.currency:
+        raise RequestError(f"Cash advances are paid in your pay currency ({emp.currency}).")
+    settle_by = data.get("expected_settlement")
+    if settle_by is not None and settle_by < data["needed_by"]:
+        raise RequestError("The settlement date can't be before the date you need the money.")
+    if settle_by is not None and settle_by > data["needed_by"] + timedelta(days=SETTLEMENT_MAX_DAYS):
+        raise RequestError(f"Settle within {SETTLEMENT_MAX_DAYS} days of receiving the advance.")
+    trip_id = (data.get("trip_id") or "").strip() or None
+    if trip_id:
+        from app.models import TravelRequest
+
+        trip = db.get(TravelRequest, trip_id)
+        if trip is None or trip.employee_id != emp.id or trip.status not in ("submitted", "approved"):
+            raise RequestError("Choose one of your own open or approved trips.")
     for row in db.scalars(select(CashAdvance).where(CashAdvance.employee_id == emp.id)):
         if is_open(row, today):
             raise RequestError("You already have an open cash advance. Finish repaying it first.")
     row = CashAdvance(id=_id("cash"), employee_id=emp.id, amount=round(amount, 2), currency=emp.currency,
                       category=category, purpose=(data.get("purpose") or "").strip()[:1000], needed_by=data["needed_by"],
-                      instalments=n, status="Submitted")
+                      instalments=n, status="Submitted", expected_settlement=settle_by, trip_id=trip_id,
+                      project=((data.get("project") or "").strip()[:120] or None))
     db.add(row)
     db.flush()
     record_audit(db, actor_id=actor_id, action="cash_advance_submitted", entity="cash_advances", entity_id=row.id,
@@ -287,8 +426,25 @@ def encash_policy(db: Session, emp: Employee) -> dict[str, Any]:
             else f"Keep at least {ENCASH_KEEP_DAYS:g} days in your balance")
         out.append({"code": b.code, "name": b.name, "available": float(b.available), "encashable": encashable,
                     "used_this_year": approved + pending, "eligible": encashable > 0, "why_not": why})
-    return {"per_day": per_day(db, emp), "currency": emp.currency, "max_days_a_year": ENCASH_MAX_DAYS_A_YEAR,
-            "keep_days": ENCASH_KEEP_DAYS, "cutoff_day": ENCASH_CUTOFF_DAY, "types": out}
+    basic, source, _annual = pay_basis(db, emp, today)
+    return {"per_day": round(basic / WORKING_DAYS_A_MONTH, 2), "currency": emp.currency,
+            "max_days_a_year": ENCASH_MAX_DAYS_A_YEAR, "keep_days": ENCASH_KEEP_DAYS, "cutoff_day": ENCASH_CUTOFF_DAY,
+            "types": out, "pay_source": source, "basic_monthly": basic, "working_days": WORKING_DAYS_A_MONTH,
+            "payout_month": payout_month(today)}
+
+
+def encashment_paid(db: Session, row: EncashmentRequest, emp: Employee) -> bool:
+    """Paid once its payout month's payroll run is locked (or, with no run, once that month is over)."""
+    if row.status != "Approved" or not row.payout_month:
+        return False
+    from app.models import PayrollRun
+
+    run = db.scalar(select(PayrollRun.status).where(PayrollRun.month == row.payout_month,
+                                                    PayrollRun.country_code == emp.country_code,
+                                                    PayrollRun.legal_entity == emp.legal_entity))
+    if run is not None:
+        return run == "locked"
+    return row.payout_month < month_key(today_for(emp))
 
 
 def payout_month(day: date) -> str:

@@ -11,6 +11,8 @@ export interface MonthlyMovement {
   labels: string[];
   /** Full month names for hover text, e.g. "Oct 2026". */
   titles: string[];
+  /** Month keys, "YYYY-MM". */
+  keys: string[];
   joiners: number[];
   exits: number[];
 }
@@ -39,6 +41,7 @@ export function monthlyMovement(people: readonly PersonRecord[], today: string, 
   return {
     labels: keys.map((k) => MONTHS[Number(k.slice(5, 7)) - 1]),
     titles: keys.map((k) => `${MONTHS[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}`),
+    keys,
     joiners,
     exits,
   };

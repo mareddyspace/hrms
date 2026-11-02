@@ -28,6 +28,22 @@ class CashIn(BaseModel):
     purpose: str = Field(default="", max_length=1000)
     needed_by: date
     instalments: int = Field(default=1, ge=1, le=12)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")  # None = your pay currency (the only one accepted)
+    expected_settlement: date | None = None
+    trip_id: str | None = Field(default=None, max_length=64)
+    project: str | None = Field(default=None, max_length=120)
+
+
+class CashSettlementIn(BaseModel):
+    spent: float = Field(ge=0, le=100_000_000)
+    returned: float = Field(default=0, ge=0, le=100_000_000)
+    note: str = Field(default="", max_length=1000)
+    reference: str | None = Field(default=None, max_length=64)
+
+
+class CashSettlementDecisionIn(BaseModel):
+    decision: Literal["verify", "reject"]
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class CashPayIn(BaseModel):
@@ -61,6 +77,22 @@ class CashOut(BaseModel):
     reference: str | None = None
     outstanding: float = 0
     schedule: list[InstalmentOut] = []
+    expected_settlement: date | None = None
+    trip_id: str | None = None
+    project: str | None = None
+    settlement_status: str | None = None
+    settlement_spent: float | None = None
+    settlement_returned: float | None = None
+    settlement_note: str | None = None
+    settlement_on: date | None = None
+    settlement_reference: str | None = None
+    settlement_verified_by: str | None = None
+    settlement_verified_on: date | None = None
+    settlement_due: float = 0
+    can_settle: bool = False
+    can_verify_settlement: bool = False
+    settlement_overdue: bool = False
+    info_requested: bool = False
 
 
 class CashPolicyOut(BaseModel):
@@ -71,6 +103,8 @@ class CashPolicyOut(BaseModel):
     max_instalments: int
     categories: list[str]
     open_id: str | None = None
+    pay_source: str = "standard"  # compensation (the current pay record) | standard (country package for the role)
+    annual_pay: float = 0
 
 
 # ---------- leave encashment ----------
@@ -96,6 +130,10 @@ class EncashPolicyOut(BaseModel):
     keep_days: float
     cutoff_day: int
     types: list[EncashTypeOut]
+    pay_source: str = "standard"
+    basic_monthly: float = 0
+    working_days: int = 22
+    payout_month: str | None = None
 
 
 class EncashOut(BaseModel):
@@ -113,6 +151,9 @@ class EncashOut(BaseModel):
     steps: list[StepOut] = []
     can_decide: bool = False
     can_withdraw: bool = False
+    paid: bool = False  # the payout month's payroll run is locked (or the month is over)
+    year: int | None = None
+    info_requested: bool = False
 
 
 # ---------- software ----------

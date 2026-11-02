@@ -58,7 +58,7 @@ def check_currency(requested: str | None, local: str) -> str:
 
 def validate_claim(
     db: Session, *, employee_id: str, country_code: str, currency: str, category: str, amount: float, on: date,
-    today: date, trip_id: str | None, receipts: list[ExpenseReceipt],
+    today: date, trip_id: str | None, receipts: list[ExpenseReceipt], exclude_id: str | None = None,
 ) -> None:
     limits = limits_for(country_code)
     if on > today:
@@ -79,10 +79,19 @@ def validate_claim(
         select(ExpenseClaim.id).where(
             ExpenseClaim.employee_id == employee_id, ExpenseClaim.expense_date == on, ExpenseClaim.category == category,
             ExpenseClaim.amount == round(amount, 2), ExpenseClaim.status.in_(OPEN_CLAIM_STATUSES),
+            ExpenseClaim.id != (exclude_id or ""),
         )
     )
     if duplicate:
         raise Conflict(f"You've already claimed this expense (same date, category and amount): {duplicate}.")
+
+
+def clean_details(raw: dict[str, str] | None) -> dict[str, str] | None:
+    """Category / mode fields as short trimmed text (keys and values), empty ones dropped."""
+    if not raw:
+        return None
+    out = {str(k).strip()[:40]: str(v).strip()[:300] for k, v in raw.items() if str(k).strip() and str(v).strip()}
+    return out or None
 
 
 def validate_travel(

@@ -187,8 +187,8 @@ def _call_model(model: str, messages: list[dict[str, str]], key: str, timeout: f
     return answer
 
 
-def _messages(context: str, question: str, history: list[dict[str, str]]) -> list[dict[str, str]]:
-    msgs = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n\nCONTEXT\n{context}"}]
+def _messages(context: str, question: str, history: list[dict[str, str]], focus: str = "") -> list[dict[str, str]]:
+    msgs = [{"role": "system", "content": f"{SYSTEM_PROMPT}{focus}\n\nCONTEXT\n{context}"}]
     for turn in history[-MAX_HISTORY_TURNS:]:
         role = turn.get("role")
         content = (turn.get("content") or "").strip()
@@ -244,6 +244,8 @@ def ask(
     question: str,
     history: list[dict[str, str]] | None = None,
     ip: str | None = None,
+    focus: str = "",
+    agent_id: str | None = None,
 ) -> CopilotResult:
     """Answer one Copilot question (the caller commits the audit row)."""
     question = question.strip()
@@ -251,7 +253,7 @@ def ask(
         result = CopilotResult(answer=DENIED_ANSWER, denied=True)
     else:
         ctx = build_context(db, user, question)
-        answer, model = _ask_models(_messages(ctx.text(), question, history or []))
+        answer, model = _ask_models(_messages(ctx.text(), question, history or [], focus))
         result = CopilotResult(
             answer=answer, sources=_sources_for(question, ctx.sources, ctx.data_refs) if answer else ctx.sources,
             used_ai=answer is not None, model=model,
@@ -264,6 +266,7 @@ def ask(
             "model": result.model,
             "used_ai": result.used_ai,
             "denied": result.denied,
+            "agent": agent_id,
         },
         ip=ip,
     )

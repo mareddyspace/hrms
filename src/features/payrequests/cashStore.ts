@@ -5,7 +5,10 @@
 import { api, API_ENABLED, apiSessionMe } from "../../api/client.ts";
 import { apiRun, createApiMirror } from "../../api/syncOps.ts";
 import { setPayslipDeductionSource } from "../../data/payslipGenerator.ts";
-import { todayISO, uid } from "../../model.ts";
+import { addDaysISO, todayISO, uid } from "../../model.ts";
+import { DEMO_ACCOUNTS } from "../../demoAccounts.ts";
+import { notify as notifyLocal } from "../workforce/workforceShared.ts";
+import { localFiles, localInfoOpen, recordLocalEvent } from "./threadStore.ts";
 import { isHrRole, personName } from "../lifecycle/lifecycleShared.ts";
 import { createLocalStore } from "./localStore.ts";
 import {
@@ -18,6 +21,8 @@ import {
   decideStep,
   instalmentSchedule,
   neededByMax,
+  paySourceFor,
+  SETTLEMENT_MAX_DAYS,
   stepViews,
   waitingStatus,
   type Actor,
@@ -26,7 +31,8 @@ import {
   type StepView,
 } from "./rules.ts";
 
-export type CashStatus = "Submitted" | "Manager approved" | "Approved" | "Paid" | "Rejected" | "Withdrawn";
+export type CashStatus = "Submitted" | "Manager approved" | "Approved" | "Paid" | "Settled" | "Rejected" | "Withdrawn";
+export type SettlementStatus = "Submitted" | "Verified" | "Rejected";
 
 export interface CashView {
   id: string;
@@ -49,6 +55,23 @@ export interface CashView {
   reference?: string;
   outstanding: number;
   schedule: Instalment[];
+  expectedSettlement?: string;
+  tripId?: string;
+  project?: string;
+  settlementStatus?: SettlementStatus;
+  settlementSpent?: number;
+  settlementReturned?: number;
+  settlementNote?: string;
+  settlementOn?: string;
+  settlementReference?: string;
+  settlementVerifiedBy?: string;
+  settlementVerifiedOn?: string;
+  /** What a settlement must account for now (the advance less what pay has recovered). */
+  settlementDue: number;
+  canSettle: boolean;
+  canVerifySettlement: boolean;
+  settlementOverdue: boolean;
+  infoRequested: boolean;
 }
 
 export interface CashPolicy {
@@ -59,6 +82,9 @@ export interface CashPolicy {
   maxInstalments: number;
   categories: readonly string[];
   openId: string | null;
+  /** "compensation": limits from your pay record (as on payslips); "standard": the role's standard package. */
+  paySource: "compensation" | "standard";
+  annualPay: number;
 }
 
 export interface CashInput {
@@ -67,6 +93,16 @@ export interface CashInput {
   purpose: string;
   neededBy: string;
   instalments: number;
+  expectedSettlement?: string;
+  tripId?: string;
+  project?: string;
+}
+
+export interface SettlementInput {
+  spent: number;
+  returned: number;
+  note: string;
+  reference: string;
 }
 
 /* ───────────── Local rows ───────────── */
@@ -88,6 +124,17 @@ interface CashRow {
   paidOn?: string;
   paidBy?: string;
   reference?: string;
+  expectedSettlement?: string;
+  tripId?: string;
+  project?: string;
+  settlementStatus?: SettlementStatus;
+  settlementSpent?: number;
+  settlementReturned?: number;
+  settlementNote?: string;
+  settlementOn?: string;
+  settlementReference?: string;
+  settlementVerifiedBy?: string;
+  settlementVerifiedOn?: string;
 }
 
 const local = createLocalStore<{ rows: CashRow[] }>("timez.cashAdvances.v2", () => ({ rows: [] }), (saved) =>
@@ -103,6 +150,26 @@ function outstandingOf(row: { status: CashStatus; amount: number; instalments: n
 
 function isOpenRow(row: CashView | CashRow): boolean {
   return PENDING.includes(row.status) || row.status === "Approved" || (row.status === "Paid" && outstandingOf(row) > 0);
+}
+
+function recoveredOf(row: { status: CashStatus; amount: number; instalments: number; paidOn?: string }, today = todayISO()): number {
+  if (row.status !== "Paid" || !row.paidOn) return 0;
+  return Math.round(instalmentSchedule(row.amount, row.instalments, row.paidOn, today).filter((i) => i.recovered).reduce((s, i) => s + i.amount, 0) * 100) / 100;
+}
+
+function dueOf(row: CashRow, today = todayISO()): number {
+  return row.status === "Paid" ? Math.round(Math.max(0, row.amount - recoveredOf(row, today)) * 100) / 100 : 0;
+}
+
+function overdueOf(row: CashRow, today = todayISO()): boolean {
+  return (
+    row.status === "Paid" &&
+    !!row.expectedSettlement &&
+    row.expectedSettlement < today &&
+    row.settlementStatus !== "Submitted" &&
+    row.settlementStatus !== "Verified" &&
+    dueOf(row, today) > 0
+  );
 }
 
 function toView(row: CashRow, actor: Actor): CashView {
@@ -124,8 +191,28 @@ function toView(row: CashRow, actor: Actor): CashView {
     canWithdraw: PENDING.includes(row.status) && actor.id === row.employeeId,
     canPay: row.status === "Approved" && actor.id !== row.employeeId && canPayOut(actor.role),
     ...(row.paidOn ? { paidOn: row.paidOn, paidBy: row.paidBy, reference: row.reference } : {}),
-    outstanding: outstandingOf(row, today),
+    outstanding: row.status === "Settled" ? 0 : outstandingOf(row, today),
     schedule: row.paidOn ? instalmentSchedule(row.amount, row.instalments, row.paidOn, today) : [],
+    ...(row.expectedSettlement ? { expectedSettlement: row.expectedSettlement } : {}),
+    ...(row.tripId ? { tripId: row.tripId } : {}),
+    ...(row.project ? { project: row.project } : {}),
+    ...(row.settlementStatus
+      ? {
+          settlementStatus: row.settlementStatus,
+          settlementSpent: row.settlementSpent,
+          settlementReturned: row.settlementReturned,
+          settlementNote: row.settlementNote,
+          settlementOn: row.settlementOn,
+          settlementReference: row.settlementReference,
+          settlementVerifiedBy: row.settlementVerifiedBy,
+          settlementVerifiedOn: row.settlementVerifiedOn,
+        }
+      : {}),
+    settlementDue: dueOf(row, today),
+    canSettle: row.status === "Paid" && actor.id === row.employeeId && row.settlementStatus !== "Submitted" && row.settlementStatus !== "Verified" && dueOf(row, today) > 0,
+    canVerifySettlement: row.settlementStatus === "Submitted" && actor.id !== row.employeeId && canPayOut(actor.role),
+    settlementOverdue: overdueOf(row, today),
+    infoRequested: localInfoOpen("cash_advance", row.id),
   };
 }
 
@@ -173,6 +260,22 @@ interface CashOut {
   reference: string | null;
   outstanding: number;
   schedule: Instalment[];
+  expected_settlement?: string | null;
+  trip_id?: string | null;
+  project?: string | null;
+  settlement_status?: SettlementStatus | null;
+  settlement_spent?: number | null;
+  settlement_returned?: number | null;
+  settlement_note?: string | null;
+  settlement_on?: string | null;
+  settlement_reference?: string | null;
+  settlement_verified_by?: string | null;
+  settlement_verified_on?: string | null;
+  settlement_due?: number;
+  can_settle?: boolean;
+  can_verify_settlement?: boolean;
+  settlement_overdue?: boolean;
+  info_requested?: boolean;
 }
 
 export function stepsFromApi(steps: StepOut[]): StepView[] {
@@ -206,6 +309,26 @@ function fromApi(c: CashOut): CashView {
     ...(c.paid_on ? { paidOn: c.paid_on, paidBy: c.paid_by ?? undefined, reference: c.reference ?? undefined } : {}),
     outstanding: c.outstanding,
     schedule: c.schedule,
+    ...(c.expected_settlement ? { expectedSettlement: c.expected_settlement } : {}),
+    ...(c.trip_id ? { tripId: c.trip_id } : {}),
+    ...(c.project ? { project: c.project } : {}),
+    ...(c.settlement_status
+      ? {
+          settlementStatus: c.settlement_status,
+          settlementSpent: c.settlement_spent ?? undefined,
+          settlementReturned: c.settlement_returned ?? undefined,
+          settlementNote: c.settlement_note ?? undefined,
+          settlementOn: c.settlement_on ?? undefined,
+          settlementReference: c.settlement_reference ?? undefined,
+          settlementVerifiedBy: c.settlement_verified_by ?? undefined,
+          settlementVerifiedOn: c.settlement_verified_on ?? undefined,
+        }
+      : {}),
+    settlementDue: c.settlement_due ?? 0,
+    canSettle: !!c.can_settle,
+    canVerifySettlement: !!c.can_verify_settlement,
+    settlementOverdue: !!c.settlement_overdue,
+    infoRequested: !!c.info_requested,
   };
 }
 
@@ -249,16 +372,35 @@ export function cashViews(actor: Actor): CashView[] {
 }
 
 export function localCashPolicy(actor: Actor & { countryCode?: string }): CashPolicy {
-  const limits = cashLimitFor(actor.countryCode, actor.role);
+  const limits = cashLimitFor(actor.countryCode, actor.role, actor.id);
+  const pay = paySourceFor(actor.countryCode, actor.role, actor.id);
   const open = local.get().rows.find((r) => r.employeeId === actor.id && isOpenRow(r));
-  return { ...limits, maxInstalments: MAX_INSTALMENTS, categories: CASH_CATEGORIES, openId: open?.id ?? null };
+  return { ...limits, maxInstalments: MAX_INSTALMENTS, categories: CASH_CATEGORIES, openId: open?.id ?? null, paySource: pay.source, annualPay: pay.annual };
 }
 
 export async function apiCashPolicy(): Promise<CashPolicy> {
-  const p = await api.get<{ limit: number; basic_monthly: number; country_cap: number; currency: string; max_instalments: number; categories: string[]; open_id: string | null }>(
-    "/cash-advances/policy",
-  );
-  return { limit: p.limit, basic: p.basic_monthly, cap: p.country_cap, currency: p.currency, maxInstalments: p.max_instalments, categories: p.categories, openId: p.open_id };
+  const p = await api.get<{
+    limit: number;
+    basic_monthly: number;
+    country_cap: number;
+    currency: string;
+    max_instalments: number;
+    categories: string[];
+    open_id: string | null;
+    pay_source?: "compensation" | "standard";
+    annual_pay?: number;
+  }>("/cash-advances/policy");
+  return {
+    limit: p.limit,
+    basic: p.basic_monthly,
+    cap: p.country_cap,
+    currency: p.currency,
+    maxInstalments: p.max_instalments,
+    categories: p.categories,
+    openId: p.open_id,
+    paySource: p.pay_source ?? "standard",
+    annualPay: p.annual_pay ?? 0,
+  };
 }
 
 /** Requests waiting on this person (local mode; the backend inbox counts its own). */
@@ -277,25 +419,35 @@ function check(input: CashInput, policy: CashPolicy): string | null {
   if (input.neededBy < todayISO()) return "The needed-by date can't be in the past.";
   if (input.neededBy > neededByMax()) return "The needed-by date must be within 90 days.";
   if (input.instalments < 1 || input.instalments > MAX_INSTALMENTS) return `Repay in 1 to ${MAX_INSTALMENTS} monthly instalments.`;
+  if (!input.purpose.trim()) return "Describe what the money is for.";
+  if (input.expectedSettlement && input.expectedSettlement < input.neededBy) return "The settlement date can't be before the date you need the money.";
+  if (input.expectedSettlement && input.expectedSettlement > addDaysISO(input.neededBy, SETTLEMENT_MAX_DAYS))
+    return `Settle within ${SETTLEMENT_MAX_DAYS} days of receiving the advance.`;
   if (policy.openId) return "You already have an open cash advance. Finish repaying it first.";
   return null;
 }
 
-export async function submitCash(actor: Actor & { countryCode?: string }, input: CashInput, policy: CashPolicy): Promise<string | null> {
-  const error = check(input, policy);
-  if (error) return error;
+/** Sends the request; resolves to its id, or the error. */
+export async function submitCash(actor: Actor & { countryCode?: string }, input: CashInput, policy: CashPolicy): Promise<{ error: string | null; id?: string }> {
+  const problem = check(input, policy);
+  if (problem) return { error: problem };
   if (API_ENABLED) {
-    return apiRun(
-      () =>
-        api.post("/cash-advances", {
+    let id: string | undefined;
+    const failed = await apiRun(async () => {
+      const out = await api.post<CashOut>("/cash-advances", {
           amount: input.amount,
           category: input.category,
           purpose: input.purpose.trim(),
           needed_by: input.neededBy,
           instalments: input.instalments,
-        }),
-      cashMirror,
-    );
+          currency: policy.currency,
+          expected_settlement: input.expectedSettlement || null,
+          trip_id: input.tripId || null,
+          project: input.project?.trim() || null,
+        });
+      id = out.id;
+    }, cashMirror);
+    return failed ? { error: failed } : { error: null, id };
   }
   const row: CashRow = {
     id: uid("cash"),
@@ -311,8 +463,83 @@ export async function submitCash(actor: Actor & { countryCode?: string }, input:
     status: "Submitted",
     submittedOn: todayISO(),
     steps: buildSteps(actor.id, { kind: "hr", label: "Finance / HR" }),
+    ...(input.expectedSettlement ? { expectedSettlement: input.expectedSettlement } : {}),
+    ...(input.tripId ? { tripId: input.tripId } : {}),
+    ...(input.project?.trim() ? { project: input.project.trim().slice(0, 120) } : {}),
   };
-  return local.set({ rows: [row, ...local.get().rows] });
+  const error = local.set({ rows: [row, ...local.get().rows] });
+  if (!error) {
+    recordLocalEvent("cash_advance", row.id, "cash_advance_submitted", actor.fullName);
+    const first = row.steps[0];
+    first?.approverIds.forEach((id) => notifyLocal(id, `Cash advance to approve · ${actor.fullName}`, `${row.amount} ${row.currency} · ${row.category}`, `/cash?open=${row.id}`));
+  }
+  return error ? { error } : { error: null, id: row.id };
+}
+
+/* ───────────── Settlement ───────────── */
+
+export async function settleCash(actor: Actor, id: string, input: SettlementInput): Promise<string | null> {
+  const spent = Math.round(input.spent * 100) / 100;
+  const returned = Math.round(input.returned * 100) / 100;
+  if (!Number.isFinite(spent) || !Number.isFinite(returned) || spent < 0 || returned < 0) return "Enter the amounts spent and returned.";
+  if (API_ENABLED) {
+    return apiRun(
+      () =>
+        api.post(`/cash-advances/${encodeURIComponent(id)}/settlement`, {
+          spent,
+          returned,
+          note: input.note.trim(),
+          reference: input.reference.trim() || null,
+        }),
+      cashMirror,
+    );
+  }
+  return mutate(id, (row) => {
+    if (row.employeeId !== actor.id) return "Only the person who received the advance can settle it.";
+    if (row.status !== "Paid") return "Only a paid advance can be settled.";
+    if (row.settlementStatus === "Submitted" || row.settlementStatus === "Verified") return `The settlement is already ${row.settlementStatus.toLowerCase()}.`;
+    const due = dueOf(row);
+    if (spent > due) return `You can account for up to ${due.toFixed(2)} ${row.currency}. Claim anything more as a reimbursement.`;
+    if (Math.abs(spent + returned - due) > 0.01) return `Spent plus returned must equal ${due.toFixed(2)} ${row.currency} (the advance less what pay has recovered).`;
+    if (returned > 0 && !input.reference.trim()) return "Add the reference of the transfer that returned the unspent money.";
+    if (spent > 0 && !localFiles("cash_advance", row.id).some((f) => f.purpose === "settlement")) return "Attach the receipts for what you spent first.";
+    row.settlementStatus = "Submitted";
+    row.settlementSpent = spent;
+    row.settlementReturned = returned;
+    row.settlementNote = input.note.trim() || undefined;
+    row.settlementReference = input.reference.trim() || undefined;
+    row.settlementOn = todayISO();
+    row.settlementVerifiedBy = undefined;
+    row.settlementVerifiedOn = undefined;
+    recordLocalEvent("cash_advance", row.id, "cash_advance_settlement_submitted", actor.fullName);
+    for (const a of DEMO_ACCOUNTS) if (a.id !== actor.id && canPayOut(a.role)) notifyLocal(a.id, `${actor.fullName} settled a cash advance`, `Spent ${spent}, returned ${returned} ${row.currency}. Verify it.`, `/cash?open=${row.id}`);
+    return null;
+  });
+}
+
+export async function verifySettlement(actor: Actor, id: string, decision: "verify" | "reject", note: string): Promise<string | null> {
+  if (decision === "reject" && !note.trim()) return "Add a note saying what is missing.";
+  if (API_ENABLED) {
+    return apiRun(() => api.post(`/cash-advances/${encodeURIComponent(id)}/settlement/decision`, { decision, note: note.trim() || null }), cashMirror);
+  }
+  return mutate(id, (row) => {
+    if (row.settlementStatus !== "Submitted") return "There is no settlement waiting to be verified.";
+    if (row.employeeId === actor.id) return "You can't verify your own settlement.";
+    if (!canPayOut(actor.role)) return "Only finance or HR can verify a settlement.";
+    row.settlementStatus = decision === "verify" ? "Verified" : "Rejected";
+    row.settlementVerifiedBy = actor.fullName;
+    row.settlementVerifiedOn = todayISO();
+    if (note.trim()) row.settlementNote = `${row.settlementNote ? `${row.settlementNote}\n` : ""}${actor.fullName}: ${note.trim()}`;
+    if (decision === "verify") row.status = "Settled";
+    recordLocalEvent("cash_advance", row.id, `cash_advance_settlement_${decision === "verify" ? "verified" : "rejected"}`, actor.fullName);
+    notifyLocal(
+      row.employeeId,
+      decision === "verify" ? "Cash advance settled" : "Cash advance settlement sent back",
+      decision === "verify" ? "Nothing more will be recovered from your pay." : note.trim(),
+      `/cash?open=${row.id}`,
+    );
+    return null;
+  });
 }
 
 export async function decideCash(actor: Actor, id: string, decision: "approve" | "reject", note: string): Promise<string | null> {
@@ -326,6 +553,8 @@ export async function decideCash(actor: Actor, id: string, decision: "approve" |
     if (typeof result === "string") return result;
     row.steps = result.steps;
     row.status = result.outcome === "approved" ? "Approved" : result.outcome === "rejected" ? "Rejected" : waitingStatus(result.steps);
+    recordLocalEvent("cash_advance", row.id, decision === "approve" ? "cash_advance_approved" : "cash_advance_rejected", actor.fullName);
+    if (result.outcome) notifyLocal(row.employeeId, `Cash advance ${result.outcome}`, note.trim() || (result.outcome === "approved" ? "It will be paid to your bank account soon." : ""), `/cash?open=${row.id}`);
     return null;
   });
 }
@@ -336,6 +565,7 @@ export async function withdrawCash(actor: Actor, id: string): Promise<string | n
     if (row.employeeId !== actor.id) return "Only the person who asked can withdraw it.";
     if (!PENDING.includes(row.status)) return "It can only be withdrawn while it waits for approval.";
     row.status = "Withdrawn";
+    recordLocalEvent("cash_advance", row.id, "cash_advance_withdrawn", actor.fullName);
     return null;
   });
 }
@@ -351,6 +581,8 @@ export async function payCash(actor: Actor, id: string, reference: string): Prom
     row.paidOn = todayISO();
     row.paidBy = actor.fullName;
     row.reference = reference.trim() || `CA-${row.id.slice(-6).toUpperCase()}`;
+    recordLocalEvent("cash_advance", row.id, "cash_advance_paid", actor.fullName);
+    notifyLocal(row.employeeId, "Cash advance paid", `Reference ${row.reference}.`, `/cash?open=${row.id}`);
     return null;
   });
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, Page, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
@@ -51,6 +51,7 @@ import {
 } from "../data/policyLibrary.ts";
 import { holidaysForCountry, holidaysForPerson, type CountryCode } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { useChartTip } from "./dashboards/chartKit.tsx";
 import "./policies.css";
 
 /** Engineering teammates who appear across the portal but can't sign in. */
@@ -104,6 +105,46 @@ function ackPercent(done: number, total: number): string {
   if (done < total && pct === 100) return "99%";
   return `${pct}%`;
 }
+
+/** Brings an element into view when it is off screen (on phones the detail sits below the list). */
+function revealSoon(el: HTMLElement | null, focus?: HTMLElement | null) {
+  requestAnimationFrame(() => {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.top < 0 || r.top > window.innerHeight * 0.6) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    focus?.focus({ preventScroll: true });
+  });
+}
+
+/** Acknowledgement meter: hover, tap or focus shows the numbers; clicking opens who is pending. */
+function AckMeter({ done, total, open, onOpen }: { done: number; total: number; open?: boolean; onOpen?: () => void }) {
+  const tip = useChartTip();
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  return (
+    <div className="chart-wrap pol-meter-wrap" ref={tip.wrapRef}>
+      <div
+        className={`pol-meter-hit${onOpen ? " chart-clickable" : ""}${tip.activeKey ? " is-active" : ""}`}
+        {...tip.bind(
+          "meter",
+          {
+            title: "Acknowledged",
+            value: `${done} of ${total} · ${ackPercent(done, total)}`,
+            note: !total ? "Nobody in scope yet" : total - done ? `${total - done} pending` : "Everyone has acknowledged",
+            action: onOpen ? (open ? "Hide the lists" : "Show who is pending") : undefined,
+          },
+          onOpen,
+        )}
+      >
+        <div className="pol-meter">
+          <span style={{ width: `${pct}%` }} />
+        </div>
+        {ackPercent(done, total)} ({done}/{total})
+      </div>
+      {tip.tooltip}
+    </div>
+  );
+}
+
 export function MyPoliciesPage() {
   const { state, employee } = usePortal();
   const acks = useSyncExternalStore(subscribePolicyAcks, getPolicyAcks, getPolicyAcks);
@@ -197,9 +238,15 @@ function MyPoliciesView({
   const [openId, setOpenId] = useState(
     params.get("policy") ?? managedPending[0]?.id ?? firstDue?.policy.id ?? entries[0]?.policy.id ?? "",
   );
+  const detailRef = useRef<HTMLDivElement>(null);
+  const openPolicy = (id: string) => {
+    setOpenId(id);
+    revealSoon(detailRef.current, detailRef.current?.querySelector<HTMLElement>(".pol-article h2"));
+  };
   useEffect(() => {
     const linked = params.get("policy");
-    if (linked) setOpenId(linked);
+    if (linked) openPolicy(linked);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
   const q = query.trim().toLowerCase();
   const matches = (p: Policy) =>
@@ -222,7 +269,7 @@ function MyPoliciesView({
                   <strong>{p.title}</strong> <span className="muted">v{p.currentVersion}</span>
                   {publishedVersion(p)?.changeSummary && <p className="muted">{publishedVersion(p)?.changeSummary}</p>}
                 </div>
-                <button type="button" className="btn" onClick={() => setOpenId(p.id)}>
+                <button type="button" className="btn" onClick={() => openPolicy(p.id)} aria-label={`Read ${p.title}`}>
                   Read
                 </button>
               </li>
@@ -262,7 +309,7 @@ function MyPoliciesView({
                     }
                     return (
                       <li key={p.id}>
-                        <button type="button" className={p.id === openId ? "pol-row active" : "pol-row"} onClick={() => setOpenId(p.id)}>
+                        <button type="button" className={p.id === openId ? "pol-row active" : "pol-row"} aria-current={p.id === openId ? "true" : undefined} onClick={() => openPolicy(p.id)}>
                           <span className="pol-row-title" title={p.title}>{p.title}</span>
                           <span className="pol-row-meta">
                             v{p.version}
@@ -277,6 +324,7 @@ function MyPoliciesView({
             );
           })}
         </Card>
+        <div className="pol-detail-wrap" ref={detailRef}>
         <Card className="pol-detail">
           {open ? (
             open.kind === "managed" ? (
@@ -288,6 +336,7 @@ function MyPoliciesView({
             <p className="empty">Pick a policy to read it. Only policies that apply to you are listed.</p>
           )}
         </Card>
+        </div>
       </div>
     </>
   );
@@ -320,7 +369,7 @@ function PolicyDetail({ policy, userId, acks, query }: { policy: Policy; userId:
   return (
     <article className="pol-article">
       <header>
-        <h2>{policy.title}</h2>
+        <h2 tabIndex={-1}>{policy.title}</h2>
         <p className="muted">
           {policy.category} · Version {policy.version} · Effective {/^\d{4}-\d{2}-\d{2}$/.test(policy.effective) ? fmtDay(policy.effective) : policy.effective} · Owner: {policy.owner}
           {policy.mandatory ? " · Mandatory" : ""}
@@ -376,7 +425,7 @@ function ManagedDetail({ policy, userId, query }: { policy: ManagedPolicy; userI
   return (
     <article className="pol-article">
       <header>
-        <h2>{policy.title}</h2>
+        <h2 tabIndex={-1}>{policy.title}</h2>
         <p className="muted">
           {policy.category} · Version {v.version}
           {v.effectiveDate ? ` · Effective ${fmtDay(v.effectiveDate)}` : ""}
@@ -542,7 +591,7 @@ function ManageView() {
               </span>,
               p.requiresAck ? "Yes" : "No",
               fmtDay(p.updatedAt),
-              <span key="a" className="reward-actions">
+              <span key={`a-${p.id}`} className="reward-actions">
                 {p.status !== "archived" && (
                   <button type="button" className="quiet-link" onClick={() => setEditing({ input: inputFromManaged(p), existingId: p.id, published: p.currentVersion > 0, label: `Edit ${p.title}` })}>
                     Edit
@@ -559,11 +608,11 @@ function ManageView() {
                   </ActionButton>
                 )}
                 {p.status === "archived" ? (
-                  <ActionButton className="btn-ghost btn-tiny" toastError success={`${p.title} restored.`} busyLabel="Restoring…" doneLabel="Restored" onAction={() => restorePolicy(p.id)}>
+                  <ActionButton key="restore" className="btn-ghost btn-tiny" toastError success={`${p.title} restored.`} busyLabel="Restoring…" doneLabel="Restored" onAction={() => restorePolicy(p.id)}>
                     Restore
                   </ActionButton>
                 ) : (
-                  <ActionButton className="btn-ghost btn-tiny" toastError success={`${p.title} archived.`} busyLabel="Archiving…" doneLabel="Archived" onAction={() => archivePolicy(p.id)}>
+                  <ActionButton key="archive" className="btn-ghost btn-tiny" toastError success={`${p.title} archived.`} busyLabel="Archiving…" doneLabel="Archived" onAction={() => archivePolicy(p.id)}>
                     Archive
                   </ActionButton>
                 )}
@@ -736,6 +785,12 @@ function ManagedAcksView() {
   const [open, setOpen] = useState<string | null>(null);
   const [data, setData] = useState<Record<string, PolicyTracking>>({});
   const [tick, setTick] = useState(0);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const toggle = (id: string) => {
+    const next = open === id ? null : id;
+    setOpen(next);
+    if (next) revealSoon(trackRef.current);
+  };
   const ids = tracked.map((p) => `${p.id}:${p.currentVersion}`).join("|");
   useEffect(() => {
     let live = true;
@@ -757,21 +812,14 @@ function ManagedAcksView() {
         rows={tracked.map((p) => {
           const t = data[p.id];
           return [
-            p.title,
+            <button key="t" type="button" className="pol-title-link" aria-expanded={open === p.id} onClick={() => toggle(p.id)}>
+              {p.title}
+            </button>,
             `v${p.currentVersion}`,
             audienceLabel(p),
-            t ? (
-              <span key="m">
-                <div className="pol-meter" aria-label={`${t.percent}% acknowledged`}>
-                  <span style={{ width: `${t.percent}%` }} />
-                </div>
-                {ackPercent(t.acknowledged, t.targeted)} ({t.acknowledged}/{t.targeted})
-              </span>
-            ) : (
-              "…"
-            ),
-            <span key="a" className="reward-actions">
-              <button type="button" className="quiet-link" onClick={() => setOpen(open === p.id ? null : p.id)}>
+            t ? <AckMeter key="m" done={t.acknowledged} total={t.targeted} open={open === p.id} onOpen={() => toggle(p.id)} /> : "…",
+            <span key={`a-${p.id}`} className="reward-actions">
+              <button type="button" className="quiet-link" aria-expanded={open === p.id} onClick={() => toggle(p.id)}>
                 {open === p.id ? "Hide" : "Details"}
               </button>
               <ActionButton
@@ -782,7 +830,10 @@ function ManagedAcksView() {
                 toastError
                 onAction={async () => {
                   const [error, count] = await sendReminder(p.id);
-                  if (!error) notify(count ? `Reminder sent to ${count} ${count === 1 ? "person" : "people"}.` : "Everyone has acknowledged.");
+                  if (!error) {
+                    notify(count ? `Reminder sent to ${count} ${count === 1 ? "person" : "people"}.` : "Nobody who can sign in is pending.");
+                    setTick((n) => n + 1);
+                  }
                   return error;
                 }}
               >
@@ -793,8 +844,10 @@ function ManagedAcksView() {
         })}
         empty={managed.loaded ? <EmptyState title="No published policies need acknowledgement" description="Publish one under Manage." /> : <EmptyState title="Loading policies…" />}
       />
+      <div ref={trackRef}>
+      {open && !data[open] && <p className="muted pol-track">Loading who has acknowledged…</p>}
       {open && data[open] && (
-        <div className="pol-track">
+        <div className="pol-track" role="region" aria-label={`${tracked.find((p) => p.id === open)?.title ?? "Policy"} acknowledgements`}>
           <div>
             <h3>Pending ({data[open].pending.length})</h3>
             {data[open].pending.length === 0 ? (
@@ -831,6 +884,7 @@ function ManagedAcksView() {
           </button>
         </div>
       )}
+      </div>
     </Card>
   );
 }
@@ -843,6 +897,13 @@ function AcknowledgementsView({ acks }: { acks: ReturnType<typeof getPolicyAcks>
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const people = useMemo(() => population(), [peopleTick]);
   const [mandatoryOnly, setMandatoryOnly] = useState(true);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const toggle = (id: string) => {
+    const next = openId === id ? null : id;
+    setOpenId(next);
+    if (next) revealSoon(trackRef.current);
+  };
   const replaced = new Set(managed.policies.filter((p) => p.currentVersion > 0).map((p) => p.id));
   const catalog = useMemo(() => policyCatalog((code) => holidaysForCountry(state.holidays, code)), [state.holidays]).filter((p) => !replaced.has(p.id));
   // Backend mode: load everyone's acknowledgements for these policies (no-op in browser-only mode).
@@ -880,27 +941,40 @@ function AcknowledgementsView({ acks }: { acks: ReturnType<typeof getPolicyAcks>
           </thead>
           <tbody>
             {rows.map(({ policy, applicable, done, pending }) => {
-              const pct = Math.round((done.length / applicable.length) * 100);
+              const isOpen = openId === policy.id;
               return (
-                <tr key={policy.id}>
-                  <td>{policy.title}</td>
+                <tr
+                  key={policy.id}
+                  className={isOpen ? "pol-track-row active" : "pol-track-row"}
+                  onClick={(e) => {
+                    // The whole row opens the tracking; inner controls handle their own clicks.
+                    if (!(e.target as HTMLElement).closest("button, a, [role=button]")) toggle(policy.id);
+                  }}
+                >
+                  <td>
+                    <button type="button" className="pol-title-link" aria-expanded={isOpen} onClick={() => toggle(policy.id)}>
+                      {policy.title}
+                    </button>
+                  </td>
                   <td>{appliesToLabel(policy)}</td>
                   <td>v{policy.version}</td>
                   <td>
-                    <div className="pol-meter" aria-label={`${pct}% acknowledged`}>
-                      <span style={{ width: `${pct}%` }} />
-                    </div>
-                    {ackPercent(done.length, applicable.length)} ({done.length}/{applicable.length})
+                    <AckMeter done={done.length} total={applicable.length} open={isOpen} onOpen={() => toggle(policy.id)} />
                   </td>
                   <td>
                     {pending.length === 0
                       ? "—"
-                      : pending.map((person) => (
+                      : pending.slice(0, 6).map((person) => (
                           <span key={person.id} className="pol-person">
                             {person.name}
                             {!person.canSignIn && <em> (can't sign in)</em>}
                           </span>
                         ))}
+                    {pending.length > 6 && (
+                      <button type="button" className="quiet-link pol-person" onClick={() => toggle(policy.id)}>
+                        +{pending.length - 6} more
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -909,6 +983,54 @@ function AcknowledgementsView({ acks }: { acks: ReturnType<typeof getPolicyAcks>
         </table>
       </div>
       {rows.length === 0 && <p className="empty">No policies apply to anyone in this group.</p>}
+      <div ref={trackRef}>
+        {(() => {
+          const row = rows.find((r) => r.policy.id === openId);
+          if (!row) return null;
+          return (
+            <div className="pol-track" role="region" aria-label={`${row.policy.title} acknowledgements`}>
+              <div>
+                <h3>
+                  {row.policy.title} · pending ({row.pending.length})
+                </h3>
+                {row.pending.length === 0 ? (
+                  <p className="muted">Everyone has acknowledged.</p>
+                ) : (
+                  <ul>
+                    {row.pending.map((person) => (
+                      <li key={person.id}>
+                        {person.name}
+                        {!person.canSignIn && <span className="muted"> · can't sign in</span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <h3>Acknowledged ({row.done.length})</h3>
+                {row.done.length === 0 ? (
+                  <p className="muted">Nobody yet.</p>
+                ) : (
+                  <ul>
+                    {row.done.map((person) => {
+                      const a = latestAck(acks, person.id, row.policy.id);
+                      return (
+                        <li key={person.id}>
+                          {person.name}
+                          {a?.at && <span className="muted"> · {fmtStamp(a.at)}</span>}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+              <button type="button" className="btn-ghost btn-tiny" onClick={() => setOpenId(null)}>
+                Close
+              </button>
+            </div>
+          );
+        })()}
+      </div>
     </Card>
   );
 }

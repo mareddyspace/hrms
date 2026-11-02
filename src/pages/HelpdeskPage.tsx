@@ -51,7 +51,12 @@ import "./helpdesk.css";
 
 type QueueFilter = "open" | "mine" | "unassigned" | "overdue" | "all";
 const MAX_FILES = 5;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
+// Same as the server (backend/app/services/storage.py ALLOWED_TYPES).
+const FILE_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp"];
+const FILE_ACCEPT = ".pdf,.png,.jpg,.jpeg,.gif,.webp";
+const fileProblem = (f: File) =>
+  !FILE_TYPES.includes(f.type) ? `${f.name}: attach a PDF or an image.` : f.size > MAX_FILE_BYTES ? `${f.name} is larger than 5 MB.` : "";
 
 function stamp(iso?: string): string {
   if (!iso) return "—";
@@ -77,7 +82,7 @@ function hoursLabel(h: number | null): string {
 }
 
 const isClosed = (r: HrRequest) => r.status === "Resolved" || r.status === "Closed";
-const shortId = (id: string) => id.toUpperCase().replace(/^HR-(LOCAL-)?/, "HR-").slice(0, 12);
+const shortId = (id: string) => id.toUpperCase().replace(/^HR-LOCAL-/, "HR-");
 
 function SlaCell({ r }: { r: HrRequest }) {
   if (isClosed(r)) return <span className="muted">Met · {stamp(r.dueAt)}</span>;
@@ -307,8 +312,8 @@ function NewRequestForm({ onCreated }: { onCreated: (id: string) => void }) {
     if (!list) return;
     const next = [...files];
     for (const f of Array.from(list)) {
-      if (f.size > MAX_FILE_BYTES) {
-        setError(`${f.name} is larger than 10 MB.`);
+      if (fileProblem(f)) {
+        setError(fileProblem(f));
         continue;
       }
       if (!next.some((x) => x.name === f.name && x.size === f.size)) next.push(f);
@@ -434,8 +439,8 @@ function NewRequestForm({ onCreated }: { onCreated: (id: string) => void }) {
             <button type="button" className="btn-ghost" onClick={() => fileInput.current?.click()}>
               Add files
             </button>
-            <span className="muted">or drop here · up to {MAX_FILES} files, 10 MB each</span>
-            <input ref={fileInput} type="file" multiple hidden onChange={(e) => {
+            <span className="muted">or drop here · PDF or images, up to {MAX_FILES} files, 5 MB each</span>
+            <input ref={fileInput} type="file" multiple hidden accept={FILE_ACCEPT} onChange={(e) => {
               addFiles(e.target.files);
               e.target.value = "";
             }} />
@@ -707,7 +712,7 @@ function RequestDetail({ r, onClose }: { r: HrRequest; onClose: () => void }) {
         )}
         {API_ENABLED && r.status !== "Closed" && (
           <div className="row-gap">
-            <input key={fileKey} type="file" aria-label="Attach a file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <input key={fileKey} type="file" accept={FILE_ACCEPT} aria-label="Attach a file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
             <ActionButton
               className="btn-ghost"
               disabled={!file}
@@ -716,7 +721,7 @@ function RequestDetail({ r, onClose }: { r: HrRequest; onClose: () => void }) {
               toastError
               onAction={async () => {
                 if (!file) return false;
-                if (file.size > MAX_FILE_BYTES) return "Files can be up to 10 MB.";
+                if (fileProblem(file)) return fileProblem(file);
                 const err = await uploadHrRequestFileApi(r.id, file);
                 if (err) return err;
                 notify(`${file.name} attached.`);

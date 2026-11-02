@@ -184,7 +184,6 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "jobs",
   "locale",
   "integrations",
-  "payroll", // integration status only
   "administration",
   "bulkdata",
   "reportbuilder",
@@ -192,11 +191,9 @@ const ACCESS_ADMIN: NavAccessId[] = [
   "approvalsmenu",
   "workflowsconfig",
   "emailoutbox",
-  "lifecycleactions",
   "accessroles", // Roles & permissions (/admin/roles)
   "aisettings", // AI settings (/admin/ai)
-  "leavepolicies", // Leave policies (/admin/leave-policies)
-  "compliancecalendar", // statutory dates and expiries (/compliance-calendar)
+  // Not here (HR work, not system administration): payroll runs, lifecycle actions, leave policies, compliance calendar.
 ];
 
 function account(

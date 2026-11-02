@@ -18,15 +18,16 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
-from app.models import ApprovalInstance, Employee, ExpenseClaim, ExpenseReceipt
+from app.models import ApprovalDecision, ApprovalInstance, Employee, ExpenseClaim, ExpenseReceipt
 from app.schemas import DecisionIn, ExpenseClaimIn, ExpenseClaimOut, ExpensePayIn, ExpenseRulesOut, ReceiptOut
-from app.schemas.expenses import EXPENSE_CATEGORIES
+from app.schemas.expenses import EXPENSE_CATEGORIES, ExpenseClaimEditIn
 from app.services import approvals as engine
 from app.services import expenses as rules
 from app.services import storage
 from app.services.activity import notify, record_audit
 from app.services.decisions import NOT_FOUND, can_view, me
 from app.services.leave import today_for
+from app.services.request_extras import open_info_ids
 from app.services.workflow_defaults import (
     decide_http,
     ensure_default,
@@ -61,6 +62,9 @@ def _outs(db: DbSession, claims: list[ExpenseClaim]) -> list[ExpenseClaimOut]:
         receipts.setdefault(r.claim_id or "", []).append(r)
     instances = {i.id: i for i in db.scalars(select(ApprovalInstance).where(
         ApprovalInstance.id.in_([c.approval_instance_id for c in claims if c.approval_instance_id])))}
+    asked = open_info_ids(db, "expense", ids)
+    decided = set(db.scalars(select(ApprovalDecision.instance_id).where(
+        ApprovalDecision.instance_id.in_([c.approval_instance_id for c in claims if c.approval_instance_id] or [""]))))
     out = []
     for c in claims:
         item = ExpenseClaimOut.model_validate(c)
@@ -69,6 +73,8 @@ def _outs(db: DbSession, claims: list[ExpenseClaim]) -> list[ExpenseClaimOut]:
         inst = instances.get(c.approval_instance_id or "")
         if inst is not None:
             item.approval_status, item.current_step = inst.status, inst.current_step
+        item.info_requested = c.id in asked
+        item.can_edit = c.status == "submitted" and (c.approval_instance_id not in decided or item.info_requested)
         out.append(item)
     return out
 
@@ -148,7 +154,7 @@ def create_claim(body: ExpenseClaimIn, request: Request, db: DbSession, user: Cu
     claim = ExpenseClaim(
         id=f"exp-{uuid.uuid4().hex[:12]}", employee_id=emp.id, category=body.category, amount=round(body.amount, 2),
         currency=currency, expense_date=body.expense_date, description=body.description.strip(), trip_id=body.trip_id,
-        status="submitted",
+        status="submitted", details=rules.clean_details(body.details),
     )
     db.add(claim)
     db.flush()
@@ -171,6 +177,53 @@ def create_claim(body: ExpenseClaimIn, request: Request, db: DbSession, user: Cu
 @router.get("/{claim_id}", response_model=ExpenseClaimOut)
 def get_claim(claim_id: str, db: DbSession, user: CurrentUserDep) -> ExpenseClaimOut:
     claim, _ = _visible_claim(db, user, claim_id)
+    return _outs(db, [claim])[0]
+
+
+@router.patch("/{claim_id}", response_model=ExpenseClaimOut)
+def edit_claim(claim_id: str, body: ExpenseClaimEditIn, request: Request, db: DbSession, user: CurrentUserDep) -> ExpenseClaimOut:
+    """Your own claim, while it is submitted and nobody has decided a step yet (or after more information was asked for).
+    The same checks as a new claim run again."""
+    claim = db.get(ExpenseClaim, claim_id)
+    if claim is None or claim.employee_id != user.employee_id:
+        raise NOT_FOUND
+    current = _outs(db, [claim])[0]
+    if not current.can_edit:
+        raise HTTPException(409, "This claim can't be changed any more: an approver has already acted on it.")
+    emp = me(user)
+    before = _snapshot(claim)
+    category = body.category or claim.category
+    amount = round(body.amount, 2) if body.amount is not None else claim.amount
+    on = body.expense_date or claim.expense_date
+    trip_id = None if body.clear_trip else (body.trip_id if body.trip_id is not None else claim.trip_id)
+    if amount > claim.amount:
+        # The approval chain was worked out for the original amount; a larger amount may need another approver.
+        raise HTTPException(422, "To claim more than the original amount, withdraw this claim and submit a new one.")
+    receipts = list(db.scalars(select(ExpenseReceipt).where(ExpenseReceipt.claim_id == claim.id)))
+    try:
+        rules.validate_claim(db, employee_id=emp.id, country_code=emp.country_code, currency=claim.currency,
+                             category=category, amount=amount, on=on, today=today_for(emp), trip_id=trip_id,
+                             receipts=receipts, exclude_id=claim.id)
+    except rules.Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except rules.RequestError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    claim.category, claim.amount, claim.expense_date, claim.trip_id = category, amount, on, trip_id
+    if body.description is not None:
+        claim.description = body.description.strip()
+    if body.details is not None:
+        claim.details = rules.clean_details(body.details)
+    instance = _instance(db, claim)
+    if instance is not None:
+        instance.amount = amount
+    record_audit(db, actor_id=user.id, action="expense_edited", entity="expense_claim", entity_id=claim.id,
+                 subject_id=emp.id, before=before, after=_snapshot(claim), ip=client_ip(request))
+    if instance is not None:
+        for ids in engine.open_groups(db, instance).values():
+            for approver in ids:
+                notify(db, recipient_id=approver, title=f"{emp.full_name} updated an expense claim",
+                       body=f"{claim.category} · {claim.currency} {claim.amount:,.2f}", href=f"/expenses?open={claim.id}")
+    db.commit()
     return _outs(db, [claim])[0]
 
 
@@ -198,6 +251,8 @@ def withdraw_claim(claim_id: str, request: Request, db: DbSession, user: Current
 def decide_claim(claim_id: str, body: DecisionIn, request: Request, db: DbSession, user: CurrentUserDep) -> ExpenseClaimOut:
     """Same as POST /approvals/{approval_instance_id}/decision."""
     claim, _ = _visible_claim(db, user, claim_id)
+    if body.decision == "reject" and not (body.note or "").strip():
+        raise HTTPException(422, "Add a comment saying why it is declined.")
     decide_http(db, _instance(db, claim), user.employee_id, body.decision, body.note, user.id, client_ip(request))
     db.commit()
     return _outs(db, [claim])[0]

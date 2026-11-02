@@ -429,6 +429,14 @@ export interface Expense extends DecisionInfo {
   paymentRef?: string;
   paidById?: string;
   paidByName?: string;
+  /** Category-specific fields (merchant, nights, provider…). */
+  details?: Record<string, string>;
+  /** Backend: an approver asked for more information and it isn't answered yet. */
+  infoRequested?: boolean;
+  /** Backend: the claimant may still change it (nobody has decided a step yet). */
+  canEdit?: boolean;
+  /** Backend: every receipt on the claim (the first is also `receipt`). */
+  receipts?: ExpenseReceipt[];
 }
 
 export interface ExpenseApprovalStep {

@@ -470,8 +470,11 @@ export async function fetchPayHistory(employeeId?: string): Promise<{ data: Comp
   }
 }
 
-export async function fetchStatement(year?: number): Promise<CompStatementOut | null> {
-  return orElse(api.get<CompStatementOut>("/compensation/statement", year ? { year } : undefined), null);
+export async function fetchStatement(year?: number, employeeId?: string): Promise<CompStatementOut | null> {
+  const query: Record<string, string | number> = {};
+  if (year) query.year = year;
+  if (employeeId) query.employee_id = employeeId;
+  return orElse(api.get<CompStatementOut>("/compensation/statement", Object.keys(query).length ? query : undefined), null);
 }
 
 export function apiCreateCycle(input: { name: string; effectiveDate: string; budgetPct: number; opensOn: string; closesOn: string; countries: string[] }): Promise<Outcome> {

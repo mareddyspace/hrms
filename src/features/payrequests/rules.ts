@@ -5,12 +5,14 @@
 import { claimLimitsFor, payRulesFor } from "../../countryPay.ts";
 import { DEMO_ACCOUNTS } from "../../demoAccounts.ts";
 import { payScaleFor } from "../../data/payslipGenerator.ts";
+import { payslipAnnualBase } from "../../data/annualPay.ts";
 import { addDaysISO, todayISO, type CountryCode, type UserRole } from "../../model.ts";
 import { addMonthsISO, isAboveInLine, isHrRole, lineManagerId, personName } from "../lifecycle/lifecycleShared.ts";
 
 export const CASH_CATEGORIES = ["Medical", "Family event", "Education", "Relocation", "Home repair", "Travel", "Other"] as const;
 export const MAX_INSTALMENTS = 6;
 export const NEEDED_BY_MAX_DAYS = 90;
+export const SETTLEMENT_MAX_DAYS = 90;
 
 export const ENCASHABLE_CODES = ["pto"];
 export const ENCASH_MAX_DAYS_A_YEAR = 10;
@@ -22,21 +24,41 @@ export const IT_ROLES: string[] = ["admin", "super_admin", "it_admin"];
 export const isItRole = (role: string) => IT_ROLES.includes(role);
 export const canPayOut = (role: UserRole | string) => isHrRole(role as UserRole) || role === "finance" || role === "admin" || role === "super_admin";
 
-/** One month's basic pay (the first pay line × seniority), as on the payslips. */
-export function basicMonthly(countryCode: CountryCode | string | undefined, role: UserRole | string): number {
+/**
+ * Pay scale as on the payslips (src/data/payslipGenerator.ts): the person's annual base pay from their current
+ * compensation record ÷ the country's standard annual package, else the role's standard scale.
+ */
+function payScale(countryCode: CountryCode | string | undefined, role: UserRole | string, employeeId?: string): { scale: number; source: "compensation" | "standard"; annual: number } {
   const rules = payRulesFor(countryCode as CountryCode);
-  return Math.round((rules.earnings[0]?.amount ?? 0) * payScaleFor(role));
+  const standardAnnual = rules.earnings.reduce((s, l) => s + l.amount, 0) * 12;
+  const annual = employeeId ? payslipAnnualBase(employeeId, countryCode as CountryCode) : undefined;
+  if (annual && annual > 0 && standardAnnual > 0) return { scale: annual / standardAnnual, source: "compensation", annual };
+  return { scale: payScaleFor(role), source: "standard", annual: Math.round(standardAnnual * payScaleFor(role)) };
 }
 
-export function cashLimitFor(countryCode: CountryCode | string | undefined, role: UserRole | string) {
-  const basic = basicMonthly(countryCode, role);
+/** One month's basic pay (the first pay line × the person's pay scale), as on the payslips. */
+export function basicMonthly(countryCode: CountryCode | string | undefined, role: UserRole | string, employeeId?: string): number {
+  const rules = payRulesFor(countryCode as CountryCode);
+  return Math.round((rules.earnings[0]?.amount ?? 0) * payScale(countryCode, role, employeeId).scale);
+}
+
+/** Where the pay figures come from: "compensation" (their pay record) or "standard" (the role's package). */
+export function paySourceFor(countryCode: CountryCode | string | undefined, role: UserRole | string, employeeId?: string) {
+  const p = payScale(countryCode, role, employeeId);
+  return { source: p.source, annual: p.annual };
+}
+
+export function cashLimitFor(countryCode: CountryCode | string | undefined, role: UserRole | string, employeeId?: string) {
+  const basic = basicMonthly(countryCode, role, employeeId);
   const cap = claimLimitsFor(countryCode as CountryCode).maxCashAdvance;
   return { limit: Math.min(basic, cap), basic, cap, currency: payRulesFor(countryCode as CountryCode).currency };
 }
 
-export function perDayPay(countryCode: CountryCode | string | undefined, role: UserRole | string): number {
-  return Math.round((basicMonthly(countryCode, role) / WORKING_DAYS_A_MONTH) * 100) / 100;
+export function perDayPay(countryCode: CountryCode | string | undefined, role: UserRole | string, employeeId?: string): number {
+  return Math.round((basicMonthly(countryCode, role, employeeId) / WORKING_DAYS_A_MONTH) * 100) / 100;
 }
+
+export const ENCASH_WORKING_DAYS = WORKING_DAYS_A_MONTH;
 
 export function monthKey(iso: string): string {
   return iso.slice(0, 7);

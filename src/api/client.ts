@@ -316,6 +316,8 @@ export interface MeOut {
 export interface PersonBasicOut {
   view: "basic";
   id: string;
+  /** Employee ID (not sensitive; older servers may leave it out of the basic card). */
+  employee_code?: string;
   full_name: string;
   preferred_name: string | null;
   job_title: string;

@@ -402,6 +402,46 @@ function timesheetAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer {
   };
 }
 
+/** "What skills do I need for my next role?", "Which courses close my skill gaps?" (not "Summarise Babu's skills"). */
+export function isCareerQuestion(question: string): boolean {
+  const q = normalizeQuestion(question);
+  return (
+    hasWord(q, ["career", "next role", "promotion", "promoted", "skill gap", "skill gaps", "gaps", "my skills", "skills", "grow", "target role", "career path", "career coach"]) &&
+    !summaryTarget(question)
+  );
+}
+
+function careerAnswer(ctx: CopilotContext): RawCopilotAnswer {
+  const links = [
+    { label: "Skills & career", to: "/skills" },
+    { label: "Learning", to: "/programs" },
+  ];
+  const c = ctx.career;
+  if (!c) return { kind: "text", summary: "Your skills, target roles and skill gaps are in Skills & career.", links };
+  const open = c.gaps.filter((g) => g.levels > 0);
+  const head = c.nextRole
+    ? open.length
+      ? `For ${c.nextRole}, build ${open.map((g) => `${g.name} (${g.have} → ${g.need})`).join(", ")}.`
+      : `You already meet every skill ${c.nextRole} needs. Talk to your manager about the move.`
+    : `There is no next role set for ${c.currentRole}. Pick target roles in Skills & career.`;
+  const courseText = c.courses.length
+    ? ` Courses that help: ${c.courses.map((x) => `"${x.title}"${x.status ? ` (${x.status.toLowerCase()})` : ""}`).join(", ")}.`
+    : open.length
+      ? " No open course covers these yet, so practise them on the job and ask your manager for stretch work."
+      : "";
+  return {
+    kind: "text",
+    summary: `${head}${courseText}`,
+    table: open.length
+      ? { headers: ["Skill", "You have", "Role needs", "Courses"], rows: open.map((g) => [g.name, g.have, g.need, c.courses.filter((x) => x.builds.includes(g.name)).map((x) => x.title).join(", ") || "—"]) }
+      : c.skills.length
+        ? { headers: ["Skill", "Level", "Target"], rows: c.skills.map((s) => [s.name, s.level, s.target]) }
+        : undefined,
+    metrics: c.skills.length ? [{ label: "Skills on profile", value: String(c.skills.length) }, { label: "Gaps to close", value: String(open.length) }] : undefined,
+    links,
+  };
+}
+
 function goalsAnswer(ctx: CopilotContext): RawCopilotAnswer {
   const links = [{ label: "Performance", to: "/evaluations" }];
   const g = ctx.goals;
@@ -902,6 +942,9 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
   if (hasWord(q, ["attendance", "overtime", "check in", "check out", "present", "punch", "clock in", "clock out"])) {
     return { kind: "text", summary: ctx.managerName ? "Check in and out from Home or Attendance. Mistakes can be fixed with a correction request to your manager." : "Check in and out from Home or Attendance. Fix mistakes with a correction request.", links: [{ label: "Attendance", to: "/attendance" }] };
   }
+
+  // Career coach: skills, next role, gaps and the courses that close them (own data only).
+  if (isCareerQuestion(question)) return careerAnswer(ctx);
 
   // Performance.
   if (hasWord(q, ["goal", "goals", "okr", "okrs", "kpi", "kpis", "performance", "appraisal", "review", "reviews", "rating", "evaluation"])) {

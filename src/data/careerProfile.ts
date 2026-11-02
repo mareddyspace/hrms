@@ -4,6 +4,7 @@ import {
   SKILL_LIBRARY,
   TARGET_ROLES,
   starterSkillsFor,
+  namedStarterSkills,
   type EmployeeSkill,
   type SkillProfile,
   type SkillTrack,
@@ -78,7 +79,7 @@ export function skillsFor(
 ): EmployeeSkill[] {
   const saved = skillProfiles.find((p) => p.employeeId === person.id);
   if (saved) return saved.skills;
-  return starterSkills(person);
+  return namedStarterSkills(person.id) ?? starterSkills(person);
 }
 
 export interface SkillGap {

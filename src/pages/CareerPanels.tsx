@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { SKILL_LIBRARY, TARGET_ROLES, type Course, type EmployeeSkill } from "../data/talentData.ts";
 import { API_ENABLED } from "../api/client.ts";
+import { ConfirmDialog } from "../components/ConfirmDialog.tsx";
 import {
   apiAddSkill,
   apiRetireSkill,
@@ -532,6 +533,7 @@ export function MySkillsPanel({ me }: { me: TalentActor }) {
   const career = useCareer();
   const skills = skillProfileFor(talent, me.id);
   const [editing, setEditing] = useState<EmployeeSkill | "new" | null>(null);
+  const [removing, setRemoving] = useState<EmployeeSkill | null>(null);
   const [form, setForm] = useState<SkillForm>(EMPTY_SKILL_FORM);
   const [error, setError] = useState<string | null>(null);
   const saveAct = useAction();
@@ -615,18 +617,29 @@ export function MySkillsPanel({ me }: { me: TalentActor }) {
             <button type="button" className="quiet-link" onClick={() => openEdit(s)}>
               Edit
             </button>
-            <ActionButton
-              className="btn-ghost btn-tiny"
-              success={`${s.skillName} removed from your profile.`}
-              toastError
-              onAction={() => talentAsync(() => removeEmployeeSkill(me, me.id, s.skillId))}
-            >
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => setRemoving(s)}>
               Remove
-            </ActionButton>
+            </button>
           </span>,
         ])}
         empty={<EmptyState title="No skills yet" description="Add the skills you use at work." />}
       />
+      <ConfirmDialog
+        open={removing !== null}
+        title={`Remove ${removing?.skillName ?? "skill"}?`}
+        confirmLabel="Remove"
+        onClose={() => setRemoving(null)}
+        onConfirm={async () => {
+          if (!removing) return null;
+          const name = removing.skillName;
+          const result = await talentAsync(() => removeEmployeeSkill(me, me.id, removing.skillId));
+          if (result) notify(result, "err");
+          else notify(`${name} removed from your profile.`, "ok");
+          return result;
+        }}
+      >
+        <p>It leaves your skills profile, role matches and skill gaps. You can add it again later.</p>
+      </ConfirmDialog>
       <Dialog open={editing !== null} title={isNew ? "Add skill" : `Edit ${form.name}`} onClose={() => setEditing(null)}>
         <form className="stack" onSubmit={saveAct.submit(save, { success: isNew ? `${form.name.trim()} added to your profile.` : `${form.name} updated.` })}>
           <Banner message={error ? { tone: "err", text: error } : null} />

@@ -111,7 +111,7 @@ import { DAY_TARGET, HALF_DAY_TARGET, dayFromApi, dayRecordFor, getLocalDays, is
 import { halfDayLeave as halfDayLeaveOn, blockingLeave as fullDayLeaveOn, parseISODate } from "./model.ts";
 import { pendingMirror } from "./api/syncTimeApprovals.ts";
 import { bindSharedTasks, mergeSharedTasks, pushTaskChanges } from "./api/syncTasks.ts";
-import { apiAddExpense, apiDecideExpense, apiPayExpense, apiWithdrawExpense, claimsMirror } from "./api/syncTimeExpenses.ts";
+import { apiAddExpense, apiDecideExpense, apiEditExpense, apiPayExpense, apiWithdrawExpense, claimsMirror } from "./api/syncTimeExpenses.ts";
 
 /** Portal lists that the API owns in backend mode (the server writes their audit entries). */
 const API_AUDITED_LISTS: ReadonlySet<string> = API_ENABLED
@@ -432,6 +432,8 @@ interface PortalApi {
   /** Whether the signed-in user may verify tax-saving proofs (payroll/HR). */
   canVerifyProofs: boolean;
   addExpense: (input: Omit<Expense, "id" | "employeeId" | "status">) => Promise<string | null>;
+  /** The claimant changes their own claim while no step has been decided (or more information was asked for). */
+  editExpense: (id: string, patch: Partial<Pick<Expense, "date" | "category" | "amount" | "description" | "details">> & { tripId?: string | null }) => Promise<string | null>;
   setExpenseStatus: (id: string, status: Expense["status"], note?: string) => Promise<string | null>;
   /** Whether the signed-in user decides the open approval step of this claim. */
   canDecideExpense: (expense: Expense) => boolean;
@@ -1848,6 +1850,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             description: input.description,
             tripId: input.tripId,
             receiptId: input.receipt?.id,
+            receiptIds: input.receipts?.map((r) => r.id),
+            details: input.details,
           });
         }
         if (input.amount > receiptThresholdFor(active.countryCode) && !input.receipt && !/Receipt:/i.test(input.description)) {
@@ -1903,6 +1907,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             });
           }
         }
+        return null;
+      },
+      editExpense: async (expenseId, patch) => {
+        if (API_ENABLED) return apiEditExpense(expenseId, patch);
+        const expense = state.expenses.find((item) => item.id === expenseId);
+        if (!expense || expense.employeeId !== active.id) return "Expense not found.";
+        if (expense.status !== "submitted" || (expense.stepDecisions ?? []).length > 0) return "This claim can't be changed any more: an approver has already acted on it.";
+        const next = { ...expense, ...patch, tripId: patch.tripId === null ? undefined : (patch.tripId ?? expense.tripId) };
+        if (next.amount > expense.amount) return "To claim more than the original amount, withdraw this claim and submit a new one.";
+        const error = validateExpense(next, claimLimitsFor(active.countryCode).maxClaim, payRulesFor(active.countryCode).currency);
+        if (error) return error;
+        setState((prev) => ({ ...prev, expenses: patchById(prev.expenses, expenseId, { ...patch, tripId: next.tripId, description: next.description.trim() }) }));
         return null;
       },
       setExpenseStatus: async (expenseId, status, note) => {

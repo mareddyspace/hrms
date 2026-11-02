@@ -14,11 +14,13 @@ from sqlalchemy import select
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
 from app.models import ApprovalInstance, Employee, ExpenseClaim, TravelRequest
 from app.schemas import DecisionIn, TravelRequestIn, TravelRequestOut
+from app.schemas.expenses import TravelBookingIn
 from app.services import approvals as engine
 from app.services import expenses as rules
 from app.services.activity import notify, record_audit
 from app.services.decisions import NOT_FOUND, can_view, me
 from app.services.leave import today_for
+from app.services.request_extras import open_info_ids
 from app.services.workflow_defaults import decide_http, ensure_default, is_approver, notify_withdrawn, waiting_entity_ids
 
 router = APIRouter(prefix="/travel", tags=["travel"])
@@ -40,6 +42,7 @@ def _outs(db: DbSession, trips: list[TravelRequest]) -> list[TravelRequestOut]:
     names = dict(db.execute(select(Employee.id, Employee.full_name).where(Employee.id.in_({t.employee_id for t in trips}))).all())
     instances = {i.id: i for i in db.scalars(select(ApprovalInstance).where(
         ApprovalInstance.id.in_([t.approval_instance_id for t in trips if t.approval_instance_id])))}
+    asked = open_info_ids(db, "travel", [t.id for t in trips])
     out = []
     for t in trips:
         item = TravelRequestOut.model_validate(t)
@@ -47,6 +50,7 @@ def _outs(db: DbSession, trips: list[TravelRequest]) -> list[TravelRequestOut]:
         inst = instances.get(t.approval_instance_id or "")
         if inst is not None:
             item.approval_status, item.current_step = inst.status, inst.current_step
+        item.info_requested = t.id in asked
         out.append(item)
     return out
 
@@ -102,7 +106,7 @@ def create_trip(body: TravelRequestIn, request: Request, db: DbSession, user: Cu
         id=f"trv-{uuid.uuid4().hex[:12]}", employee_id=emp.id, purpose=body.purpose.strip(),
         from_location=body.from_location.strip(), to_location=body.to_location.strip(), start_date=body.start_date,
         end_date=body.end_date, mode=body.mode, estimated_cost=round(body.estimated_cost, 2), currency=currency,
-        advance_amount=round(body.advance_amount, 2), status="submitted",
+        advance_amount=round(body.advance_amount, 2), status="submitted", details=rules.clean_details(body.details),
     )
     db.add(trip)
     db.flush()
@@ -158,6 +162,30 @@ def withdraw_trip(trip_id: str, request: Request, db: DbSession, user: CurrentUs
 def decide_trip(trip_id: str, body: DecisionIn, request: Request, db: DbSession, user: CurrentUserDep) -> TravelRequestOut:
     """Same as POST /approvals/{approval_instance_id}/decision."""
     trip, _ = _visible(db, user, trip_id)
+    if body.decision == "reject" and not (body.note or "").strip():
+        raise HTTPException(422, "Add a comment saying why it is declined.")
     decide_http(db, _instance(db, trip), user.employee_id, body.decision, body.note, user.id, client_ip(request))
+    db.commit()
+    return _outs(db, [trip])[0]
+
+
+TRAVEL_ADMIN_ROLES = frozenset({"hr_admin", "hr", "admin", "super_admin", "travel_admin"})
+
+
+@router.put("/{trip_id}/booking", response_model=TravelRequestOut)
+def save_booking(trip_id: str, body: TravelBookingIn, request: Request, db: DbSession, user: CurrentUserDep) -> TravelRequestOut:
+    """Tickets, PNR, hotel and booking reference for an approved trip: the traveller, HR or a travel admin."""
+    trip, emp = _visible(db, user, trip_id)
+    if not (trip.employee_id == user.employee_id or user.account.role in TRAVEL_ADMIN_ROLES):
+        raise HTTPException(403, "Only the traveller, HR or a travel admin can record the booking.")
+    if trip.status != "approved":
+        raise HTTPException(409, "Bookings are recorded once the trip is approved.")
+    before = {"booking": trip.booking}
+    trip.booking = rules.clean_details(body.booking)
+    record_audit(db, actor_id=user.id, action="travel_booking_saved", entity="travel_request", entity_id=trip.id,
+                 subject_id=emp.id, before=before, after={"booking": trip.booking}, ip=client_ip(request))
+    if trip.employee_id != user.employee_id:
+        notify(db, recipient_id=trip.employee_id, title="Your trip is booked",
+               body=f"{trip.from_location} to {trip.to_location}: open it for the booking details.", href=f"/travel?open={trip.id}")
     db.commit()
     return _outs(db, [trip])[0]

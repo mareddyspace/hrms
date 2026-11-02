@@ -20,6 +20,7 @@ from app.services import approvals as engine
 from app.services import overtime as rules
 from app.services.decisions import NOT_FOUND, me
 from app.services.leave import today_for
+from app.services.request_extras import open_info_ids
 from app.services.self_service import RequestError
 from app.services.workflow_defaults import decide_http
 
@@ -56,6 +57,7 @@ class OvertimeOut(BaseModel):
     steps: list[StepOut]
     can_decide: bool
     can_withdraw: bool
+    info_requested: bool = False
 
 
 class OvertimePolicyOut(BaseModel):
@@ -73,6 +75,18 @@ class OvertimePolicyOut(BaseModel):
 class AttendanceDayOut(BaseModel):
     work_date: date
     worked_minutes: int | None
+    # Extras for the request form (all read-only):
+    shift_name: str | None = None
+    shift_start: str | None = None
+    shift_end: str | None = None
+    shift_minutes: int | None = None
+    beyond_shift_minutes: int | None = None
+    day_type: str = "working"  # working | weekend | holiday | leave
+    holiday_name: str | None = None
+    existing_id: str | None = None
+    existing_status: str | None = None
+    eligible: bool = True
+    warnings: list[str] = []
 
 
 def _all_ok(user: CurrentUser) -> bool:
@@ -84,7 +98,8 @@ def _err(exc: RequestError) -> HTTPException:
     return HTTPException(409 if "already" in text else 422, text)
 
 
-def _out(db: DbSession, user: CurrentUser, row: OvertimeRequest, emp: Employee) -> OvertimeOut:
+def _out(db: DbSession, user: CurrentUser, row: OvertimeRequest, emp: Employee,
+         open_info: set[str] | None = None) -> OvertimeOut:
     instance = rules.instance_of(db, row)
     return OvertimeOut(
         id=row.id, employee_id=emp.id, employee_name=emp.full_name, work_date=row.work_date, hours=row.hours,
@@ -93,6 +108,7 @@ def _out(db: DbSession, user: CurrentUser, row: OvertimeRequest, emp: Employee) 
         amount=row.amount, currency=row.currency, comp_off_days=row.comp_off_days, payout_month=row.payout_month,
         paid=bool(row.paid_run_id), steps=_steps(db, instance), can_decide=engine.can_act(db, instance, user.employee_id),
         can_withdraw=row.status in rules.PENDING and emp.id == user.employee_id,
+        info_requested=row.id in (open_info if open_info is not None else open_info_ids(db, "overtime", [row.id])),
     )
 
 
@@ -116,20 +132,29 @@ def policy(db: DbSession, user: CurrentUserDep) -> OvertimePolicyOut:
 
 @router.get("/attendance", response_model=AttendanceDayOut)
 def attendance_day(work_date: date, db: DbSession, user: CurrentUserDep) -> AttendanceDayOut:
-    """My worked minutes on a date (null = no attendance that day), so the form can warn before sending."""
+    """The date checked before sending: attendance, shift, day type and overtime already asked for (null worked
+    minutes = no attendance that day). eligible is False when the server would refuse the date."""
     emp = me(user)
-    return AttendanceDayOut(work_date=work_date, worked_minutes=rules.attendance_minutes(db, emp.id, work_date))
+    return AttendanceDayOut(**rules.day_check(db, emp, work_date))
 
 
 @router.get("", response_model=list[OvertimeOut])
 def list_overtime(db: DbSession, user: CurrentUserDep, scope: Scope = "mine",
                   limit: Annotated[int, Query(ge=1, le=500)] = 200) -> list[OvertimeOut]:
     out = []
-    for row in _list(db, user, OvertimeRequest, rules.OVERTIME, scope, _all_ok(user), limit):
+    rows = _list(db, user, OvertimeRequest, rules.OVERTIME, scope, _all_ok(user), limit)
+    asked = open_info_ids(db, "overtime", [r.id for r in rows])
+    for row in rows:
         emp = db.get(Employee, row.employee_id)
         if emp is not None and _can_view(db, user, row, emp, _all_ok(user)):
-            out.append(_out(db, user, row, emp))
+            out.append(_out(db, user, row, emp, asked))
     return out
+
+
+@router.get("/{row_id}", response_model=OvertimeOut)
+def get_overtime(row_id: str, db: DbSession, user: CurrentUserDep) -> OvertimeOut:
+    row, emp = _get(db, user, row_id)
+    return _out(db, user, row, emp)
 
 
 @router.post("", response_model=OvertimeOut, status_code=status.HTTP_201_CREATED)
@@ -147,6 +172,8 @@ def create_overtime(body: OvertimeIn, request: Request, db: DbSession, user: Cur
 @router.post("/{row_id}/decision", response_model=OvertimeOut)
 def decide_overtime(row_id: str, body: DecisionIn, request: Request, db: DbSession, user: CurrentUserDep) -> OvertimeOut:
     row, emp = _get(db, user, row_id)
+    if body.decision == "reject" and not (body.note or "").strip():
+        raise HTTPException(422, "Add a comment saying why it is declined.")
     decide_http(db, rules.instance_of(db, row), user.employee_id, body.decision, body.note, user.id, client_ip(request))
     db.commit()
     return _out(db, user, row, emp)

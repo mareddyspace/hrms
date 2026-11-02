@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ActionButton, Banner, Card, Dialog, EmptyState, Field, FilterBar, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../components/ui.tsx";
 import { formatHoursAmount, formatShortDate, todayISO } from "../model.ts";
@@ -18,6 +18,7 @@ import {
   healthOf,
   nextMilestone,
   openDocument,
+  refreshProjects,
   saveMember,
   saveMilestone,
   saveProject,
@@ -63,6 +64,10 @@ function usedPct(p: ProjectInfo) {
 export function ProjectsPage() {
   const ctx = useProjectContext();
   const projects = useProjects(ctx);
+  // Shared data: fetch the latest whenever the page opens (others may have changed milestones or tasks).
+  useEffect(() => {
+    void refreshProjects();
+  }, []);
   const [params, setParams] = useSearchParams();
   const mode = params.get("list") === "previous" ? "previous" : "current";
   const openId = params.get("id");

@@ -69,6 +69,7 @@ class PersonBasicOut(ORM):
 
     view: Literal["basic"] = "basic"
     id: str
+    employee_code: str  # the employee ID is not sensitive: shown in the directory and on every profile
     full_name: str
     preferred_name: str | None
     job_title: str

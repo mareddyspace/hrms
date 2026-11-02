@@ -83,6 +83,68 @@ def attendance_minutes(db: Session, employee_id: str, day: date) -> int | None:
     return int(row.worked_minutes or 0)
 
 
+def _span_minutes(start: str, end: str) -> int:
+    sh, sm = (int(x) for x in start.split(":"))
+    eh, em = (int(x) for x in end.split(":"))
+    return (eh * 60 + em - sh * 60 - sm) % (24 * 60) or 24 * 60
+
+
+def day_check(db: Session, emp: Employee, day: date) -> dict[str, Any]:
+    """What the request form shows when a date is picked: attendance, the shift, the day type, overtime already asked
+    for that date, and warnings. eligible mirrors the date checks create() makes."""
+    from app.models import Holiday, LeaveRequest
+    from app.services.attendance import shift_for
+
+    today = today_for(emp)
+    worked = attendance_minutes(db, emp.id, day)
+    start, end = shift_for(emp)
+    shift_minutes = _span_minutes(start, end)
+    shift_name = None
+    try:
+        from app.models import RosterShift, ShiftType
+
+        roster = db.scalar(select(RosterShift).where(RosterShift.employee_id == emp.id, RosterShift.work_date == day))
+        st = db.get(ShiftType, roster.shift_id) if roster is not None else None
+        if st is not None:
+            shift_name, start, end = st.name, st.start, st.end
+            shift_minutes = _span_minutes(start, end) - int(st.break_minutes or 0)
+    except Exception:  # noqa: BLE001 (roster tables missing on an old database)
+        pass
+    holiday = db.scalar(select(Holiday.name).where(Holiday.country_code == emp.country_code, Holiday.date == day,
+                                                   Holiday.active.is_(True)).limit(1))
+    on_leave = db.scalar(select(LeaveRequest.id).where(LeaveRequest.employee_id == emp.id, LeaveRequest.status == "approved",
+                                                       LeaveRequest.from_date <= day, LeaveRequest.to_date >= day).limit(1))
+    day_type = "holiday" if holiday else "leave" if on_leave else "weekend" if day.weekday() >= 5 else "working"
+    existing = db.scalar(select(OvertimeRequest).where(OvertimeRequest.employee_id == emp.id, OvertimeRequest.work_date == day,
+                                                       OvertimeRequest.status.in_(("Submitted", "Approved"))).limit(1))
+    warnings: list[str] = []
+    eligible = True
+    if day >= today:
+        eligible = False
+        warnings.append("Choose a past date: overtime is claimed after it is worked.")
+    elif day < today - timedelta(days=MAX_DAYS_BACK):
+        eligible = False
+        warnings.append(f"Overtime can be claimed up to {MAX_DAYS_BACK} days back.")
+    if existing is not None:
+        eligible = False
+        warnings.append(f"You already asked for overtime on this date ({existing.id.upper()}, {existing.status.lower()}).")
+    if worked is None:
+        warnings.append("No attendance recorded on this date. Your manager will see this.")
+    if day_type == "leave":
+        warnings.append("You were on approved leave that day.")
+    beyond = None
+    if worked is not None and day_type == "working":
+        beyond = max(0, worked - shift_minutes)
+        if beyond == 0:
+            warnings.append("Attendance shows no time beyond your shift that day.")
+    elif worked is not None:
+        beyond = worked
+    return {"work_date": day, "worked_minutes": worked, "shift_name": shift_name or "Your shift", "shift_start": start,
+            "shift_end": end, "shift_minutes": shift_minutes, "beyond_shift_minutes": beyond, "day_type": day_type,
+            "holiday_name": holiday, "existing_id": existing.id if existing else None,
+            "existing_status": existing.status if existing else None, "eligible": eligible, "warnings": warnings}
+
+
 def _id() -> str:
     return f"ot-{uuid.uuid4().hex[:12]}"
 

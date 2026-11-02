@@ -8,7 +8,8 @@ import { pushPersonTaskAlert } from "./collabLocal.ts";
 import { resolveFlow, workflowVersion, type FlowDecision, type FlowStep } from "./approvalWorkflows.ts";
 import { decideFlowStep, isWaitingOn, waitingApproverIds } from "./expenseFlow.ts";
 import { API_ENABLED } from "../api/client.ts";
-import { apiDecideTravel, apiSubmitTravel, apiWithdrawTravel, claimsMirror } from "../api/syncTimeExpenses.ts";
+import { apiDecideTravel, apiSaveBooking, apiSubmitTravel, apiWithdrawTravel, claimsMirror } from "../api/syncTimeExpenses.ts";
+import { lineManagerId } from "../features/lifecycle/lifecycleShared.ts";
 
 export const TRAVEL_MODES = ["Flight", "Train", "Bus", "Car", "Other"] as const;
 export type TravelMode = (typeof TRAVEL_MODES)[number];
@@ -35,12 +36,23 @@ export interface TravelRequest extends DecisionInfo {
   stepDecisions: FlowDecision[];
   /** Workflow version the steps came from. */
   workflowVersion?: number;
+  /** Mode-specific fields (class, train number, vehicle…), accommodation and the advance reason. */
+  details?: Record<string, string>;
+  /** Tickets / hotel once booked. */
+  booking?: Record<string, string>;
+  /** Backend: an approver asked for more information that isn't answered yet. */
+  infoRequested?: boolean;
 }
 
 export type TravelInput = Pick<
   TravelRequest,
-  "purpose" | "fromCity" | "toCity" | "departOn" | "returnOn" | "mode" | "estimatedCost" | "currency" | "advanceNeeded" | "advanceAmount"
+  "purpose" | "fromCity" | "toCity" | "departOn" | "returnOn" | "mode" | "estimatedCost" | "currency" | "advanceNeeded" | "advanceAmount" | "details"
 >;
+
+/** Approved, and the return date has passed. */
+export function tripCompleted(t: TravelRequest, today = todayISO()): boolean {
+  return t.status === "approved" && t.returnOn < today;
+}
 
 export interface TravelActor {
   id: string;
@@ -173,6 +185,7 @@ export async function submitTravel(actor: TravelActor, input: TravelInput): Prom
     currency: input.currency,
     advanceNeeded: input.advanceNeeded,
     advanceAmount: input.advanceNeeded ? input.advanceAmount : undefined,
+    ...(input.details && Object.keys(input.details).length ? { details: input.details } : {}),
     status: steps.length === 0 ? "approved" : "pending",
     submittedOn: today,
     steps,
@@ -273,16 +286,42 @@ export async function decideTravel(
   return null;
 }
 
-export async function withdrawTravel(actor: TravelActor, id: string): Promise<string | null> {
+export async function withdrawTravel(actor: TravelActor, id: string, hasOpenClaims?: (tripId: string) => boolean): Promise<string | null> {
   const all = read();
   const t = all.find((item) => item.id === id);
   if (!t) return "Travel request not found.";
   if (t.employeeId !== actor.id) return "Only the person who raised this request can withdraw it.";
-  if (t.status !== "pending") return "Only open requests can be withdrawn.";
+  if (t.status === "approved") {
+    // Cancelling an approved trip: only before it starts and with no open claims linked (same as the API).
+    if (t.departOn <= todayISO()) return "This trip has already started.";
+    if (hasOpenClaims?.(t.id)) return "Expense claims are linked to this trip.";
+  } else if (t.status !== "pending") return "Only open or upcoming approved trips can be withdrawn.";
   if (API_ENABLED) return apiWithdrawTravel(id);
   const updated: TravelRequest = { ...t, status: "withdrawn" };
   write(all.map((item) => (item.id === id ? updated : item)));
-  audit(actor, updated, "Updated", [{ field: "Status", before: "pending", after: "withdrawn" }]);
+  audit(actor, updated, "Updated", [{ field: "Status", before: t.status, after: "withdrawn" }]);
+  if (t.status === "approved") {
+    const manager = lineManagerId(t.employeeId);
+    if (manager) pushPersonTaskAlert({ recipientId: manager, title: `${t.employeeName} cancelled an approved trip`, body: tripText(t), href: "/travel" });
+  }
+  return null;
+}
+
+/** Tickets / hotel details for an approved trip (the traveller, HR or a travel admin). */
+export async function saveBooking(actor: TravelActor & { role?: string }, id: string, booking: Record<string, string>): Promise<string | null> {
+  const all = read();
+  const t = all.find((item) => item.id === id);
+  if (!t) return "Travel request not found.";
+  if (t.status !== "approved") return "Bookings are recorded once the trip is approved.";
+  const clean = Object.fromEntries(Object.entries(booking).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+  if (!Object.keys(clean).length) return "Enter the booking details.";
+  if (API_ENABLED) return apiSaveBooking(id, clean);
+  const admin = actor.role ? ["hr", "hr_admin", "admin", "super_admin", "travel_admin"].includes(actor.role) : false;
+  if (t.employeeId !== actor.id && !admin) return "Only the traveller, HR or a travel admin can record the booking.";
+  const updated: TravelRequest = { ...t, booking: clean };
+  write(all.map((item) => (item.id === id ? updated : item)));
+  audit(actor, updated, "Updated", [{ field: "Booking", before: t.booking ? "saved" : "", after: Object.values(clean).join(", ") }]);
+  if (t.employeeId !== actor.id) pushPersonTaskAlert({ recipientId: t.employeeId, title: "Your trip is booked", body: tripText(t), href: "/travel" });
   return null;
 }
 

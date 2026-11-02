@@ -137,7 +137,7 @@ function localInputs(state: PortalState, country: string, entity: string, month:
       const currency = payRulesFor(p.countryCode as CountryCode).currency;
       const claims = state.expenses.filter((e) => e.employeeId === p.id && e.status === "approved" && e.date <= end && (e.currency ?? "INR") === currency);
       const enc = state.encashments.filter((e) => e.employeeId === p.id && e.status === "approved" && payoutMonth(e.decidedOn ?? e.appliedOn) === month);
-      const perDay = perDayPay(p.countryCode, role);
+      const perDay = perDayPay(p.countryCode, role, p.id);
       const ot = localPayableOvertime(p.id, month);
       const bank = localBank(p.id, p.fullName, p.employeeCode, p.countryCode);
       return {

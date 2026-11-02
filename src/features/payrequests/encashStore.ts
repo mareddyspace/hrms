@@ -6,7 +6,9 @@ import { api, API_ENABLED } from "../../api/client.ts";
 import { apiRun, createApiMirror } from "../../api/syncOps.ts";
 import type { Encashment, LeaveRow } from "../../model.ts";
 import { loadScopes, stepsFromApi } from "./cashStore.ts";
-import { ENCASH_CUTOFF_DAY, ENCASH_KEEP_DAYS, ENCASH_MAX_DAYS_A_YEAR, ENCASHABLE_CODES, payoutMonth, type StepView } from "./rules.ts";
+import { todayISO } from "../../model.ts";
+import { localInfoOpen } from "./threadStore.ts";
+import { ENCASH_WORKING_DAYS, ENCASH_CUTOFF_DAY, ENCASH_KEEP_DAYS, ENCASH_MAX_DAYS_A_YEAR, ENCASHABLE_CODES, payoutMonth, type StepView } from "./rules.ts";
 
 export type EncashStatus = "Submitted" | "Manager approved" | "Approved" | "Rejected" | "Withdrawn";
 
@@ -25,6 +27,10 @@ export interface EncashView {
   steps: StepView[];
   canDecide: boolean;
   canWithdraw: boolean;
+  /** Paid with the payout month's payroll (run locked, or the month is over). */
+  paid: boolean;
+  year: number;
+  infoRequested: boolean;
 }
 
 export interface EncashType {
@@ -44,10 +50,21 @@ export interface EncashPolicy {
   keepDays: number;
   cutoffDay: number;
   types: EncashType[];
+  /** "compensation": per-day rate from your pay record (as on payslips); "standard": the role's package. */
+  paySource: "compensation" | "standard";
+  basicMonthly: number;
+  workingDays: number;
 }
 
 /** Local mode: the same rules over the portal's leave table and encashments. */
-export function localEncashPolicy(rows: LeaveRow[], encashments: Encashment[], employeeId: string, perDay: number, currency: string): EncashPolicy {
+export function localEncashPolicy(
+  rows: LeaveRow[],
+  encashments: Encashment[],
+  employeeId: string,
+  perDay: number,
+  currency: string,
+  pay: { source: "compensation" | "standard"; basic: number } = { source: "standard", basic: 0 },
+): EncashPolicy {
   const year = new Date().getFullYear();
   const types = rows.map((row): EncashType => {
     if (!ENCASHABLE_CODES.includes(row.code)) {
@@ -69,7 +86,17 @@ export function localEncashPolicy(rows: LeaveRow[], encashments: Encashment[], e
       ...(encashable > 0 ? {} : { whyNot: roomYear <= 0 ? `Yearly limit of ${ENCASH_MAX_DAYS_A_YEAR} days reached` : `Keep at least ${ENCASH_KEEP_DAYS} days in your balance` }),
     };
   });
-  return { perDay, currency, maxDaysAYear: ENCASH_MAX_DAYS_A_YEAR, keepDays: ENCASH_KEEP_DAYS, cutoffDay: ENCASH_CUTOFF_DAY, types };
+  return {
+    perDay,
+    currency,
+    maxDaysAYear: ENCASH_MAX_DAYS_A_YEAR,
+    keepDays: ENCASH_KEEP_DAYS,
+    cutoffDay: ENCASH_CUTOFF_DAY,
+    types,
+    paySource: pay.source,
+    basicMonthly: pay.basic,
+    workingDays: ENCASH_WORKING_DAYS,
+  };
 }
 
 /** Local mode rows (one approval step: the manager, or HR for the CEO). */
@@ -105,6 +132,9 @@ export function localEncashViews(
       ],
       canDecide: false,
       canWithdraw: e.status === "pending",
+      paid: e.status === "approved" && payoutMonth(e.decidedOn ?? e.appliedOn) < todayISO().slice(0, 7),
+      year: Number(e.appliedOn.slice(0, 4)),
+      infoRequested: localInfoOpen("encashment", e.id),
     };
   });
 }
@@ -126,6 +156,9 @@ interface EncashOut {
   steps: Parameters<typeof stepsFromApi>[0];
   can_decide: boolean;
   can_withdraw: boolean;
+  paid?: boolean;
+  year?: number | null;
+  info_requested?: boolean;
 }
 
 export const encashMirror = createApiMirror<{ rows: EncashView[] }>(
@@ -148,6 +181,9 @@ export const encashMirror = createApiMirror<{ rows: EncashView[] }>(
           steps: stepsFromApi(r.steps),
           canDecide: r.can_decide,
           canWithdraw: r.can_withdraw,
+          paid: !!r.paid,
+          year: r.year ?? Number(r.submitted_on.slice(0, 4)),
+          infoRequested: !!r.info_requested,
         }),
       )
       .sort((a, b) => b.submittedOn.localeCompare(a.submittedOn) || b.id.localeCompare(a.id)),
@@ -162,6 +198,9 @@ export async function apiEncashPolicy(): Promise<EncashPolicy> {
     keep_days: number;
     cutoff_day: number;
     types: { code: string; name: string; available: number; encashable: number; used_this_year: number; eligible: boolean; why_not: string | null }[];
+    pay_source?: "compensation" | "standard";
+    basic_monthly?: number;
+    working_days?: number;
   }>("/encashments/policy");
   return {
     perDay: p.per_day,
@@ -170,11 +209,19 @@ export async function apiEncashPolicy(): Promise<EncashPolicy> {
     keepDays: p.keep_days,
     cutoffDay: p.cutoff_day,
     types: p.types.map((t) => ({ code: t.code, name: t.name, available: t.available, encashable: t.encashable, usedThisYear: t.used_this_year, eligible: t.eligible, ...(t.why_not ? { whyNot: t.why_not } : {}) })),
+    paySource: p.pay_source ?? "standard",
+    basicMonthly: p.basic_monthly ?? 0,
+    workingDays: p.working_days ?? 22,
   };
 }
 
-export function apiSubmitEncashment(code: string, days: number): Promise<string | null> {
-  return apiRun(() => api.post("/encashments", { leave_code: code, days }), encashMirror);
+/** Resolves to the new request's id, or the error. */
+export async function apiSubmitEncashment(code: string, days: number): Promise<{ error: string | null; id?: string }> {
+  let id: string | undefined;
+  const error = await apiRun(async () => {
+    id = (await api.post<EncashOut>("/encashments", { leave_code: code, days })).id;
+  }, encashMirror);
+  return error ? { error } : { error: null, id };
 }
 
 export function apiDecideEncashment(id: string, decision: "approve" | "reject", note: string): Promise<string | null> {

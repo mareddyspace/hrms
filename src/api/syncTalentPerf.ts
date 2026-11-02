@@ -16,6 +16,8 @@ import {
   type DevAction,
   type EmployeeSkill,
   type Enrollment,
+  type FeedbackItem,
+  type PraiseBadge,
   type OneOnOne,
   type PerfCycle,
   type PerfGoal,
@@ -104,6 +106,39 @@ interface ReviewOut {
   feedback_360_status: string;
   reviewers: Reviewer360Out[];
   dev_actions: DevActionOut[];
+  summary_360?: { responses: number; average_rating: number; comments: string[] } | null;
+}
+
+interface FeedbackOut {
+  id: string;
+  kind: "praise" | "feedback" | "request";
+  from_id: string;
+  from_name: string | null;
+  to_id: string;
+  to_name: string | null;
+  message: string;
+  badge: string | null;
+  status: string | null;
+  request_id: string | null;
+  created_at: string;
+}
+
+const FEEDBACK_KIND: Record<FeedbackOut["kind"], FeedbackItem["kind"]> = { praise: "Praise", feedback: "Feedback", request: "Request" };
+
+function toFeedback(f: FeedbackOut): FeedbackItem {
+  return {
+    id: f.id,
+    kind: FEEDBACK_KIND[f.kind] ?? "Feedback",
+    fromId: f.from_id,
+    fromName: f.from_name ?? nameOf(f.from_id),
+    toId: f.to_id,
+    toName: f.to_name ?? nameOf(f.to_id),
+    message: f.message,
+    createdOn: localDay(f.created_at) ?? f.created_at.slice(0, 10),
+    createdAt: f.created_at,
+    ...(f.badge ? { badge: f.badge as PraiseBadge } : {}),
+    ...(f.kind === "request" ? { status: f.status === "answered" ? ("Answered" as const) : ("Open" as const) } : {}),
+  };
 }
 
 interface Pending360Out {
@@ -262,6 +297,7 @@ function toReview(r: ReviewOut): PerfReview {
     ...(r.released_at ? { releasedOn: localDay(r.released_at) } : {}),
     devActions: r.dev_actions.map((a) => ({ id: a.id, title: a.title, due: a.due ?? "", status: DEV_STATUS[a.status] ?? "Not started" })),
     reviewers360: r.reviewers.map(toReviewer),
+    ...(r.summary_360 ? { summary360: { responses: r.summary_360.responses, averageRating: r.summary_360.average_rating, comments: r.summary_360.comments } } : {}),
     finalDecisionNote: "",
   };
 }
@@ -363,17 +399,20 @@ export interface PerformanceData {
   goals: PerfGoal[];
   reviews: PerfReview[];
   checkIns: OneOnOne[];
+  /** Praise (everyone's), and private feedback / requests I sent or received. */
+  feedback: FeedbackItem[];
 }
 
 async function loadPerformance(accountId: string): Promise<PerformanceData> {
   await waitForPeople();
   const { all, reports } = peopleFor(accountId);
-  const [cycles, goals, checkIns, reviews, pending] = await Promise.all([
+  const [cycles, goals, checkIns, reviews, pending, feedback] = await Promise.all([
     orEmpty(qget<CycleOut[]>("/performance/cycles")),
     perPerson<GoalOut>("/performance/goals", all),
     perPerson<CheckInOut>("/performance/check-ins", [accountId, ...reports].slice(0, MAX_PEOPLE)),
     orEmpty(qget<ReviewOut[]>("/performance/reviews")),
     orEmpty(qget<Pending360Out[]>("/performance/360/pending")),
+    orEmpty(qget<FeedbackOut[]>("/performance/feedback")),
   ]);
   const mapped = reviews.map(toReview);
   // 360 requests on reviews outside my scope: a stub with just my own nomination.
@@ -399,10 +438,11 @@ async function loadPerformance(accountId: string): Promise<PerformanceData> {
     goals: goals.filter((g) => !seen.has(g.id) && seen.add(g.id)).map(toGoal),
     reviews: mapped,
     checkIns: checkIns.filter((c) => !seen.has(c.id) && seen.add(c.id)).map(toCheckIn),
+    feedback: feedback.map(toFeedback),
   };
 }
 
-export const performanceMirror = createTalentMirror<PerformanceData>(() => ({ cycles: [], goals: [], reviews: [], checkIns: [] }), loadPerformance);
+export const performanceMirror = createTalentMirror<PerformanceData>(() => ({ cycles: [], goals: [], reviews: [], checkIns: [], feedback: [] }), loadPerformance);
 
 const runPerf = (fn: () => Promise<unknown>) => runTalentApi(fn, performanceMirror);
 
@@ -449,6 +489,25 @@ export function apiSaveGoal(input: { id?: string; ownerId: string; cycleId: stri
   return runPerf(() =>
     input.id ? apiRequest(`/performance/goals/${enc(input.id)}`, { method: "PUT", body }) : api.post("/performance/goals", body),
   );
+}
+
+export function apiDeleteGoal(id: string) {
+  return runPerf(() => apiRequest(`/performance/goals/${enc(id)}`, { method: "DELETE" }));
+}
+
+export function apiGiveFeedback(input: { kind: FeedbackItem["kind"]; toId: string; message: string; badge?: string }) {
+  return runPerf(() =>
+    api.post("/performance/feedback", {
+      kind: input.kind.toLowerCase(),
+      to_id: input.toId,
+      message: input.message.trim(),
+      ...(input.kind === "Praise" && input.badge ? { badge: input.badge } : {}),
+    }),
+  );
+}
+
+export function apiAnswerFeedback(requestId: string, message: string) {
+  return runPerf(() => api.post(`/performance/feedback/${enc(requestId)}/answer`, { message: message.trim() }));
 }
 
 export function apiGoalProgress(id: string, progress: number) {

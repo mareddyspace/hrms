@@ -41,10 +41,34 @@ class EmployeeDocumentOut(_DocORM):
     updated_at: datetime
     days_to_expiry: int | None = None
     versions: list[DocVersionOut] = []
+    description: str | None = None
+    verification_status: str | None = None
+    verification_note: str | None = None
+    verified_by: str | None = None
+    verified_at: datetime | None = None
 
 
 class DocExpiryIn(BaseModel):
     expiry_date: date | None
+
+
+class DocCategoryOut(BaseModel):
+    name: str
+    label: str
+    verification: bool
+    employee_upload: bool
+
+
+class DocCategoryIn(BaseModel):
+    name: str = Field(max_length=32)
+    label: str = Field(min_length=1, max_length=60)
+    verification: bool
+    employee_upload: bool
+
+
+class DocVerifyIn(BaseModel):
+    decision: Literal["verify", "reject"]
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class DocRulesOut(BaseModel):
@@ -52,6 +76,7 @@ class DocRulesOut(BaseModel):
     manager_categories: list[str]
     max_bytes: int
     content_types: list[str]
+    category_config: list[DocCategoryOut] = []
 
 
 class LetterTypeOut(BaseModel):

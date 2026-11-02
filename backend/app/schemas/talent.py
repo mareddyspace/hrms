@@ -487,6 +487,14 @@ class DevActionOut(_ORM):
     status: str
 
 
+class Summary360Out(BaseModel):
+    """For the employee once the rating is released, with at least 2 answers: no names, comments in alphabetical order."""
+
+    responses: int
+    average_rating: float
+    comments: list[str]
+
+
 class ReviewOut(BaseModel):
     id: str
     cycle_id: str
@@ -502,6 +510,7 @@ class ReviewOut(BaseModel):
     feedback_360_status: str
     reviewers: list[Reviewer360Out]
     dev_actions: list[DevActionOut]
+    summary_360: Summary360Out | None = None
 
 
 class Pending360Out(BaseModel):
@@ -509,6 +518,31 @@ class Pending360Out(BaseModel):
     cycle_id: str
     employee_id: str
     employee_name: str | None
+
+
+class PerfFeedbackIn(BaseModel):
+    kind: Literal["praise", "feedback", "request"]
+    to_id: str = Field(min_length=1, max_length=64)
+    message: str = Field(min_length=10, max_length=1000)
+    badge: str | None = Field(default=None, max_length=40)
+
+
+class PerfFeedbackAnswerIn(BaseModel):
+    message: str = Field(min_length=10, max_length=1000)
+
+
+class PerfFeedbackOut(BaseModel):
+    id: str
+    kind: str
+    from_id: str
+    from_name: str | None = None
+    to_id: str
+    to_name: str | None = None
+    message: str
+    badge: str | None = None
+    status: str | None = None
+    request_id: str | None = None
+    created_at: datetime
 
 
 # ---------- learning ----------

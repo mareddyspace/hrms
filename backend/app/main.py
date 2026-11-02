@@ -235,6 +235,11 @@ from app.routers import tax_declarations as tax_declarations_router  # noqa: E40
 
 app.include_router(tax_declarations_router.router, prefix=API_PREFIX)
 
+# ---------- request threads: comments, more-information requests, supporting files, audit trail (migration 0028) ----------
+from app.routers import request_extras as request_extras_router  # noqa: E402
+
+app.include_router(request_extras_router.router, prefix=API_PREFIX)
+
 # ---------- start-up: optional migrations (outermost hook, so it runs before the jobs above touch the database) ----------
 from app import migrate as _migrate  # noqa: E402
 from app.services import storage as _storage  # noqa: E402

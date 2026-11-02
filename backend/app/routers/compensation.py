@@ -487,9 +487,19 @@ def _bonus_year(bonus: CompBonus) -> int:
 
 
 @router.get("/statement", response_model=CompStatementOut)
-def statement(db: DbSession, user: CurrentUserDep, year: Annotated[int | None, Query(ge=2000, le=2100)] = None) -> CompStatementOut:
-    """Your own total rewards: current base, bonuses for the year (accrued or paid) and employer cost of your benefits."""
-    emp = me(user)
+def statement(request: Request, db: DbSession, user: CurrentUserDep, year: Annotated[int | None, Query(ge=2000, le=2100)] = None,
+              employee_id: str | None = None) -> CompStatementOut:
+    """Total rewards: current base, bonuses for the year (accrued or paid) and employer cost of benefits.
+
+    Yourself by default; someone else's only for viewers who may see their pay (HR / compensation in scope,
+    or an explicit compensation-access grant). Managers without that grant get 403.
+    """
+    if employee_id and employee_id != user.employee_id:
+        emp = comp.require_pay_view(db, user, employee_id)
+        comp.log_pay_view(db, user, emp.id, "total rewards statement", client_ip(request))
+        db.commit()
+    else:
+        emp = me(user)
     today = _today(user)
     year = year or today.year
     as_of = min(today, date(year, 12, 31))

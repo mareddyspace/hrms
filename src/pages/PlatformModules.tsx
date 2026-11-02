@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { PRODUCT_NAME } from "../brand.ts";
 import {
   ActionButton,
@@ -46,10 +46,11 @@ import {
   upcomingHolidays,
   waitingItems,
   workforceStats,
+  businessUnitFor,
   type DayStatus,
 } from "../data/workforceStats.ts";
 import { countWaitingOnMe } from "./ApprovalsCenter.tsx";
-import { useAskCopilotAi, type CopilotOrigin } from "../features/copilot/askCopilot.ts";
+import { useAgentStatus, useAskCopilotAi, type CopilotOrigin } from "../features/copilot/askCopilot.ts";
 import { agentEnabled } from "../data/aiSettings.ts";
 import { CopilotOriginTag, CopilotSources, CopilotThinking } from "../features/copilot/CopilotSources.tsx";
 import { CopilotExtras } from "../features/copilot/CopilotExtras.tsx";
@@ -108,34 +109,15 @@ import { usePortal } from "../store.tsx";
 import { MaskedValue } from "../components/MaskedValue.tsx";
 import { OnboardingAnalyticsPanel } from "../features/onboarding/OnboardingAnalytics.tsx";
 import { PayrollStatusPanel } from "../features/payroll/PayrollStatusPanel.tsx";
+import { BarList, ChartDetail, ChartWithDetail } from "./dashboards/chartKit.tsx";
 
 function usePlatformTick() {
   return useSyncExternalStore(subscribePlatform, getPlatformVersion, getPlatformVersion);
 }
 
-function BarRows({
-  items,
-  max,
-  format = (n) => String(n),
-}: {
-  items: { label: string; value: number }[];
-  max?: number;
-  format?: (n: number) => string;
-}) {
-  const peak = max ?? Math.max(1, ...items.map((i) => i.value));
-  return (
-    <ul className="tz-bars" aria-label="Chart">
-      {items.map((item) => (
-        <li key={item.label}>
-          <span className="tz-bar-label">{item.label}</span>
-          <span className="tz-bar-track">
-            <span className="tz-bar-fill" style={{ width: `${Math.min(100, (item.value / peak) * 100)}%` }} />
-          </span>
-          <span className="tz-bar-value">{format(item.value)}</span>
-        </li>
-      ))}
-    </ul>
-  );
+/** Analytics bar rows (.tz-bars look): hover / tap / focus shows the value; rows with `to` drill down, `onSelect` opens details. */
+function BarRows({ format = (n) => String(n), ...rest }: { format?: (n: number) => string } & Omit<Parameters<typeof BarList>[0], "variant" | "format">) {
+  return <BarList variant="tz" format={format} {...rest} />;
 }
 
 /* ───────────────── Analytics ───────────────── */
@@ -161,6 +143,7 @@ function useMyTeam() {
 
 export function AnalyticsPage() {
   usePlatformTick();
+  const navigate = useNavigate();
   const { demoProfile, employee, state, canDecideFor, canVerifyProofs } = usePortal();
   const { regionCode, activeCountry, t } = useLocale();
   const { team, people } = useMyTeam();
@@ -397,13 +380,47 @@ export function AnalyticsPage() {
       {activeTab === "workforce" && canCompany && (
         <div className="grid-2">
           <Card title="Country distribution">
-            <BarRows items={stats.byCountry.map((c) => ({ label: c.name, value: c.count }))} />
+            <BarRows
+              items={stats.byCountry.map((c) => ({ label: c.name, value: c.count, to: `/directory?country=${encodeURIComponent(c.name)}${dept !== "All departments" ? `&department=${encodeURIComponent(dept)}` : ""}` }))}
+              share
+              actionLabel="Open in directory"
+              ariaLabel="Headcount by country"
+              empty="No active people in this scope."
+            />
           </Card>
           <Card title="Department distribution">
-            <BarRows items={stats.byDepartment.map((d) => ({ label: d.name, value: d.count }))} />
+            <BarRows
+              items={stats.byDepartment.map((d) => ({ label: d.name, value: d.count, to: `/directory?department=${encodeURIComponent(d.name)}${countryFilter !== "ALL" ? `&country=${countryFilter}` : ""}` }))}
+              share
+              actionLabel="Open in directory"
+              ariaLabel="Headcount by department"
+              empty="No active people in this scope."
+            />
           </Card>
           <Card title="Business units">
-            <BarRows items={stats.byBusinessUnit.map((b) => ({ label: b.name, value: b.count }))} />
+            <ChartWithDetail
+              chart={(selected, toggle) => (
+                <BarRows
+                  items={stats.byBusinessUnit.map((b) => ({ label: b.name, value: b.count }))}
+                  share
+                  ariaLabel="Headcount by business unit"
+                  empty="No active people in this scope."
+                  selected={selected}
+                  onSelect={(item) => toggle(item.label)}
+                  actionLabel={(item) => (selected === item.label ? "Hide countries" : "Show countries")}
+                />
+              )}
+              detail={(selected, close) => {
+                const rows = stats.byCountry.filter((c) => c.count > 0 && businessUnitFor(c.code) === selected);
+                return (
+                  <ChartDetail
+                    title={`${selected} · ${rows.reduce((n, c) => n + c.count, 0)} people`}
+                    onClose={close}
+                    rows={rows.map((c) => ({ id: c.code, primary: c.name, to: `/directory?country=${encodeURIComponent(c.name)}`, secondary: `${c.count} people` }))}
+                  />
+                );
+              }}
+            />
           </Card>
         </div>
       )}
@@ -415,7 +432,13 @@ export function AnalyticsPage() {
       {activeTab === "recruiting" && (
         <div className="grid-2">
           <Card title="Recruitment pipeline">
-            <BarRows items={pipeline.map((s) => ({ label: s.stage, value: s.count }))} />
+            <BarRows
+              items={pipeline.map((s) => ({ label: s.stage, value: s.count, to: `/recruiting?stage=${encodeURIComponent(s.stage)}` }))}
+              share
+              actionLabel="Open candidates at this stage"
+              ariaLabel="Candidates by pipeline stage"
+              empty="No candidates in the pipeline."
+            />
           </Card>
           <Card title="Requisitions">
             <MetricGrid>
@@ -431,17 +454,93 @@ export function AnalyticsPage() {
         <div className="grid-2">
           <Card title="Attendance · weekly">
             {attendance.trend.length ? (
-              <BarRows items={attendance.trend.map((r) => ({ label: r.label, value: r.pct }))} max={100} format={(n) => `${n}%`} />
+              <ChartWithDetail
+                chart={(selected, toggle) => (
+                  <BarRows
+                    items={attendance.trend.map((r) => ({ label: r.label, title: `Week of ${r.label}`, value: r.pct, note: `${r.attended} of ${r.days} expected days attended` }))}
+                    max={100}
+                    format={(n) => `${n}%`}
+                    ariaLabel="Attendance rate per week"
+                    selected={selected}
+                    onSelect={(item) => toggle(item.label)}
+                    actionLabel={(item) => (selected === item.label ? "Hide absences" : "Show absences")}
+                  />
+                )}
+                detail={(selected, close) => {
+                  const week = attendance.trend.find((r) => r.label === selected);
+                  return (
+                    <ChartDetail
+                      title={`Absent days · week of ${selected} · ${week?.absent.length ?? 0}`}
+                      onClose={close}
+                      rows={(week?.absent ?? []).map((x) => ({ id: `${x.id}-${x.date}`, primary: x.name, to: `/people/${x.id}`, secondary: formatShortDate(x.date) }))}
+                      empty="Nobody was absent without leave that week."
+                      more={{ to: "/attendance", label: "Open attendance" }}
+                    />
+                  );
+                }}
+              />
             ) : (
               <p className="note">No attendance records.</p>
             )}
           </Card>
           <Card title="Leave days · approved">
-            <BarRows items={leave.map((r) => ({ label: r.label, value: r.days }))} />
+            <ChartWithDetail
+              chart={(selected, toggle) => (
+                <BarRows
+                  items={leave.map((r) => ({ label: r.label, value: r.days, note: `${r.requestIds.length} approved request${r.requestIds.length === 1 ? "" : "s"}` }))}
+                  format={(n) => `${n}d`}
+                  ariaLabel="Approved leave days per month"
+                  empty="No approved leave in this period."
+                  selected={selected}
+                  onSelect={(item) => toggle(item.label)}
+                  actionLabel={(item) => (selected === item.label ? "Hide requests" : "Show requests")}
+                />
+              )}
+              detail={(selected, close) => {
+                const ids = new Set(leave.find((r) => r.label === selected)?.requestIds ?? []);
+                const reqs = state.leaveRequests.filter((r) => ids.has(r.id)).sort((a, b) => a.from.localeCompare(b.from));
+                return (
+                  <ChartDetail
+                    title={`Leave in ${selected} · ${reqs.length}`}
+                    onClose={close}
+                    rows={reqs.map((r) => ({
+                      id: r.id,
+                      primary: personName(r.employeeId, people),
+                      to: `/people/${r.employeeId}`,
+                      secondary: `${leaveNameFor(state.leavePolicies, r.code, r.employeeId) ?? r.code} · ${formatShortDate(r.from)}${r.to !== r.from ? ` → ${formatShortDate(r.to)}` : ""}`,
+                    }))}
+                    more={{ to: "/leave", label: "Open leave" }}
+                  />
+                );
+              }}
+            />
           </Card>
           <Card title="Overtime by department (hours)">
             {attendance.overtime.length ? (
-              <BarRows items={attendance.overtime.map((r) => ({ label: r.label, value: r.hours }))} />
+              <ChartWithDetail
+                chart={(selected, toggle) => (
+                  <BarRows
+                    items={attendance.overtime.map((r) => ({ label: r.label, value: r.hours, note: `${r.people.length} ${r.people.length === 1 ? "person" : "people"}` }))}
+                    format={(n) => `${n} h`}
+                    share
+                    ariaLabel="Overtime hours by department"
+                    selected={selected}
+                    onSelect={(item) => toggle(item.label)}
+                    actionLabel={(item) => (selected === item.label ? "Hide people" : "Show people")}
+                  />
+                )}
+                detail={(selected, close) => {
+                  const row = attendance.overtime.find((r) => r.label === selected);
+                  return (
+                    <ChartDetail
+                      title={`${selected} · ${row?.hours ?? 0} h overtime`}
+                      onClose={close}
+                      rows={(row?.people ?? []).map((x) => ({ id: x.id, primary: x.name, to: `/people/${x.id}`, secondary: `${x.hours} h` }))}
+                      more={{ to: "/attendance", label: "Open attendance" }}
+                    />
+                  );
+                }}
+              />
             ) : (
               <p className="note">No overtime recorded.</p>
             )}
@@ -465,6 +564,10 @@ export function AnalyticsPage() {
                 ]}
                 max={100}
                 format={(n) => `${n}%`}
+                ariaLabel="Review progress"
+                empty="No reviews submitted yet in scope."
+                actionLabel="Open performance"
+                onSelect={() => navigate("/evaluations")}
               />
             ) : (
               <p className="note">No reviews in scope.</p>
@@ -476,7 +579,14 @@ export function AnalyticsPage() {
               <MetricCard label="Certifications YTD" value={learningMore.certificationsYtd} />
               <MetricCard label="Mandatory pending" value={learningMore.mandatoryPending} />
             </MetricGrid>
-            <BarRows items={learningMore.topCourses.map((c) => ({ label: c.name, value: c.completionPct }))} max={100} format={(n) => `${n}%`} />
+            <BarRows
+              items={learningMore.topCourses.map((c) => ({ label: c.name, value: c.completionPct, to: "/programs" }))}
+              max={100}
+              format={(n) => `${n}%`}
+              actionLabel="Open learning"
+              ariaLabel="Completion of the busiest courses"
+              empty="No course enrolments in scope."
+            />
           </Card>
         </div>
       )}
@@ -484,7 +594,13 @@ export function AnalyticsPage() {
       {activeTab === "skills" && (
         <div className="grid-2">
           <Card title="Skill coverage">
-            <BarRows items={skillTop.map((s) => ({ label: s.name, value: s.people }))} />
+            <BarRows
+              items={skillTop.map((s) => ({ label: s.name, value: s.people, note: `Average level ${s.avgLevel} / 5`, to: "/skills" }))}
+              format={(n) => `${n} ${n === 1 ? "person" : "people"}`}
+              actionLabel="Open skills"
+              ariaLabel="People per top skill"
+              empty="No skill profiles in scope."
+            />
           </Card>
           <Card title="Critical skill gaps">
             <DataTable
@@ -565,12 +681,18 @@ type ChatTurn = {
   pending?: boolean;
 };
 
+/** Each assistant keeps its own conversation: switching assistants starts a fresh chat. */
 export function AiCopilotPage() {
+  const [params] = useSearchParams();
+  return <AiCopilotChat key={params.get("agent") ?? "copilot"} />;
+}
+
+function AiCopilotChat() {
   const { employee, demoProfile } = usePortal();
   const [askParams, setAskParams] = useSearchParams();
   const requestedAgent = askParams.get("agent");
   const activeAgent = AI_AGENTS.find((a) => a.id === requestedAgent && agentEnabled(a.id) && (!AGENT_ROLES[a.id] || AGENT_ROLES[a.id].includes(demoProfile.role)));
-  const askCopilot = useAskCopilotAi();
+  const askCopilot = useAskCopilotAi(activeAgent?.id);
   const persona = copilotPersonaFromRole(demoProfile.role);
   const suggestions = activeAgent ? (requestedAgent === "document" && !canManageLetters(demoProfile) ? SELF_DOCUMENT_STARTERS : (AGENT_STARTERS[requestedAgent ?? ""] ?? COPILOT_SUGGESTIONS[persona])) : COPILOT_SUGGESTIONS[persona];
   const [prompt, setPrompt] = useState("");
@@ -626,7 +748,7 @@ export function AiCopilotPage() {
   }, [history]);
 
   return (
-    <Page title={activeAgent ? `${activeAgent.name} Assistant` : "AI Copilot"} subtitle={activeAgent?.purpose}>
+    <Page title={activeAgent ? activeAgent.name : "AI Copilot"} subtitle={activeAgent?.purpose}>
       {requestedAgent && !activeAgent && <Banner message={{ tone: "err", text: "This assistant is unavailable or you do not have access to it." }} />}
       {chatError && <Banner message={{ tone: "err", text: chatError }} />}
       <div className="copilot-layout">
@@ -665,13 +787,14 @@ export function AiCopilotPage() {
             <div className="copilot-thread" aria-live="polite">
               {history.length === 0 && (
                 <p className="note">
-                  Hi {employee.fullName.split(" ")[0]} — ask about your leave, holidays, approvals or working hours.
+                  Hi {employee.fullName.split(" ")[0]} —{" "}
+                  {activeAgent ? `I'm your ${activeAgent.name.toLowerCase()}. ${activeAgent.purpose} Pick a suggested question or type your own.` : "ask about your leave, holidays, approvals or working hours."}
                 </p>
               )}
               {history.map((turn) => (
                 <div key={turn.id} className={`copilot-bubble ${turn.role}`}>
                   <p className="copilot-role">
-                    {turn.role === "user" ? "You" : `${PRODUCT_NAME} Copilot`}
+                    {turn.role === "user" ? "You" : activeAgent ? activeAgent.name : `${PRODUCT_NAME} Copilot`}
                     {turn.role === "assistant" && <CopilotOriginTag origin={turn.origin} model={turn.model} />}
                   </p>
                   {turn.pending ? <CopilotThinking /> : <p>{turn.text || turn.answer?.summary || "—"}</p>}
@@ -737,7 +860,8 @@ function CopilotAnswerCard({ answer, highlight }: { answer: CopilotAnswer; highl
 
 /** Questions each agent can start with; they open in the Copilot. */
 const AGENT_STARTERS: Record<string, string[]> = {
-  employee: ["How many leave days do I have?", "Apply leave next Friday", "I moved to a new address"],
+  employee: ["How many leave days do I have?", "Apply leave next Friday", "What holidays are coming up?"],
+  career: ["What skills do I need for my next role?", "Which courses close my skill gaps?", "How are my goals going?"],
   manager: ["Who is on leave this week?", "What approvals are waiting for me?", "Overtime by person this month"],
   hr: ["Headcount by country", "Who hasn't finished mandatory training?", "Prepare a promotion letter for Babu"],
   recruiter: ["Joiners this quarter by department", "Attrition by department", "Headcount by location"],
@@ -759,6 +883,7 @@ const AGENT_ROLES: Record<string, readonly string[]> = {
 
 export function AiAgentsPage() {
   const { demoProfile } = usePortal();
+  const status = useAgentStatus();
   if (!hasModuleAccess(demoProfile, "agents")) {
     return (
       <Page title="AI Agents" subtitle="Autonomous assistants">
@@ -767,11 +892,14 @@ export function AiAgentsPage() {
     );
   }
 
-  const agents = AI_AGENTS.filter((agent) => agentEnabled(agent.id) && (!AGENT_ROLES[agent.id] || AGENT_ROLES[agent.id].includes(demoProfile.role)));
+  const agents = AI_AGENTS.filter(
+    (agent) => agentEnabled(agent.id) && !status.hidden.has(agent.id) && (!AGENT_ROLES[agent.id] || AGENT_ROLES[agent.id].includes(demoProfile.role)),
+  );
   const hrLetters = canManageLetters(demoProfile);
   const startersFor = (id: string) => (id === "document" && !hrLetters ? SELF_DOCUMENT_STARTERS : (AGENT_STARTERS[id] ?? []));
   return (
-    <Page title="AI Agents">
+    <Page title="AI Agents" subtitle="Assistants that answer from the data you are allowed to see">
+      {status.error && <Banner message={{ tone: "warn", text: "Couldn't check the AI service. Assistants use the built-in answers for now." }} />}
       {agents.length === 0 && <EmptyState title="No agents switched on" description="An admin can switch agents on in AI settings." />}
       <div className="agent-grid">
         {agents.map((agent) => (
@@ -786,11 +914,15 @@ export function AiAgentsPage() {
               <div className="info-fact">
                 <dt>Status</dt>
                 <dd>
-                  <StatusBadge
-                    status={agent.demoStatus === "Demo ready" ? "Ready" : agent.demoStatus === "Demo beta" ? "Beta" : "Planned"}
-                    tone={agent.demoStatus === "Demo ready" ? "ok" : agent.demoStatus === "Demo beta" ? "warn" : "info"}
-                    literal
-                  />
+                  {status.modes === null ? (
+                    <span className="muted">Checking…</span>
+                  ) : (
+                    <StatusBadge
+                      status={(status.modes[agent.id] ?? "builtin") === "ai" ? "AI answers" : "Built-in answers"}
+                      tone={(status.modes[agent.id] ?? "builtin") === "ai" ? "ok" : "info"}
+                      literal
+                    />
+                  )}
                 </dd>
               </div>
             </dl>

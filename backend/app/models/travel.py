@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
-from sqlalchemy import Date, ForeignKey, Index, Numeric, String, Text
+from sqlalchemy import JSON, Date, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, TimestampMixin
@@ -27,3 +28,6 @@ class TravelRequest(TimestampMixin, Base):
     advance_amount: Mapped[float] = mapped_column(Numeric(14, 2, asdecimal=False), default=0)
     status: Mapped[str] = mapped_column(String(16), index=True)  # submitted | approved | rejected | withdrawn
     approval_instance_id: Mapped[str | None] = mapped_column(String(64))
+    # Migration 0028: mode-specific fields, accommodation and advance (details); tickets / hotel once booked (booking).
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    booking: Mapped[dict[str, Any] | None] = mapped_column(JSON)

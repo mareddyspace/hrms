@@ -340,6 +340,8 @@ export interface PerfReview {
   developmentPlan?: string;
   devActions?: DevAction[];
   reviewers360?: Reviewer360[];
+  /** Backend: the employee's anonymous 360 summary (after release, at least 2 answers). */
+  summary360?: { responses: number; averageRating: number; comments: string[] };
   finalDecisionNote: string;
 }
 
@@ -1347,6 +1349,11 @@ const STARTER_SKILLS: Record<string, { track: SkillTrack; skills: EmployeeSkill[
   "emp-kabir": { track: "engineering", skills: [skill("sk-7", "Advanced", "Expert"), skill("sk-4", "Advanced", "Expert"), skill("sk-2", "Advanced", "Advanced"), skill("sk-1", "Intermediate", "Advanced")] },
   "emp-diya": { track: "engineering", skills: [skill("sk-2", "Intermediate", "Advanced"), skill("sk-1", "Working", "Intermediate"), skill("sk-7", "Awareness", "Working")] },
 };
+
+/** The named starter profile (same list as the backend's career.STARTER_SKILLS), or null for everyone else. */
+export function namedStarterSkills(employeeId: string): EmployeeSkill[] | null {
+  return STARTER_SKILLS[employeeId]?.skills ?? null;
+}
 
 /** Starter skills and career track for a person (engineering profile when unknown). */
 export function starterSkillsFor(employeeId: string): { track: SkillTrack; skills: EmployeeSkill[] } {

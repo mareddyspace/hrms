@@ -12,7 +12,9 @@ import { createLocalStore } from "../payrequests/localStore.ts";
 import { loadScopes, stepsFromApi } from "../payrequests/cashStore.ts";
 import { canActOnStep, decideStep, stepViews, type Actor, type FlowStep, type StepView } from "../payrequests/rules.ts";
 import { notify } from "../workforce/workforceShared.ts";
-import { compOffDays, hourlyRate, overtimePay, overtimeProblem, overtimeRulesFor } from "./rules.ts";
+import { MAX_DAYS_BACK, compOffDays, hourlyRate, overtimePay, overtimeProblem, overtimeRulesFor } from "./rules.ts";
+import { payRulesFor } from "../../countryPay.ts";
+import { localInfoOpen, recordLocalEvent } from "../payrequests/threadStore.ts";
 
 export type OvertimeStatus = "Submitted" | "Approved" | "Rejected" | "Withdrawn";
 export type OvertimeOutcome = "pay" | "comp_off";
@@ -39,6 +41,34 @@ export interface OvertimeView {
   steps: StepView[];
   canDecide: boolean;
   canWithdraw: boolean;
+  infoRequested: boolean;
+}
+
+/** What the form shows once a date is picked (attendance, shift, day type, overtime already asked for). */
+export interface DayCheck {
+  workedMinutes: number | null;
+  shiftName: string;
+  shiftStart?: string;
+  shiftEnd?: string;
+  shiftMinutes?: number;
+  beyondShiftMinutes: number | null;
+  dayType: "working" | "weekend" | "holiday" | "leave";
+  holidayName?: string;
+  existingId?: string;
+  existingStatus?: string;
+  eligible: boolean;
+  warnings: string[];
+}
+
+export interface OvertimePolicyView {
+  hourlyRate: number;
+  multiplier: number;
+  maxHours: number;
+  compOff: boolean;
+  dayHours: number;
+  weeklyHours: number;
+  currency: string;
+  maxDaysBack: number;
 }
 
 export interface OvertimeInput {
@@ -52,7 +82,7 @@ type Who = Actor & { countryCode?: string; currency?: string };
 
 /* ───────────── Local rows ───────────── */
 
-interface OvertimeRow extends Omit<OvertimeView, "steps" | "canDecide" | "canWithdraw" | "paid"> {
+interface OvertimeRow extends Omit<OvertimeView, "steps" | "canDecide" | "canWithdraw" | "paid" | "infoRequested"> {
   countryCode: string;
   steps: FlowStep[];
   paidRunId?: string;
@@ -70,6 +100,7 @@ function toView(row: OvertimeRow, actor: Actor): OvertimeView {
     steps: stepViews(steps),
     canDecide: row.status === "Submitted" && canActOnStep(actor, row.employeeId, steps),
     canWithdraw: row.status === "Submitted" && actor.id === row.employeeId,
+    infoRequested: localInfoOpen("overtime", row.id),
   };
 }
 
@@ -108,6 +139,7 @@ interface OvertimeOut {
   steps: Parameters<typeof stepsFromApi>[0];
   can_decide: boolean;
   can_withdraw: boolean;
+  info_requested?: boolean;
 }
 
 function fromApi(o: OvertimeOut): OvertimeView {
@@ -132,6 +164,7 @@ function fromApi(o: OvertimeOut): OvertimeView {
     steps: stepsFromApi(o.steps),
     canDecide: o.can_decide,
     canWithdraw: o.can_withdraw,
+    infoRequested: !!o.info_requested,
   };
 }
 
@@ -166,6 +199,106 @@ export async function attendanceMinutesOn(employeeId: string, date: string): Pro
   }
   const session = getAttendanceState().sessions.find((s) => s.employeeId === employeeId && s.date === date);
   return session ? Math.round(attendedMinutes(session)) : null;
+}
+
+interface DayCheckOut {
+  worked_minutes: number | null;
+  shift_name: string | null;
+  shift_start: string | null;
+  shift_end: string | null;
+  shift_minutes: number | null;
+  beyond_shift_minutes: number | null;
+  day_type: DayCheck["dayType"];
+  holiday_name: string | null;
+  existing_id: string | null;
+  existing_status: string | null;
+  eligible: boolean;
+  warnings: string[];
+}
+
+const minutesOf = (hhmm: string) => {
+  const [h, m] = hhmm.split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+};
+
+/** Checks a date before sending (both modes give the same answers). */
+export async function checkOvertimeDay(actor: Who & { shiftStart?: string; shiftEnd?: string }, date: string): Promise<DayCheck | null> {
+  if (!date) return null;
+  if (API_ENABLED) {
+    const o = await api.get<DayCheckOut>("/overtime/attendance", { work_date: date });
+    return {
+      workedMinutes: o.worked_minutes,
+      shiftName: o.shift_name ?? "Your shift",
+      ...(o.shift_start ? { shiftStart: o.shift_start, shiftEnd: o.shift_end ?? undefined } : {}),
+      ...(o.shift_minutes !== null ? { shiftMinutes: o.shift_minutes } : {}),
+      beyondShiftMinutes: o.beyond_shift_minutes,
+      dayType: o.day_type,
+      ...(o.holiday_name ? { holidayName: o.holiday_name } : {}),
+      ...(o.existing_id ? { existingId: o.existing_id, existingStatus: o.existing_status ?? undefined } : {}),
+      eligible: o.eligible,
+      warnings: o.warnings,
+    };
+  }
+  const today = todayISO();
+  const worked = await attendanceMinutesOn(actor.id, date);
+  const start = actor.shiftStart ?? "09:30";
+  const end = actor.shiftEnd ?? "18:30";
+  const shiftMinutes = (minutesOf(end) - minutesOf(start) + 1440) % 1440 || 1440;
+  const weekday = new Date(`${date}T00:00:00`).getDay();
+  const dayType: DayCheck["dayType"] = weekday === 0 || weekday === 6 ? "weekend" : "working";
+  const existing = local.get().rows.find((r) => r.employeeId === actor.id && r.date === date && (r.status === "Submitted" || r.status === "Approved"));
+  const warnings: string[] = [];
+  let eligible = true;
+  if (date >= today) {
+    eligible = false;
+    warnings.push("Choose a past date: overtime is claimed after it is worked.");
+  } else if ((Date.parse(today) - Date.parse(date)) / 86_400_000 > MAX_DAYS_BACK) {
+    eligible = false;
+    warnings.push(`Overtime can be claimed up to ${MAX_DAYS_BACK} days back.`);
+  }
+  if (existing) {
+    eligible = false;
+    warnings.push(`You already asked for overtime on this date (${existing.id.toUpperCase()}, ${existing.status.toLowerCase()}).`);
+  }
+  if (worked === null) warnings.push("No attendance recorded on this date. Your manager will see this.");
+  let beyond: number | null = null;
+  if (worked !== null && dayType === "working") {
+    beyond = Math.max(0, worked - shiftMinutes);
+    if (beyond === 0) warnings.push("Attendance shows no time beyond your shift that day.");
+  } else if (worked !== null) beyond = worked;
+  return {
+    workedMinutes: worked,
+    shiftName: "Your shift",
+    shiftStart: start,
+    shiftEnd: end,
+    shiftMinutes,
+    beyondShiftMinutes: beyond,
+    dayType,
+    ...(existing ? { existingId: existing.id, existingStatus: existing.status } : {}),
+    eligible,
+    warnings,
+  };
+}
+
+/** The rate and limits the estimate uses: the server's in backend mode (its hourly rate comes from the pay record). */
+export async function overtimePolicy(actor: Who): Promise<OvertimePolicyView> {
+  if (API_ENABLED) {
+    const p = await api.get<{ weekly_hours: number; day_hours: number; multiplier: number; max_hours: number; comp_off: boolean; max_days_back: number; hourly_rate: number; currency: string }>(
+      "/overtime/policy",
+    );
+    return { hourlyRate: p.hourly_rate, multiplier: p.multiplier, maxHours: p.max_hours, compOff: p.comp_off, dayHours: p.day_hours, weeklyHours: p.weekly_hours, currency: p.currency, maxDaysBack: p.max_days_back };
+  }
+  const r = overtimeRulesFor(actor.countryCode);
+  return {
+    hourlyRate: hourlyRate(actor.id, actor.countryCode, actor.role),
+    multiplier: r.multiplier,
+    maxHours: r.maxHours,
+    compOff: r.compOff,
+    dayHours: r.dayHours,
+    weeklyHours: r.weeklyHours,
+    currency: actor.currency ?? payRulesFor(actor.countryCode as never).currency,
+    maxDaysBack: MAX_DAYS_BACK,
+  };
 }
 
 /* ───────────── Changes ───────────── */
@@ -209,7 +342,8 @@ export async function submitOvertime(actor: Who, input: OvertimeInput): Promise<
     steps,
   };
   const error = local.set({ rows: [row, ...local.get().rows] });
-  if (!error && manager) notify(manager, `Approve overtime · ${actor.fullName}`, `${input.hours} h on ${input.date}.`, "/overtime");
+  if (!error) recordLocalEvent("overtime", row.id, "overtime_submitted", actor.fullName);
+  if (!error && manager) notify(manager, `Approve overtime · ${actor.fullName}`, `${input.hours} h on ${input.date}.`, `/overtime?open=${row.id}`);
   return error;
 }
 
@@ -235,6 +369,7 @@ export async function decideOvertime(actor: Actor, id: string, decision: "approv
     const result = decideStep(actor, row.employeeId, row.steps, decision, note);
     if (typeof result === "string") return result;
     row.steps = result.steps;
+    recordLocalEvent("overtime", row.id, decision === "approve" ? "overtime_approved" : "overtime_rejected", actor.fullName);
     if (result.outcome === "rejected") row.status = "Rejected";
     if (result.outcome === "approved") {
       row.status = "Approved";
@@ -264,6 +399,7 @@ export async function withdrawOvertime(actor: Actor, id: string): Promise<string
     if (row.employeeId !== actor.id) return "Only the person who asked can withdraw it.";
     if (row.status !== "Submitted") return "It can only be withdrawn while it waits for approval.";
     row.status = "Withdrawn";
+    recordLocalEvent("overtime", row.id, "overtime_withdrawn", actor.fullName);
     return null;
   });
 }
