@@ -227,7 +227,7 @@ function MyPoliciesView({
   acks: ReturnType<typeof getPolicyAcks>;
 }) {
   const [query, setQuery] = useState("");
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   // Copilot source links and notifications open a policy directly: /policies?policy=<id>
   // Open something useful straight away: the linked policy, else the first one waiting on me, else the first listed.
   const firstDue = entries.find((e) =>
@@ -241,11 +241,17 @@ function MyPoliciesView({
   const detailRef = useRef<HTMLDivElement>(null);
   const openPolicy = (id: string) => {
     setOpenId(id);
+    // Keep the address on the open policy, so a refresh or a shared link shows the same one.
+    if (params.get("policy") !== id) {
+      const next = new URLSearchParams(params);
+      next.set("policy", id);
+      setParams(next, { replace: true });
+    }
     revealSoon(detailRef.current, detailRef.current?.querySelector<HTMLElement>(".pol-article h2"));
   };
   useEffect(() => {
     const linked = params.get("policy");
-    if (linked) openPolicy(linked);
+    if (linked && linked !== openId) openPolicy(linked);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
   const q = query.trim().toLowerCase();
@@ -299,22 +305,20 @@ function MyPoliciesView({
                     let badge = null;
                     if (e.kind === "managed") {
                       const ack = myAckOf(e.managed, userId);
-                      if (needsMyAck(e.managed, userId)) badge = <span className="pol-badge pol-badge-due">{ack ? "Updated — re-acknowledge" : "Acknowledge"}</span>;
+                      if (needsMyAck(e.managed, userId)) badge = <span className="pol-badge pol-badge-due">{ack ? "Re-acknowledge" : "Acknowledge"}</span>;
                       else if (e.managed.requiresAck) badge = <span className="pol-badge pol-badge-ok">Acknowledged</span>;
                     } else {
                       const ack = latestAck(acks, userId, p.id);
                       const current = ack?.version === p.version;
-                      if (p.mandatory && !current) badge = <span className="pol-badge pol-badge-due">{ack ? "Updated — re-acknowledge" : "Acknowledge"}</span>;
+                      if (p.mandatory && !current) badge = <span className="pol-badge pol-badge-due">{ack ? "Re-acknowledge" : "Acknowledge"}</span>;
                       else if (current) badge = <span className="pol-badge pol-badge-ok">Acknowledged</span>;
                     }
                     return (
                       <li key={p.id}>
                         <button type="button" className={p.id === openId ? "pol-row active" : "pol-row"} aria-current={p.id === openId ? "true" : undefined} onClick={() => openPolicy(p.id)}>
                           <span className="pol-row-title" title={p.title}>{p.title}</span>
-                          <span className="pol-row-meta">
-                            v{p.version}
-                            {badge}
-                          </span>
+                          <span className="pol-row-ver">v{p.version}</span>
+                          <span className="pol-row-status">{badge}</span>
                         </button>
                       </li>
                     );
@@ -385,17 +389,17 @@ function PolicyDetail({ policy, userId, acks, query }: { policy: Policy; userId:
           <>
             {ack && <span className="muted">You acknowledged v{ack.version}. This version changed.</span>}
             <ActionButton
-              className="btn"
+              className={policy.mandatory ? "btn" : "btn-ghost"}
               busyLabel="Saving…"
-              doneLabel="Acknowledged"
-              success={`Policy acknowledged: ${policy.title}.`}
+              doneLabel={policy.mandatory ? "Acknowledged" : "Read"}
+              success={policy.mandatory ? `Policy acknowledged: ${policy.title}.` : `Marked as read: ${policy.title}.`}
               onAction={async () => {
                 const error = await acknowledgePolicyAsync(userId, policy.id, policy.version);
                 setAckError(error);
                 return error;
               }}
             >
-              {`Acknowledge v${policy.version}`}
+              {policy.mandatory ? `Acknowledge v${policy.version}` : "Mark as read"}
             </ActionButton>
           </>
         )}
