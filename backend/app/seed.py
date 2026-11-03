@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.config import BACKEND_DIR, get_settings
@@ -259,8 +259,17 @@ def seed_projects(db: Session) -> int:
     return len(PROJECTS)
 
 
-def run(reset_passwords: bool = False) -> dict[str, int]:
+# Any fixed number, different from app.migrate's: only one seed runs at a time across instances.
+SEED_LOCK_KEY = 7_316_220_042
+
+
+def run(reset_passwords: bool = False, *, only_if_free: bool = False) -> dict[str, int]:
+    """Seed everything in one transaction (all or nothing). only_if_free: skip, returning {}, when another
+    instance is already seeding (transaction-level lock, so it works through Neon's pooled endpoint)."""
     with SessionLocal() as db:
+        if only_if_free and db.get_bind().dialect.name == "postgresql":
+            if not db.scalar(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": SEED_LOCK_KEY}):
+                return {}
         # Load existing rows once so the per-row lookups below hit the session, not the network (matters on Neon).
         cache = [row for model in (Country, Employee, Account, AccessScope, LeaveType, LeavePolicy, Holiday, LeaveRequest,
                                     Project, ProjectMember)

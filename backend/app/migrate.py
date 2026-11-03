@@ -5,7 +5,8 @@ starting together can't run it twice: the second waits, then finds the schema al
 lock (not a session lock) also works through Neon's pooled (PgBouncer) endpoint. PostgreSQL DDL is transactional,
 so a failed migration rolls back completely.
 
-Seeding is never automatic: run `python -m app.seed` by hand (see DEPLOY.md).
+Seeding runs by hand (`python -m app.seed`), or once at start-up with SEED_ON_START=true (seed_if_enabled):
+on the server it sits next to the database and uses the server's file storage.
 Run by hand: python -m app.migrate
 """
 
@@ -64,6 +65,33 @@ def run_if_enabled() -> None:
         log.info("Database schema already at head (%s); %.1fs", after, took)
     else:
         log.info("Database schema upgraded %s -> %s in %.1fs", before or "empty", after, took)
+
+
+def seed_if_enabled() -> None:
+    """SEED_ON_START=true: run the idempotent seed in a background thread so the server answers health checks
+    meanwhile. Failures are logged, never fatal: the seed is one transaction, so a failed run saves nothing."""
+    if not get_settings().seed_on_start:
+        return
+    import threading
+
+    def work() -> None:
+        from app import seed
+
+        started = time.monotonic()
+        log.info("SEED_ON_START: seeding sample data")
+        try:
+            stats = seed.run(only_if_free=True)
+        except Exception:
+            log.exception("SEED_ON_START: seed failed; nothing was saved")
+            return
+        if not stats:
+            log.info("SEED_ON_START: another instance is seeding; skipped")
+            return
+        added = ", ".join(f"{k}={v}" for k, v in stats.items() if v and k.endswith("added"))
+        log.info("SEED_ON_START: seed finished in %.1fs (%s). You can remove SEED_ON_START now.",
+                 time.monotonic() - started, added or "nothing new")
+
+    threading.Thread(target=work, name="seed-on-start", daemon=True).start()
 
 
 if __name__ == "__main__":

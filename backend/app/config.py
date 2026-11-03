@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     # Run `alembic upgrade head` once at start-up (Render free has no pre-deploy command).
     run_migrations_on_start: bool = Field(default=False, validation_alias="RUN_MIGRATIONS_ON_START")
+    # Run the sample-data seed (app/seed.py) once at start-up, next to the database. Turn on, let it finish, turn off.
+    seed_on_start: bool = Field(default=False, validation_alias="SEED_ON_START")
     access_token_minutes: int = 30
     refresh_token_days: int = 7
     max_failed_logins: int = 5

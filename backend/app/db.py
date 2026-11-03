@@ -58,7 +58,10 @@ def make_engine(url: str) -> Engine:
 
         return engine
     # Neon's pooled endpoint runs PgBouncer: turn off server-side prepared statements to stay compatible.
-    return create_engine(url, pool_pre_ping=True, pool_recycle=300, connect_args={"prepare_threshold": None})
+    # TCP keep-alives stop routers and Wi-Fi from silently dropping a connection that is busy in a long run (the seed).
+    return create_engine(url, pool_pre_ping=True, pool_recycle=300,
+                         connect_args={"prepare_threshold": None, "keepalives": 1, "keepalives_idle": 30,
+                                       "keepalives_interval": 10, "keepalives_count": 5})
 
 
 engine = make_engine(get_settings().database_url)

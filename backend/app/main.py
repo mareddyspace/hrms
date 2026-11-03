@@ -253,6 +253,7 @@ async def _lifespan_migrate(app_: FastAPI):  # type: ignore[no-untyped-def]
              "on" if settings.docs_enabled else "off")
     _migrate.run_if_enabled()
     log.info("File storage: %s", _storage.check_configuration())
+    _migrate.seed_if_enabled()
     async with _lifespan_before_migrations(app_) as state:
         yield state
 
