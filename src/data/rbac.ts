@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "../model.ts";
 /**
  * TimeZ frontend RBAC — single source of truth for the 8 demo roles.
  * Frontend-only checks today; shape is ready for backend policy claims later.
@@ -53,7 +54,7 @@ function isSelf(ctx: SubjectContext): boolean {
 }
 
 function isHr(role: DemoAccount["role"]): boolean {
-  return role === "hr_admin" || role === "hr" || role === "hrbp";
+  return role === "hr_admin" || role === "hr" || role === "hrbp" || isSuperAdmin(role);
 }
 
 function isExecutive(role: DemoAccount["role"]): boolean {
@@ -61,7 +62,7 @@ function isExecutive(role: DemoAccount["role"]): boolean {
 }
 
 function isAdminPlatform(role: DemoAccount["role"]): boolean {
-  return role === "admin" || role === "it_admin" || role === "super_admin" || role === "compliance";
+  return role === "it_admin" || role === "compliance"; // admin / super_admin are super admins (isHr)
 }
 
 /* ───────────── Profile / people ───────────── */

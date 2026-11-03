@@ -43,8 +43,10 @@ Active = Annotated[bool | None, Query(description="Omit for active only; false f
 
 
 def _require_editor(user: CurrentUser) -> None:
-    if not (user.scope.is_hr or user.account.role == "admin"):
+    if not user.scope.is_hr:  # HR and super admins
         raise HTTPException(403, "Only HR or an administrator can change the organization.")
+    if user.scope.countries:  # the structure spans countries: not for HR limited to some of them
+        raise HTTPException(403, "Organization changes are for HR without a country limit, or an administrator.")
 
 
 def _cols(row: Any, names: tuple[str, ...]) -> dict[str, Any]:

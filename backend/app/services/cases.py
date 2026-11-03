@@ -22,7 +22,7 @@ from app.models import Employee, HrCase, HrCaseFile, HrCaseNote
 from app.services import storage
 from app.services.activity import record_audit
 from app.services.platform_settings import get_setting
-from app.services.scope import HR_ROLES, Scope
+from app.services.scope import HR_ACCESS_ROLES, Scope
 
 CATEGORIES = ("Grievance", "Harassment/POSH", "Discrimination", "Ethics/whistleblowing", "Safety")
 POSH = "Harassment/POSH"
@@ -82,7 +82,7 @@ def can_manage(db: Session, case: HrCase, employee_id: str | None, role: str, sc
     """HR within its data scope; committee members additionally for POSH. Never the reporter or the person named."""
     if not employee_id or is_named(case, employee_id) or case.reporter_id == employee_id:
         return False
-    if role in HR_ROLES and in_hr_scope(db, case, scope):
+    if role in HR_ACCESS_ROLES and in_hr_scope(db, case, scope):
         return True
     return is_posh(case) and employee_id in committee(db)
 

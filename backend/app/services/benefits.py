@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.deps import CurrentUser
 from app.models import Account, BenefitDependent, BenefitPlan, BenefitWindow, Employee, LifeEvent
-from app.services.scope import HR_ROLES, manager_chain_ids
+from app.services.scope import HR_ACCESS_ROLES, HR_ROLES, manager_chain_ids
 
 LIFE_EVENT_TYPES = ("Marriage", "Birth or adoption", "Divorce", "Death of a dependent", "Spouse lost coverage")
 LIFE_EVENT_WINDOW_DAYS = 30
@@ -136,7 +136,7 @@ def require_window(db: Session, emp: Employee, today: date) -> ChangeWindow:
 
 
 def is_benefits_hr(user: CurrentUser) -> bool:
-    return user.account.role in HR_ROLES
+    return user.account.role in HR_ACCESS_ROLES
 
 
 def can_decide_for(db: Session, user: CurrentUser, emp: Employee) -> bool:

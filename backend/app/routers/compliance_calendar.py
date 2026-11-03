@@ -17,11 +17,11 @@ from app.models import ComplianceDueDate, Country
 from app.services import compliance_calendar as rules
 from app.services.activity import record_audit
 from app.services.leave import today_for
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
 router = APIRouter(prefix="/compliance-calendar", tags=["compliance calendar"])
 
-ALLOWED = HR_ROLES | {"admin", "super_admin"}
+ALLOWED = HR_ACCESS_ROLES | {"admin", "super_admin"}
 
 
 class ItemOut(BaseModel):

@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.deps import CurrentUser
 from app.models import Employee, EmployeeDocument
 from app.services import storage
-from app.services.scope import HR_ROLES, manager_chain_ids
+from app.services.scope import HR_ACCESS_ROLES, manager_chain_ids
 
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -86,7 +86,7 @@ def clean_name(raw: str | None, content_type: str, fallback: str = "document") -
 
 
 def is_hr_for(user: CurrentUser, emp: Employee) -> bool:
-    return user.account.role in HR_ROLES and user.scope.can_see(emp)
+    return user.account.role in HR_ACCESS_ROLES and user.scope.can_see(emp)
 
 
 def can_see_document(db: Session, user: CurrentUser, doc: EmployeeDocument, owner: Employee) -> bool:

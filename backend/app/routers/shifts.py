@@ -26,14 +26,14 @@ from app.services import shifts as rules
 from app.services.activity import notify, record_audit
 from app.services.decisions import NOT_FOUND, can_decide, me
 from app.services.leave import today_for
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
 router = APIRouter(prefix="/shifts", tags=["shifts"])
 ROUTE = "/workforce/shifts"
 
 
 def _is_hr(user: CurrentUser) -> bool:
-    return user.account.role in HR_ROLES
+    return user.account.role in HR_ACCESS_ROLES
 
 
 def _today(user: CurrentUser) -> date:

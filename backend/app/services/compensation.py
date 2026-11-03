@@ -39,9 +39,9 @@ from app.models import (
 from app.services import approvals as engine
 from app.services.activity import record_audit
 from app.services.decisions import can_view
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
-PAY_ROLES = HR_ROLES | {"compensation"}
+PAY_ROLES = HR_ACCESS_ROLES | {"compensation"}
 EXEC_THRESHOLD_PCT = 10
 COMP_WORKFLOW: list[dict[str, Any]] = [
     {"roles": ["hr"], "mode": "any", "min_amount": None},

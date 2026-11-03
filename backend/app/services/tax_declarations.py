@@ -22,9 +22,9 @@ from sqlalchemy.orm import Session
 from app.db import utcnow
 from app.deps import CurrentUser
 from app.models import AccessScope, Employee, Notification, TaxDeclaration, TaxDeclarationWindow
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
-VERIFY_ROLES = HR_ROLES | {"finance", "payroll", "compensation"}
+VERIFY_ROLES = HR_ACCESS_ROLES | {"finance", "payroll", "compensation"}
 EDITABLE = ("draft", "rejected")
 STATUSES = ("draft", "submitted", "verified", "rejected")
 REMIND_DAYS = 30  # deadline reminders start this many days before
@@ -154,7 +154,7 @@ def can_verify(db: Session, user: CurrentUser, emp: Employee) -> bool:
     """Finance / HR verify people in their scope, never themselves."""
     if emp.id == user.employee_id or user.account.role not in VERIFY_ROLES:
         return False
-    if user.account.role in HR_ROLES:
+    if user.account.role in HR_ACCESS_ROLES:
         return user.scope.can_see(emp)
     row = db.get(AccessScope, user.id)
     countries = [c.strip().upper() for c in (row.country_codes or "").split(",") if c.strip()] if row else []

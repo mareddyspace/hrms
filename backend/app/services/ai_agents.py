@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.models import AiSetting
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES, HR_ROLES
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ AGENTS: dict[str, Agent] = {a.id: a for a in [
     Agent("recruiter", "Recruiting assistant", "hiring: open roles, pipeline stages and joiners",
           frozenset({"recruiter"}) | HR_ROLES),
     Agent("analytics", "Analytics assistant", "workforce numbers: headcount, joiners, exits and attrition",
-          frozenset({"manager", "executive"}) | HR_ROLES),
+          frozenset({"manager", "executive"}) | HR_ACCESS_ROLES),
 ]}
 
 

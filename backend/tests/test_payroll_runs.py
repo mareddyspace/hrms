@@ -208,27 +208,19 @@ def _gb_run_in_review(client, farhan, months_back: int) -> str:
     return rid
 
 
-def test_admin_has_no_payroll_runs(client, farhan):
+def test_admin_is_super_admin_for_payroll_runs(client, farhan):
     from app.security import create_access_token
 
     # A direct token: earlier security tests lock Alex's sign-in on purpose.
     alex = {"Authorization": f"Bearer {create_access_token('demo-admin', 'admin')[0]}"}
     rid = _gb_run_in_review(client, farhan, 3)
-    month = client.get(f"{API}/payroll/runs/{rid}", headers=farhan).json()["month"]
-    entity = client.get(f"{API}/payroll/runs/{rid}", headers=farhan).json()["legal_entity"]
-    params = {"month": month, "country": "GB", "entity": entity}
-    assert client.get(f"{API}/payroll/runs", headers=alex).status_code == 403
-    assert client.get(f"{API}/payroll/entities", headers=alex).status_code == 403
-    assert client.get(f"{API}/payroll/runs/inputs", headers=alex, params=params).status_code == 403
-    assert client.post(f"{API}/payroll/runs/prepare", headers=alex,
-                       json={"month": month, "country_code": "GB", "legal_entity": entity, "lines": []}).status_code == 403
-    for path in ("", "/register.csv", "/bank.csv"):
-        assert client.get(f"{API}/payroll/runs/{rid}{path}", headers=alex).status_code == 403
-    assert client.post(f"{API}/payroll/runs/{rid}/approve", headers=alex).status_code == 403
-    assert client.post(f"{API}/payroll/runs/{rid}/send-back", headers=alex, json={"note": "x"}).status_code == 403
-    assert client.put(f"{API}/payroll/bank-details/emp-mahesh", headers=alex, json={
-        "account_name": "X", "account_number": "12345678", "bank_code": "HDFC0", "bank_name": "HDFC"}).status_code == 403
-    # The non-confidential provider / status page stays open to the admin.
+    run = client.get(f"{API}/payroll/runs/{rid}", headers=farhan).json()
+    params = {"month": run["month"], "country": "GB", "entity": run["legal_entity"]}
+    assert client.get(f"{API}/payroll/runs", headers=alex).status_code == 200
+    assert client.get(f"{API}/payroll/entities", headers=alex).status_code == 200
+    assert client.get(f"{API}/payroll/runs/inputs", headers=alex, params=params).status_code == 200
+    for path in ("", "/register.csv"):
+        assert client.get(f"{API}/payroll/runs/{rid}{path}", headers=alex).status_code == 200
     assert client.get(f"{API}/payroll/status", headers=alex).status_code == 200
 
 

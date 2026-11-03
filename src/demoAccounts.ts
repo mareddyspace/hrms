@@ -175,27 +175,6 @@ const ACCESS_MANAGER: NavAccessId[] = [
   // compensation intentionally omitted — managers do not get salary records by default
 ];
 
-/** Platform admin: settings & system reports — not confidential pay. */
-const ACCESS_ADMIN: NavAccessId[] = [
-  // Own self-service (own payslips included) plus platform tools — no team tools without a team, no others' pay.
-  ...ACCESS_EMPLOYEE,
-  "people",
-  "organization",
-  "jobs",
-  "locale",
-  "integrations",
-  "administration",
-  "bulkdata",
-  "reportbuilder",
-  "auditlog",
-  "approvalsmenu",
-  "workflowsconfig",
-  "emailoutbox",
-  "accessroles", // Roles & permissions (/admin/roles)
-  "aisettings", // AI settings (/admin/ai)
-  // Not here (HR work, not system administration): payroll runs, lifecycle actions, leave policies, compliance calendar.
-];
-
 function account(
   partial: Omit<DemoAccount, "employmentType" | "shiftName" | "shiftHours" | "photo" | "mobile" | "address"> &
     Partial<Pick<DemoAccount, "employmentType" | "shiftName" | "shiftHours" | "photo" | "mobile" | "address" | "rbacFlags">>,
@@ -438,7 +417,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     currency: "GBP",
     shiftHours: "09:00 AM to 05:30 PM",
     reportsToId: "demo-ceo",
-    navAccess: ACCESS_ADMIN,
+    navAccess: ["*"], // super admin: every page (the server gives admin full access too)
   }),
 ];
 

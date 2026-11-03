@@ -1,6 +1,6 @@
 """Policies HR publishes (app/models/policies.py): audience, versions, acknowledgements, reminders.
 
-- HR (HR_ROLES) and admins create and edit policies. Edits go into the draft version (the next number); publishing
+- HR (HR_ACCESS_ROLES) and admins create and edit policies. Edits go into the draft version (the next number); publishing
   makes it current and notifies everyone it targets ("Needs your acknowledgement" when requires_ack).
 - Audience: all, by country (country codes) or by department (names). People who have left are never targeted.
 - An acknowledgement is for one version; a new version needs a new one.
@@ -21,9 +21,9 @@ from app.models import Employee, PolicyAcknowledgment
 from app.models.policies import HrPolicy, HrPolicyVersion
 from app.services.activity import notify
 from app.services.headcount import started_clause
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
-EDITOR_ROLES = HR_ROLES | {"admin"}
+EDITOR_ROLES = HR_ACCESS_ROLES | {"admin"}
 LEFT_STATUSES = ("Terminated", "Exited", "Resigned", "Separated", "Inactive")
 
 

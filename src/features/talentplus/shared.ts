@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "../../model.ts";
 import { DEMO_ACCOUNTS, managementChain, type DemoAccount } from "../../demoAccounts.ts";
 import { getPerson } from "../../data/peopleLocal.ts";
 import { TASK_TEAM } from "../../data/taskTeam.ts";
@@ -16,7 +17,7 @@ const HR_ROLES: readonly UserRole[] = ["hr", "hr_admin", "hrbp"];
 const EXEC_ROLES: readonly UserRole[] = ["executive", "founder", "cofounder", "super_admin"];
 
 export function isHr(role: UserRole): boolean {
-  return HR_ROLES.includes(role);
+  return HR_ROLES.includes(role) || isSuperAdmin(role);
 }
 
 export function isExecutive(role: UserRole): boolean {

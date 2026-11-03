@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "../model.ts";
 /**
  * People / compensation permission helpers.
  * Delegates to `rbac.ts` — keep imports stable for existing modules.
@@ -39,6 +40,7 @@ export {
 
 export function canManagePeople(role: UserRole): boolean {
   return (
+    isSuperAdmin(role) ||
     role === "hr_admin" ||
     role === "hr" ||
     role === "hrbp" ||

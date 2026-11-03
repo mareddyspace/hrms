@@ -34,18 +34,18 @@ from app.schemas.engagement_shifts import (
 from app.services.activity import notify, record_audit
 from app.services.decisions import NOT_FOUND, me
 from app.services.headcount import started_clause
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES, HR_ROLES
 
 router = APIRouter(tags=["engagement"])
 
 MIN_RESPONSES = 5
 MONTHLY_ALLOWANCE = 100
 MAX_POINTS_PER_KUDOS = 50
-RESULT_ROLES = HR_ROLES | {"admin", "executive"}
+RESULT_ROLES = HR_ACCESS_ROLES | {"admin", "executive"}
 
 
 def _hr(user: CurrentUser) -> None:
-    if user.account.role not in HR_ROLES:
+    if user.account.role not in HR_ACCESS_ROLES:
         raise HTTPException(403, "Only HR can manage surveys.")
 
 
@@ -142,7 +142,7 @@ def _buckets(s: EngagementSurvey, rows: list[EngagementResponse], attr: str) -> 
 def list_surveys(db: DbSession, user: CurrentUserDep) -> list[SurveyOut]:
     """HR: every survey. Everyone else: published surveys open to them."""
     rows = list(db.scalars(select(EngagementSurvey).order_by(EngagementSurvey.open_date.desc())))
-    if user.account.role not in HR_ROLES:
+    if user.account.role not in HR_ACCESS_ROLES:
         emp = user.employee
         rows = [s for s in rows if s.published and emp is not None and in_audience(s, emp)]
     return [_survey_out(db, s, user.employee_id) for s in rows]
@@ -272,7 +272,7 @@ def survey_trend(db: DbSession, user: CurrentUserDep, kind: str | None = None) -
 @router.get("/surveys/{survey_id}", response_model=SurveyOut)
 def get_survey(survey_id: str, db: DbSession, user: CurrentUserDep) -> SurveyOut:
     s = _survey(db, survey_id)
-    if user.account.role not in HR_ROLES and not (s.published and user.employee and in_audience(s, user.employee)):
+    if user.account.role not in HR_ACCESS_ROLES and not (s.published and user.employee and in_audience(s, user.employee)):
         raise NOT_FOUND
     return _survey_out(db, s, user.employee_id)
 
@@ -385,7 +385,7 @@ def points(db: DbSession, user: CurrentUserDep, employee_id: str | None = None) 
     if employee_id and employee_id != emp.id:
         other = db.get(Employee, employee_id)
         # HR only, and only within its data scope (country-limited HR doesn't see other countries' points).
-        if user.account.role not in HR_ROLES or other is None or not user.scope.can_see(other):
+        if user.account.role not in HR_ACCESS_ROLES or other is None or not user.scope.can_see(other):
             raise NOT_FOUND
         return _balance(db, employee_id)
     return _balance(db, emp.id)
@@ -410,7 +410,7 @@ def list_redemptions(db: DbSession, user: CurrentUserDep,
     stmt = select(RewardRedemption)
     if view == "mine":
         stmt = stmt.where(RewardRedemption.employee_id == (user.employee_id or ""))
-    elif user.account.role not in HR_ROLES:
+    elif user.account.role not in HR_ACCESS_ROLES:
         raise HTTPException(403, "Only HR can see every redemption.")
     if status_filter:
         stmt = stmt.where(RewardRedemption.status == status_filter)
@@ -463,7 +463,7 @@ def cancel_redemption(redemption_id: str, request: Request, db: DbSession, user:
 @router.post("/recognition/redemptions/{redemption_id}/decision", response_model=RedemptionOut)
 def decide_redemption(redemption_id: str, body: RedemptionDecisionIn, request: Request, db: DbSession,
                       user: CurrentUserDep) -> RedemptionOut:
-    if user.account.role not in HR_ROLES:
+    if user.account.role not in HR_ACCESS_ROLES:
         raise HTTPException(403, "Only HR can fulfil or decline rewards.")
     r = db.get(RewardRedemption, redemption_id)
     if r is None:

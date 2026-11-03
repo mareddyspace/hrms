@@ -41,9 +41,9 @@ from app.services import self_service
 from app.services.activity import notify, record_audit
 from app.services.headcount import PRE_START_STATUSES
 from app.services.leave import holiday_dates_for, weekly_off_for_employee, working_days
-from app.services.scope import HR_ROLES, Scope
+from app.services.scope import HR_ACCESS_ROLES, Scope
 
-PAYROLL_ROLES = HR_ROLES | {"payroll"}  # do payroll: prepare, see each person's pay, export the register and bank file
+PAYROLL_ROLES = HR_ACCESS_ROLES | {"payroll"}  # do payroll: prepare, see each person's pay, export the register and bank file
 PREPARE_ROLES = PAYROLL_ROLES
 APPROVE_ROLES = PAYROLL_ROLES | {"finance", "executive"}
 VIEW_ROLES = PREPARE_ROLES | APPROVE_ROLES

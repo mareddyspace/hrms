@@ -10,7 +10,9 @@ from __future__ import annotations
 import base64
 import binascii
 import re
+import time
 import uuid
+from collections import deque
 from datetime import date
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -60,9 +62,28 @@ def career_post(posting_id: str, db: DbSession) -> PublicPostingOut:
     return _public(db, post, req)
 
 
+# Public form: at most APPLY_LIMIT applications per address in APPLY_WINDOW seconds (in memory, one server process).
+APPLY_LIMIT, APPLY_WINDOW = 5, 600
+_applies: dict[str, deque[float]] = {}
+
+
+def _apply_throttle(ip: str | None) -> None:
+    now = time.monotonic()
+    q = _applies.setdefault(ip or "?", deque())
+    while q and q[0] <= now - APPLY_WINDOW:
+        q.popleft()
+    if len(q) >= APPLY_LIMIT:
+        raise HTTPException(429, "Too many applications from this connection. Try again in a few minutes.")
+    q.append(now)
+    if len(_applies) > 10_000:  # forget idle addresses
+        for k in [k for k, v in _applies.items() if not v or v[-1] <= now - APPLY_WINDOW]:
+            _applies.pop(k, None)
+
+
 @router.post("/careers/{posting_id}/apply", response_model=PublicApplyOut, status_code=status.HTTP_201_CREATED)
 def apply(posting_id: str, body: PublicApplyIn, request: Request, db: DbSession) -> PublicApplyOut:
     """Name, email, phone, CV (PDF, DOC, DOCX or TXT, at most 5 MB, sent as base64) and an optional cover note."""
+    _apply_throttle(client_ip(request))
     post, req = _open_post(db, posting_id)
     if body.website:  # filled in only by bots: answer as if it worked, keep nothing
         return PublicApplyOut(reference="received", title=post.title)

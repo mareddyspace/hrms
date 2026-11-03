@@ -3,9 +3,10 @@
 - everyone: themselves
 - anyone with reports: their whole reporting line (recursive via manager_id)
 - HR: global for HR data (can be limited to a list of countries in access_scopes)
-- admin (system administrator) / executive (CEO, founder): organisation-wide for the directory (basic profiles) and
-  aggregate dashboards only (`org_wide`, `org_filter`), never HR data about people outside their own reporting line
-  (front-end policy src/data/rbac.ts: getProfileDepth gives them "basic", canViewSensitivePii gives them nothing).
+- admin / super_admin (SUPER_ADMIN_ROLES): super admin, full access to everything HR can see and do, in every country,
+  whatever data scope is saved for the account
+- executive (CEO, founder): organisation-wide for the directory (basic profiles) and aggregate dashboards only
+  (`org_wide`, `org_filter`), never HR data about people outside their own reporting line
 """
 
 from __future__ import annotations
@@ -17,9 +18,12 @@ from sqlalchemy.orm import Session
 
 from app.models import AccessScope, Account, Employee
 
-HR_ROLES = frozenset({"hr_admin", "hr", "hrbp"})
+HR_ROLES = frozenset({"hr_admin", "hr", "hrbp"})  # the HR team (approver groups, HR inbox, notifications)
+SUPER_ADMIN_ROLES = frozenset({"admin", "super_admin"})
+# Who may see and do HR work (access checks). Approver and recipient lookups keep using HR_ROLES.
+HR_ACCESS_ROLES = HR_ROLES | SUPER_ADMIN_ROLES
 # Organisation-wide for aggregates / dashboards / the directory. Only HR_ROLES get HR data about everyone (is_global).
-GLOBAL_ROLES = HR_ROLES | {"admin", "executive"}
+GLOBAL_ROLES = HR_ACCESS_ROLES | {"executive"}
 ORG_WIDE_ROLES = GLOBAL_ROLES
 # Saved data scopes that mean "people sharing my <column>" (app/services/data_scope.py).
 SCOPE_MATCH_COLUMNS = {
@@ -59,7 +63,7 @@ class Scope:
 
     @property
     def is_hr(self) -> bool:
-        return self.role in HR_ROLES
+        return self.role in HR_ACCESS_ROLES
 
     def employee_filter(self) -> ColumnElement[bool]:
         """SQL condition on Employee for rows this user may see."""
@@ -96,7 +100,7 @@ def build_scope(db: Session, account: Account) -> Scope:
     return Scope(
         self_id=account.employee_id,
         role=account.role,
-        is_global=account.role in HR_ROLES,
+        is_global=account.role in HR_ACCESS_ROLES,
         countries=countries if account.role in HR_ROLES else None,
         reports=reports,
         org_wide=account.role in ORG_WIDE_ROLES,

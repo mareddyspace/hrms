@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "../../model.ts";
 import { DEMO_ACCOUNTS, findDemoById, managementChain, type DemoAccount } from "../../demoAccounts.ts";
 import { taskPersonById, taskTeamFor, type TaskTeamPerson } from "../../data/taskTeam.ts";
 import { getPerson, listPeople } from "../../data/peopleLocal.ts";
@@ -48,7 +49,7 @@ export function swapPartnerError(personId: string, date: string): string | null 
 }
 
 export function isHrRole(role: UserRole): boolean {
-  return role === "hr" || role === "hr_admin" || role === "hrbp" || role === "super_admin";
+  return role === "hr" || role === "hr_admin" || role === "hrbp" || isSuperAdmin(role);
 }
 
 export function isHrOrAdmin(role: UserRole): boolean {

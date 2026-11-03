@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "../../model.ts";
 import type { DemoAccount } from "../../demoAccounts.ts";
 import type { UserRole } from "../../model.ts";
 import { addDaysISO, todayISO } from "../../model.ts";
@@ -11,7 +12,7 @@ export type ComplianceResult = string | null;
 const HR_ROLES: readonly UserRole[] = ["hr", "hr_admin", "hrbp"];
 
 export function isHr(role: UserRole): boolean {
-  return HR_ROLES.includes(role);
+  return HR_ROLES.includes(role) || isSuperAdmin(role);
 }
 
 export function newId(prefix: string): string {

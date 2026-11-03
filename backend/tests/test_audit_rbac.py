@@ -178,8 +178,8 @@ def test_employee_cannot_open_others_documents_by_id(client, babu, ram):
     # guessed ids give the same answer as real ones (no existence oracle)
     assert client.get(f"{API}/documents/doc-{uuid.uuid4().hex[:12]}", headers=babu).status_code == \
         client.get(f"{API}/documents/{doc_id}", headers=babu).status_code
-    # medical documents are not for the manager chain either, nor for admin or the recruiter
-    for other in ("jordan.blake@timez.com", "alex.morgan@timez.com", "sophie.clark@timez.com"):
+    # medical documents are not for the manager chain either, nor the recruiter (admin is a super admin)
+    for other in ("jordan.blake@timez.com", "sophie.clark@timez.com"):
         assert client.get(f"{API}/documents/{doc_id}", headers=login(client, other)).status_code in (403, 404), other
 
 
@@ -283,30 +283,26 @@ def test_hr_country_scope_applies_to_cases(client):
 
 
 # ---------- admin ----------
-def test_admin_has_no_pay_or_case_access(client, alex):
-    for path in PAY_BY_PARAM:
-        assert denied_or_absent(client.get(f"{API}{path}", headers=alex, params={"employee_id": "emp-mahesh"}), "emp-mahesh")
-    assert client.get(f"{API}/compensation/records/current", headers=alex).status_code == 403
-    assert client.get(f"{API}/compensation/proposals", headers=alex, params={"view": "all"}).status_code == 403
-    assert client.get(f"{API}/cases", headers=alex, params={"view": "manage"}).json() == []
+# ---------- admin: super admin, full access like HR in every country ----------
+def test_admin_is_super_admin_with_pay_and_case_access(client, alex):
+    assert client.get(f"{API}/compensation/proposals", headers=alex, params={"view": "all"}).status_code == 200
     case = client.post(f"{API}/cases", headers=login(client, "babu.menon@timez.com"), json={
-        "category": "Grievance", "anonymous": False, "description": "Audit: admin must never read this case."})
-    assert client.get(f"{API}/cases/{case.json()['id']}", headers=alex).status_code == 404
+        "category": "Grievance", "anonymous": False, "description": "Audit: the super admin can read this case."})
+    assert client.get(f"{API}/cases/{case.json()['id']}", headers=alex).status_code == 200
 
 
-def test_admin_cannot_read_employee_documents(client, alex):
-    res = client.get(f"{API}/documents", headers=alex, params={"employee_id": "emp-mahesh"})
-    assert denied_or_absent(res, "emp-mahesh")
+def test_admin_reads_employee_documents(client, alex):
+    assert client.get(f"{API}/documents", headers=alex, params={"employee_id": "emp-mahesh"}).status_code == 200
 
 
-def test_admin_gets_basic_profile_and_no_pii_reveal(client, alex):
-    assert client.get(f"{API}/people/emp-mahesh", headers=alex).json()["view"] == "basic"
-    assert client.get(f"{API}/people/emp-mahesh/reveal", headers=alex, params={"field": "mobile"}).status_code == 403
+def test_admin_gets_full_profile_and_pii_reveal(client, alex):
+    assert client.get(f"{API}/people/emp-mahesh", headers=alex).json()["view"] == "full"
+    assert client.get(f"{API}/people/emp-mahesh/reveal", headers=alex, params={"field": "mobile"}).status_code == 200
 
 
-def test_admin_and_executive_cannot_read_performance_of_strangers(client, alex, jordan):
+def test_executive_cannot_read_performance_of_strangers(client, jordan):
     stranger = sample_employee("GB", offset=9)
-    for h in (alex, jordan):
+    for h in (jordan,):
         for path in ("/performance/goals", "/leave/balances", "/attendance/summary"):
             assert denied_or_absent(client.get(f"{API}{path}", headers=h, params={"employee_id": stranger}), stranger), path
 

@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "../model.ts";
 import {
   CORRECTIONS_SEED,
   nonWorkingReason,
@@ -294,7 +295,7 @@ export function listCorrectionsForManager(managerId: string): AttendanceCorrecti
 
 /** HR can review any correction, not only their own reporting line. */
 export function isHrReviewer(role: string): boolean {
-  return role === "hr" || role === "hr_admin";
+  return role === "hr" || role === "hr_admin" || isSuperAdmin(role);
 }
 
 /** Corrections the viewer may decide — `canApprove` is the portal's reporting-line check; HR sees every request but their own. */

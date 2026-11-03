@@ -57,7 +57,7 @@ from app.services.activity import notify, record_audit
 from app.services.approval_targets import start_about
 from app.services.decisions import NOT_FOUND, can_view, me, target
 from app.services.leave import today_for
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES, HR_ROLES
 from app.services.workflow_defaults import decide_http, waiting_entity_ids
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -141,7 +141,7 @@ def document_rules(db: DbSession, user: CurrentUserDep) -> DocRulesOut:
 @router.put("/categories", response_model=list[DocCategoryOut])
 def save_categories(body: list[DocCategoryIn], request: Request, db: DbSession, user: CurrentUserDep) -> list[DocCategoryOut]:
     """HR / admin: rename categories, and choose which need verification and which employees may upload."""
-    if user.account.role not in (*HR_ROLES, "admin", "super_admin"):
+    if user.account.role not in (*HR_ACCESS_ROLES, "admin", "super_admin"):
         raise HTTPException(403, "Only HR or an administrator can change document categories.")
     from app.services.platform_settings import set_setting
 
@@ -161,7 +161,7 @@ def save_categories(body: list[DocCategoryIn], request: Request, db: DbSession, 
 @router.get("/verification-queue", response_model=list[EmployeeDocumentOut])
 def verification_queue(db: DbSession, user: CurrentUserDep) -> list[EmployeeDocumentOut]:
     """HR: documents waiting for verification in your scope."""
-    if user.account.role not in HR_ROLES:
+    if user.account.role not in HR_ACCESS_ROLES:
         return []
     rows = [d for d in db.scalars(select(EmployeeDocument).join(Employee, Employee.id == EmployeeDocument.employee_id)
                                   .where(EmployeeDocument.verification_status == "pending", user.scope.employee_filter())
@@ -319,11 +319,11 @@ def list_policy_acks(db: DbSession, user: CurrentUserDep, employee_id: str | Non
                      ) -> list[PolicyAcknowledgment]:
     """Your acknowledgments; HR may pass employee_id (in scope) or policy_id alone (everyone in scope)."""
     stmt = select(PolicyAcknowledgment)
-    if employee_id is None and policy_id and user.account.role in HR_ROLES:
+    if employee_id is None and policy_id and user.account.role in HR_ACCESS_ROLES:
         stmt = stmt.join(Employee, Employee.id == PolicyAcknowledgment.employee_id).where(user.scope.employee_filter())
     else:
         emp = target(db, user, employee_id)
-        if emp.id != user.employee_id and user.account.role not in HR_ROLES:
+        if emp.id != user.employee_id and user.account.role not in HR_ACCESS_ROLES:
             raise HTTPException(403, "Only HR can see someone else's acknowledgments.")
         stmt = stmt.where(PolicyAcknowledgment.employee_id == emp.id)
     if policy_id:
@@ -365,8 +365,15 @@ def set_expiry(document_id: str, body: DocExpiryIn, request: Request, db: DbSess
         raise HTTPException(403, "Only the employee or HR can change this document.")
     before = doc.expiry_date
     doc.expiry_date = body.expiry_date
+    # The employee changing the date of a document HR verified sends it back for verification.
+    reverify = (before != body.expiry_date and doc.verification_status == "verified" and user.employee_id == owner.id
+                and not docs.is_hr_for(user, owner))
+    if reverify:
+        doc.verification_status, doc.verified_by, doc.verified_at = "pending", None, None
     record_audit(db, actor_id=user.id, action="document_expiry_changed", entity="employee_document", entity_id=doc.id,
-                 subject_id=owner.id, before={"expiry_date": before}, after={"expiry_date": body.expiry_date}, ip=client_ip(request))
+                 subject_id=owner.id, before={"expiry_date": before},
+                 after={"expiry_date": body.expiry_date, "verification_status": doc.verification_status},
+                 ip=client_ip(request))
     db.commit()
     return _doc_outs(db, [doc], _today(user), with_versions=True)[0]
 
@@ -398,7 +405,7 @@ def download_document(document_id: str, request: Request, db: DbSession, user: C
 
 # ---------- letters ----------
 def _is_letter_hr(user: CurrentUser, emp: Employee) -> bool:
-    return user.account.role in HR_ROLES and user.scope.can_see(emp)
+    return user.account.role in HR_ACCESS_ROLES and user.scope.can_see(emp)
 
 
 def _letter_instance(db: DbSession, req: LetterRequest) -> ApprovalInstance | None:
@@ -468,7 +475,7 @@ def list_templates(db: DbSession, user: CurrentUserDep, letter_type: str | None 
 
 
 def _require_template_hr(user: CurrentUser) -> None:
-    if user.account.role not in HR_ROLES:
+    if user.account.role not in HR_ACCESS_ROLES:
         raise HTTPException(403, "Only HR can change letter templates.")
 
 
@@ -526,7 +533,7 @@ def list_letter_requests(
     elif view == "to_decide":
         stmt = stmt.where(LetterRequest.id.in_(waiting_entity_ids(db, "letter", user.employee_id) or [""]))
     else:
-        if user.account.role not in HR_ROLES:
+        if user.account.role not in HR_ACCESS_ROLES:
             raise HTTPException(403, "Only HR can list every letter request.")
         stmt = stmt.where(user.scope.employee_filter())
     if status_filter:
@@ -549,7 +556,7 @@ def _checked_request(db: DbSession, user: CurrentUser, body: LetterRequestIn) ->
     label = info["label"]
     hr = _is_letter_hr(user, emp)
     if info.get("second"):
-        if user.account.role not in HR_ROLES:
+        if user.account.role not in HR_ACCESS_ROLES:
             raise HTTPException(403, f"{label}s are issued by HR.")
         if emp.id == requester.id:
             raise HTTPException(403, "You cannot raise this letter for yourself.")
@@ -568,7 +575,7 @@ def _checked_request(db: DbSession, user: CurrentUser, body: LetterRequestIn) ->
     custom = " ".join((body.custom_text or "").split())[:1200] or None
     req = LetterRequest(id=f"ltr-{uuid.uuid4().hex[:12]}", employee_id=emp.id, letter_type=body.letter_type, status="pending",
                         requested_by=requester.id, note=body.note.strip() or "No reason given", details=details,
-                        effective_date=body.effective_date if user.account.role in HR_ROLES else None, custom_text=custom)
+                        effective_date=body.effective_date if user.account.role in HR_ACCESS_ROLES else None, custom_text=custom)
     return requester, emp, req
 
 

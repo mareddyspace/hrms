@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "../model.ts";
 import {
   CANDIDATES,
   CERTIFICATIONS,
@@ -313,7 +314,7 @@ function guarded(apply: (state: TalentState) => TalentResult): TalentResult {
 const HR_ROLES: readonly UserRole[] = ["hr", "hr_admin", "hrbp"];
 
 export function isHrRole(role: UserRole): boolean {
-  return HR_ROLES.includes(role);
+  return HR_ROLES.includes(role) || isSuperAdmin(role);
 }
 
 /** Recruiter, HR and hiring managers run the hiring workflow. */

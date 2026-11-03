@@ -16,14 +16,14 @@ from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Account, AccountDataScope, Employee
-from app.services.scope import HR_ROLES, ORG_WIDE_ROLES, SCOPE_MATCH_COLUMNS, Scope, build_scope
+from app.services.scope import HR_ACCESS_ROLES, HR_ROLES, ORG_WIDE_ROLES, SUPER_ADMIN_ROLES, SCOPE_MATCH_COLUMNS, Scope, build_scope
 
 DATA_SCOPES = ("own", "direct", "line", "department", "country", "entity", "business_unit", "location", "global")
 _MATCH_COLUMN = SCOPE_MATCH_COLUMNS
 
 
 def default_scope_name(role: str) -> str:
-    if role in HR_ROLES:  # admin / executive: their line for HR data; org-wide only for aggregates (Scope.org_wide)
+    if role in HR_ACCESS_ROLES:  # HR and super admins; executive: their line for HR data, org-wide aggregates only
         return "global"
     return "line"
 
@@ -61,7 +61,7 @@ def scope_for(db: Session, account: Account) -> Scope:
     """The scope request handlers use (app/deps.py)."""
     base = build_scope(db, account)
     row = saved_row(db, account.id)
-    if row is None:
+    if row is None or account.role in SUPER_ADMIN_ROLES:  # super admins always see everything
         return base
     countries = [c.strip().upper() for c in (row.country_codes or []) if c and c.strip()] or None
     if account.role not in HR_ROLES:

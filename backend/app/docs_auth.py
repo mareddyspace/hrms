@@ -22,6 +22,7 @@ from app.db import SessionLocal, utcnow
 from app.deps import client_ip
 from app.models import Account
 from app.security import verify_password
+from app.services.scope import SUPER_ADMIN_ROLES
 from app.services import login_throttle
 
 _CHALLENGE = {"WWW-Authenticate": 'Basic realm="TimeZ HRMS API docs", charset="UTF-8"'}
@@ -70,6 +71,8 @@ def check(request: Request) -> Response | None:
         if not account.active or not verify_password(password, account.password_hash):
             _failed_attempt(db, account, request, "docs_login_failed")
             login_throttle.record_failure(ip)
+            return _unauthorized()
+        if account.role not in SUPER_ADMIN_ROLES:  # the API reference is for administrators only
             return _unauthorized()
     return None
 

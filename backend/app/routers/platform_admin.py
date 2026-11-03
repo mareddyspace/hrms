@@ -28,7 +28,7 @@ from app.services.data_scope import default_scope_name
 from app.services.decisions import NOT_FOUND
 from app.services.email_outbox import DEFAULT_SWITCHES
 from app.services.platform_settings import all_settings, set_setting
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES, HR_ROLES
 
 router = APIRouter(prefix="/admin", tags=["admin platform"])
 
@@ -45,7 +45,7 @@ def _admin(user: CurrentUser) -> None:
 
 def _admin_or_hr(user: CurrentUser) -> None:
     """Read-only views HR also needs (integrations status, runs, quarantine)."""
-    if user.account.role not in ADMIN_ROLES and user.account.role not in HR_ROLES:
+    if user.account.role not in ADMIN_ROLES and user.account.role not in HR_ACCESS_ROLES:
         raise HTTPException(403, "Only an administrator or HR can see this.")
 
 
@@ -99,6 +99,8 @@ def put_data_scope(account_id: str, body: DataScopeIn, request: Request, db: DbS
     acc = _account(db, account_id)
     if acc.id == user.id:
         raise HTTPException(403, "You can't change the data scope of your own account.")
+    if body.scope == "global" and acc.role not in HR_ACCESS_ROLES:
+        raise HTTPException(422, "Global scope is only for HR and admin accounts.")
     countries = sorted({c.strip().upper() for c in body.countries if c.strip()}) if acc.role in HR_ROLES else []
     if any(not re.fullmatch(r"[A-Z]{2}", c) for c in countries):
         raise HTTPException(422, "Countries are two-letter codes.")

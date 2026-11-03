@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Employee, Ticket, TicketEvent, TicketTask
-from app.services.scope import HR_ROLES, manager_chain_ids
+from app.services.scope import HR_ACCESS_ROLES, manager_chain_ids
 
 TYPES = ("IT support", "HR query", "Bug", "Client issue", "Access request")
 PRIORITIES = ("low", "medium", "high", "urgent")
@@ -71,7 +71,7 @@ def can_view(db: Session, t: Ticket, actor_id: str, role: str) -> bool:
         return True
     if role in ADMIN_ROLES and t.type in IT_TYPES:
         return True
-    if role in HR_ROLES and t.type == "HR query":
+    if role in HR_ACCESS_ROLES and t.type == "HR query":
         return True
     return manages(db, actor_id, t.requester_id) or manages(db, actor_id, t.assignee_id)
 

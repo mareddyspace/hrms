@@ -156,3 +156,25 @@ def test_integrations_quarantine_flow(client, babu, farhan):
     assert client.get(f"{A}/integrations/payroll/runs", headers=admin()).json()[0]["id"] == run["id"]
     with SessionLocal() as db:  # failures alert admin (and HR for payroll) -> integrations emails
         assert db.scalar(select(func.count()).select_from(EmailOutboxItem).where(EmailOutboxItem.channel == "integrations")) >= 1
+
+
+def test_global_scope_only_for_hr_and_admin_accounts(client):
+    assert client.put(f"{A}/accounts/emp-mahesh/data-scope", headers=admin(), json={"scope": "global"}).status_code == 422
+    assert client.put(f"{A}/accounts/emp-ram/data-scope", headers=admin(), json={"scope": "global"}).status_code == 422
+
+
+def test_country_limited_hr_changes_only_its_countries(client):
+    from app.models import AccessScope, Account
+
+    with SessionLocal() as db:
+        if db.get(Account, "acc-qa-hr-in") is None:
+            db.add(Account(id="acc-qa-hr-in", email="qa.hr.in@timez.example", password_hash="x", role="hr",
+                           employee_id=None, active=True, failed_attempts=0))
+            db.flush()
+            db.add(AccessScope(account_id="acc-qa-hr-in", country_codes="IN"))
+            db.commit()
+    hr_in = token_for("acc-qa-hr-in", "hr")
+    body = {"country_code": "GB", "date": "2031-12-24", "name": "QA Eve"}
+    assert client.post("/api/v1/admin/leave/holidays", headers=hr_in, json=body).status_code == 403
+    assert client.post("/api/v1/admin/leave/carry-forward/run", headers=hr_in).status_code == 403
+    assert client.post("/api/v1/org/units", headers=hr_in, json={"code": "QA-UNIT", "name": "QA Unit", "type": "department"}).status_code == 403

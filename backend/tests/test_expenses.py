@@ -235,9 +235,7 @@ def test_finance_role_approves_and_sees_all(client, babu, ram):
             db.commit()
 
 
-def test_admin_is_not_finance(client, babu, ram, admin):
+def test_admin_is_super_admin_for_claims(client, babu, ram, admin):
     cid = claim(client, babu, 444, category="Other").json()["id"]
-    assert cid not in {c["id"] for c in client.get(API, params={"view": "all"}, headers=admin).json()}
-    # admin may still open it when named as the fallback finance approver, but never pays
-    assert client.post(f"{API}/{cid}/pay", headers=admin, json={"paid_on": today_ist().isoformat(),
-                                                                   "payment_reference": "R"}).status_code in (403, 404)
+    assert cid in {c["id"] for c in client.get(API, params={"view": "all"}, headers=admin).json()}
+    assert client.get(f"{API}/{cid}", headers=admin).status_code == 200

@@ -16,11 +16,11 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import Account, PlatformSetting
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
 ISSUER = "TimeZ HRMS"
 POLICY_KEY = "require_mfa_admin_hr"
-POLICY_ROLES = HR_ROLES | {"admin"}
+POLICY_ROLES = HR_ACCESS_ROLES | {"admin"}
 BACKUP_CODE_COUNT = 10
 
 

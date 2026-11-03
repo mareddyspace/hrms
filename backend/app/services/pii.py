@@ -13,14 +13,14 @@ from typing import TYPE_CHECKING
 from sqlalchemy.orm import Session
 
 from app.services.activity import record_audit
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
 if TYPE_CHECKING:
     from app.deps import CurrentUser
     from app.models import Employee
 
 DOT = "•"
-REVEAL_ROLES = HR_ROLES  # not admin / executive: a system admin or the CEO gets basic profiles, no PII (src/data/rbac.ts)
+REVEAL_ROLES = HR_ACCESS_ROLES  # HR and super admins; not the executive (basic profiles, no PII; src/data/rbac.ts)
 
 
 def mask_phone(value: str | None) -> str | None:

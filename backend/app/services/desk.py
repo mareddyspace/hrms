@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.db import utcnow
 from app.models import Account, DeskTicket
 from app.services.activity import notify, record_audit
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
 CATEGORIES = ("Payroll provider", "Benefits", "Documents", "IT access", "Leave", "Profile correction", "Other")
 PRIORITIES = ("Low", "Normal", "High", "Urgent")
@@ -35,7 +35,7 @@ SLA: dict[str, tuple[str, int]] = {
     "Profile correction": ("demo-hr-admin", 2),
     "Other": ("demo-hr-admin", 3),
 }
-DESK_ROLES = HR_ROLES | {"admin"}
+DESK_ROLES = HR_ACCESS_ROLES | {"admin"}
 
 # Finer topics per category (shown as "Subcategory" on the request form; src/data/collabData.ts HR_REQUEST_SUBCATEGORIES).
 SUBCATEGORIES: dict[str, tuple[str, ...]] = {

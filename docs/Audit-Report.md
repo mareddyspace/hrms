@@ -139,9 +139,25 @@ shown in the portal also comes from that list, not from the server.
 
 ## 8. Prioritised fix list
 
-**Progress (3 Nov 2026, not yet committed):** high items 1, 2, 3, 4 and 6 are fixed. Item 5 is partly fixed: the server now
-flags a missing salary record and pay above the salary on record. Tax and statutory deductions are still worked out in the
-browser; moving that tax engine to the server is still open.
+**Progress (3 Nov 2026):**
+- **Done and pushed (commit `1a25fb8`):** high items 1, 2, 3, 4 and 6. Item 5 is partly done: the server flags a missing
+  salary record and pay above the salary on record. Tax and statutory deductions are still worked out in the browser.
+- **Done next (not committed yet):**
+  - **Admin is now a super admin, as the owner decided.** Admin and super_admin have full access to everything HR
+    can see and do, in every country, including pay and personal details: `HR_ACCESS_ROLES` and `SUPER_ADMIN_ROLES`
+    in `backend/app/services/scope.py`; in the portal, `isSuperAdmin` in `src/model.ts` and every page. This replaces
+    finding H2 and the admin parts of H1. HR approval tasks still go only to HR.
+  - **Fixed:** M1 for leave admin and org edits; M2 (only HR and admin accounts can be given global scope); M3's rate
+    limit (5 applications per address every 10 minutes); B3 (admin can prepare payroll); B4 (payroll status counts);
+    L1 (`/docs` for admins only); L4 (a changed expiry date goes back for verification).
+- **Still open:**
+  - the payroll tax engine on the server
+  - the HR country limit for payroll lines, recruiting, onboarding and performance cycles
+  - clean-up of the CV file when an application fails
+  - the CEO Exits menu
+  - L3 (GET endpoints that write; by design)
+  - L6 (approvals inbox performance)
+  - the front-end medium items
 
 Effort: **S** = under 2 hours, **M** = half a day to a day, **L** = 2+ days.
 

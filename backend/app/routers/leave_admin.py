@@ -30,7 +30,7 @@ from app.schemas.leave_rules import (
 )
 from app.services import leave_rules
 from app.services.activity import record_audit
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
 router = APIRouter(prefix="/admin/leave", tags=["leave admin"])
 countries_router = APIRouter(prefix="/countries", tags=["countries"])
@@ -41,8 +41,15 @@ CountryQ = Annotated[str | None, Query(pattern=r"^[A-Z]{2}$")]
 
 
 def _hr_or_admin(user: CurrentUser) -> None:
-    if user.account.role not in HR_ROLES and user.account.role not in ADMIN_ROLES:
+    if user.account.role not in HR_ACCESS_ROLES and user.account.role not in ADMIN_ROLES:
         raise HTTPException(403, "Only HR or an administrator can do this.")
+
+
+def _covers(user: CurrentUser, code: str | None) -> None:
+    """HR limited to some countries changes only those countries' policies and holidays."""
+    countries = user.scope.countries
+    if countries and code not in countries:
+        raise HTTPException(403, "That country is outside your HR scope.")
 
 
 def _country(db: DbSession, code: str) -> Country:
@@ -146,6 +153,7 @@ def _clean_types(types: list[str] | None) -> list[str] | None:
 @router.post("/policies", response_model=LeavePolicyAdminOut, status_code=status.HTTP_201_CREATED)
 def create_policy(body: LeavePolicyAdminIn, request: Request, db: DbSession, user: CurrentUserDep) -> LeavePolicy:
     _hr_or_admin(user)
+    _covers(user, body.country_code)
     _country(db, body.country_code)
     if db.get(LeaveType, body.leave_code) is None:
         raise HTTPException(422, "Unknown leave type.")
@@ -171,6 +179,9 @@ def _update_policy(db: DbSession, user: CurrentUser, request: Request, policy_id
     row = db.get(LeavePolicy, policy_id)
     if row is None:
         raise NOT_FOUND
+    _covers(user, row.country_code)
+    if "country_code" in changes:
+        _covers(user, changes["country_code"])
     before = _snap(row, POLICY_FIELDS)
     if "employment_types" in changes:
         changes["employment_types"] = _clean_types(changes["employment_types"])
@@ -240,6 +251,7 @@ def _holiday_clash(db: DbSession, row: Holiday) -> None:
 @router.post("/holidays", response_model=HolidayAdminOut, status_code=status.HTTP_201_CREATED)
 def create_holiday(body: HolidayAdminIn, request: Request, db: DbSession, user: CurrentUserDep) -> Holiday:
     _hr_or_admin(user)
+    _covers(user, body.country_code)
     _country(db, body.country_code)
     row = Holiday(id=f"h-{body.country_code.lower()}-{uuid.uuid4().hex[:10]}", country_code=body.country_code,
                   date=body.date, name=body.name.strip(), calendar=(body.calendar or "").strip() or None, active=True,
@@ -257,6 +269,9 @@ def _update_holiday(db: DbSession, user: CurrentUser, request: Request, holiday_
     row = db.get(Holiday, holiday_id)
     if row is None:
         raise NOT_FOUND
+    _covers(user, row.country_code)
+    if "country_code" in changes:
+        _covers(user, changes["country_code"])
     before = _snap(row, HOLIDAY_FIELDS)
     if "calendar" in changes:
         changes["calendar"] = (changes["calendar"] or "").strip() or None
@@ -291,6 +306,8 @@ def run_carry_forward(request: Request, db: DbSession, user: CurrentUserDep,
                       year: Annotated[int | None, Query(ge=2000, le=2100)] = None) -> CarryForwardRunOut:
     """Carry unused days into `year` (default: this year). Running it again adds nothing."""
     _hr_or_admin(user)
+    if user.scope.countries:
+        raise HTTPException(403, "Carry-forward runs for every country; ask HR without a country limit or an admin.")
     out = leave_rules.run_carry_forward(db, year)
     record_audit(db, actor_id=user.id, action="leave_carry_forward_run", entity="jobs", entity_id=None, after=out,
                  ip=client_ip(request))

@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "../model.ts";
 import { useSyncExternalStore } from "react";
 import {
   DEMO_ACCOUNTS,
@@ -68,7 +69,7 @@ export function useAccessVersion(): number {
 }
 
 function isHrRole(role: string): boolean {
-  return role === "hr" || role === "hr_admin" || role === "hrbp";
+  return role === "hr" || role === "hr_admin" || role === "hrbp" || isSuperAdmin(role);
 }
 
 /* —— Backend mode (VITE_API_URL): data scope and page access live on the server —— */

@@ -87,6 +87,11 @@ export interface Employee {
   currency?: string;
 }
 
+/** Admin and super admin: full access to every page and every record, like HR in every country (the server agrees). */
+export function isSuperAdmin(role: string): boolean {
+  return role === "admin" || role === "super_admin";
+}
+
 /** Team approval rights — granted by role binding, not executive title alone. */
 export function canApproveTeam(role: UserRole): boolean {
   return (

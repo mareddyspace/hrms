@@ -13,7 +13,7 @@ from app.models import (
     MailRecipient, Notification, SharedTask,
 )
 from app.services.activity import notify
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 from app.services.tickets import TEAMMATES, person_exists, person_name  # noqa: F401  (re-exported)
 
 ADMIN_ROLES = frozenset({"admin", "super_admin"})
@@ -27,7 +27,7 @@ def now() -> datetime:
 
 
 def is_hr(role: str) -> bool:
-    return role in HR_ROLES
+    return role in HR_ACCESS_ROLES
 
 
 def is_admin(role: str) -> bool:

@@ -50,7 +50,7 @@ from app.services.activity import notify, record_audit
 from app.services.approval_targets import start_about
 from app.services.decisions import NOT_FOUND, can_view, me
 from app.services.leave import today_for
-from app.services.scope import manager_chain_ids
+from app.services.scope import HR_ACCESS_ROLES, manager_chain_ids
 from app.services.workflow_defaults import decide_http, waiting_entity_ids
 
 router = APIRouter(prefix="/compensation", tags=["compensation"])
@@ -281,7 +281,7 @@ def list_cycles(db: DbSession, user: CurrentUserDep) -> list[CompCycleOut]:
 
 @router.post("/cycles", response_model=CompCycleOut, status_code=status.HTTP_201_CREATED)
 def create_cycle(body: CompCycleIn, request: Request, db: DbSession, user: CurrentUserDep) -> CompCycleOut:
-    if user.account.role not in comp.HR_ROLES:
+    if user.account.role not in comp.HR_ACCESS_ROLES:
         raise HTTPException(403, "Only HR can create review cycles.")
     if body.closes_on < body.opens_on:
         raise HTTPException(422, "The close date must be after the open date.")
@@ -306,7 +306,7 @@ def create_cycle(body: CompCycleIn, request: Request, db: DbSession, user: Curre
 
 @router.post("/cycles/{cycle_id}/status", response_model=CompCycleOut)
 def set_cycle_status(cycle_id: str, body: CompCycleStatusIn, request: Request, db: DbSession, user: CurrentUserDep) -> CompCycleOut:
-    if user.account.role not in comp.HR_ROLES:
+    if user.account.role not in comp.HR_ACCESS_ROLES:
         raise HTTPException(403, "Only HR can open or close review cycles.")
     cycle = db.get(CompReviewCycle, cycle_id)
     if cycle is None:

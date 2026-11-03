@@ -51,6 +51,9 @@ def fresh_login_throttle():
     from app.services import login_throttle
 
     login_throttle.reset()
+    from app.routers import careers
+
+    careers._applies.clear()  # same for the public job-application limit
     yield
 
 

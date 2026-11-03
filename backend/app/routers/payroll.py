@@ -19,11 +19,11 @@ from app.models import Country, Employee, IntegrationConnector, PlatformSetting
 from app.schemas.onboarding_payroll import PayrollEntityStatusOut, PayrollStatusOut
 from app.services.activity import record_audit
 from app.services.headcount import started_clause
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 
-PAYROLL_ROLES = HR_ROLES | {"admin", "finance"}
+PAYROLL_ROLES = HR_ACCESS_ROLES | {"admin", "finance"}
 PAYROLL_CONNECTOR = "payroll"
 PROVIDERS_KEY = "payroll_providers"  # platform_settings: {"IN": "Provider name", ...}
 ADMIN_ROLES = frozenset({"admin", "super_admin"})
@@ -66,7 +66,7 @@ def payroll_status(db: DbSession, user: CurrentUserDep) -> PayrollStatusOut:
     health_base = _health(connection, conn.failed_count if conn else 0, conn.records_processed if conn else 0)
     countries = {c.code: c.name for c in db.scalars(select(Country))}
     stmt = (select(Employee.country_code, Employee.legal_entity, Employee.payroll_status, func.count())
-            .where(user.scope.employee_filter(), Employee.employment_status.not_in(("Terminated", "Exited")),
+            .where(user.scope.org_filter(), Employee.employment_status.not_in(("Terminated", "Exited")),
                    started_clause(today))  # people on the payroll now: started, not left (same as headcount)
             .group_by(Employee.country_code, Employee.legal_entity, Employee.payroll_status))
     groups: dict[tuple[str, str], dict[str, int]] = {}

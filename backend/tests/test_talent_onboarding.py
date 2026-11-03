@@ -115,12 +115,12 @@ def test_joiner_access_recruiter_only_own_hires_and_no_personal_details_for_it(c
             "equipment": ["laptop"], "it_request": {"systems": ["Email"]}}
     assert client.put(f"{O}/joiners/{joiner['id']}/preboarding", headers=me, json=form).status_code == 200
 
-    # HR, the manager and the joiner see the whole form
-    for who in (farhan, ram, me):
+    # HR, the super admin, the manager and the joiner see the whole form
+    for who in (farhan, admin, ram, me):
         pre = client.get(f"{O}/joiners/{joiner['id']}", headers=who).json()["preboarding"]
         assert pre["personal"]["mobile"] == "+91 90000 00001" and pre["emergency_contact"]["name"] == "Ravi Rao"
-    # the recruiter who hired them and admin (IT tasks) see the joiner, but only equipment and the IT request
-    for who in (sophie, admin):
+    # the recruiter who hired them sees the joiner, but only equipment and the IT request
+    for who in (sophie,):
         pre = client.get(f"{O}/joiners/{joiner['id']}", headers=who).json()["preboarding"]
         assert set(pre) == {"equipment", "it_request"}
         listed = next(j for j in client.get(f"{O}/joiners", headers=who).json() if j["id"] == joiner["id"])

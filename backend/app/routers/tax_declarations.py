@@ -245,13 +245,13 @@ def _audit(db: DbSession, user: CurrentUser, request: Request, action: str, item
 
 def _verifiers(db: DbSession, emp: Employee) -> list[str]:
     from app.models import Account
-    from app.services.scope import build_scope
+    from app.services.scope import HR_ACCESS_ROLES, build_scope
 
     out = []
     for acc in db.scalars(select(Account).where(Account.role.in_(sorted(rules.VERIFY_ROLES)), Account.employee_id.is_not(None))):
         if acc.employee_id == emp.id:
             continue
-        if acc.role in rules.HR_ROLES and not build_scope(db, acc).can_see(emp):
+        if acc.role in HR_ACCESS_ROLES and not build_scope(db, acc).can_see(emp):
             continue
         out.append(acc.employee_id)
     return out

@@ -26,7 +26,7 @@ from app.services import cases as rules
 from app.services import storage
 from app.services.activity import notify, record_audit
 from app.services.decisions import NOT_FOUND, me
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES, HR_ROLES
 from app.services.uploads import UPLOAD_OPENAPI, clean_name, read_upload
 
 router = APIRouter(prefix="/cases", tags=["hr cases"])
@@ -145,7 +145,7 @@ def list_cases(
     if view == "mine":
         stmt = stmt.where(HrCase.reporter_id == emp_id)
     else:
-        if _role(user) not in HR_ROLES:
+        if _role(user) not in HR_ACCESS_ROLES:
             if emp_id not in rules.committee(db):
                 return []
             stmt = stmt.where(HrCase.category == rules.POSH)

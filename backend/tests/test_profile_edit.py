@@ -126,9 +126,8 @@ def test_hr_edits_in_scope_and_others_cannot(client, babu, ram, farhan, alex, jo
     entry = _audits("employee", "TZ0001")[-1]
     assert entry.actor_id == "demo-hr-admin" and entry.action == "updated profile"
     assert "1991-05-06" not in str(entry.changes) and entry.changes["after"]["work_arrangement"] == "Hybrid"
-    # The platform admin is not HR and may not edit people's records (src/data/rbac.ts canManagePeopleRecords);
-    # HR may not edit themselves through this route.
-    assert client.patch(f"{P}/TZ0001", headers=alex, json={"work_arrangement": "Office"}).status_code in (403, 404)
+    # The admin is a super admin and may edit records like HR; HR may not edit themselves through this route.
+    assert client.patch(f"{P}/TZ0001", headers=alex, json={"work_arrangement": "Office"}).status_code == 200
     assert client.patch(f"{P}/demo-hr-admin", headers=farhan, json={"nationality": "Indian"}).status_code == 403
     assert client.patch(f"{P}/TZ0001", headers=farhan, json={"work_arrangement": "Moon"}).status_code == 422
 

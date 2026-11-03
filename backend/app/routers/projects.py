@@ -23,7 +23,7 @@ from app.models import (
 from app.services import storage
 from app.services.activity import notify, record_audit
 from app.services.decisions import NOT_FOUND, me
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ACCESS_ROLES
 from app.services.uploads import UPLOAD_OPENAPI, clean_name, read_upload
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -175,7 +175,7 @@ def _role(user: CurrentUser) -> str:
 
 
 def _is_hr_admin(user: CurrentUser) -> bool:
-    return _role(user) in HR_ROLES or _role(user) in ADMIN_ROLES
+    return _role(user) in HR_ACCESS_ROLES or _role(user) in ADMIN_ROLES
 
 
 def _membership(db: DbSession, project_id: str, employee_id: str | None) -> ProjectMember | None:

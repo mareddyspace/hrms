@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "../model.ts";
 import { findDemoById } from "../demoAccounts.ts";
 /** TimeZ collaboration & workflow — fictional demo data only. */
 
@@ -555,7 +556,7 @@ export const HR_ROLES = ["hr", "hr_admin", "hrbp"];
 export const ADMIN_ROLES = ["admin", "super_admin", "it_admin"];
 
 export function isHrRole(role: string): boolean {
-  return HR_ROLES.includes(role);
+  return HR_ROLES.includes(role) || isSuperAdmin(role);
 }
 
 /**

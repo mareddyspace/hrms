@@ -39,13 +39,16 @@ def test_production_docs_need_a_portal_sign_in():
         assert res.status_code == 401 and res.headers["www-authenticate"].startswith("Basic")
         assert c.get(path, headers=_basic("babu.menon@timez.com", "wrong-password")).status_code == 401
         assert c.get(path, headers={"Authorization": "Basic !!notbase64"}).status_code == 401
-    ok = _basic("babu.menon@timez.com", PASSWORDS["babu.menon@timez.com"])
+    # only administrators: a correct employee sign-in is still refused
+    assert c.get("/docs", headers=_basic("babu.menon@timez.com", PASSWORDS["babu.menon@timez.com"])).status_code == 401
+    with SessionLocal() as db:  # wrong tries here and in earlier tests count toward lockouts; reset for this and later tests
+        for email in ("babu.menon@timez.com", "alex.morgan@timez.com"):
+            acc = db.scalar(select(Account).where(Account.email == email))
+            acc.failed_attempts, acc.locked_until = 0, None
+        db.commit()
+    ok = _basic("alex.morgan@timez.com", PASSWORDS["alex.morgan@timez.com"])
     assert "swagger" in c.get("/docs", headers=ok).text.lower()
     assert "/ping" in c.get("/openapi.json", headers=ok).json()["paths"]
-    with SessionLocal() as db:  # the two wrong tries counted toward the lockout; reset for other tests
-        acc = db.scalar(select(Account).where(Account.email == "babu.menon@timez.com"))
-        acc.failed_attempts, acc.locked_until = 0, None
-        db.commit()
 
 
 def test_docs_default_on_in_development():
