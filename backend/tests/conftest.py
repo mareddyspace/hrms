@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 _TMP = Path(tempfile.mkdtemp(prefix="timez-test-"))
+os.environ["TIMEZ_TEST_SUITE"] = "1"  # app.config accepts the throwaway test file only with this flag
 os.environ["DATABASE_URL"] = f"sqlite:///{(_TMP / 'test.db').as_posix()}"  # environment wins over .env
 os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret")
 os.environ["STORAGE_BACKEND"] = "local"  # never the real bucket, whatever backend/.env says

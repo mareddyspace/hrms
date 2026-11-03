@@ -16,4 +16,4 @@ def upgrade_to_head() -> None:
 
 if __name__ == "__main__":
     upgrade_to_head()
-    print(f"Database schema is up to date ({'SQLite dev file' if get_settings().is_sqlite else 'PostgreSQL'}).")
+    print(f"Database schema is up to date ({'test database' if get_settings().is_sqlite else 'PostgreSQL'}).")

@@ -1,6 +1,6 @@
 # TimeZ HRMS API (v1)
 
-FastAPI + PostgreSQL (Neon). With no database set it uses a local SQLite file (`timez-dev.db`).
+FastAPI + PostgreSQL (Neon) only. Without a PostgreSQL `DATABASE_URL` the server stops with a clear message.
 
 ## Set up (Windows PowerShell, run inside `backend`)
 
@@ -14,7 +14,7 @@ pip install -r requirements.txt
 ## Database
 
 1. Open `.env` and paste your Neon connection string after `DATABASE_URL=`
-   (Neon dashboard -> Connect -> connection string, starts with `postgresql://`). Leave it empty to use SQLite.
+   (Neon dashboard -> Connect -> connection string, starts with `postgresql://`). Required.
 2. Create the tables: `python -m app.db_init`
 3. Load the data: `python -m app.seed`
    - 500 people from `seed/TimeZ_500_Employee_Sample_HCM_Data.xlsx` (checked on load: unique IDs, managers exist,
@@ -61,7 +61,8 @@ when `RUN_MIGRATIONS_ON_START=true`). Files go to the bucket when `STORAGE_BACKE
 python -m pytest
 ```
 
-Tests always use a temporary SQLite database, never the one in `.env`.
+Tests run on a throwaway test file that is deleted after the run, never the database in `.env`, so the thousands
+of records they create never reach real data. The application itself refuses anything but PostgreSQL.
 
 ## Updating the seed files
 

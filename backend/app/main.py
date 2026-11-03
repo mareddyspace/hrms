@@ -256,10 +256,23 @@ from app.services import storage as _storage  # noqa: E402
 _lifespan_before_migrations = app.router.lifespan_context
 
 
+def _check_database() -> None:
+    """Stop start-up with a clear message when the database can't be reached (no fallback database exists)."""
+    try:
+        with engine.connect() as conn:
+            version = conn.execute(text("SHOW server_version")).scalar() if engine.dialect.name == "postgresql" else None
+    except Exception as exc:
+        log.error("Cannot connect to the PostgreSQL database (%s). Check DATABASE_URL in backend/.env or the server's "
+                  "environment, and that the Neon project is running. Not starting.", type(exc).__name__)
+        raise RuntimeError("Database connection failed; see the log line above.") from None
+    log.info("Database connected: %s %s", engine.dialect.name, version or "")
+
+
 @asynccontextmanager
 async def _lifespan_migrate(app_: FastAPI):  # type: ignore[no-untyped-def]
     log.info("Starting TimeZ HRMS API (env=%s, database=%s, docs=%s)", settings.app_env, engine.dialect.name,
              "on" if settings.docs_enabled else "off")
+    _check_database()
     _migrate.run_if_enabled()
     log.info("File storage: %s", _storage.check_configuration())
     _migrate.seed_if_enabled()

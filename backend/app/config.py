@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -9,23 +10,30 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-DEV_SQLITE_PATH = BACKEND_DIR / "timez-dev.db"
+# Set only by the automated test suite (tests/conftest.py), which runs on a throwaway database file so the
+# thousands of records it creates never reach the real one. The application itself runs on PostgreSQL only.
+TEST_SUITE_FLAG = "TIMEZ_TEST_SUITE"
+
+
+class DatabaseConfigError(RuntimeError):
+    """DATABASE_URL is missing or is not PostgreSQL. The message never contains the URL."""
 
 
 def normalize_database_url(raw: str | None) -> str:
-    """Turn the pasted URL into a SQLAlchemy URL.
-
-    - empty            -> SQLite file backend/timez-dev.db
-    - postgres(ql)://  -> postgresql+psycopg:// (query string such as ?sslmode=require is kept)
-    - anything else    -> used as is (e.g. sqlite:///... for tests)
-    """
+    """Turn the pasted URL into a SQLAlchemy URL: postgres(ql):// -> postgresql+psycopg:// (query string such as
+    ?sslmode=require is kept). Missing or not PostgreSQL -> DatabaseConfigError, never a fallback database."""
     url = (raw or "").strip().strip('"').strip("'")
     if not url:
-        return f"sqlite:///{DEV_SQLITE_PATH.as_posix()}"
-    for prefix in ("postgresql+psycopg2://", "postgresql://", "postgres://"):
+        raise DatabaseConfigError(
+            "DATABASE_URL is not set. Put your Neon PostgreSQL connection string in backend/.env "
+            "(DATABASE_URL=postgresql://...) or in the server's environment settings.")
+    for prefix in ("postgresql+psycopg://", "postgresql+psycopg2://", "postgresql://", "postgres://"):
         if url.startswith(prefix):
             return "postgresql+psycopg://" + url[len(prefix):]
-    return url
+    if url.startswith("sqlite") and os.environ.get(TEST_SUITE_FLAG) == "1":
+        return url
+    raise DatabaseConfigError("DATABASE_URL must be a PostgreSQL connection string (postgresql://...). "
+                              "TimeZ runs on PostgreSQL (Neon) only.")
 
 
 class Settings(BaseSettings):

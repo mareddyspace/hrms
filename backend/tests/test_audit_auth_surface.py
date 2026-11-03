@@ -21,7 +21,7 @@ from tests.conftest import PASSWORDS, login
 # Routes that are meant to work without a token.
 PUBLIC = {
     ("POST", "/api/v1/auth/login"), ("POST", "/api/v1/auth/mfa/verify"), ("POST", "/api/v1/auth/refresh"),
-    ("POST", "/api/v1/auth/logout"), ("GET", "/health"),
+    ("POST", "/api/v1/auth/logout"), ("GET", "/health"), ("GET", "/"),
     ("GET", "/api/v1/public/careers"), ("GET", "/api/v1/public/careers/{posting_id}"),
     ("POST", "/api/v1/public/careers/{posting_id}/apply"),
     ("GET", "/api/v1/public/offers/{token}"), ("POST", "/api/v1/public/offers/{token}/respond"),

@@ -517,5 +517,5 @@ if __name__ == "__main__":
     parser.add_argument("--reset-passwords", action="store_true", help="Set the demo passwords again and unlock accounts.")
     args = parser.parse_args()
     result = run(reset_passwords=args.reset_passwords)
-    target = "SQLite dev file" if get_settings().is_sqlite else "PostgreSQL"
+    target = "test database" if get_settings().is_sqlite else "PostgreSQL"
     print(f"Seeded {target}: " + ", ".join(f"{k}={v}" for k, v in result.items()))
