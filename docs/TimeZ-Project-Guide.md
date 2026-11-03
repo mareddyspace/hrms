@@ -188,14 +188,18 @@ change these. To reset them: `python -m app.seed --reset-passwords` (in `backend
 ### Running everything on your PC
 ```
 cd C:\Users\Gayathri\OneDrive\Desktop\hrmsspare\backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
+.\run-local.ps1
 ```
+This uses a **practice database** on your PC (`backend\local-dev.db`), never the live Neon one: the first run builds
+it with the sample data (about a minute), later runs start in about 15 seconds. `.\run-local.ps1 -Fresh` starts the
+practice data again. Don't start `uvicorn` directly while `backend\.env` points at Neon: from India every database
+query takes about 0.3 s, so start-up takes minutes, and its start-up jobs write reminders into the live data.
 In a second terminal:
 ```
 cd C:\Users\Gayathri\OneDrive\Desktop\hrmsspare
 npm run dev
 ```
-Then open http://localhost:5173. Your PC and the live site use the **same Neon database**.
+Then open http://localhost:5173.
 
 ---
 

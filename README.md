@@ -79,9 +79,7 @@ cd backend
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 # create backend/.env from backend/.env.example (DATABASE_URL etc.)
-.\.venv\Scripts\python.exe -m app.db_init
-.\.venv\Scripts\python.exe -m app.seed
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
+.\run-local.ps1   # practice database backend\local-dev.db: built and seeded on first run, never the live one
 
 # front end (new terminal, repo root)
 npm install
