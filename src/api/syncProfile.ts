@@ -38,6 +38,13 @@ export interface ApiHrProfileUpdate extends ApiSelfProfileUpdate {
   date_of_birth?: string | null;
   gender?: string | null;
   company?: string | null;
+  // Job fields: each change also starts a new dated assignment on the server.
+  job_title?: string;
+  department?: string;
+  location?: string;
+  grade?: string;
+  employment_type?: string;
+  manager_id?: string | null;
 }
 
 export type ApiCorrectionField =
@@ -123,6 +130,33 @@ export async function apiUpdateOwnProfile(input: ApiSelfProfileUpdate): Promise<
   }
   await loadApiPeople().catch(() => undefined);
   return null;
+}
+
+/** POST /people (HR in scope): add someone to the directory. */
+export interface ApiPersonCreate {
+  first_name: string;
+  middle_name?: string | null;
+  last_name: string;
+  email: string;
+  country_code: string;
+  job_title: string;
+  department: string;
+  location: string;
+  grade: string;
+  employment_type?: string;
+  joining_date: string;
+  manager_id?: string | null;
+}
+
+export async function apiCreatePerson(input: ApiPersonCreate): Promise<{ id: string | null; error: string | null }> {
+  let id: string;
+  try {
+    id = (await apiRequest<PersonFullOut>("/people", { method: "POST", body: body(input) })).id;
+  } catch (error) {
+    return { id: null, error: message(error, "Could not add the employee. Try again.") };
+  }
+  await loadApiPeople().catch(() => undefined);
+  return { id, error: null };
 }
 
 export async function apiUpdatePerson(personId: string, input: ApiHrProfileUpdate): Promise<string | null> {

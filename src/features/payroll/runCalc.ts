@@ -8,10 +8,13 @@ import type { IndiaRegime } from "../../countryPay.ts";
 import type { CountryCode, InvestmentProof, OrgTimesheetRecord, PayLine, Timesheet } from "../../model.ts";
 
 export type RunStatus = "draft" | "review" | "locked";
-export type RunFlag = "missing_bank" | "negative_net" | "new_joiner" | "leaver";
+export type RunFlag = "missing_bank" | "negative_net" | "new_joiner" | "leaver" | "missing_salary" | "pay_above_salary";
 
 export const FLAG_TEXT: Record<RunFlag, string> = {
   missing_bank: "No bank details: pay is held",
+  // Set by the server only (backend/app/services/payroll_runs.py), against the salary on record.
+  missing_salary: "No salary record: pay was worked out from a default scale. Add the salary before approving",
+  pay_above_salary: "Regular pay is higher than the salary on record for the days paid",
   negative_net: "Net pay below zero",
   new_joiner: "New joiner",
   leaver: "Leaver",

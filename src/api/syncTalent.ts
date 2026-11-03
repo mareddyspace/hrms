@@ -347,8 +347,9 @@ export interface JoinerOut {
 
 /** Pre-boarding form as stored on the joiner (backend/app/schemas/onboarding_payroll.py). */
 export interface PreboardingOut {
-  personal: { confirmed: boolean; preferred_name?: string | null; personal_email?: string | null; mobile?: string | null; address?: string | null };
-  emergency_contact: { name: string; relationship: string; phone: string };
+  // Left out for recruiters and IT: only HR, the joiner and their manager see personal details.
+  personal?: { confirmed: boolean; preferred_name?: string | null; personal_email?: string | null; mobile?: string | null; address?: string | null };
+  emergency_contact?: { name: string; relationship: string; phone: string };
   equipment: string[];
   it_request: { systems: string[]; notes?: string | null };
 }
@@ -651,7 +652,7 @@ function toPreboarding(p: PreboardingOut): PreboardingForm {
       ...(pe.mobile ? { mobile: pe.mobile } : {}),
       ...(pe.address ? { address: pe.address } : {}),
     },
-    emergencyContact: { ...p.emergency_contact },
+    emergencyContact: p.emergency_contact ? { ...p.emergency_contact } : { name: "", relationship: "", phone: "" },
     equipment: (p.equipment ?? []).filter((e): e is EquipmentItem => (EQUIPMENT_ITEMS as readonly string[]).includes(e)),
     itRequest: { systems: p.it_request?.systems ?? [], ...(p.it_request?.notes ? { notes: p.it_request.notes } : {}) },
   };

@@ -205,9 +205,37 @@ def is_joiner_self(user: CurrentUser, joiner: Joiner) -> bool:
     return user.employee_id is not None and user.employee_id == joiner.employee_id
 
 
-def can_view(user: CurrentUser, joiner: Joiner) -> bool:
-    return (is_hr_for(user, joiner) or is_joiner_self(user, joiner) or user.account.role in IT_ROLES | {"recruiter"}
-            or (user.employee_id is not None and (user.employee_id == joiner.manager_id or joiner.employee_id in user.scope.reports)))
+def is_manager_of(user: CurrentUser, joiner: Joiner) -> bool:
+    return user.employee_id is not None and (user.employee_id == joiner.manager_id or joiner.employee_id in user.scope.reports)
+
+
+def is_assigned_recruiter(db: Session, user: CurrentUser, joiner: Joiner) -> bool:
+    """The recruiter who ran the requisition this joiner was hired on (not every recruiter)."""
+    if user.account.role != "recruiter" or user.employee_id is None or not joiner.requisition_id:
+        return False
+    req = db.get(Requisition, joiner.requisition_id)
+    return req is not None and req.recruiter_id == user.employee_id
+
+
+def can_view(db: Session, user: CurrentUser, joiner: Joiner) -> bool:
+    return (is_hr_for(user, joiner) or is_joiner_self(user, joiner) or user.account.role in IT_ROLES
+            or is_manager_of(user, joiner) or is_assigned_recruiter(db, user, joiner))
+
+
+# Pre-boarding parts IT needs for its tasks; personal details and the emergency contact are not among them.
+PREBOARDING_SHARED_KEYS = ("equipment", "it_request")
+
+
+def can_see_personal(user: CurrentUser, joiner: Joiner) -> bool:
+    """Personal details from the pre-boarding form: HR in scope, the joiner and their manager only."""
+    return is_hr_for(user, joiner) or is_joiner_self(user, joiner) or is_manager_of(user, joiner)
+
+
+def preboarding_for(user: CurrentUser, joiner: Joiner) -> dict | None:
+    form = joiner.preboarding
+    if form is None or can_see_personal(user, joiner):
+        return form
+    return {k: form[k] for k in PREBOARDING_SHARED_KEYS if k in form}
 
 
 def is_task_owner(user: CurrentUser, task: OnboardingTask, joiner: Joiner) -> bool:

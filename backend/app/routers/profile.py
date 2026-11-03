@@ -22,17 +22,19 @@ from sqlalchemy import select
 
 from app.db import utcnow
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
-from app.models import Account, Employee, ProfileCorrection
+from app.models import Account, Country, Employee, EmployeeAssignment, ProfileCorrection
 from app.routers.people import _get_visible, present
 from app.schemas import PersonFullOut
 from app.schemas.profile import (
     AiActionAuditIn, AiActionAuditOut, HrProfileUpdateIn, ProfileCorrectionDecisionIn, ProfileCorrectionIn,
-    ProfileCorrectionOut, ProfileOtpIn, ProfileOtpOut, SelfProfileUpdateIn,
+    PersonCreateIn, ProfileCorrectionOut, ProfileOtpIn, ProfileOtpOut, SelfProfileUpdateIn,
 )
 from app.config import get_settings
 from app.services import profile_otp
 from app.services.activity import notify, record_audit
 from app.services.pii import REVEAL_ROLES, can_reveal_employee, mask_dob, mask_email, mask_for_audit
+from app.services.lifecycle import ASSIGNMENT_FIELDS, _close_and_add_assignment
+from app.services.onboarding import next_employee_id
 from app.services.scope import HR_ROLES, report_ids
 
 router = APIRouter(tags=["profile"])
@@ -129,6 +131,8 @@ def _apply(db: DbSession, user: CurrentUser, emp: Employee, values: dict[str, An
             before["full_name"], after["full_name"] = old_full, emp.full_name
     if not after:
         return
+    if set(after) & set(ASSIGNMENT_FIELDS):  # job change: close the current assignment, open one from today
+        _close_and_add_assignment(db, emp, date.today())
     record_audit(db, actor_id=user.id, action=action, entity="employee", entity_id=emp.id, subject_id=emp.id,
                  before=before, after=after, ip=client_ip(request))
     db.commit()
@@ -194,7 +198,58 @@ def update_profile(person_id: str, body: HrProfileUpdateIn, request: Request, db
         raise HTTPException(422, "First and last name can't be blank.")
     if "company" in values and not values["company"]:
         values["company"] = "TimeZ"
+    for name in ("job_title", "department", "location", "grade", "employment_type"):
+        if name in values and not (values[name] or "").strip():
+            raise HTTPException(422, f"{name.replace('_', ' ').capitalize()} can't be blank.")
+    if "manager_id" in values and values["manager_id"] != emp.manager_id:
+        _validate_requested(db, emp, "manager_id", values["manager_id"])
     _apply(db, user, emp, values, request, "updated profile")
+    return _full(db, user, emp)
+
+
+@router.post("/people", response_model=PersonFullOut, status_code=201)
+def create_person(body: PersonCreateIn, request: Request, db: DbSession, user: CurrentUserDep) -> PersonFullOut:
+    """HR adds someone to the directory. Starts Active, or Onboarding when the joining date is still ahead."""
+    country_code = body.country_code.upper()
+    if not (user.scope.is_hr and (not user.scope.countries or country_code in user.scope.countries)):
+        raise HTTPException(403, "Only HR for this country can add employees.")
+    country = db.get(Country, country_code)
+    if country is None:
+        raise HTTPException(422, "Choose a valid country.")
+    email = body.email.strip().lower()
+    if db.scalar(select(Employee.id).where(Employee.email == email)):
+        raise HTTPException(409, f"{email} is already in the directory.")
+    manager = db.get(Employee, body.manager_id) if body.manager_id else None
+    if body.manager_id and (manager is None or manager.employment_status == "Terminated"):
+        raise HTTPException(422, "Choose an active manager.")
+    ref = manager if manager and manager.country_code == country_code else db.scalar(
+        select(Employee).where(Employee.country_code == country_code, Employee.employment_status == "Active").order_by(Employee.id))
+    emp_id = next_employee_id(db)
+    names = [x.strip() for x in (body.first_name, body.middle_name or "", body.last_name) if x and x.strip()]
+    emp = Employee(
+        id=emp_id, employee_code=emp_id, full_name=" ".join(names), first_name=body.first_name.strip(),
+        middle_name=(body.middle_name or "").strip() or None, last_name=body.last_name.strip(),
+        preferred_name=body.first_name.strip(), email=email, country_code=country_code,
+        legal_entity=ref.legal_entity if ref else f"TimeZ {country.name}",
+        business_unit=ref.business_unit if ref else f"TimeZ {country.name}", division=ref.division if ref else None,
+        department=body.department.strip(), location=body.location.strip(), job_title=body.job_title.strip(),
+        grade=body.grade.strip(), employment_type=body.employment_type.strip(),
+        employment_status="Onboarding" if body.joining_date > date.today() else "Active",
+        joining_date=body.joining_date, manager_id=manager.id if manager else None,
+        time_zone=country.time_zone, currency=country.currency,
+        holiday_calendar=ref.holiday_calendar if ref else None, leave_policy_name=ref.leave_policy_name if ref else None,
+        source="portal_hr",
+    )
+    db.add(emp)
+    db.flush()
+    db.add(EmployeeAssignment(employee_id=emp.id, effective_from=body.joining_date,
+                              **{k: getattr(emp, k) for k in ASSIGNMENT_FIELDS}))
+    record_audit(db, actor_id=user.id, action="employee_created", entity="employee", entity_id=emp.id, subject_id=emp.id,
+                 before=None, after={"full_name": emp.full_name, "country_code": country_code, "job_title": emp.job_title,
+                                     "department": emp.department, "joining_date": emp.joining_date},
+                 ip=client_ip(request))
+    db.commit()
+    db.refresh(emp)
     return _full(db, user, emp)
 
 

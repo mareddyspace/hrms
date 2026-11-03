@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models import Account, ApprovalInstance, AuditLog, Employee, ExpenseReceipt
 from app.security import create_access_token
+from tests.conftest import login
 from app.services import storage
 
 API = "/api/v1/expenses"
@@ -132,10 +133,10 @@ def test_small_claim_manager_only_then_paid(client, babu, ram, farhan, admin, so
     assert client.post(f"{API}/{cid}/pay", headers=babu, json=pay).status_code == 403
     assert client.post(f"{API}/{cid}/pay", headers=ram, json=pay).status_code == 403
     future = {"paid_on": (today_ist() + timedelta(days=3)).isoformat(), "payment_reference": "X"}
-    assert client.post(f"{API}/{cid}/pay", headers=admin, json=future).status_code == 422
-    res = client.post(f"{API}/{cid}/pay", headers=admin, json=pay)
+    assert client.post(f"{API}/{cid}/pay", headers=farhan, json=future).status_code == 422
+    res = client.post(f"{API}/{cid}/pay", headers=farhan, json=pay)
     assert res.status_code == 200 and res.json()["status"] == "paid" and res.json()["payment_reference"] == "NEFT-001"
-    assert client.post(f"{API}/{cid}/pay", headers=admin, json=pay).status_code == 409
+    assert client.post(f"{API}/{cid}/pay", headers=farhan, json=pay).status_code == 409
     assert any(n["title"] == "Expense claim paid" for n in client.get("/api/v1/notifications", headers=babu).json())
     with SessionLocal() as db:
         actions = set(db.scalars(select(AuditLog.action).where(AuditLog.entity_id == cid)))
@@ -202,7 +203,7 @@ def test_withdraw_and_reject(client, babu, ram):
     assert client.post(f"{API}/{cid}/decision", headers=ram, json={"decision": "reject"}).status_code == 422
     res = client.post(f"{API}/{cid}/decision", headers=ram, json={"decision": "reject", "note": "Personal expense"})
     assert res.json()["status"] == "rejected"
-    assert client.post(f"{API}/{cid}/pay", headers=token_for("demo-admin", "admin"),
+    assert client.post(f"{API}/{cid}/pay", headers=login(client, "farhan.ali@timez.com"),
                        json={"paid_on": (today_ist() - timedelta(days=1)).isoformat(), "payment_reference": "R"}).status_code == 409
 
 
@@ -232,3 +233,11 @@ def test_finance_role_approves_and_sees_all(client, babu, ram):
         with SessionLocal() as db:
             db.get(Account, "test-finance").active = False
             db.commit()
+
+
+def test_admin_is_not_finance(client, babu, ram, admin):
+    cid = claim(client, babu, 444, category="Other").json()["id"]
+    assert cid not in {c["id"] for c in client.get(API, params={"view": "all"}, headers=admin).json()}
+    # admin may still open it when named as the fallback finance approver, but never pays
+    assert client.post(f"{API}/{cid}/pay", headers=admin, json={"paid_on": today_ist().isoformat(),
+                                                                   "payment_reference": "R"}).status_code in (403, 404)

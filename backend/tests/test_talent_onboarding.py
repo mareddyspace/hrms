@@ -104,3 +104,33 @@ def test_hr_acknowledges_on_behalf(client, ram, farhan, sophie, admin):
     with SessionLocal() as db:
         ids = sorted(int(e[2:]) for e in db.scalars(select(Employee.id).where(Employee.source == "recruiting")))
         assert len(ids) == len(set(ids)) and all(i > 500 for i in ids)
+
+
+def test_joiner_access_recruiter_only_own_hires_and_no_personal_details_for_it(client, ram, farhan, sophie, admin):
+    _, joiner = hire(client, sophie, ram, farhan, "Kavya Rao", "kavya.rao@example.com", start_in_days=28)
+    me = _joiner_login(joiner["employee_id"])
+    form = {"personal": {"confirmed": True, "personal_email": "kavya@home.example", "mobile": "+91 90000 00001",
+                         "address": "12 Lake Road"},
+            "emergency_contact": {"name": "Ravi Rao", "relationship": "Father", "phone": "+91 90000 00002"},
+            "equipment": ["laptop"], "it_request": {"systems": ["Email"]}}
+    assert client.put(f"{O}/joiners/{joiner['id']}/preboarding", headers=me, json=form).status_code == 200
+
+    # HR, the manager and the joiner see the whole form
+    for who in (farhan, ram, me):
+        pre = client.get(f"{O}/joiners/{joiner['id']}", headers=who).json()["preboarding"]
+        assert pre["personal"]["mobile"] == "+91 90000 00001" and pre["emergency_contact"]["name"] == "Ravi Rao"
+    # the recruiter who hired them and admin (IT tasks) see the joiner, but only equipment and the IT request
+    for who in (sophie, admin):
+        pre = client.get(f"{O}/joiners/{joiner['id']}", headers=who).json()["preboarding"]
+        assert set(pre) == {"equipment", "it_request"}
+        listed = next(j for j in client.get(f"{O}/joiners", headers=who).json() if j["id"] == joiner["id"])
+        assert "personal" not in (listed["preboarding"] or {}) and "Lake Road" not in str(listed)
+    # another recruiter, not on this requisition, does not see the joiner at all
+    with SessionLocal() as db:
+        if db.get(Account, "acc-qa-recruiter2") is None:
+            db.add(Account(id="acc-qa-recruiter2", email="qa.recruiter2@timez.example", password_hash="x",
+                           role="recruiter", employee_id=None, active=True, failed_attempts=0))
+            db.commit()
+    other = token_for("acc-qa-recruiter2", "recruiter")
+    assert client.get(f"{O}/joiners/{joiner['id']}", headers=other).status_code == 404
+    assert joiner["id"] not in {j["id"] for j in client.get(f"{O}/joiners", headers=other).json()}

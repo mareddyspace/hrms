@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
-import { API_ENABLED } from "../api/client.ts";
-import { apiUpdatePerson, type ApiHrProfileUpdate } from "../api/syncProfile.ts";
+import { apiCreatePerson, apiUpdatePerson, type ApiHrProfileUpdate } from "../api/syncProfile.ts";
 import { Banner, Card, Dialog, Field, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import {
   FILTER_OPTIONS,
@@ -136,8 +135,8 @@ function validatePerson(draft: LocalPersonRecord, people: PersonRecord[], isNew:
 }
 
 /**
- * Save an add/edit and record job changes as dated lifecycle events.
- * An edit dated after today is held and applied on that date. Returns true when it was scheduled.
+ * Local mode: save in the browser. An edit dated after today is held and applied on that date.
+ * Returns true when it was scheduled. Backend mode uses saveEmployeeOnServer instead.
  */
 export function saveEmployee(
   next: LocalPersonRecord,
@@ -152,12 +151,41 @@ export function saveEmployee(
   }
   upsertPerson(next);
   if (before) recordLifecycleChanges(before, next, effectiveDate, actor);
-  if (API_ENABLED && before) syncProfileToServer(before, next);
   return false;
 }
 
-/** Backend mode: send the HR-owned profile fields that changed (PATCH /people/{id}, audited on the server). */
-function syncProfileToServer(before: PersonRecord, next: PersonRecord) {
+/**
+ * Backend mode: add the person (POST /people) or send the HR-owned fields that changed (PATCH /people/{id}, audited,
+ * job fields also start a new dated assignment). Returns the person's id, or the server's error to show.
+ */
+export async function saveEmployeeOnServer(
+  next: LocalPersonRecord,
+  effectiveDate: string,
+  before: PersonRecord | null,
+): Promise<{ id: string | null; error: string | null }> {
+  const [first = "", ...rest] = next.fullName.trim().split(/\s+/);
+  if (!before) {
+    return apiCreatePerson({
+      first_name: next.firstName?.trim() || first,
+      middle_name: next.middleName ?? null,
+      last_name: next.lastName?.trim() || rest.join(" "),
+      email: next.email,
+      country_code: String(next.countryCode),
+      job_title: next.designation,
+      department: next.department,
+      location: next.location,
+      grade: next.grade,
+      employment_type: next.employmentType,
+      joining_date: next.dateOfJoining,
+      manager_id: next.managerId || null,
+    });
+  }
+  if (effectiveDate > todayISO()) {
+    return { id: null, error: "Changes dated in the future are made under Lifecycle actions, so they can be approved and applied on that date." };
+  }
+  if (before.employmentStatus !== next.employmentStatus) {
+    return { id: null, error: "Change the employment status through Exits or Lifecycle actions." };
+  }
   const update: ApiHrProfileUpdate = {};
   const changed = (a: unknown, b: unknown) => (a ?? "") !== (b ?? "");
   if (changed(before.firstName, next.firstName)) update.first_name = next.firstName ?? null;
@@ -168,10 +196,15 @@ function syncProfileToServer(before: PersonRecord, next: PersonRecord) {
   if (changed(before.workArrangement, next.workArrangement) && next.workArrangement) update.work_arrangement = next.workArrangement;
   if (changed(before.gender, next.gender)) update.gender = next.gender || null;
   if (changed(before.dateOfBirth, next.dateOfBirth) && next.dateOfBirth && !isMasked(next.dateOfBirth)) update.date_of_birth = next.dateOfBirth;
-  if (!Object.keys(update).length) return;
-  void apiUpdatePerson(next.id, update).then((error) => {
-    if (error) console.error("Could not save profile on the server:", error);
-  });
+  if (changed(before.designation, next.designation)) update.job_title = next.designation;
+  if (changed(before.department, next.department)) update.department = next.department;
+  if (changed(before.location, next.location)) update.location = next.location;
+  if (changed(before.grade, next.grade)) update.grade = next.grade;
+  if (changed(before.employmentType, next.employmentType)) update.employment_type = next.employmentType;
+  if (changed(before.managerId, next.managerId)) update.manager_id = next.managerId || null;
+  if (!Object.keys(update).length) return { id: next.id, error: null };
+  const error = await apiUpdatePerson(next.id, update);
+  return { id: error ? null : next.id, error };
 }
 
 function addYears(iso: string, years: number): string {

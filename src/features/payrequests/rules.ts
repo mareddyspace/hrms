@@ -22,7 +22,7 @@ const WORKING_DAYS_A_MONTH = 22;
 
 export const IT_ROLES: string[] = ["admin", "super_admin", "it_admin"];
 export const isItRole = (role: string) => IT_ROLES.includes(role);
-export const canPayOut = (role: UserRole | string) => isHrRole(role as UserRole) || role === "finance" || role === "admin" || role === "super_admin";
+export const canPayOut = (role: UserRole | string) => isHrRole(role as UserRole) || role === "finance";
 
 /**
  * Pay scale as on the payslips (src/data/payslipGenerator.ts): the person's annual base pay from their current

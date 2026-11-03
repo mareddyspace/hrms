@@ -54,7 +54,7 @@ import type { DemoAccount } from "../demoAccounts.ts";
 import { formatShortDate, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { Employee360View } from "./Employee360View.tsx";
-import { EmployeeFormDialog, saveEmployee } from "./EmployeeFormDialog.tsx";
+import { EmployeeFormDialog, saveEmployee, saveEmployeeOnServer } from "./EmployeeFormDialog.tsx";
 import { OwnDetailsEditor, ProfileDetailsCards, VerifyBadge, useCorrectionUi, type OwnEditMode } from "./ProfileDetailsCards.tsx";
 import { CertificateDialog, type CertificateDoc } from "../components/CertificateViewer.tsx";
 import "./profile.css";
@@ -767,6 +767,13 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
           people={people}
           onClose={() => setHrEditOpen(false)}
           onSave={(next, effectiveDate) => {
+            if (API_ENABLED) {
+              void saveEmployeeOnServer(next, effectiveDate, person.record!).then(({ error }) => {
+                setHrEditOpen(false);
+                setBanner(error ? { tone: "err", text: error } : { tone: "ok", text: "Employee record saved." });
+              });
+              return;
+            }
             const scheduled = saveEmployee(next, effectiveDate, person.record!, demoProfile);
             setHrEditOpen(false);
             setBanner({ tone: "ok", text: scheduled ? `Change scheduled for ${formatShortDate(effectiveDate)}.` : "Employee record saved." });

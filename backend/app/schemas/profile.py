@@ -84,6 +84,31 @@ class HrProfileUpdateIn(SelfProfileUpdateIn):
     date_of_birth: date | None = None
     gender: str | None = Field(default=None, max_length=32)
     company: str | None = Field(default=None, max_length=100)
+    # Job fields (each change also starts a new row in the dated assignment history). Status changes go through
+    # exits and lifecycle actions, not this edit.
+    job_title: str | None = Field(default=None, min_length=2, max_length=200)
+    department: str | None = Field(default=None, min_length=2, max_length=200)
+    location: str | None = Field(default=None, min_length=2, max_length=200)
+    grade: str | None = Field(default=None, min_length=1, max_length=16)
+    employment_type: str | None = Field(default=None, min_length=2, max_length=32)
+    manager_id: str | None = Field(default=None, max_length=64)
+
+
+class PersonCreateIn(BaseModel):
+    """POST /people for HR: add someone to the directory directly (new hires normally come through recruiting)."""
+
+    first_name: str = Field(min_length=1, max_length=100)
+    middle_name: str | None = Field(default=None, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    country_code: str = Field(min_length=2, max_length=2)
+    job_title: str = Field(min_length=2, max_length=200)
+    department: str = Field(min_length=2, max_length=200)
+    location: str = Field(min_length=2, max_length=200)
+    grade: str = Field(min_length=1, max_length=16)
+    employment_type: str = Field(default="Full-Time", min_length=2, max_length=32)
+    joining_date: date
+    manager_id: str | None = Field(default=None, max_length=64)
 
 
 class ProfileCorrectionIn(BaseModel):

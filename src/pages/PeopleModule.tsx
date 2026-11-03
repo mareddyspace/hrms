@@ -1,6 +1,7 @@
+import { API_ENABLED } from "../api/client.ts";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Card, EmptyState, FilterBar, Page, StatusBadge } from "../components/ui.tsx";
+import { Card, EmptyState, FilterBar, Page, StatusBadge, notifyError } from "../components/ui.tsx";
 import { FILTER_OPTIONS, type EmploymentStatus, type PersonRecord } from "../data/peopleData.ts";
 import { dataScopeFor, dataScopeLabel, personFilterFor, useAccessVersion } from "../data/accessControl.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
@@ -9,7 +10,7 @@ import { directoryFieldLevel } from "../data/rbac.ts";
 import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import { usePortal } from "../store.tsx";
-import { EmployeeFormDialog, saveEmployee } from "./EmployeeFormDialog.tsx";
+import { EmployeeFormDialog, saveEmployee, saveEmployeeOnServer } from "./EmployeeFormDialog.tsx";
 import { PersonProfilePage } from "./PersonProfilePage.tsx";
 
 function usePeople(): PersonRecord[] {
@@ -449,8 +450,15 @@ export function PeopleNewPage() {
         people={people}
         onClose={() => navigate("/directory")}
         onSave={(next, effectiveDate) => {
-          saveEmployee(next, effectiveDate, null, demoProfile);
-          navigate(`/directory/${next.id}`);
+          if (!API_ENABLED) {
+            saveEmployee(next, effectiveDate, null, demoProfile);
+            navigate(`/directory/${next.id}`);
+            return;
+          }
+          void saveEmployeeOnServer(next, effectiveDate, null).then(({ id, error }) => {
+            if (error) notifyError(error);
+            else navigate(`/directory/${id}`);
+          });
         }}
       />
     </Page>

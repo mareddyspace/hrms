@@ -1166,7 +1166,7 @@ function PreboardingCard({ joiner, actor, onResult }: { joiner: OnboardingJoiner
         ) : (
           <dl className="info-grid">
             <div className="info-fact"><dt>Details confirmed</dt><dd>{p.personal.confirmed ? "Yes" : "No"}</dd></div>
-            <div className="info-fact"><dt>Emergency contact</dt><dd>{p.emergencyContact.name} ({p.emergencyContact.relationship})</dd></div>
+            <div className="info-fact"><dt>Emergency contact</dt><dd>{p.emergencyContact.name ? `${p.emergencyContact.name} (${p.emergencyContact.relationship})` : "Visible to HR and the manager"}</dd></div>
             <div className="info-fact"><dt>Equipment</dt><dd>{p.equipment.map((e) => EQUIPMENT_LABEL[e]).join(", ") || "—"}</dd></div>
             <div className="info-fact"><dt>IT access</dt><dd>{p.itRequest.systems.join(", ") || "—"}</dd></div>
           </dl>

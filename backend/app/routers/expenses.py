@@ -40,7 +40,7 @@ from app.services.workflow_defaults import (
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
 
-FINANCE_ROLES = frozenset({"finance", "admin"})
+FINANCE_ROLES = frozenset({"finance"})  # not admin: admins get no HR or pay data about others (services/scope.py)
 
 
 def is_finance(user: CurrentUser) -> bool:
@@ -260,9 +260,9 @@ def decide_claim(claim_id: str, body: DecisionIn, request: Request, db: DbSessio
 
 @router.post("/{claim_id}/pay", response_model=ExpenseClaimOut)
 def mark_paid(claim_id: str, body: ExpensePayIn, request: Request, db: DbSession, user: CurrentUserDep) -> ExpenseClaimOut:
-    if not is_finance(user):
-        raise HTTPException(403, "Only Finance or an administrator can mark claims as paid.")
     claim, emp = _visible_claim(db, user, claim_id)
+    if not (is_finance(user) or (user.scope.is_hr and user.scope.can_see(emp))):
+        raise HTTPException(403, "Only Finance or HR can mark claims as paid.")
     if claim.status != "approved":
         raise HTTPException(409, f"Only approved claims can be paid; this one is {claim.status}.")
     today = today_for(user.employee) if user.employee else date.today()

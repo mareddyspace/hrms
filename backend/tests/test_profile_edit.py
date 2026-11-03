@@ -230,3 +230,38 @@ def test_ai_action_audit(client, babu):
     assert all("682016" not in str(r.changes) and "98470" not in str(r.changes) for r in rows)
     assert client.post("/api/v1/ai/actions/audit", headers=babu, json={"action": "x", "status": "done"}).status_code == 422
     assert client.post("/api/v1/ai/actions/audit", json={"action": "x", "status": "proposed"}).status_code == 401
+
+
+def test_hr_adds_employee_and_changes_job_with_history(client, babu, ram, farhan):
+    from app.models import EmployeeAssignment
+
+    body = {"first_name": "Anika", "last_name": "Shah", "email": "anika.shah@timez.com", "country_code": "IN",
+            "job_title": "QA Engineer", "department": "Engineering", "location": "Bengaluru", "grade": "L2",
+            "joining_date": "2026-01-05", "manager_id": "emp-ram"}
+    assert client.post(P, headers=babu, json=body).status_code == 403
+    assert client.post(P, headers=ram, json=body).status_code == 403
+    res = client.post(P, headers=farhan, json=body)
+    assert res.status_code == 201, res.text
+    new = res.json()
+    assert new["full_name"] == "Anika Shah" and new["employment_status"] == "Active" and new["manager_id"] == "emp-ram"
+    assert client.post(P, headers=farhan, json=body).status_code == 409  # same email
+    assert client.get(f"{P}/{new['id']}", headers=farhan).status_code == 200
+
+    # job change: saved on the record and as a new dated assignment
+    assert client.patch(f"{P}/{new['id']}", headers=farhan, json={"manager_id": new["id"]}).status_code == 422
+    assert client.patch(f"{P}/{new['id']}", headers=farhan, json={"department": " "}).status_code == 422
+    res = client.patch(f"{P}/{new['id']}", headers=farhan,
+                       json={"job_title": "Senior QA Engineer", "grade": "L3", "department": "Quality"})
+    assert res.status_code == 200, res.text
+    assert res.json()["job_title"] == "Senior QA Engineer" and res.json()["department"] == "Quality"
+    with SessionLocal() as db:
+        rows = list(db.scalars(select(EmployeeAssignment).where(EmployeeAssignment.employee_id == new["id"])
+                               .order_by(EmployeeAssignment.effective_from)))
+        assert rows[-1].job_title == "Senior QA Engineer" and rows[-1].effective_to is None
+        assert any(r.job_title == "QA Engineer" for r in rows)
+        assert db.scalar(select(AuditLog).where(AuditLog.entity_id == new["id"], AuditLog.action == "employee_created"))
+        # leave the shared directory as it was (other tests count headcount)
+        for row in rows:
+            db.delete(row)
+        db.delete(db.get(Employee, new["id"]))
+        db.commit()

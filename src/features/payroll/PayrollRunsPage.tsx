@@ -369,7 +369,7 @@ export function PayrollRunsPage() {
               <>
                 <div className="chip-row" style={{ marginBottom: 8 }}>
                   {(Object.keys(counts) as RunFlag[]).map((k) => (
-                    <StatusBadge key={k} status={`${FLAG_TEXT[k]} · ${counts[k]}`} tone={k === "missing_bank" || k === "negative_net" ? "danger" : "info"} literal keepCase />
+                    <StatusBadge key={k} status={`${FLAG_TEXT[k]} · ${counts[k]}`} tone={k === "missing_bank" || k === "negative_net" || k === "missing_salary" || k === "pay_above_salary" ? "danger" : "info"} literal keepCase />
                   ))}
                 </div>
                 <ul className="payroll-exceptions">

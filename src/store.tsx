@@ -72,6 +72,7 @@ import {
   findDemoByEmailOrCode,
   normalizeSignInEmail,
   findDemoById,
+  registerServerAccount,
   managementChain,
   type DemoAccount, RETIRED_ACCOUNT_IDS, RETIRED_SIGN_IN_IDS, mentionsRetiredAccount, setDirectoryChainSource, setNavOverrideSource } from "./demoAccounts.ts";
 import { canApproveTeam, holidaysForPerson, maskAddress, maskMobile, setEarnedLeaveSource, setHolidayContext } from "./model.ts";
@@ -1182,11 +1183,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           }
           try {
             const { me, previousLoginAt, mustChangePassword } = await apiLogin(email, password, mfaCode);
-            const account = findDemoById(me.account_id);
-            if (!account) {
-              clearTokens();
-              return "This account can't use the portal yet. Contact HR.";
-            }
+            // The eight demo personas keep their own pages; any other server account (a new hire, say) signs in
+            // with the role and name the server gives it.
+            const account = findDemoById(me.account_id) ?? registerServerAccount({
+              accountId: me.account_id, email: me.email, role: me.role, fullName: me.full_name, countryCode: me.country_code,
+            });
             writeApiLock(email, null);
             if (remember) localStorage.setItem(REMEMBER_KEY, account.email);
             else localStorage.removeItem(REMEMBER_KEY);

@@ -4,6 +4,7 @@
  * group has approved, with "any" the first approval completes it.
  */
 import type { ExpenseApprovalStep, ExpenseStepDecision } from "../model.ts";
+import { isHrRole } from "./collabData.ts";
 import { approversForStep, withoutPriorApprovers, type FlowDecision, type FlowGroup, type ParallelMode } from "./approvalWorkflows.ts";
 
 /** A saved step: the expense claim shape, plus parallel groups on newer requests. */
@@ -152,13 +153,13 @@ export function waitingApproverIds(request: Pick<SteppedRequest, "steps" | "curr
   return step.approverIds;
 }
 
-/** Roles that record payments on approved claims. */
-export const PAYER_ROLES = ["finance", "admin", "super_admin"];
+/** Roles that record payments on approved claims, besides HR (the server allows Finance and HR in scope, not admins). */
+export const PAYER_ROLES = ["finance"];
 
 export function canPayExpenses(role: string, myId: string, employeeId: string): boolean {
   if (myId === employeeId) return false;
-  if (PAYER_ROLES.includes(role)) return true;
-  // With no finance or admin accounts, whoever the finance step resolves to pays.
+  if (PAYER_ROLES.includes(role) || isHrRole(role)) return true;
+  // With no finance accounts, whoever the finance step resolves to pays.
   return approversForStep({ role: "finance" }, employeeId).includes(myId);
 }
 

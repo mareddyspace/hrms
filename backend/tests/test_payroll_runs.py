@@ -113,6 +113,13 @@ def test_payroll_run_draft_review_locked(client, babu, farhan):
     run = res.json()
     assert run["status"] == "draft" and run["headcount"] == len(inputs) and run["can_submit"]
     assert any(x["kind"] == "missing_bank" for x in run["exceptions"])
+    # the server checks the browser's pay against the salary on record (every test line pays Basic 50,000)
+    for p in inputs:
+        kinds = {x["kind"] for x in run["exceptions"] if x["employee_id"] == p["employee_id"]}
+        assert ("missing_salary" in kinds) == (p["annual_base"] is None)
+        if p["annual_base"] is not None:
+            due = p["annual_base"] / 12 * (p["days_in_month"] - p["lwp_days"]) / p["days_in_month"]
+            assert ("pay_above_salary" in kinds) == (50000 > due * 1.01 + 1)
     line = next(l for l in run["lines"] if l["employee_id"] == "emp-mahesh")
     assert line["net"] == round(line["gross"] - line["deductions_total"], 2)
     assert run["totals"]["held"] >= 1

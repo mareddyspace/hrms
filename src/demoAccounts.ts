@@ -1,4 +1,4 @@
-import type { Employee } from "./model.ts";
+import { canApproveTeam, TIMEZ_COUNTRIES, type CountryCode, type Employee, type UserRole } from "./model.ts";
 
 /** Explicit authorization flags (frontend stand-in for backend claims). */
 export type RbacFlags = {
@@ -520,7 +520,63 @@ export function findDemoByCode(code: string): DemoAccount | undefined {
 }
 
 export function findDemoById(id: string): DemoAccount | undefined {
-  return DEMO_ACCOUNTS.find((account) => account.id === id);
+  return DEMO_ACCOUNTS.find((account) => account.id === id) ?? serverAccounts().find((account) => account.id === id);
+}
+
+/** Backend mode: sign-in accounts that are not one of the eight demo personas (e.g. a new hire), kept in the
+ * browser so a page refresh still knows who is signed in. No passwords or personal details are stored. */
+const SERVER_ACCOUNTS_KEY = "timez.server.accounts.v1";
+
+export interface ServerAccountInfo {
+  accountId: string;
+  email: string;
+  role: string;
+  fullName: string | null;
+  countryCode: string | null;
+}
+
+function serverAccounts(): DemoAccount[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SERVER_ACCOUNTS_KEY) ?? "[]") as ServerAccountInfo[];
+    return Array.isArray(raw) ? raw.map(toPortalAccount) : [];
+  } catch {
+    return [];
+  }
+}
+
+function toPortalAccount(info: ServerAccountInfo): DemoAccount {
+  // Pages come from the demo persona with the same role (HR, recruiter, executive, admin...), else by role family.
+  const template = DEMO_ACCOUNTS.find((a) => a.role === info.role);
+  const navAccess = template?.navAccess ?? (canApproveTeam(info.role as UserRole) ? ACCESS_MANAGER : ACCESS_EMPLOYEE);
+  const country = TIMEZ_COUNTRIES.find((c) => c.code === info.countryCode);
+  return account({
+    id: info.accountId,
+    employeeCode: info.accountId.toUpperCase(),
+    fullName: info.fullName || info.email,
+    personaLabel: template?.personaLabel ?? info.role.replace(/_/g, " "),
+    role: info.role as UserRole,
+    designation: template?.designation ?? "",
+    email: info.email,
+    password: "",
+    mobile: "",
+    address: "",
+    timeZone: country?.timeZone ?? "UTC",
+    ...(country ? { countryCode: country.code as CountryCode, countryName: country.name, currency: country.currency } : {}),
+    navAccess,
+  });
+}
+
+/** Remember (and return) a server account that has no demo persona. */
+export function registerServerAccount(info: ServerAccountInfo): DemoAccount {
+  try {
+    const list = (JSON.parse(localStorage.getItem(SERVER_ACCOUNTS_KEY) ?? "[]") as ServerAccountInfo[]).filter(
+      (a) => a.accountId !== info.accountId,
+    );
+    localStorage.setItem(SERVER_ACCOUNTS_KEY, JSON.stringify([...list, info]));
+  } catch {
+    // storage blocked: the session still works until the page is reloaded
+  }
+  return toPortalAccount(info);
 }
 
 /** Lower-cased, trimmed sign-in email; addresses from before the rename (@infotech.com) map to @timez.com. */

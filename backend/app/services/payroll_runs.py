@@ -60,7 +60,10 @@ FLAG_TEXT = {
     "negative_net": "Net pay below zero",
     "new_joiner": "New joiner",
     "leaver": "Leaver",
+    "missing_salary": "No salary record: pay was worked out from a default scale. Add the salary before approving",
+    "pay_above_salary": "Regular pay is higher than the salary on record for the days paid",
 }
+BONUS_LINE = "Performance bonus"
 
 
 class RunError(ValueError):
@@ -297,8 +300,14 @@ def prepare(db: Session, country: str, entity: str, month: str, lines: list[dict
             raise RunError(f"{name}: paid days must be 0 to {p['days_in_month']}.")
         gross, ded = _sum(earnings), _sum(deductions)
         net = round(gross - ded, 2)
+        # The browser works out the pay; the server checks it against the salary on record (annual_base).
+        regular = gross - _sum(earnings, OVERTIME_LINE) - _sum(earnings, REIMBURSEMENT_LINE) \
+            - _sum(earnings, ENCASHMENT_LINE) - _sum(earnings, BONUS_LINE)
+        due = (p["annual_base"] or 0) / 12 * paid_days / p["days_in_month"] if p["days_in_month"] else 0
+        above = p["annual_base"] is not None and regular > due * 1.01 + TOLERANCE
         flags = [f for f, on in (("missing_bank", not p["bank_ok"]), ("negative_net", net < 0),
-                                 ("new_joiner", p["new_joiner"]), ("leaver", p["leaver"])) if on]
+                                 ("new_joiner", p["new_joiner"]), ("leaver", p["leaver"]),
+                                 ("missing_salary", p["annual_base"] is None), ("pay_above_salary", above)) if on]
         slip = raw.get("slip") if isinstance(raw.get("slip"), dict) else None
         db.add(PayrollRunLine(
             run_id=run.id, employee_id=emp_id, employee_name=name, employee_code=p["employee_code"],

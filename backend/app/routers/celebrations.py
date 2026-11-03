@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db import utcnow
 from app.deps import CurrentUserDep, DbSession, client_ip
-from app.models import Account, Employee, Kudos
+from app.models import Employee, Kudos
 from app.services.activity import notify, record_audit
 from app.services.decisions import me
 from app.services.headcount import has_started
@@ -75,9 +75,9 @@ def _next_in(d: date, start: date, end: date) -> date | None:
 
 
 def circle_ids(db: Session, viewer_id: str | None) -> set[str]:
-    """The people around the viewer: themselves, their manager, teammates under the same manager, their direct
-    reports, and everyone who can sign in (the demo team). The calendar shows only these, not the whole company."""
-    ids = set(db.scalars(select(Account.employee_id).where(Account.employee_id.is_not(None))))
+    """The people around the viewer: themselves, their manager, teammates under the same manager and their direct
+    reports. The calendar shows only these, not the whole company (nor everyone who happens to have a sign-in)."""
+    ids: set[str] = set()
     me_row = db.get(Employee, viewer_id) if viewer_id else None
     if me_row is not None:
         ids.add(me_row.id)

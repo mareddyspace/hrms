@@ -18,9 +18,10 @@ from app.services.decisions import NOT_FOUND
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
-def _out(db: DbSession, joiner: Joiner) -> JoinerOut:
+def _out(db: DbSession, joiner: Joiner, user: CurrentUser) -> JoinerOut:
     tasks = rules.tasks_of(db, joiner)
     out = JoinerOut.model_validate(joiner)
+    out.preboarding = rules.preboarding_for(user, joiner)
     out.tasks = [OnboardingTaskOut.model_validate(t) for t in tasks]
     out.progress_pct = rules.progress_pct(tasks)
     emp = db.get(Employee, joiner.employee_id)
@@ -30,7 +31,7 @@ def _out(db: DbSession, joiner: Joiner) -> JoinerOut:
 
 def _visible(db: DbSession, user: CurrentUser, joiner_id: str) -> Joiner:
     joiner = db.get(Joiner, joiner_id)
-    if joiner is None or not rules.can_view(user, joiner):
+    if joiner is None or not rules.can_view(db, user, joiner):
         raise NOT_FOUND
     return joiner
 
@@ -40,12 +41,12 @@ def list_joiners(db: DbSession, user: CurrentUserDep, status: str | None = None)
     stmt = select(Joiner).order_by(Joiner.start_date.desc(), Joiner.id)
     if status:
         stmt = stmt.where(Joiner.status == status)
-    return [_out(db, j) for j in db.scalars(stmt) if rules.can_view(user, j)]
+    return [_out(db, j, user) for j in db.scalars(stmt) if rules.can_view(db, user, j)]
 
 
 @router.get("/joiners/{joiner_id}", response_model=JoinerOut)
 def get_joiner(joiner_id: str, db: DbSession, user: CurrentUserDep) -> JoinerOut:
-    return _out(db, _visible(db, user, joiner_id))
+    return _out(db, _visible(db, user, joiner_id), user)
 
 
 @router.patch("/tasks/{task_id}", response_model=JoinerOut)
@@ -55,7 +56,7 @@ def update_task(task_id: str, body: TaskUpdateIn, request: Request, db: DbSessio
         raise NOT_FOUND
     joiner = _visible(db, user, task.joiner_id)
     if body.status == task.status:
-        return _out(db, joiner)
+        return _out(db, joiner, user)
     try:
         before = rules.update_task(db, user, task, joiner, body.status, body.reason)
     except rules.Forbidden as exc:
@@ -73,7 +74,7 @@ def update_task(task_id: str, body: TaskUpdateIn, request: Request, db: DbSessio
                    href=f"/onboarding/joiners/{joiner.id}")
     rules.refresh_status(db, joiner, user.id)
     db.commit()
-    return _out(db, joiner)
+    return _out(db, joiner, user)
 
 
 @router.post("/joiners/{joiner_id}/acknowledge", response_model=JoinerOut)
@@ -94,7 +95,7 @@ def acknowledge_policies(joiner_id: str, request: Request, db: DbSession, user: 
                href=f"/onboarding/joiners/{joiner.id}")
     rules.refresh_status(db, joiner, user.id)
     db.commit()
-    return _out(db, joiner)
+    return _out(db, joiner, user)
 
 
 # ---------- analytics & pre-boarding form (migration 0010) ----------
@@ -140,4 +141,4 @@ def submit_preboarding(joiner_id: str, body: PreboardingFormIn, request: Request
                href=f"/onboarding/joiners/{joiner.id}")
     rules.refresh_status(db, joiner, user.id)
     db.commit()
-    return _out(db, joiner)
+    return _out(db, joiner, user)
