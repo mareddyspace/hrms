@@ -104,3 +104,15 @@ def test_year_view_lists_every_month_and_respects_hidden_birthdays(client, babu,
         assert not [r for r in res.json() if r["employee_id"] == "emp-ram" and r["kind"] == "birthday"]
     finally:
         client.put("/api/v1/celebrations/me/preferences", json={"hide_birthday": False}, headers=ram)
+
+
+def test_calendar_circle_shows_only_people_around_me(client, babu, ram):
+    everyone = client.get("/api/v1/celebrations", headers=babu, params={"year": 2026}).json()
+    mine = client.get("/api/v1/celebrations", headers=babu, params={"year": 2026, "circle": True}).json()
+    people = {c["employee_id"] for c in mine}
+    assert len(mine) < len(everyone) / 10
+    assert {"emp-mahesh", "emp-ram", "emp-priya", "emp-oliver"} <= people
+    assert all(c["employee_id"].startswith(("emp-", "demo-")) for c in mine)  # no workbook strangers for Babu
+    team = {c["employee_id"] for c in client.get("/api/v1/celebrations", headers=ram,
+                                                  params={"year": 2026, "circle": True}).json()}
+    assert {"emp-mahesh", "emp-priya", "emp-oliver"} <= team

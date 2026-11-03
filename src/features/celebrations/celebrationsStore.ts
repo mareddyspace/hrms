@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { API_ENABLED, api, apiRequest } from "../../api/client.ts";
+import { DEMO_ACCOUNTS } from "../../demoAccounts.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { addDaysISO, todayISO } from "../../model.ts";
 import {
@@ -109,6 +110,19 @@ export async function setHideBirthday(employeeId: string, hide: boolean): Promis
 
 /* ───────────── Local list ───────────── */
 
+/** The people around someone (backend circle_ids): themselves, their manager, teammates under the same manager,
+ *  their direct reports and everyone who can sign in. The calendar shows only these, not the whole company. */
+export function localCircle(actorId: string): Set<string> {
+  const people = listPeople();
+  const ids = new Set<string>([actorId, ...DEMO_ACCOUNTS.map((a) => a.id)]);
+  const managerId = people.find((p) => p.id === actorId)?.managerId;
+  if (managerId) ids.add(managerId);
+  for (const p of people) {
+    if (p.managerId === actorId || (managerId && p.managerId === managerId)) ids.add(p.id);
+  }
+  return ids;
+}
+
 function occurrenceIn(iso: string, start: string, end: string): string | null {
   const [, m, d] = iso.split("-").map(Number);
   for (const year of [Number(start.slice(0, 4)), Number(start.slice(0, 4)) + 1]) {
@@ -128,13 +142,15 @@ function wishedIds(actorId: string): Set<string> {
   );
 }
 
-export function localCelebrations(actorId: string, days: number, today = todayISO()): Celebration[] {
+export function localCelebrations(actorId: string, days: number, today = todayISO(), circle = false): Celebration[] {
   const start = addDaysISO(today, -1);
   const end = addDaysISO(today, days - 1);
   const hidden = readPrefs();
   const wished = wishedIds(actorId);
+  const around = circle ? localCircle(actorId) : null;
   const out: Celebration[] = [];
   for (const p of listPeople()) {
+    if (around && !around.has(p.id)) continue;
     if (p.employmentStatus === "Terminated" || !p.dateOfJoining || p.dateOfJoining > today) continue;
     const base = {
       employeeId: p.id,
@@ -197,24 +213,24 @@ function subscribeLocal(fn: () => void) {
   return () => offs.forEach((off) => off());
 }
 
-/** Celebrations from yesterday to `days` ahead, for the signed-in person. */
-export function useCelebrations(actorId: string, days: number) {
+/** Celebrations from yesterday to `days` ahead, for the signed-in person (`circle`: only the people around them). */
+export function useCelebrations(actorId: string, days: number, circle = false) {
   useSyncExternalStore(API_ENABLED ? noSubscribe : subscribeLocal, () => (API_ENABLED ? 0 : localTick));
   const [apiRows, setApiRows] = useState<Celebration[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
     if (!API_ENABLED) return;
     try {
-      setApiRows((await api.get<CelebrationApi[]>("/celebrations", { days })).map(fromApi));
+      setApiRows((await api.get<CelebrationApi[]>("/celebrations", { days, ...(circle ? { circle: true } : {}) })).map(fromApi));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load celebrations.");
     }
-  }, [days]);
+  }, [days, circle]);
   useEffect(() => {
     void load();
   }, [load]);
-  const rows = API_ENABLED ? (apiRows ?? []) : localCelebrations(actorId, days);
+  const rows = API_ENABLED ? (apiRows ?? []) : localCelebrations(actorId, days, todayISO(), circle);
   return { rows, loading: API_ENABLED && apiRows === null && !error, error, reload: load };
 }
 
@@ -241,13 +257,15 @@ export async function sendWish(actor: PlusActor, c: Celebration, message: string
 
 /* ───────────── Whole year (calendar month / year views) ───────────── */
 
-/** Birthdays (hidden ones left out) and work anniversaries for every day of `year`. */
-export function localYearCelebrations(year: number, today = todayISO()): Celebration[] {
+/** Birthdays (hidden ones left out) and work anniversaries for every day of `year`, of the people around `actorId`. */
+export function localYearCelebrations(year: number, actorId: string, today = todayISO()): Celebration[] {
   const hidden = readPrefs();
   const start = `${year}-01-01`;
   const end = `${year}-12-31`;
+  const around = localCircle(actorId);
   const out: Celebration[] = [];
   for (const p of listPeople()) {
+    if (!around.has(p.id)) continue;
     if (p.employmentStatus === "Terminated" || !p.dateOfJoining || p.dateOfJoining > today) continue;
     const base = {
       employeeId: p.id,
@@ -268,8 +286,9 @@ export function localYearCelebrations(year: number, today = todayISO()): Celebra
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
 }
 
-/** Celebrations for a calendar year: GET /celebrations?year= in backend mode, the browser directory otherwise. */
-export function useYearCelebrations(year: number) {
+/** The calendar's celebrations for a year, only the people around `actorId`: GET /celebrations?year=&circle=true
+ *  in backend mode, the browser directory otherwise. */
+export function useYearCelebrations(year: number, actorId: string) {
   useSyncExternalStore(API_ENABLED ? noSubscribe : subscribeLocal, () => (API_ENABLED ? 0 : localTick));
   const [apiRows, setApiRows] = useState<{ year: number; rows: Celebration[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -277,7 +296,7 @@ export function useYearCelebrations(year: number) {
     if (!API_ENABLED) return;
     let live = true;
     api
-      .get<CelebrationApi[]>("/celebrations", { year })
+      .get<CelebrationApi[]>("/celebrations", { year, circle: true })
       .then((rows) => {
         if (!live) return;
         setApiRows({ year, rows: rows.map(fromApi) });
@@ -289,7 +308,7 @@ export function useYearCelebrations(year: number) {
     return () => {
       live = false;
     };
-  }, [year]);
-  const rows = API_ENABLED ? (apiRows?.year === year ? apiRows.rows : []) : localYearCelebrations(year);
+  }, [year, actorId]);
+  const rows = API_ENABLED ? (apiRows?.year === year ? apiRows.rows : []) : localYearCelebrations(year, actorId);
   return { rows, error };
 }

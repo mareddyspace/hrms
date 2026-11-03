@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db import utcnow
 from app.deps import CurrentUserDep, DbSession, client_ip
-from app.models import Employee, Kudos
+from app.models import Account, Employee, Kudos
 from app.services.activity import notify, record_audit
 from app.services.decisions import me
 from app.services.headcount import has_started
@@ -74,7 +74,22 @@ def _next_in(d: date, start: date, end: date) -> date | None:
     return None
 
 
-def celebrations(db: Session, today: date, days: int, viewer_id: str | None, year: int | None = None) -> list[CelebrationOut]:
+def circle_ids(db: Session, viewer_id: str | None) -> set[str]:
+    """The people around the viewer: themselves, their manager, teammates under the same manager, their direct
+    reports, and everyone who can sign in (the demo team). The calendar shows only these, not the whole company."""
+    ids = set(db.scalars(select(Account.employee_id).where(Account.employee_id.is_not(None))))
+    me_row = db.get(Employee, viewer_id) if viewer_id else None
+    if me_row is not None:
+        ids.add(me_row.id)
+        ids |= set(db.scalars(select(Employee.id).where(Employee.manager_id == me_row.id)))
+        if me_row.manager_id:
+            ids.add(me_row.manager_id)
+            ids |= set(db.scalars(select(Employee.id).where(Employee.manager_id == me_row.manager_id)))
+    return ids
+
+
+def celebrations(db: Session, today: date, days: int, viewer_id: str | None, year: int | None = None,
+                 circle: bool = False) -> list[CelebrationOut]:
     """From today - 1 (yesterday's wishes still count) to today + days - 1; with `year`, every day of that year
     (the calendar's month and year views). New joiners are only listed for the rolling window."""
     start, end = today - timedelta(days=1), today + timedelta(days=days - 1)
@@ -87,7 +102,10 @@ def celebrations(db: Session, today: date, days: int, viewer_id: str | None, yea
                                                      Kudos.created_at >= utcnow() - timedelta(days=14)))}
     wished_ids = {to for to, _ in wished}
     out: list[CelebrationOut] = []
-    for emp in db.scalars(select(Employee).where(Employee.employment_status.not_in(LEFT))):
+    people = select(Employee).where(Employee.employment_status.not_in(LEFT))
+    if circle:
+        people = people.where(Employee.id.in_(circle_ids(db, viewer_id)))
+    for emp in db.scalars(people):
         base = dict(employee_id=emp.id, name=emp.full_name, job_title=emp.job_title,
                     department=emp.department, location=emp.location, wished_by_me=emp.id in wished_ids)
         if emp.date_of_birth and not emp.hide_birthday and has_started(emp, today):
@@ -107,10 +125,12 @@ def celebrations(db: Session, today: date, days: int, viewer_id: str | None, yea
 @router.get("", response_model=list[CelebrationOut])
 def list_celebrations(db: DbSession, user: CurrentUserDep,
                       days: Annotated[int, Query(ge=1, le=31)] = 7,
-                      year: Annotated[int | None, Query(ge=2000, le=2100)] = None) -> list[CelebrationOut]:
+                      year: Annotated[int | None, Query(ge=2000, le=2100)] = None,
+                      circle: bool = False) -> list[CelebrationOut]:
+    """circle=true: only the people around you (circle_ids), for the calendar; otherwise the whole company."""
     emp = user.employee
     today = today_for(emp) if emp else date.today()
-    return celebrations(db, today, days, user.employee_id, year)
+    return celebrations(db, today, days, user.employee_id, year, circle)
 
 
 @router.post("/wishes", response_model=CelebrationOut, status_code=201)

@@ -202,14 +202,15 @@ export function CalendarPage() {
       }));
   }, [talent, employee.id, employee.fullName]);
 
-  // Birthdays (day and month only; "Hide my birthday" respected) and work anniversaries for the year on screen.
-  const yearCelebrations = useYearCelebrations(cursor.year);
+  // Birthdays (day and month only; "Hide my birthday" respected) and work anniversaries for the year on screen,
+  // only for the people around you (manager, teammates, reports, the sign-in team); Celebrations lists everyone.
+  const yearCelebrations = useYearCelebrations(cursor.year, employee.id);
   const celebrationEvents = useMemo(
     () => yearCelebrations.rows.filter((c) => c.kind !== "new_joiner").map((c) => celebrationEvent(c, employee.id)),
     [yearCelebrations.rows, employee.id],
   );
   // Next two weeks, across the year end too.
-  const soonCelebrations = useCelebrations(employee.id, 14);
+  const soonCelebrations = useCelebrations(employee.id, 14, true);
 
   const allEvents = useMemo(() => {
     const base = eventsForPerson(employee.id, holidaySource);
