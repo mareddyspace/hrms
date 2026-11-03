@@ -40,6 +40,7 @@ export interface MailThread {
 const KEY = "kastech.mail.v1";
 const listeners = new Set<() => void>();
 let cache: MailMessage[] | null = null;
+const LATER_MAIL = new Set(["ml-seed-5", "ml-seed-6", "ml-seed-7"]);
 
 function seed(): MailMessage[] {
   return [
@@ -99,6 +100,47 @@ function seed(): MailMessage[] {
       readBy: ["emp-mahesh"],
       category: "Attendance",
     },
+    {
+      id: "ml-seed-5",
+      threadId: "th-seed-priya-leave",
+      fromId: "emp-priya",
+      fromName: "Priya Nair",
+      toIds: ["emp-ram"],
+      ccIds: [],
+      subject: "Two days off next week",
+      body:
+        "Hi Ram,\n\nI've applied for two days of privilege leave next week for a family function. Kabir will cover code reviews on Northwind and I'll hand over the self-service design notes before I go.\n\nThanks,\nPriya",
+      sentAt: "2026-10-27T05:05:00.000Z",
+      readBy: ["emp-priya"],
+      category: "Leave",
+    },
+    {
+      id: "ml-seed-6",
+      threadId: "th-seed-oliver-expense",
+      fromId: "emp-oliver",
+      fromName: "Oliver Hughes",
+      toIds: ["emp-ram"],
+      ccIds: [],
+      subject: "Train fare to Reading",
+      body:
+        "Hi Ram,\n\nI've submitted a claim for £86.40 for the return train to the Acme office in Reading for the UAT session. The receipt is attached to the claim.\n\nThanks,\nOliver",
+      sentAt: "2026-10-01T16:20:00.000Z",
+      readBy: ["emp-oliver", "emp-ram"],
+      category: "Pay",
+    },
+    {
+      id: "ml-seed-7",
+      threadId: "th-seed-oliver-expense",
+      fromId: "emp-ram",
+      fromName: "Ram Krishnan",
+      toIds: ["emp-oliver"],
+      ccIds: [],
+      subject: "Re: Train fare to Reading",
+      body: "Hi Oliver,\n\nThanks — I'll approve it this week.\n\nRegards,\nRam",
+      sentAt: "2026-10-02T08:10:00.000Z",
+      readBy: ["emp-ram"],
+      category: "Pay",
+    },
   ];
 }
 
@@ -148,7 +190,8 @@ function read(): MailMessage[] {
     // Mail to or from a retired sign-in account (the Compensation persona) is dropped.
     const kept = saved?.filter((m) => !mentionsRetiredAccount(m)) ?? null;
     if (saved && kept && kept.length !== saved.length) localStorage.setItem(KEY, JSON.stringify(kept));
-    cache = kept ?? seed();
+    // Mail for sign-in accounts added later (Priya, Oliver) is added to saved mailboxes from before them.
+    cache = kept ? [...kept, ...seed().filter((m) => LATER_MAIL.has(m.id) && !kept.some((k) => k.id === m.id))] : seed();
   } catch {
     cache = seed();
   }

@@ -343,6 +343,9 @@ export const COMP_HISTORY: CompHistoryRow[] = [
   { id: "ch-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", effective: "2025-04-01", event: "Annual increment", grade: "L4", base: "₹16,20,000", currency: "INR", managerId: "emp-ram" },
   { id: "ch-3", employeeId: "emp-ram", employeeName: "Ram Krishnan", effective: "2026-04-01", event: "Promotion + increment", grade: "M1", base: "₹34,00,000", currency: "INR", managerId: "demo-ceo" },
   { id: "ch-5", employeeId: "emp-priya", employeeName: "Priya Nair", effective: "2026-04-01", event: "Annual increment", grade: "L5", base: "₹22,00,000", currency: "INR", managerId: "emp-ram" },
+  { id: "ch-6", employeeId: "emp-priya", employeeName: "Priya Nair", effective: "2025-04-01", event: "Annual increment", grade: "L5", base: "₹20,50,000", currency: "INR", managerId: "emp-ram" },
+  { id: "ch-7", employeeId: "emp-oliver", employeeName: "Oliver Hughes", effective: "2026-04-01", event: "Annual increment", grade: "L4", base: "£60,500", currency: "GBP", managerId: "emp-ram" },
+  { id: "ch-8", employeeId: "emp-oliver", employeeName: "Oliver Hughes", effective: "2025-04-01", event: "Annual increment", grade: "L4", base: "£58,000", currency: "GBP", managerId: "emp-ram" },
 ];
 
 export const COMP_REVIEWS: CompReviewItem[] = [
@@ -383,6 +386,8 @@ export const COMP_REVIEWS: CompReviewItem[] = [
 export const BONUSES: BonusRecord[] = [
   { id: "bn-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", type: "Annual incentive", period: "FY2025", amount: "₹1,20,000", currency: "INR", status: "Paid" },
   { id: "bn-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", type: "Spot award", period: "Q2 2026", amount: "₹25,000", currency: "INR", status: "Accrued" },
+  { id: "bn-4", employeeId: "emp-priya", employeeName: "Priya Nair", type: "Annual incentive", period: "FY2025", amount: "₹1,60,000", currency: "INR", status: "Paid" },
+  { id: "bn-5", employeeId: "emp-oliver", employeeName: "Oliver Hughes", type: "Annual incentive", period: "FY2025", amount: "£2,400", currency: "GBP", status: "Paid" },
   { id: "bn-3", employeeId: "emp-ram", employeeName: "Ram Krishnan", type: "Annual incentive", period: "FY2025", amount: "₹3,00,000", currency: "INR", status: "Paid" },
 ];
 
@@ -496,6 +501,9 @@ export const BENEFIT_PLANS: BenefitPlan[] = [
 export const BENEFIT_ENROLLMENTS: BenefitEnrollment[] = [
   { id: "be-1", employeeId: "emp-mahesh", employeeName: "Babu Menon", planId: "bp-in-med", planName: "Group Medical (India)", country: "India", status: "Enrolled", effective: "2026-01-01" },
   { id: "be-2", employeeId: "emp-mahesh", employeeName: "Babu Menon", planId: "bp-in-pf", planName: "Provident Fund", country: "India", status: "Enrolled", effective: "2024-11-04" },
+  { id: "be-7", employeeId: "emp-priya", employeeName: "Priya Nair", planId: "bp-in-med", planName: "Group Medical (India)", country: "India", status: "Enrolled", effective: "2026-01-01" },
+  { id: "be-8", employeeId: "emp-priya", employeeName: "Priya Nair", planId: "bp-in-pf", planName: "Provident Fund", country: "India", status: "Enrolled", effective: "2020-07-06" },
+  { id: "be-9", employeeId: "emp-oliver", employeeName: "Oliver Hughes", planId: "bp-uk-pen", planName: "Workplace Pension", country: "United Kingdom", status: "Enrolled", effective: "2022-12-12" },
   { id: "be-5", employeeId: "demo-hr-admin", employeeName: "Farhan Ali", planId: "bp-in-med", planName: "Group Medical (India)", country: "India", status: "Enrolled", effective: "2026-01-01" },
   { id: "be-6", employeeId: "demo-ceo", employeeName: "Jordan Blake", planId: "bp-us-med", planName: "Medical PPO", country: "United States", status: "Eligible", effective: "2026-11-01" },
 ];
@@ -503,11 +511,15 @@ export const BENEFIT_ENROLLMENTS: BenefitEnrollment[] = [
 export const DEPENDENTS: Dependent[] = [
   { id: "dep-1", employeeId: "emp-mahesh", name: "Ananya Menon", relationship: "Spouse", coveredPlans: ["Group Medical (India)"], dateOfBirth: "1993-08-21", gender: "Female", verification: "Verified" },
   { id: "dep-2", employeeId: "emp-mahesh", name: "Arjun Menon", relationship: "Child", coveredPlans: ["Group Medical (India)"], dateOfBirth: "2025-05-30", gender: "Male", verification: "Verified" },
+  { id: "dep-3", employeeId: "emp-priya", name: "Rahul Nair", relationship: "Spouse", coveredPlans: ["Group Medical (India)"], dateOfBirth: "1990-12-02", gender: "Male", verification: "Verified" },
+  { id: "dep-4", employeeId: "emp-oliver", name: "Emily Hughes", relationship: "Spouse", coveredPlans: [], dateOfBirth: "1996-04-18", gender: "Female", verification: "Verified" },
 ];
 
 export const BENEFIT_HISTORY: BenefitHistoryRow[] = [
   { id: "bh-1", employeeId: "emp-mahesh", date: "2026-01-01", event: "Enrollment", detail: "Renewed Group Medical (India)" },
   { id: "bh-2", employeeId: "emp-mahesh", date: "2025-06-12", event: "Dependent add", detail: "Added Arjun Menon to medical" },
+  { id: "bh-3", employeeId: "emp-priya", date: "2026-01-01", event: "Enrollment", detail: "Renewed Group Medical (India)" },
+  { id: "bh-4", employeeId: "emp-oliver", date: "2022-12-12", event: "Enrollment", detail: "Auto-enrolled in the Workplace Pension" },
 ];
 
 export interface LetterTemplateInfo {
@@ -575,6 +587,36 @@ export const LETTER_REQUESTS: LetterRequest[] = [
       "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nSalary revision draft for Babu Menon.\nAmounts are placeholders and masked according to viewer permissions.\nDo not treat as an official compensation letter.",
   },
   {
+    id: "ltr-4",
+    employeeId: "emp-priya",
+    employeeName: "Priya Nair",
+    type: "Address proof",
+    status: "Issued",
+    requestedBy: "Priya Nair",
+    requestedById: "emp-priya",
+    requestedOn: "2026-08-18",
+    approver: "Farhan Ali",
+    decidedOn: "2026-08-20",
+    note: "Passport renewal",
+    previewBody:
+      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nAddress confirmation for Priya Nair (EMP1185).\nRole: Senior Software Engineer · Entity: TimeZ India Pvt Ltd.\nPreview only — the issued letter is provided by HR.",
+  },
+  {
+    id: "ltr-5",
+    employeeId: "emp-oliver",
+    employeeName: "Oliver Hughes",
+    type: "Employment",
+    status: "Issued",
+    requestedBy: "Oliver Hughes",
+    requestedById: "emp-oliver",
+    requestedOn: "2026-09-14",
+    approver: "Farhan Ali",
+    decidedOn: "2026-09-16",
+    note: "Mortgage application",
+    previewBody:
+      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nEmployment particulars summary for Oliver Hughes (EMP1186).\nRole: QA Engineer · Entity: TimeZ UK Ltd.\nPreview only — the issued letter is provided by HR.",
+  },
+  {
     id: "ltr-3",
     employeeId: "emp-priya",
     employeeName: "Priya Nair",
@@ -589,10 +631,10 @@ export const LETTER_REQUESTS: LetterRequest[] = [
   },
 ];
 
-const babuDoc = (id: string, name: string, category: string, docType: string, uploadedBy: string, uploadedAt: string, sizeLabel: string, preview: string): DocLibraryItem => ({
+const personDoc = (employeeId: string, employeeName: string) => (id: string, name: string, category: string, docType: string, uploadedBy: string, uploadedAt: string, sizeLabel: string, preview: string): DocLibraryItem => ({
   id,
-  employeeId: "emp-mahesh",
-  employeeName: "Babu Menon",
+  employeeId,
+  employeeName,
   name,
   category,
   docType,
@@ -603,7 +645,11 @@ const babuDoc = (id: string, name: string, category: string, docType: string, up
   isDemoFile: true,
 });
 
-/** Babu's documents: ID proofs, joining papers, payslips and tax forms (sample data, masked where sensitive). */
+const babuDoc = personDoc("emp-mahesh", "Babu Menon");
+const priyaDoc = personDoc("emp-priya", "Priya Nair");
+const oliverDoc = personDoc("emp-oliver", "Oliver Hughes");
+
+/** Babu's, Priya's and Oliver's documents: ID proofs, joining papers, payslips and tax forms (sample data, masked where sensitive). */
 export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
   babuDoc(
     "dl-1",
@@ -694,6 +740,66 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "2026-04-18T15:20:00",
     "64 KB",
     "FORM 12BB — Investment declaration, FY 2026-27\n\nEmployee: Babu Menon (EMP1184)\n\nHouse rent: INR 25,000 a month · Landlord PAN: AKLPS••••R\nSection 80C: PPF 1,00,000 · ELSS 50,000\nSection 80D: Health insurance (self and family) 25,000\n\nDeclared on 18 April 2026.",
+  ),
+  priyaDoc(
+    "dl-priya-pan",
+    "PAN card",
+    "Identity",
+    "ID proof",
+    "Priya Nair",
+    "2020-07-07T10:00:00",
+    "236 KB",
+    "PERMANENT ACCOUNT NUMBER CARD\nIncome Tax Department, Government of India\n\nName: PRIYA NAIR\nDate of birth: 14/03/1992\nPAN: BKRPN••••L\n\nVerified by HR on 8 Jul 2020.",
+  ),
+  priyaDoc(
+    "dl-priya-offer",
+    "Offer letter",
+    "Employment",
+    "Letter",
+    "HR Ops",
+    "2020-06-15T11:00:00",
+    "176 KB",
+    "TimeZ India Pvt Ltd\nPrestige Tech Park, Outer Ring Road, Bengaluru 560103\n\nPriya Nair\n\nOFFER OF EMPLOYMENT\n\nDear Priya,\n\nWe are pleased to offer you the position of Software Engineer in Engineering, reporting to Ram Krishnan, from 6 July 2020.\n\nPreview only — the signed copy is held by HR.",
+  ),
+  priyaDoc(
+    "dl-priya-form16",
+    "Form 16 — FY 2025-26",
+    "Payroll",
+    "Tax form",
+    "Payroll",
+    "2026-06-12T10:00:00",
+    "205 KB",
+    "FORM 16 — Certificate under section 203 of the Income-tax Act, 1961\nAssessment year 2026-27 (FY 2025-26)\n\nEmployer: TimeZ India Pvt Ltd · TAN: BLRT••••2E\nEmployee: Priya Nair · PAN: BKRPN••••L\n\nSummary only — amounts are masked in the preview.",
+  ),
+  oliverDoc(
+    "dl-oliver-passport",
+    "Passport",
+    "Identity",
+    "ID proof",
+    "Oliver Hughes",
+    "2022-09-12T09:30:00",
+    "390 KB",
+    "UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND — PASSPORT\n\nSurname: HUGHES\nGiven names: OLIVER\nNationality: British Citizen\nPassport no.: 5••••8261\nDate of expiry: 03/05/2031\n\nRight-to-work check completed by HR on 12 Sep 2022.",
+  ),
+  oliverDoc(
+    "dl-oliver-contract",
+    "Contract of employment",
+    "Employment",
+    "Agreement",
+    "HR Ops",
+    "2022-08-22T11:00:00",
+    "188 KB",
+    "TimeZ UK Ltd\nLondon\n\nWRITTEN STATEMENT OF EMPLOYMENT PARTICULARS\n\nEmployee: Oliver Hughes\nJob title: QA Engineer · Engineering\nStart date: 12 September 2022\nHours: 37.5 a week, Monday to Friday\nHoliday: 25 days plus bank holidays\nPension: auto-enrolment (Workplace Pension)\n\nPreview only — the signed copy is held by HR.",
+  ),
+  oliverDoc(
+    "dl-oliver-p60",
+    "P60 — tax year 2025/26",
+    "Payroll",
+    "Tax form",
+    "Payroll",
+    "2026-05-20T10:00:00",
+    "88 KB",
+    "P60 End of Year Certificate — tax year to 5 April 2026\n\nEmployer: TimeZ UK Ltd · PAYE ref: 120/••••58\nEmployee: Oliver Hughes · NI number: QQ ••• •• 86 C\nTax code: 1257L\n\nSummary only — amounts are masked in the preview.",
   ),
 ];
 

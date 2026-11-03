@@ -63,7 +63,7 @@ type ImmigrationState = { documents: IdDocument[] };
 
 const SPONSOR_COUNTRIES = ["United Arab Emirates", "Saudi Arabia"];
 const SPONSORED_TYPES: DocType[] = ["Visa", "Work permit", "Residence ID/Iqama", "Emirates ID"];
-const DEMO_IDS = new Set(["emp-mahesh", "emp-ram", "demo-hr-admin", "demo-recruiter", "demo-ceo", "demo-admin"]);
+const DEMO_IDS = new Set(["emp-mahesh", "emp-priya", "emp-oliver", "emp-ram", "demo-hr-admin", "demo-recruiter", "demo-ceo", "demo-admin"]);
 
 export const EXPIRING_WINDOW_DAYS = 90;
 
@@ -110,6 +110,8 @@ function defaults(): ImmigrationState {
   const docs: IdDocument[] = [
     seedDoc("emp-mahesh", "Passport", "Z4821937", "India", "2019-03-11", "2029-03-10"),
     seedDoc("emp-mahesh", "Visa", "B1B2-55017342", "United States", "2022-01-05", relDay(64)),
+    seedDoc("emp-priya", "Passport", "T6120458", "India", "2021-09-14", "2031-09-13"),
+    seedDoc("emp-oliver", "Passport", "548208261", "United Kingdom", "2021-05-04", "2031-05-03"),
     seedDoc("demo-hr-admin", "Passport", "W9017325", "India", "2018-07-02", "2028-07-01"),
     seedDoc("demo-admin", "Passport", "533829104", "United Kingdom", "2021-05-20", "2031-05-19"),
   ];

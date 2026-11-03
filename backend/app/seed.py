@@ -206,6 +206,10 @@ def seed_leave_requests(db: Session) -> int:
         ("lv-mar", "emp-mahesh", "pto", "2026-03-16", "2026-03-18", "Family visit", "approved", "emp-ram"),
         ("lv-jun", "emp-mahesh", "pto", "2026-06-22", "2026-06-22", "Personal errand", "approved", "emp-ram"),
         ("lv-oct-wfh", "emp-mahesh", "wfh", "2026-10-22", "2026-10-22", "Home repair appointment", "approved", "emp-ram"),
+        ("lv-priya-may", "emp-priya", "pto", "2026-05-11", "2026-05-15", "Family trip to Munnar", "approved", "emp-ram"),
+        ("lv-priya-aug", "emp-priya", "sick", "2026-08-19", "2026-08-19", "Fever", "approved", "emp-ram"),
+        ("lv-oliver-jul", "emp-oliver", "pto", "2026-07-20", "2026-07-24", "Summer holiday in Cornwall", "approved", "emp-ram"),
+        ("lv-oliver-sep", "emp-oliver", "sick", "2026-09-08", "2026-09-08", "Dentist appointment", "approved", "emp-ram"),
         ("lv-sophie-pto", "demo-recruiter", "pto", ahead.isoformat(), ahead.isoformat(), "Family function", "pending", None),
     ]
     added = 0
@@ -234,12 +238,12 @@ PROJECTS = [
 ]
 # project id -> sign-in people on it (role)
 PROJECT_MEMBERS = {
-    "prj-internal": ["emp-mahesh", "emp-ram", "demo-hr-admin", "demo-recruiter", "demo-ceo", "demo-admin"],
-    "prj-hrms": ["emp-mahesh", "emp-ram", "demo-hr-admin", "demo-admin"],
-    "prj-acme": ["emp-mahesh", "emp-ram", "demo-ceo"],
+    "prj-internal": ["emp-mahesh", "emp-priya", "emp-oliver", "emp-ram", "demo-hr-admin", "demo-recruiter", "demo-ceo", "demo-admin"],
+    "prj-hrms": ["emp-mahesh", "emp-priya", "emp-oliver", "emp-ram", "demo-hr-admin", "demo-admin"],
+    "prj-acme": ["emp-mahesh", "emp-oliver", "emp-ram", "demo-ceo"],
     "prj-globex": ["emp-mahesh", "emp-ram", "demo-recruiter"],
-    "p-maple": ["emp-mahesh", "emp-ram"],
-    "p-north": ["emp-mahesh", "emp-ram"],
+    "p-maple": ["emp-mahesh", "emp-priya", "emp-ram"],
+    "p-north": ["emp-mahesh", "emp-priya", "emp-oliver", "emp-ram"],
 }
 
 
@@ -287,6 +291,7 @@ def run(reset_passwords: bool = False) -> dict[str, int]:
         stats["desk_requests_added"] = _seed_desk_requests(db)  # sample help desk requests with replies (0027)
         stats.update(_seed_project_details(db))  # project milestones, tasks, roles; shift locations (0025)
         stats.update(_seed_pay_benefits(db))  # benefit plan details, tax declaration deadlines and samples (0026)
+        stats.update(_seed_teammates(db))  # Priya and Oliver: roster, project tasks, documents, open requests
         db.commit()
         del cache
     return stats
@@ -482,6 +487,13 @@ def _seed_bank_details(db: Session) -> int:
 
     db.flush()
     return seed_bank_details(db)
+
+
+def _seed_teammates(db: Session) -> dict[str, int]:
+    from app.seed_teammates import seed
+
+    db.flush()
+    return seed(db)
 
 
 def _seed_pay_benefits(db: Session) -> dict[str, int]:

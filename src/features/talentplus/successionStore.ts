@@ -64,6 +64,7 @@ function defaults(): SuccessionState {
     { employeeId: "emp-mahesh", performance: "Medium", potential: "High", flightRisk: "Medium", readiness: "Ready in 1–2 years", note: "Strong system design growth.", updatedBy: "emp-ram", updatedOn: "2026-09-30" },
     { employeeId: "emp-ram", performance: "High", potential: "High", flightRisk: "Low", readiness: "Ready now", note: "", updatedBy: "demo-ceo", updatedOn: "2026-09-28" },
     { employeeId: "demo-recruiter", performance: "High", potential: "Medium", flightRisk: "Medium", readiness: "Ready in 1–2 years", note: "", updatedBy: "demo-hr-admin", updatedOn: "2026-09-26" },
+    { employeeId: "emp-oliver", performance: "Medium", potential: "Medium", flightRisk: "Low", readiness: "Ready in 1–2 years", note: "Owns the Northwind regression suite.", updatedBy: "emp-ram", updatedOn: "2026-09-30" },
     { employeeId: "demo-admin", performance: "Low", potential: "Medium", flightRisk: "Low", readiness: "Ready in 3+ years", note: "", updatedBy: "demo-ceo", updatedOn: "2026-09-25" },
   ];
   const mix: [Level, Level, Level][] = [

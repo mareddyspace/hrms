@@ -9,7 +9,7 @@ def _no_pay(item: dict) -> None:
 
 def test_babu_sees_directory_with_basic_fields(client, babu):
     body = client.get("/api/v1/people", headers=babu, params={"page_size": 200}).json()
-    assert body["total"] == 507  # 500 workbook + 6 sign-ins + the seeded joiner (app/seed_demo.py)
+    assert body["total"] == 509  # 500 workbook + 8 sign-ins + the seeded joiner (app/seed_demo.py)
     others = [p for p in body["items"] if p["id"] != "emp-mahesh"]
     assert others and all(p["view"] == "basic" for p in others)
     for p in others:
@@ -48,12 +48,12 @@ def test_ram_sees_babu_in_full(client, ram):
     assert client.get("/api/v1/people/demo-ceo", headers=ram).json()["view"] == "basic"
     assert client.get("/api/v1/leave/balances", headers=ram, params={"employee_id": "emp-mahesh"}).status_code == 200
     team = client.get("/api/v1/leave/requests", headers=ram, params={"view": "team"}).json()
-    assert {r["employee_id"] for r in team} == {"emp-mahesh"}
+    assert {r["employee_id"] for r in team} == {"emp-mahesh", "emp-priya", "emp-oliver"}
 
 
 def test_farhan_sees_everyone_in_full(client, farhan):
     res = client.get("/api/v1/people", headers=farhan, params={"page_size": 200, "scope": "mine"}).json()
-    assert res["total"] == 507
+    assert res["total"] == 509
     assert all(p["view"] == "full" for p in res["items"])
     assert client.get("/api/v1/people/demo-ceo", headers=farhan).json()["view"] == "full"
     assert client.get("/api/v1/auth/me", headers=farhan).json()["scope"] == "global"

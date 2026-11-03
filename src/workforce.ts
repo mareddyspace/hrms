@@ -128,16 +128,24 @@ export function gradeForTitle(title: string): string {
   return "L4";
 }
 
-/** Engineering teammates on Ram's team who are not sign-in personas (ids used across leave, tasks, shifts). */
+/**
+ * Engineering teammates on Ram's team who are not sign-in personas (ids used across leave, tasks, shifts).
+ * Priya Nair (emp-priya) used to be one; she is now a sign-in account (src/demoAccounts.ts) with the same id.
+ */
 export const TEAMMATES: {
   id: string; employeeCode: string; name: string; title: string; gender: "Male" | "Female"; dateOfJoining: string; mobile: string;
 }[] = [
-  { id: "emp-priya", employeeCode: "EMP1203", name: "Priya Nair", title: "Senior Engineer", gender: "Female", dateOfJoining: "2020-07-06", mobile: "+91 98450 31203" },
   { id: "emp-anu", employeeCode: "EMP1204", name: "Anu Rao", title: "Software Engineer", gender: "Female", dateOfJoining: "2021-02-15", mobile: "+91 98450 31204" },
   { id: "emp-kabir", employeeCode: "EMP1201", name: "Kabir Sharma", title: "Senior Engineer", gender: "Male", dateOfJoining: "2018-11-12", mobile: "+91 98450 31201" },
   { id: "emp-diya", employeeCode: "EMP1202", name: "Diya Patel", title: "QA Analyst", gender: "Female", dateOfJoining: "2022-05-09", mobile: "+91 98450 31202" },
 ];
 export const TEAMMATE_MANAGER_ID = "emp-ram";
+
+/**
+ * Sign-in accounts added after the directory was generated (Oliver Hughes, UK). They are not counted against a
+ * country's headcount, so the generated people keep the same ids (wf-TZ…) as the server's directory.
+ */
+const OUTSIDE_HEADCOUNT: ReadonlySet<string> = new Set(["emp-oliver"]);
 
 /** Personas that lead a country's department themselves (their teams report to them, not a generated head). */
 const PERSONA_HEADS: Record<string, string> = {
@@ -289,10 +297,10 @@ export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
   void _total;
   const rows: WorkforceRow[] = [];
   const named = [
-    ...DEMO_ACCOUNTS.map((a) => ({ name: a.fullName, country: a.countryCode ?? "IN" })),
+    ...DEMO_ACCOUNTS.filter((a) => !OUTSIDE_HEADCOUNT.has(a.id)).map((a) => ({ name: a.fullName, country: a.countryCode ?? "IN" })),
     ...TEAMMATES.map((t) => ({ name: t.name, country: "IN" })),
   ];
-  const usedNames = new Set([...named.map((n) => n.name), ...RETIRED_NAMES]);
+  const usedNames = new Set([...named.map((n) => n.name), ...DEMO_ACCOUNTS.map((a) => a.fullName), ...RETIRED_NAMES]);
   let nameIndex = 0;
   const nextName = (): { first: string; last: string } => {
     for (;;) {

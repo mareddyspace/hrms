@@ -138,6 +138,8 @@ const SEED_SHIFTS: ShiftDef[] = [
   { id: "sh-evening", name: "Evening", start: "14:00", end: "22:00", weekendOnly: false, active: true, breakMinutes: 60, location: "Kochi office" },
   { id: "sh-night", name: "Night", start: "22:00", end: "06:00", weekendOnly: false, active: true, breakMinutes: 60, location: "Kochi office" },
   { id: "sh-weekend", name: "Weekend support", start: "09:00", end: "17:00", weekendOnly: true, active: true, breakMinutes: 60, location: "Kochi office" },
+  // Oliver Hughes works UK hours from London (Europe/London).
+  { id: "sh-uk-day", name: "UK day", start: "09:00", end: "17:30", weekendOnly: false, active: true, breakMinutes: 60, location: "London office" },
 ];
 
 function seedAssignments(): ShiftAssignment[] {
@@ -152,21 +154,26 @@ function seedAssignments(): ShiftAssignment[] {
   add("emp-kabir", "sh-weekend", ["2026-10-03"]);
   add("emp-priya", "sh-evening", week("2026-09-28", [0, 1, 2, 3, 4]));
   add("emp-diya", "sh-night", week("2026-09-28", [0, 1, 2]));
+  add("emp-oliver", "sh-uk-day", week("2026-09-28", [0, 1, 2, 3, 4]));
   // Week of 12 Oct
   add("emp-mahesh", "sh-general", week("2026-10-12", [0, 1, 2, 3, 4]));
   add("emp-priya", "sh-evening", week("2026-10-12", [0, 1, 2, 3]));
   add("emp-kabir", "sh-morning", week("2026-10-12", [0, 1, 2, 3, 4]));
   add("emp-kabir", "sh-weekend", ["2026-10-17"]);
   add("emp-diya", "sh-night", week("2026-10-12", [0, 1, 2]));
+  add("emp-oliver", "sh-uk-day", week("2026-10-12", [0, 1, 2, 3, 4]));
   // Week of 19 Oct (20 Oct is Dussehra)
   add("emp-mahesh", "sh-general", week("2026-10-19", [0, 2, 3, 4]));
   add("emp-priya", "sh-evening", week("2026-10-19", [0, 1, 2, 3, 4]));
   add("emp-kabir", "sh-morning", week("2026-10-19", [0, 1, 2, 3, 4]));
   add("emp-diya", "sh-general", week("2026-10-19", [0, 1, 2, 3, 4]));
   add("emp-anu", "sh-weekend", ["2026-10-24", "2026-10-25"]);
+  add("emp-oliver", "sh-uk-day", week("2026-10-19", [0, 1, 2, 3, 4]));
   // Week of 26 Oct — still a draft
   add("emp-mahesh", "sh-general", week("2026-10-26", [0, 1, 2, 3, 4]));
   add("emp-kabir", "sh-morning", week("2026-10-26", [0, 1, 2, 3, 4]));
+  add("emp-priya", "sh-evening", week("2026-10-26", [0, 1, 2, 3, 4]));
+  add("emp-oliver", "sh-uk-day", week("2026-10-26", [0, 1, 2, 3, 4]));
   return rows;
 }
 
@@ -230,7 +237,20 @@ function defaults(): ShiftState {
   };
 }
 
-const store = createStore<ShiftState>(KEY, defaults, keepArrays);
+/** Sign-in accounts added later (Priya, Oliver): saved rosters from before them get their seed shifts once. */
+const LATER_PEOPLE = new Set(["emp-priya", "emp-oliver"]);
+function normalizeShifts(saved: Partial<ShiftState>, base: ShiftState): ShiftState {
+  const out = keepArrays(saved, base);
+  const missingShifts = base.shifts.filter((s) => s.id === "sh-uk-day" && !out.shifts.some((x) => x.id === s.id));
+  if (missingShifts.length) {
+    out.shifts = [...out.shifts, ...missingShifts];
+    const missing = base.assignments.filter((a) => LATER_PEOPLE.has(a.personId) && !out.assignments.some((x) => x.id === a.id));
+    out.assignments = [...out.assignments, ...missing];
+  }
+  return out;
+}
+
+const store = createStore<ShiftState>(KEY, defaults, normalizeShifts);
 
 /* ---------- backend mode (VITE_API_URL): shift types, rosters, swaps and coverage from the API ---------- */
 

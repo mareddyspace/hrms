@@ -55,7 +55,7 @@ import { useChartTip } from "./dashboards/chartKit.tsx";
 import "./policies.css";
 
 /** Engineering teammates who appear across the portal but can't sign in. */
-const TEAMMATE_IDS = ["emp-priya", "emp-anu", "emp-kabir", "emp-diya"];
+const TEAMMATE_IDS = ["emp-anu", "emp-kabir", "emp-diya"];
 
 type PersonRow = { id: string; name: string; audience: PolicyAudience; canSignIn: boolean };
 

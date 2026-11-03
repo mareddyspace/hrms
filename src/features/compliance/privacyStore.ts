@@ -56,6 +56,10 @@ function defaults(): PrivacyState {
       { id: "cs-2", personId: "emp-mahesh", key: "birthday-team", granted: true, at: `${relDay(-180)}T09:12:30.000Z` },
       { id: "cs-3", personId: "emp-mahesh", key: "comms-emails", granted: true, at: `${relDay(-180)}T09:13:00.000Z` },
       { id: "cs-4", personId: "emp-mahesh", key: "comms-emails", granted: false, at: `${relDay(-40)}T14:02:00.000Z` },
+      { id: "cs-6", personId: "emp-priya", key: "directory-photo", granted: true, at: `${relDay(-200)}T09:12:00.000Z` },
+      { id: "cs-7", personId: "emp-priya", key: "birthday-team", granted: true, at: `${relDay(-200)}T09:12:30.000Z` },
+      { id: "cs-8", personId: "emp-oliver", key: "directory-photo", granted: true, at: `${relDay(-150)}T09:12:00.000Z` },
+      { id: "cs-9", personId: "emp-oliver", key: "comms-emails", granted: false, at: `${relDay(-150)}T09:13:00.000Z` },
       { id: "cs-5", personId: "emp-ram", key: "directory-photo", granted: true, at: `${relDay(-300)}T10:00:00.000Z` },
     ],
     requests: [

@@ -20,6 +20,11 @@ from app.models.shifts import ShiftType
 
 D = date.fromisoformat
 BABU, RAM = "emp-mahesh", "emp-ram"
+# Ram's other two engineers: (title, budget hours, responsibilities) on every project they join.
+TEAMMATE_ROLES: dict[str, tuple[str, float, str]] = {
+    "emp-priya": ("Tech lead", 160, "Architecture, code reviews and release planning."),
+    "emp-oliver": ("QA engineer", 120, "Test plans, regression runs and release sign-off."),
+}
 
 # id: (description, start, end, budget h, Babu's title, Babu's budget h, Babu's responsibilities)
 DETAILS: dict[str, tuple[str, str, str | None, float, str, float, str]] = {
@@ -127,6 +132,8 @@ def seed(db: Session) -> dict[str, int]:
             if member.title is None:
                 if member.employee_id == BABU:
                     member.title, member.responsibilities, member.budget_hours = title, duties, my_budget
+                elif member.employee_id in TEAMMATE_ROLES:
+                    member.title, member.budget_hours, member.responsibilities = TEAMMATE_ROLES[member.employee_id]
                 elif member.employee_id == RAM:
                     member.title = "Project manager"
                     member.responsibilities = "Plans the work, runs reviews, approves time and owns the client relationship."

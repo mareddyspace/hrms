@@ -336,8 +336,13 @@ def test_manager_reopens_missed_day(client, babu, ram, farhan, monkeypatch):
     from app.routers import timesheets
 
     monkeypatch.setattr(timesheets, "TODAY_ONLY", True)
+    from app.db import SessionLocal
+    from app.services.leave import holiday_dates
+
     missed = date.today() - timedelta(days=14)
-    while missed.weekday() >= 5:
+    with SessionLocal() as db:
+        holidays = holiday_dates(db, "IN", missed - timedelta(days=30), missed)
+    while missed.weekday() >= 5 or missed in holidays:
         missed -= timedelta(days=1)
     url = f"/api/v1/timesheets/team/emp-mahesh/days/{missed.isoformat()}/reopen"
     assert _add(client, babu, missed.isoformat(), 1).status_code == 422  # missed: closed

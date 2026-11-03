@@ -48,6 +48,7 @@ def _pdf(title: str, lines: list[str]) -> bytes:
 def _documents(emp: Employee, today: date) -> list[tuple[str, str, str, list[str], date | None]]:
     """(id suffix, category, title, lines, expiry)."""
     code, name = emp.employee_code, emp.full_name
+    born = emp.date_of_birth.strftime("%d/%m/%Y") if emp.date_of_birth else "14/03/1994"
     joined = emp.joining_date.strftime("%d %B %Y").lstrip("0") if emp.joining_date else "4 November 2024"
     last_month = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
     months = [last_month, (last_month - timedelta(days=1)).replace(day=1)]
@@ -65,11 +66,11 @@ def _documents(emp: Employee, today: date) -> list[tuple[str, str, str, list[str
     return [
         ("aadhaar", "Identity", "Aadhaar card", [
             "Unique Identification Authority of India", "", f"Name            {name}", "Aadhaar number  XXXX XXXX 4821",
-            "Date of birth   14/03/1994", "Address         12 Lake View Road, Indiranagar, Bengaluru 560038",
+            f"Date of birth   {born}", "Address         12 Lake View Road, Indiranagar, Bengaluru 560038",
             "", "Masked copy. Verified by HR."], None),
         ("pan", "Identity", "PAN card", [
             "Income Tax Department, Government of India", "", f"Name            {name.upper()}", "PAN             ABCPM****K",
-            "Date of birth   14/03/1994", "", "Masked copy. Verified by HR."], None),
+            f"Date of birth   {born}", "", "Masked copy. Verified by HR."], None),
         ("offer", "Employment", "Offer letter", [
             emp.legal_entity, "", f"Dear {emp.first_name or name},", "",
             f"We are pleased to offer you the position of {emp.job_title} in {emp.department},",

@@ -351,6 +351,8 @@ const NAMED_PEOPLE: Record<string, { gender: string; dateOfJoining: string }> = 
   "demo-hr-admin": { gender: "Male", dateOfJoining: "2015-01-12" },
   "demo-recruiter": { gender: "Female", dateOfJoining: "2018-02-05" },
   "emp-mahesh": { gender: "Male", dateOfJoining: "2019-05-13" },
+  "emp-priya": { gender: "Female", dateOfJoining: "2020-07-06" },
+  "emp-oliver": { gender: "Male", dateOfJoining: "2022-09-12" },
   "demo-admin": { gender: "Female", dateOfJoining: "2020-01-20" },
 };
 
@@ -360,7 +362,7 @@ function countryByCode(code: string) {
 
 /**
  * Reporting line for the sign-in personas. It runs only through other sign-in personas so approvals and the org
- * chart stay within the six accounts: Jordan (CEO) → Farhan → Sophie; Jordan → Ram → Babu; Jordan → Alex.
+ * chart stay within the sign-in accounts: Jordan (CEO) → Farhan → Sophie; Jordan → Ram → Babu, Priya, Oliver; Jordan → Alex.
  * The generated Country Managers keep reporting to the CEO with their own generated teams.
  */
 const PERSONA_MANAGER: Record<string, string> = {
@@ -369,6 +371,8 @@ const PERSONA_MANAGER: Record<string, string> = {
   "emp-ram": "demo-ceo",
   "demo-admin": "demo-ceo",
   "emp-mahesh": "emp-ram",
+  "emp-priya": "emp-ram",
+  "emp-oliver": "emp-ram",
   "demo-recruiter": "demo-hr-admin",
 };
 const CEO_ID = "demo-ceo";

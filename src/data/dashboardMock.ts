@@ -97,7 +97,8 @@ export const TZ_TEAM = {
   openRoles: 2,
   directReports: [
     { name: "Babu Menon", code: "EMP1184", role: "Software Engineer", status: "Present" },
-    { name: "Priya Nair", code: "EMP1203", role: "Senior Engineer", status: "WFH" },
+    { name: "Priya Nair", code: "EMP1185", role: "Senior Software Engineer", status: "WFH" },
+    { name: "Oliver Hughes", code: "EMP1186", role: "QA Engineer", status: "Remote" },
     { name: "Anu Rao", code: "EMP1204", role: "Software Engineer", status: "Present" },
     { name: "Kabir Sharma", code: "EMP1201", role: "Senior Engineer", status: "Leave" },
     { name: "Diya Patel", code: "EMP1202", role: "QA Analyst", status: "Present" },
@@ -115,6 +116,7 @@ export const TZ_TEAM = {
     { name: "Babu Menon", last: "07 Oct", next: "16 Oct", status: "Booked" },
     { name: "Diya Patel", last: "01 Oct", next: "Overdue", status: "Needs slot" },
     { name: "Kabir Sharma", last: "30 Sep", next: "17 Oct", status: "Booked" },
+    { name: "Oliver Hughes", last: "08 Oct", next: "22 Oct", status: "Booked" },
   ],
   overtimeRisk: [
     { name: "Babu Menon", hours: 14, note: "Sprint crunch" },

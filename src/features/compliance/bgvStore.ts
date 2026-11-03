@@ -115,6 +115,38 @@ function defaults(): BgvState {
           ...(["Education", "Previous employment", "Reference"] as CheckType[]).map((t) => check(t, "Not started", "")),
         ],
       },
+      {
+        id: "bgv-emp-priya",
+        subjectKind: "employee",
+        subjectId: "emp-priya",
+        subjectName: "Priya Nair",
+        role: "Senior Software Engineer",
+        consent: { givenOn: "2026-07-15", recordedById: "emp-priya", at: "2026-07-15T09:00:00.000Z" },
+        createdOn: "2026-07-15",
+        checks: [
+          check("Identity", "Clear", "SecureCheck", "2026-07-16", "2026-07-17"),
+          check("Education", "Clear", "SecureCheck", "2026-07-16", "2026-07-24"),
+          check("Previous employment", "Clear", "SecureCheck", "2026-07-16", "2026-07-29"),
+          check("Criminal record", "Clear", "SecureCheck", "2026-07-16", "2026-07-30"),
+          check("Address", "Clear", "SecureCheck", "2026-07-16", "2026-07-22"),
+          check("Reference", "In progress", "SecureCheck", "2026-07-16"),
+        ],
+      },
+      {
+        id: "bgv-emp-oliver",
+        subjectKind: "employee",
+        subjectId: "emp-oliver",
+        subjectName: "Oliver Hughes",
+        role: "QA Engineer",
+        consent: { givenOn: "2026-08-03", recordedById: "emp-oliver", at: "2026-08-03T09:00:00.000Z" },
+        createdOn: "2026-08-03",
+        checks: [
+          check("Identity", "Clear", "HireRight", "2026-08-04", "2026-08-05", "Right to work: British passport"),
+          check("Criminal record", "Clear", "HireRight", "2026-08-04", "2026-08-12", "Basic DBS check"),
+          check("Address", "Clear", "HireRight", "2026-08-04", "2026-08-07"),
+          ...(["Education", "Previous employment", "Reference"] as CheckType[]).map((t) => check(t, "Not started", "")),
+        ],
+      },
     ],
   };
 }

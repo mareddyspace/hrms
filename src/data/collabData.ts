@@ -487,9 +487,18 @@ export const CHAT_PEOPLE: ChatPerson[] = [
   {
     id: "emp-priya",
     name: "Priya Nair",
-    title: "Software Engineer",
+    title: "Senior Software Engineer",
     department: "Engineering",
-    roleLabel: "Colleague",
+    roleLabel: "Employee",
+    availability: "Online",
+    channelTags: ["general"],
+  },
+  {
+    id: "emp-oliver",
+    name: "Oliver Hughes",
+    title: "QA Engineer",
+    department: "Engineering",
+    roleLabel: "Employee",
     availability: "Online",
     channelTags: ["general"],
   },
@@ -882,6 +891,32 @@ export const NOTIFICATIONS_SEED: AppNotification[] = [
     href: "/chat?c=cv-3",
     actionLabel: "Reply",
     ref: { kind: "chat", id: "cv-3" },
+  },
+
+  /* ── Priya Nair and Oliver Hughes (employees) ── */
+  {
+    id: "nf-priya-1",
+    category: "Leave",
+    title: "Leave request sent to Ram Krishnan",
+    body: "Privilege leave · 2 days · waiting for approval.",
+    at: hoursAgo(20),
+    readBy: [],
+    audience: "employee",
+    recipientId: "emp-priya",
+    href: "/leave",
+    actionLabel: "View leave",
+  },
+  {
+    id: "nf-oliver-1",
+    category: "Attendance",
+    title: "Timesheet submitted · week of 12 Oct",
+    body: "32 h on Northwind Billing, waiting for Ram Krishnan.",
+    at: hoursAgo(30),
+    readBy: [],
+    audience: "employee",
+    recipientId: "emp-oliver",
+    href: "/timesheet",
+    actionLabel: "View timesheet",
   },
 
   /* ── Everyone ── */

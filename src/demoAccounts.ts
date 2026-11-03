@@ -212,14 +212,16 @@ function account(
 }
 
 /**
- * The six sign-in accounts. Reporting line (org chart) is separate from RBAC:
+ * The eight sign-in accounts. Reporting line (org chart) is separate from RBAC:
  *
  *   Jordan Blake (Executive) ── root
  *   ├── Farhan Ali (HR)
  *   │   └── Sophie Clark (Recruiter)    ← candidate access = Recruiter role, not chart
  *   │       (HR also owns compensation & benefits: final pay approvals, benefits, pay preview)
  *   ├── Ram Krishnan (Manager)
- *   │   └── Babu Menon (Employee)       ← Ram approves Babu's leave via reporting
+ *   │   ├── Babu Menon (Employee)       ← Ram approves Babu's leave via reporting
+ *   │   ├── Priya Nair (Employee)       ← same employee pages as Babu (India)
+ *   │   └── Oliver Hughes (Employee)    ← same employee pages as Babu (UK, GBP payroll)
  *   └── Alex Morgan (Admin)             ← accounts = Admin role; no auto payslips
  *
  * The generated directory's Country Managers (wf-TZ0001 … wf-TZ0469) are ordinary people who cannot sign in.
@@ -246,6 +248,49 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     currency: "INR",
     reportsToId: "emp-ram",
     navAccess: [...ACCESS_EMPLOYEE, "agents"], // AI agents are for employees only
+  }),
+  account({
+    id: "emp-priya",
+    employeeCode: "EMP1185",
+    fullName: "Priya Nair",
+    personaLabel: "Employee",
+    role: "employee",
+    designation: "Senior Software Engineer",
+    email: "priya.nair@timez.com",
+    password: "Employee@1185",
+    mobile: "+91 98450 22185",
+    address: "Bengaluru, India",
+    timeZone: "Asia/Kolkata",
+    countryCode: "IN",
+    countryName: "India",
+    legalEntity: "TimeZ India Pvt Ltd",
+    location: "Bengaluru",
+    department: "Engineering",
+    currency: "INR",
+    reportsToId: "emp-ram",
+    navAccess: [...ACCESS_EMPLOYEE, "agents"], // same pages as Babu
+  }),
+  account({
+    id: "emp-oliver",
+    employeeCode: "EMP1186",
+    fullName: "Oliver Hughes",
+    personaLabel: "Employee",
+    role: "employee",
+    designation: "QA Engineer",
+    email: "oliver.hughes@timez.com",
+    password: "Employee@1186",
+    mobile: "+44 7700 900186",
+    address: "London, UK",
+    timeZone: "Europe/London",
+    countryCode: "GB",
+    countryName: "United Kingdom",
+    legalEntity: "TimeZ UK Ltd",
+    location: "London",
+    department: "Engineering",
+    currency: "GBP",
+    shiftHours: "09:00 AM to 05:30 PM",
+    reportsToId: "emp-ram",
+    navAccess: [...ACCESS_EMPLOYEE, "agents"], // same pages as Babu
   }),
   account({
     id: "emp-ram",
@@ -438,7 +483,7 @@ export type DemoOrgNode = DemoAccount & { children: DemoOrgNode[] };
 /** Display order under a leader (story-friendly, not alphabetical). */
 const ORG_CHILD_ORDER: Record<string, string[]> = {
   "demo-ceo": ["demo-hr-admin", "emp-ram", "demo-admin"],
-  "emp-ram": ["emp-mahesh"],
+  "emp-ram": ["emp-mahesh", "emp-priya", "emp-oliver"],
   "demo-hr-admin": ["demo-recruiter"],
 };
 
@@ -495,7 +540,6 @@ export function findDemoByEmailOrCode(value: string): DemoAccount | undefined {
 /** Everyone above this person in the reporting line, nearest first (manager, their manager, …). */
 /** Engineering teammates who aren't sign-in personas but appear in leave, tasks and timesheets. */
 const TEAMMATE_REPORTS_TO: Record<string, string> = {
-  "emp-priya": "emp-ram",
   "emp-anu": "emp-ram",
   "emp-kabir": "emp-ram",
   "emp-diya": "emp-ram",

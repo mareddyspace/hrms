@@ -232,6 +232,9 @@ function ensureDemoLastLogin() {
   localStorage.setItem(LAST_LOGIN_SEEDED_KEY, "1");
 }
 
+/** Set once the sample data for later sign-in accounts (Priya, Oliver) has been added to saved data. */
+const LATER_PEOPLE_SEEDED_KEY = "timez.seed.laterPeople.v1";
+
 function loadState(): PortalState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -309,7 +312,9 @@ function loadState(): PortalState {
     // Sample requests left waiting after their dates have passed are replaced with current ones.
     for (const sample of seed.leaveRequests.filter((r) => ["lv-oct-wfh", "lv-priya-pto", "lv-anu-sick"].includes(r.id))) {
       const saved = parsed.leaveRequests.find((r) => r.id === sample.id);
-      if (saved && saved.status === "pending" && saved.from < todayISO()) {
+      // Priya's sample request used to be one day and could land on a holiday; it is now two working days.
+      const oldPriyaSample = sample.id === "lv-priya-pto" && saved?.from === saved?.to;
+      if (saved && saved.status === "pending" && (saved.from < todayISO() || oldPriyaSample)) {
         Object.assign(saved, sample);
         renamed = true;
       }
@@ -331,6 +336,40 @@ function loadState(): PortalState {
     }
     if (!parsed.policies.some((policy) => policy.id === "pol-handbook")) {
       parsed.policies = seed.policies;
+      renamed = true;
+    }
+    // Sign-in accounts added later (Priya Nair, Oliver Hughes): saved data from before they could sign in gets their
+    // sample leave, projects, timesheets, tasks, documents and so on (once; rows they later remove stay removed).
+    if (localStorage.getItem(LATER_PEOPLE_SEEDED_KEY) !== "1") {
+      const later = new Set(["emp-priya", "emp-oliver"]);
+      const record = parsed as unknown as Record<string, unknown>;
+      for (const [key, rows] of Object.entries(seed) as [string, unknown][]) {
+        if (!Array.isArray(rows) || !Array.isArray(record[key])) continue;
+        const saved = record[key] as { id?: string; employeeId?: string; personId?: string }[];
+        const has = (row: { id?: string; employeeId?: string }) =>
+          saved.some((x) => x.id === row.id && (x.employeeId ?? "") === (row.employeeId ?? ""));
+        const missing = (rows as { id?: string; employeeId?: string; personId?: string }[]).filter(
+          (row) => row.id && later.has(row.employeeId ?? row.personId ?? "") && !has(row),
+        );
+        if (missing.length) {
+          record[key] = [...saved, ...missing];
+          renamed = true;
+        }
+      }
+      localStorage.setItem(LATER_PEOPLE_SEEDED_KEY, "1");
+    }
+    // Priya's team-timesheet row used to carry another person's employee code and project.
+    for (const row of parsed.orgTimesheets ?? []) {
+      if (row.id === "org-ts-priya" && (row.employeeCode !== "EMP1185" || row.projectSummary === "Maple Clinic Portal")) {
+        row.employeeCode = "EMP1185";
+        row.projectSummary = "Northwind Billing";
+        renamed = true;
+      }
+    }
+    // Oliver's sample claim is in pounds (early saved copies had no currency, which reads as INR).
+    const oliverClaim = parsed.expenses?.find((e) => e.id === "ex-oliver" && !e.currency);
+    if (oliverClaim) {
+      oliverClaim.currency = "GBP";
       renamed = true;
     }
     if (renamed) localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));

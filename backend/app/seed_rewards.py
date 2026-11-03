@@ -41,6 +41,10 @@ GRADE_FACTOR = {"G3": 0.55, "G4": 0.7, "G5": 0.85, "G6": 1.0, "G7": 1.25, "G8": 
 PAY_HISTORY = [  # employee, effective, base, grade, reason
     ("emp-mahesh", "2025-04-01", 1_620_000, "L4", "Annual increment"),
     ("emp-mahesh", "2026-04-01", 1_740_000, "L4", "Annual increment"),
+    ("emp-priya", "2025-04-01", 2_050_000, "L5", "Annual increment"),
+    ("emp-priya", "2026-04-01", 2_200_000, "L5", "Annual increment"),
+    ("emp-oliver", "2025-04-01", 58_000, "L4", "Annual increment"),
+    ("emp-oliver", "2026-04-01", 60_500, "L4", "Annual increment"),
     ("emp-ram", "2025-04-01", 2_900_000, "L6", "Annual increment"),
     ("emp-ram", "2026-04-01", 3_400_000, "M1", "Promotion + increment"),
     ("demo-hr-admin", "2026-04-01", 4_200_000, "M2", "Annual increment"),
@@ -52,6 +56,8 @@ BONUSES = [  # id, employee, type, period, amount, status
     ("bonus-seed-1", "emp-mahesh", "Annual incentive", "FY2025", 120_000, "paid"),
     ("bonus-seed-2", "emp-mahesh", "Spot award", "Q2 2026", 25_000, "accrued"),
     ("bonus-seed-3", "emp-ram", "Annual incentive", "FY2025", 300_000, "paid"),
+    ("bonus-seed-4", "emp-priya", "Annual incentive", "FY2025", 160_000, "paid"),
+    ("bonus-seed-5", "emp-oliver", "Annual incentive", "FY2025", 3_000, "paid"),
 ]
 CYCLES = [
     {"id": "cyc-fy2026", "name": "FY2026 Annual compensation review", "effective_date": "2027-04-01", "budget_pct": 8,
@@ -123,11 +129,15 @@ PLANS: list[dict[str, Any]] = [
      "eligibility": {"exclude_employment_types": ["Contract"], "min_service_months": 6}},
 ]
 OPEN_ENROLLMENT = {"id": "bw-oe-2027", "name": "Open enrollment 2027", "start_date": "2026-10-15", "end_date": "2026-11-15"}
-SIGN_IN_PEOPLE = ("emp-mahesh", "emp-ram", "demo-hr-admin", "demo-recruiter", "demo-ceo", "demo-admin")
-EXTRA_ENROLLMENTS = [("emp-mahesh", "bp-in-med", "2026-01-01"), ("demo-hr-admin", "bp-in-med", "2026-01-01")]
+SIGN_IN_PEOPLE = ("emp-mahesh", "emp-priya", "emp-oliver", "emp-ram", "demo-hr-admin", "demo-recruiter", "demo-ceo", "demo-admin")
+EXTRA_ENROLLMENTS = [("emp-mahesh", "bp-in-med", "2026-01-01"), ("demo-hr-admin", "bp-in-med", "2026-01-01"),
+                     ("emp-priya", "bp-in-med", "2026-01-01")]
+MEDICAL_PLANS = ("bp-in-med", "bp-uk-med")
 DEPENDENTS = [
     ("dep-seed-1", "emp-mahesh", "Ananya Menon", "Spouse", "1993-08-21", "Female"),
     ("dep-seed-2", "emp-mahesh", "Arjun Menon", "Child", "2025-05-30", "Male"),
+    ("dep-seed-3", "emp-priya", "Rahul Nair", "Spouse", "1990-12-02", "Male"),
+    ("dep-seed-4", "emp-oliver", "Emily Hughes", "Spouse", "1996-04-18", "Female"),
 ]
 
 
@@ -207,11 +217,12 @@ def seed(db: Session) -> dict[str, int]:
             db.add(BenefitDependent(id=dep_id, employee_id=emp_id, name=name, relationship=relationship, date_of_birth=_d(dob),
                                     gender=gender, verification="verified", verified_by="demo-hr-admin"))
     db.flush()
-    med = db.scalar(select(BenefitEnrollment).where(BenefitEnrollment.employee_id == "emp-mahesh", BenefitEnrollment.plan_id == "bp-in-med"))
-    if med is not None:
-        for dep_id, emp_id, *_ in DEPENDENTS:
-            if db.get(BenefitDependent, dep_id) is not None and db.get(BenefitDependentCoverage, (med.id, dep_id)) is None:
-                db.add(BenefitDependentCoverage(enrollment_id=med.id, dependent_id=dep_id))
+    # Each person's dependants go on that person's own medical plan.
+    for dep_id, emp_id, *_ in DEPENDENTS:
+        med = db.scalar(select(BenefitEnrollment).where(BenefitEnrollment.employee_id == emp_id,
+                                                        BenefitEnrollment.plan_id.in_(MEDICAL_PLANS)))
+        if med is not None and db.get(BenefitDependent, dep_id) is not None                 and db.get(BenefitDependentCoverage, (med.id, dep_id)) is None:
+            db.add(BenefitDependentCoverage(enrollment_id=med.id, dependent_id=dep_id))
     if "emp-mahesh" in people and not db.scalar(select(Beneficiary.id).where(Beneficiary.employee_id == "emp-mahesh")):
         db.add(Beneficiary(employee_id="emp-mahesh", nomination_for="Provident Fund", name="Ananya Menon", relationship="Spouse",
                            share_pct=100, date_of_birth=_d("1993-08-21")))

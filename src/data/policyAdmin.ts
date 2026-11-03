@@ -177,7 +177,7 @@ if (!API_ENABLED) {
 }
 
 /** The people the browser-only demo knows: the sign-ins and a few teammates. */
-const TEAMMATE_IDS = ["emp-priya", "emp-anu", "emp-kabir", "emp-diya"];
+const TEAMMATE_IDS = ["emp-anu", "emp-kabir", "emp-diya"];
 export function localPolicyPeople(): PolicyPerson[] {
   const rows: PolicyPerson[] = DEMO_ACCOUNTS.map((a) => {
     const p = getPerson(a.id);

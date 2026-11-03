@@ -63,6 +63,7 @@ const KEY = "timez.tickets.v1";
 const BABU = "emp-mahesh";
 const RAM = "emp-ram";
 const PRIYA = "emp-priya";
+const OLIVER = "emp-oliver";
 const KABIR = "emp-kabir";
 const ALEX = "demo-admin";
 const FARHAN = "demo-hr-admin";
@@ -244,9 +245,51 @@ function seed(): Ticket[] {
       createdAt: "2026-10-14T13:30:00",
       updatedAt: "2026-10-16T10:21:00",
     },
+    {
+      id: "TCK-1043",
+      title: "Invoice export drops the last row",
+      description: "Exporting a filtered invoice list to Excel leaves out the final invoice. Seen in Chrome and Edge.",
+      type: "Bug",
+      priority: "medium",
+      status: "In progress",
+      projectId: "p-north",
+      projectName: "Northwind Billing",
+      requesterId: OLIVER,
+      assigneeId: BABU,
+      subOwnerId: OLIVER,
+      watcherIds: [RAM, PRIYA],
+      due: "2026-11-06",
+      tasks: [
+        { id: "tt-1043-1", title: "Fix the export range", ownerId: BABU, due: "2026-11-04", done: false },
+        { id: "tt-1043-2", title: "Retest with 1, 50 and 500 rows", ownerId: OLIVER, due: "2026-11-06", done: false },
+      ],
+      activity: [
+        ev("e1", "2026-10-27T10:05:00", OLIVER, "created", "Raised the ticket."),
+        ev("e2", "2026-10-27T10:40:00", RAM, "assigned", "Assigned to Babu Menon."),
+        ev("e3", "2026-10-28T09:15:00", BABU, "status", "Open → In progress"),
+      ],
+      createdAt: "2026-10-27T10:05:00",
+      updatedAt: "2026-10-28T09:15:00",
+    },
+    {
+      id: "TCK-1044",
+      title: "VPN drops on the London office Wi-Fi",
+      description: "The VPN disconnects every 20 minutes on the 3rd-floor Wi-Fi in London. Fine on a home connection.",
+      type: "IT support",
+      priority: "medium",
+      status: "Open",
+      requesterId: OLIVER,
+      assigneeId: ALEX,
+      watcherIds: [],
+      due: "2026-11-05",
+      activity: [ev("e1", "2026-10-29T09:20:00", OLIVER, "created", "Raised the ticket.")],
+      createdAt: "2026-10-29T09:20:00",
+      updatedAt: "2026-10-29T09:20:00",
+    },
   ];
 }
 
+const LATER_TICKETS = new Set(["TCK-1043", "TCK-1044"]);
 let cache: Ticket[] | null = null;
 const listeners = new Set<() => void>();
 
@@ -255,7 +298,8 @@ function read(): Ticket[] {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Ticket[];
-      if (Array.isArray(parsed)) return parsed;
+      // Tickets for sign-in accounts added later (Oliver) are added to saved lists from before them.
+      if (Array.isArray(parsed)) return [...parsed, ...seed().filter((t) => LATER_TICKETS.has(t.id) && !parsed.some((p) => p.id === t.id))];
     }
   } catch {
     /* fall back to seed */

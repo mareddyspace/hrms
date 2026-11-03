@@ -27,6 +27,8 @@ from app.main import app  # noqa: E402
 PASSWORDS = {
     "babu.menon@timez.com": "Employee@1184",
     "ram.krishnan@timez.com": "Manager@1001",
+    "priya.nair@timez.com": "Employee@1185",
+    "oliver.hughes@timez.com": "Employee@1186",
     "farhan.ali@timez.com": "HrAdmin@2001",
     "sophie.clark@timez.com": "Recruiter@3001",
     "jordan.blake@timez.com": "Executive@5001",

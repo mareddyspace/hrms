@@ -73,6 +73,8 @@ import {
 // v4: the Compensation persona was retired (HR owns compensation & benefits) — older data is replaced.
 // v5: the Hiring Manager persona was retired — his pay, benefits and documents left the seed; older data is replaced.
 const KEY = "timez.reward.state.v5";
+/** Sign-in accounts added after saved reward data may exist; their seed rows are merged in on load. */
+const LATER_SEED_PEOPLE: ReadonlySet<string> = new Set(["emp-priya", "emp-oliver"]);
 const OLD_KEYS = ["timez.reward.state.v1", "timez.reward.state.v2", "timez.reward.state.v3", "timez.reward.state.v4"];
 
 type RewardState = {
@@ -175,8 +177,15 @@ function read(): RewardState {
     const raw = localStorage.getItem(KEY);
     if (!raw) return withAutoEnrollments(base);
     const parsed = JSON.parse(raw) as Partial<RewardState>;
-    const list = <K extends keyof RewardState>(key: K): RewardState[K] =>
-      (Array.isArray(parsed[key]) ? parsed[key] : base[key]) as RewardState[K];
+    // Sign-in accounts added later (Priya, Oliver): their seed rows are added to a saved state that predates them.
+    const list = <K extends keyof RewardState>(key: K): RewardState[K] => {
+      if (!Array.isArray(parsed[key])) return base[key];
+      const saved = parsed[key] as { id: string; employeeId?: string }[];
+      const seeded = (base[key] as unknown as { id: string; employeeId?: string }[]).filter(
+        (row) => LATER_SEED_PEOPLE.has(row.employeeId ?? "") && !saved.some((x) => x.id === row.id),
+      );
+      return [...saved, ...seeded] as unknown as RewardState[K];
+    };
     const win = parsed.openEnrollment;
     return withAutoEnrollments({
       cycles: list("cycles"),

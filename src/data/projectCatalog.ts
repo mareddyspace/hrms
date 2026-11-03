@@ -7,6 +7,11 @@ import type { LocalProject, TaskStatus } from "./projectStore.ts";
 
 const BABU = "emp-mahesh";
 const RAM = "emp-ram";
+const PRIYA = "emp-priya";
+const OLIVER = "emp-oliver";
+
+/** Sign-in accounts on the project teams (other team members are listed by name only). */
+const NAMES: Record<string, string> = { [BABU]: "Babu Menon", [RAM]: "Ram Krishnan", [PRIYA]: "Priya Nair", [OLIVER]: "Oliver Hughes" };
 
 type Seed = {
   id: string;
@@ -20,7 +25,8 @@ type Seed = {
   myTitle: string;
   myBudget: number;
   myDuties: string;
-  others: [string, string, string][];
+  /** [name, title, duties] and, for a sign-in account, its id. */
+  others: [string, string, string, string?][];
   milestones: [string, string, boolean, string][];
   tasks: [string, string, string, TaskStatus, number, string, string][];
   activity: [string, string, string][];
@@ -41,7 +47,8 @@ const SEEDS: Seed[] = [
     myBudget: 320,
     myDuties: "Invoice and payment screens, exports and front-end tests.",
     others: [
-      ["Priya Nair", "Tech lead", "Architecture, code reviews and release planning."],
+      ["Priya Nair", "Tech lead", "Architecture, code reviews and release planning.", PRIYA],
+      ["Oliver Hughes", "QA engineer", "Regression automation and release testing.", OLIVER],
       ["Kabir Sharma", "Backend developer", "Invoice engine and payment gateway APIs."],
       ["Anu Rao", "QA engineer", "Test plans, regression runs and UAT support."],
     ],
@@ -58,6 +65,10 @@ const SEEDS: Seed[] = [
       ["NW-401", "Dunning email preview", "2026-10-23", "in_review", 6, BABU, "Preview the reminder email before it is sent to a customer."],
       ["NW-388", "Credit note form", "2026-10-09", "done", 10, BABU, "Raise a credit note against an invoice."],
       ["NW-420", "Go-live cut-over plan", "2026-12-04", "todo", 16, RAM, "Plan the switch from the legacy system."],
+      ["NW-415", "Customer self-service architecture", "2026-11-06", "in_progress", 12, PRIYA, "Design the invoice, download and dispute flows for customers."],
+      ["NW-410", "Review payment gateway reconciliation", "2026-10-21", "done", 6, PRIYA, "Code review and sign-off of the reconciliation job."],
+      ["NW-423", "Regression suite for invoice filters", "2026-11-10", "in_progress", 10, OLIVER, "Automate the invoice list filters and export checks."],
+      ["NW-424", "Self-service UAT test plan", "2026-11-12", "todo", 8, OLIVER, "Test plan and cases for the customer self-service release."],
     ],
     activity: [
       ["2026-10-27", "Ram Krishnan", "Signed off the payment gateway milestone"],
@@ -78,6 +89,7 @@ const SEEDS: Seed[] = [
     myBudget: 240,
     myDuties: "Lab report viewer and downloads, appointment reminders.",
     others: [
+      ["Priya Nair", "Tech lead", "Architecture and code reviews for the portal.", PRIYA],
       ["Diya Patel", "UX designer", "Screen designs and usability tests with clinic staff."],
       ["Kabir Sharma", "Backend developer", "Clinic data feed and messaging APIs."],
     ],
@@ -92,6 +104,7 @@ const SEEDS: Seed[] = [
       ["MC-207", "Lab report viewer", "2026-11-10", "in_progress", 16, BABU, "Show a patient's lab results with reference ranges."],
       ["MC-211", "Report download as PDF", "2026-11-20", "todo", 6, BABU, "Download a lab report as a PDF."],
       ["MC-199", "Appointment reminders", "2026-10-16", "done", 8, BABU, "Text and email reminders a day before."],
+      ["MC-214", "Lab data feed fallback design", "2026-11-13", "todo", 6, PRIYA, "Plan how the viewer works while the clinic feed is late."],
     ],
     activity: [
       ["2026-10-28", "Ram Krishnan", "Flagged lab reports as at risk: the clinic data feed is late"],
@@ -133,7 +146,8 @@ const SEEDS: Seed[] = [
     myBudget: 200,
     myDuties: "Roster and holiday screens, timesheet review.",
     others: [
-      ["Priya Nair", "Tech lead", "Architecture and code reviews."],
+      ["Priya Nair", "Tech lead", "Architecture and code reviews.", PRIYA],
+      ["Oliver Hughes", "QA engineer", "UK payroll and holiday test cases.", OLIVER],
       ["Anu Rao", "QA engineer", "Regression tests for every release."],
     ],
     milestones: [
@@ -193,7 +207,7 @@ export function CATALOG_FOR_STORE(): Record<string, LocalProject> {
       members: [
         { employeeId: RAM, name: "Ram Krishnan", jobTitle: "Engineering Manager", role: "lead", title: "Project manager", responsibilities: "Plans the work, runs reviews, approves time and owns the client relationship." },
         { employeeId: BABU, name: "Babu Menon", jobTitle: "Software Engineer", role: "member", title: s.myTitle, responsibilities: s.myDuties, budgetHours: s.myBudget },
-        ...s.others.map(([name, title, duties]) => ({ employeeId: `name:${name}`, name, jobTitle: title, role: "member", title, responsibilities: duties })),
+        ...s.others.map(([name, title, duties, id]) => ({ employeeId: id ?? `name:${name}`, name, jobTitle: title, role: "member", title, responsibilities: duties })),
       ],
       milestones: s.milestones.map(([name, due, done, description], i) => ({ id: `pm-${s.id}-${i}`, name, description, due, completedOn: done ? due : null })),
       tasks: s.tasks.map(([code, title, due, status, estimate, assigneeId, description]) => ({
@@ -202,7 +216,7 @@ export function CATALOG_FOR_STORE(): Record<string, LocalProject> {
         title,
         description,
         assigneeId,
-        assigneeName: assigneeId === BABU ? "Babu Menon" : "Ram Krishnan",
+        assigneeName: NAMES[assigneeId] ?? "Ram Krishnan",
         milestoneId: null,
         due,
         estimate,
