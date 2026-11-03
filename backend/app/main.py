@@ -58,6 +58,15 @@ for module in (auth, people, leave, attendance, timesheets, approvals, notificat
 app.include_router(approvals.workflows_router, prefix=API_PREFIX)
 
 
+@app.get("/", tags=["health"], include_in_schema=False)
+def root() -> dict[str, str]:
+    """The API has no web page of its own: say what it is and where to go (the portal is the front end)."""
+    out = {"service": "TimeZ HRMS API", "status": "running", "health": "/health"}
+    if settings.docs_enabled:
+        out["docs"] = "/docs"
+    return out
+
+
 @app.get("/health", tags=["health"])
 def health() -> dict[str, str]:
     try:
