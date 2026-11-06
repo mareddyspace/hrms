@@ -1,0 +1,205 @@
+section,check,user,expected,actual,pass
+§56 Data scope,Leave balance of Babu,Babu,allowed,allowed,PASS
+§56 Data scope,Leave balance of Babu,Priya,denied,denied,PASS
+§56 Data scope,Leave balance of Babu,Oliver,denied,denied,PASS
+§56 Data scope,Leave balance of Babu,Ram,allowed,allowed,PASS
+§56 Data scope,Leave balance of Babu,Farhan,allowed,allowed,PASS
+§56 Data scope,Leave balance of Babu,Sophie,denied,denied,PASS
+§56 Data scope,Leave balance of Babu,Jordan,allowed,allowed,PASS
+§56 Data scope,Leave balance of Babu,Alex,allowed,allowed,PASS
+§56 Data scope,Leave history of Babu,Babu,allowed,allowed,PASS
+§56 Data scope,Leave history of Babu,Priya,denied,denied,PASS
+§56 Data scope,Leave history of Babu,Oliver,denied,denied,PASS
+§56 Data scope,Leave history of Babu,Ram,allowed,allowed,PASS
+§56 Data scope,Leave history of Babu,Farhan,allowed,allowed,PASS
+§56 Data scope,Leave history of Babu,Sophie,denied,denied,PASS
+§56 Data scope,Leave history of Babu,Jordan,allowed,allowed,PASS
+§56 Data scope,Leave history of Babu,Alex,allowed,allowed,PASS
+§56 Data scope,Attendance of Babu,Babu,allowed,allowed,PASS
+§56 Data scope,Attendance of Babu,Priya,denied,denied,PASS
+§56 Data scope,Attendance of Babu,Oliver,denied,denied,PASS
+§56 Data scope,Attendance of Babu,Ram,allowed,allowed,PASS
+§56 Data scope,Attendance of Babu,Farhan,allowed,allowed,PASS
+§56 Data scope,Attendance of Babu,Sophie,denied,denied,PASS
+§56 Data scope,Attendance of Babu,Jordan,allowed,allowed,PASS
+§56 Data scope,Attendance of Babu,Alex,allowed,allowed,PASS
+§56 Data scope,Goals of Babu,Babu,allowed,allowed,PASS
+§56 Data scope,Goals of Babu,Priya,denied,denied,PASS
+§56 Data scope,Goals of Babu,Oliver,denied,denied,PASS
+§56 Data scope,Goals of Babu,Ram,allowed,allowed,PASS
+§56 Data scope,Goals of Babu,Farhan,allowed,allowed,PASS
+§56 Data scope,Goals of Babu,Sophie,denied,denied,PASS
+§56 Data scope,Goals of Babu,Jordan,allowed,allowed,PASS
+§56 Data scope,Goals of Babu,Alex,allowed,allowed,PASS
+§56 Data scope,Documents of Babu,Babu,allowed,allowed,PASS
+§56 Data scope,Documents of Babu,Priya,denied,denied,PASS
+§56 Data scope,Documents of Babu,Oliver,denied,denied,PASS
+§56 Data scope,Documents of Babu,Ram,allowed,allowed,PASS
+§56 Data scope,Documents of Babu,Farhan,allowed,allowed,PASS
+§56 Data scope,Documents of Babu,Sophie,denied,denied,PASS
+§56 Data scope,Documents of Babu,Jordan,allowed,allowed,PASS
+§56 Data scope,Documents of Babu,Alex,allowed,allowed,PASS
+§56 Data scope,Timesheet entries of Babu,Babu,allowed,allowed,PASS
+§56 Data scope,Timesheet entries of Babu,Priya,denied,denied,PASS
+§56 Data scope,Timesheet entries of Babu,Oliver,denied,denied,PASS
+§56 Data scope,Timesheet entries of Babu,Ram,allowed,allowed,PASS
+§56 Data scope,Timesheet entries of Babu,Farhan,allowed,allowed,PASS
+§56 Data scope,Timesheet entries of Babu,Sophie,denied,denied,PASS
+§56 Data scope,Timesheet entries of Babu,Jordan,allowed,allowed,PASS
+§56 Data scope,Timesheet entries of Babu,Alex,allowed,allowed,PASS
+§56 Data scope,Learning of Babu,Babu,allowed,allowed,PASS
+§56 Data scope,Learning of Babu,Priya,denied,denied,PASS
+§56 Data scope,Learning of Babu,Oliver,denied,denied,PASS
+§56 Data scope,Learning of Babu,Ram,allowed,allowed,PASS
+§56 Data scope,Learning of Babu,Farhan,allowed,allowed,PASS
+§56 Data scope,Learning of Babu,Sophie,denied,denied,PASS
+§56 Data scope,Learning of Babu,Jordan,allowed,allowed,PASS
+§56 Data scope,Learning of Babu,Alex,allowed,allowed,PASS
+§22 Compensation,Salary records of Babu,Babu,allowed,allowed,PASS
+§22 Compensation,Salary records of Babu,Priya,denied,denied,PASS
+§22 Compensation,Salary records of Babu,Oliver,denied,denied,PASS
+§22 Compensation,Salary records of Babu,Ram,denied,denied,PASS
+§22 Compensation,Salary records of Babu,Farhan,allowed,allowed,PASS
+§22 Compensation,Salary records of Babu,Sophie,denied,denied,PASS
+§22 Compensation,Salary records of Babu,Jordan,denied,denied,PASS
+§22 Compensation,Salary records of Babu,Alex,allowed,allowed,PASS
+§29 Personal data,Reveal Babu's mobile,Babu,allowed,allowed,PASS
+§29 Personal data,Reveal Babu's mobile,Priya,denied,denied,PASS
+§29 Personal data,Reveal Babu's mobile,Oliver,denied,denied,PASS
+§29 Personal data,Reveal Babu's mobile,Ram,denied,denied,PASS
+§29 Personal data,Reveal Babu's mobile,Farhan,allowed,allowed,PASS
+§29 Personal data,Reveal Babu's mobile,Sophie,denied,denied,PASS
+§29 Personal data,Reveal Babu's mobile,Jordan,denied,denied,PASS
+§29 Personal data,Reveal Babu's mobile,Alex,allowed,allowed,PASS
+§9 People,Babu's profile view,Babu,full,full,PASS
+§9 People,Babu's profile view,Priya,basic,basic,PASS
+§9 People,Babu's profile view,Oliver,basic,basic,PASS
+§9 People,Babu's profile view,Ram,full,full,PASS
+§9 People,Babu's profile view,Farhan,full,full,PASS
+§9 People,Babu's profile view,Sophie,basic,basic,PASS
+§9 People,Babu's profile view,Jordan,full,full,PASS
+§9 People,Babu's profile view,Alex,full,full,PASS
+§28 Data scope,Leave balance of an unrelated UK employee,Babu,denied,denied,PASS
+§28 Data scope,Leave balance of an unrelated UK employee,Priya,denied,denied,PASS
+§28 Data scope,Leave balance of an unrelated UK employee,Oliver,denied,denied,PASS
+§28 Data scope,Leave balance of an unrelated UK employee,Ram,denied,denied,PASS
+§28 Data scope,Leave balance of an unrelated UK employee,Farhan,allowed,allowed,PASS
+§28 Data scope,Leave balance of an unrelated UK employee,Sophie,denied,denied,PASS
+§28 Data scope,Leave balance of an unrelated UK employee,Jordan,denied,denied,PASS
+§28 Data scope,Leave balance of an unrelated UK employee,Alex,allowed,allowed,PASS
+§63 Self-service,Own leave balance,Babu,allowed,allowed,PASS
+§63 Self-service,Own payslips list,Babu,allowed,allowed,PASS
+§63 Self-service,Own leave balance,Priya,allowed,allowed,PASS
+§63 Self-service,Own payslips list,Priya,allowed,allowed,PASS
+§63 Self-service,Own leave balance,Oliver,allowed,allowed,PASS
+§63 Self-service,Own payslips list,Oliver,allowed,allowed,PASS
+§63 Self-service,Own leave balance,Ram,allowed,allowed,PASS
+§63 Self-service,Own payslips list,Ram,allowed,allowed,PASS
+§63 Self-service,Own leave balance,Farhan,allowed,allowed,PASS
+§63 Self-service,Own payslips list,Farhan,allowed,allowed,PASS
+§63 Self-service,Own leave balance,Sophie,allowed,allowed,PASS
+§63 Self-service,Own payslips list,Sophie,allowed,allowed,PASS
+§63 Self-service,Own leave balance,Jordan,allowed,allowed,PASS
+§63 Self-service,Own payslips list,Jordan,allowed,allowed,PASS
+§63 Self-service,Own leave balance,Alex,allowed,allowed,PASS
+§63 Self-service,Own payslips list,Alex,allowed,allowed,PASS
+§13 Recruiting,Candidate list (any candidates visible),Babu,denied,denied,PASS
+§13 Recruiting,Candidate list (any candidates visible),Priya,denied,denied,PASS
+§13 Recruiting,Candidate list (any candidates visible),Oliver,denied,denied,PASS
+§13 Recruiting,Candidate list (any candidates visible),Ram,allowed,allowed,PASS
+§13 Recruiting,Candidate list (any candidates visible),Farhan,allowed,allowed,PASS
+§13 Recruiting,Candidate list (any candidates visible),Sophie,allowed,allowed,PASS
+§13 Recruiting,Candidate list (any candidates visible),Jordan,allowed,allowed,PASS
+§13 Recruiting,Candidate list (any candidates visible),Alex,allowed,allowed,PASS
+§66 Administration,Control center overview,Babu,denied,denied,PASS
+§66 Administration,Account list with status,Babu,denied,denied,PASS
+§55 Audit,Read the audit trail,Babu,denied,denied,PASS
+§66 Administration,Control center overview,Priya,denied,denied,PASS
+§66 Administration,Account list with status,Priya,denied,denied,PASS
+§55 Audit,Read the audit trail,Priya,denied,denied,PASS
+§66 Administration,Control center overview,Oliver,denied,denied,PASS
+§66 Administration,Account list with status,Oliver,denied,denied,PASS
+§55 Audit,Read the audit trail,Oliver,denied,denied,PASS
+§66 Administration,Control center overview,Ram,denied,denied,PASS
+§66 Administration,Account list with status,Ram,denied,denied,PASS
+§55 Audit,Read the audit trail,Ram,denied,denied,PASS
+§66 Administration,Control center overview,Farhan,denied,denied,PASS
+§66 Administration,Account list with status,Farhan,denied,denied,PASS
+§55 Audit,Read the audit trail,Farhan,denied,denied,PASS
+§66 Administration,Control center overview,Sophie,denied,denied,PASS
+§66 Administration,Account list with status,Sophie,denied,denied,PASS
+§55 Audit,Read the audit trail,Sophie,denied,denied,PASS
+§66 Administration,Control center overview,Jordan,denied,denied,PASS
+§66 Administration,Account list with status,Jordan,denied,denied,PASS
+§55 Audit,Read the audit trail,Jordan,denied,denied,PASS
+§66 Administration,Control center overview,Alex,allowed,allowed,PASS
+§66 Administration,Account list with status,Alex,allowed,allowed,PASS
+§55 Audit,Read the audit trail,Alex,allowed,allowed,PASS
+§11 Organization,Create an org unit,Babu,denied,denied,PASS
+§11 Organization,Create an org unit,Priya,denied,denied,PASS
+§11 Organization,Create an org unit,Oliver,denied,denied,PASS
+§11 Organization,Create an org unit,Ram,denied,denied,PASS
+§11 Organization,Create an org unit,Farhan,allowed,allowed,PASS
+§11 Organization,Create an org unit,Sophie,denied,denied,PASS
+§11 Organization,Create an org unit,Jordan,denied,denied,PASS
+§11 Organization,Create an org unit,Alex,allowed,allowed,PASS
+§17 Leave,Apply for leave,Babu,allowed,allowed,PASS
+§25 Workflow,Babu's leave reaches his manager's inbox,Ram,yes,yes,PASS
+§25 Workflow,Approve Babu's leave (not the approver),Babu,denied,denied,PASS
+§25 Workflow,Approve Babu's leave (not the approver),Priya,denied,denied,PASS
+§25 Workflow,Approve Babu's leave (not the approver),Sophie,denied,denied,PASS
+§25 Workflow,Reject without a reason,Ram,refused,refused,PASS
+§25 Workflow,Manager approves Babu's leave,Ram,allowed,allowed,PASS
+§25 Notifications,Babu is told his leave was decided,Babu,yes,yes,PASS
+§25 Notifications,Ram is told about Babu's leave request,Ram,yes,yes,PASS
+§55 Audit,"Leave decision is audited (who, what, when, before/after)",Ram,yes,yes,PASS
+§25 Workflow,Approve own leave,Ram,denied,denied,PASS
+§25 Workflow,Ram's manager approves Ram's leave,Jordan,allowed,allowed,PASS
+§25 Workflow,Priya's leave reaches Ram,Priya,yes,yes,PASS
+§25 Workflow,Oliver's leave reaches Ram,Oliver,yes,yes,PASS
+§18 Timesheet,Submit a day,Babu,allowed,allowed,PASS
+§18 Timesheet,Approve Babu's day (not the approver),Babu,denied,denied,PASS
+§18 Timesheet,Approve Babu's day (not the approver),Priya,denied,denied,PASS
+§18 Timesheet,Manager approves Babu's day,Ram,allowed,allowed,PASS
+Communication,Start a chat with a colleague,Babu,allowed,allowed,PASS
+Communication,Send a chat message,Babu,allowed,allowed,PASS
+Communication,The colleague sees the chat,Oliver,yes,yes,PASS
+Communication,Someone outside the chat can't see it,Priya,yes,yes,PASS
+Communication,Post a company announcement,Babu,denied,denied,PASS
+Communication,Post a company announcement,Priya,denied,denied,PASS
+Communication,Post a company announcement,Oliver,denied,denied,PASS
+Communication,Post a company announcement,Ram,denied,denied,PASS
+Communication,Post a company announcement,Farhan,allowed,allowed,PASS
+Communication,Post a company announcement,Sophie,denied,denied,PASS
+Communication,Post a company announcement,Jordan,denied,denied,PASS
+Communication,Post a company announcement,Alex,allowed,allowed,PASS
+Communication,Read announcements,Babu,allowed,allowed,PASS
+Communication,Own notifications,Babu,allowed,allowed,PASS
+Communication,Read announcements,Priya,allowed,allowed,PASS
+Communication,Own notifications,Priya,allowed,allowed,PASS
+Communication,Read announcements,Oliver,allowed,allowed,PASS
+Communication,Own notifications,Oliver,allowed,allowed,PASS
+Communication,Read announcements,Ram,allowed,allowed,PASS
+Communication,Own notifications,Ram,allowed,allowed,PASS
+Communication,Read announcements,Farhan,allowed,allowed,PASS
+Communication,Own notifications,Farhan,allowed,allowed,PASS
+Communication,Read announcements,Sophie,allowed,allowed,PASS
+Communication,Own notifications,Sophie,allowed,allowed,PASS
+Communication,Read announcements,Jordan,allowed,allowed,PASS
+Communication,Own notifications,Jordan,allowed,allowed,PASS
+Communication,Read announcements,Alex,allowed,allowed,PASS
+Communication,Own notifications,Alex,allowed,allowed,PASS
+§57 AI,AI summary of emp-ram,Babu,denied,denied,PASS
+§57 AI,AI summary of emp-mahesh,Babu,allowed,allowed,PASS
+§57 AI,AI summary of emp-mahesh,Ram,allowed,allowed,PASS
+§57 AI,AI summary of emp-mahesh,Sophie,denied,denied,PASS
+§57 AI,AI summary of emp-mahesh,Priya,denied,denied,PASS
+§57 AI,AI summary of emp-mahesh,Farhan,allowed,allowed,PASS
+§49 Payroll,Open payroll runs,Babu,denied,denied,PASS
+§49 Payroll,Open payroll runs,Priya,denied,denied,PASS
+§49 Payroll,Open payroll runs,Oliver,denied,denied,PASS
+§49 Payroll,Open payroll runs,Ram,denied,denied,PASS
+§49 Payroll,Open payroll runs,Farhan,allowed,allowed,PASS
+§49 Payroll,Open payroll runs,Sophie,denied,denied,PASS
+§49 Payroll,Open payroll runs,Jordan,allowed,allowed,PASS
+§49 Payroll,Open payroll runs,Alex,allowed,allowed,PASS
