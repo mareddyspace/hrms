@@ -18,6 +18,7 @@ from app.security import (
 )
 from app.services import login_throttle, mfa
 from app.services.activity import record_audit
+from app.services.pii import mask_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -107,6 +108,11 @@ def login(body: LoginIn, request: Request, db: DbSession) -> MfaLoginOut:
 
     if account is None:
         verify_password(body.password, None)  # same work as a real check
+        # Kept for the security log with the address masked (someone guessing accounts shows up there).
+        record_audit(db, actor_id=None, action="login_failed_unknown", entity="account", entity_id=None,
+                     ip=client_ip(request), result="failure", user_agent=user_agent(request),
+                     after={"email": mask_email(body.email.strip().lower())})
+        db.commit()
         raise _fail(request, LOGIN_FAILED)
 
     if account.locked_until and account.locked_until > now:

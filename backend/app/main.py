@@ -158,6 +158,11 @@ from app.routers import account_security  # noqa: E402
 
 app.include_router(account_security.router, prefix=API_PREFIX)
 
+# ---------- super admin control center (read-only platform KPIs, audit, sign-ins, sessions, monitoring) ----------
+from app.routers import admin_console  # noqa: E402
+
+app.include_router(admin_console.router, prefix=API_PREFIX)
+
 # ---------- leave admin (types, policies, holidays, carry-forward) and country config (migration 0011) ----------
 from app.routers import leave_admin  # noqa: E402
 
