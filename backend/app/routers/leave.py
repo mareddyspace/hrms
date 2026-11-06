@@ -282,6 +282,47 @@ def cancel(request_id: str, request: Request, db: DbSession, user: CurrentUserDe
     return _out(item, emp.full_name)
 
 
+@router.post("/requests/{request_id}/change", response_model=LeaveRequestOut, status_code=status.HTTP_201_CREATED)
+def change_request(request_id: str, body: LeaveRequestIn, request: Request, db: DbSession,
+                   user: CurrentUserDep) -> LeaveRequestOut:
+    """Leave correction: new dates, type or reason for a pending request, or approved leave that hasn't started.
+    The old request is withdrawn (or cancelled) and a new one goes through approval again, all in one step."""
+    item = db.get(LeaveRequest, request_id)
+    if item is None or item.employee_id != user.employee_id:
+        raise NOT_FOUND
+    emp = _me(user)
+    if not (item.status == "pending" or (item.status == "approved" and item.from_date > rules.today_for(emp))):
+        raise HTTPException(409, "Only pending requests or approved leave that hasn't started can be changed.")
+    before = _snapshot(item)
+    was_pending = item.status == "pending"
+    item.status = "withdrawn" if was_pending else "cancelled"
+    if was_pending:
+        chain.withdraw(db, chain.LEAVE, item.id, user.id, client_ip(request))
+    db.flush()  # the old days no longer count for balance and overlap checks
+    try:
+        days = rules.validate_new_request(db, emp, body.leave_code, body.from_date, body.to_date, body.half, body.reason)
+    except rules.LeaveError as exc:
+        db.rollback()  # nothing changes when the new dates don't work
+        raise HTTPException(422, str(exc)) from exc
+    new = LeaveRequest(
+        id=f"lv-{uuid.uuid4().hex[:12]}", employee_id=emp.id, leave_code=body.leave_code, from_date=body.from_date,
+        to_date=body.to_date, half=body.half, days=days, reason=body.reason.strip(), status="pending",
+        handover_to=(body.handover_to or "").strip() or item.handover_to,
+    )
+    db.add(new)
+    db.flush()
+    chain.start(db, chain.LEAVE, new.id, emp, user.id,
+                {"needs_hr": chain.leave_needs_hr(db, body.leave_code, days), "leave_type": body.leave_code})
+    record_audit(db, actor_id=user.id, action="leave_changed", entity="leave_request", entity_id=new.id,
+                 subject_id=emp.id, before=before, after=_snapshot(new) | {"replaces": item.id}, ip=client_ip(request))
+    if emp.manager_id and not was_pending:
+        notify(db, recipient_id=emp.manager_id, title=f"{emp.full_name} changed approved leave",
+               body=f"Was {item.from_date} to {item.to_date}; now {new.from_date} to {new.to_date} (needs approval again).",
+               href=f"/leave/requests/{new.id}")
+    db.commit()
+    return _out_one(db, user, new, emp.full_name)
+
+
 # ---------- supporting file (one per request) ----------
 @router.post("/requests/{request_id}/attachment", response_model=LeaveRequestOut, openapi_extra=UPLOAD_OPENAPI)
 async def upload_attachment(

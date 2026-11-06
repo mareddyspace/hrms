@@ -341,6 +341,10 @@ export function Employee360View({
   const bonuses = reward.bonuses.filter((b) => b.employeeId === person.id);
   const enrolments = reward.enrollments.filter((e) => e.employeeId === person.id);
   const coverage = (reward.dependents ?? DEPENDENTS).filter((d) => d.employeeId === person.id);
+  // Backend mode keeps dependents in Benefits; the profile shows those when it has none of its own.
+  const dependents: typeof person.dependents = person.dependents.length
+    ? person.dependents
+    : coverage.map((d) => ({ name: d.name, relation: d.relationship as (typeof person.dependents)[number]["relation"], dateOfBirth: d.dateOfBirth ?? "" }));
   const rules = payRulesFor(String(person.countryCode) as CountryCode);
   const monthly = rules.earnings.reduce((sum, line) => sum + line.amount, 0);
   const showPay = revealPay;
@@ -769,10 +773,10 @@ export function Employee360View({
 
               <Section
                 icon={<Users size={16} />}
-                title={`Dependents${person.dependents.length ? ` (${person.dependents.length})` : ""}`}
+                title={`Dependents${dependents.length ? ` (${dependents.length})` : ""}`}
                 action={isSelf ? <Link to="/benefits" className="btn-ghost btn-tiny">Benefits</Link> : undefined}
               >
-                {person.dependents.length === 0 ? (
+                {dependents.length === 0 ? (
                   <p className="pi-missing">None recorded</p>
                 ) : (
                   <table className="pi-table">
@@ -784,7 +788,7 @@ export function Employee360View({
                       </tr>
                     </thead>
                     <tbody>
-                      {person.dependents.map((d) => (
+                      {dependents.map((d) => (
                         <tr key={d.name}>
                           <td>{d.name}</td>
                           <td>{d.relation}</td>
@@ -935,7 +939,7 @@ export function Employee360View({
                 <Item label="Job title" value={person.designation} />
                 <Item label="Grade" value={person.grade} />
                 <Item label="Job family" value={person.jobFamily} />
-                <Item label="Job profile" value={jobProfileLabel(person.jobProfileId)} />
+                <Item label="Job profile" value={person.jobProfileTitle || jobProfileLabel(person.jobProfileId)} />
                 <Item label="Position" value={positionLabel(person)} />
                 <Item label="Department" value={person.department} />
                 <Item label="In this role since" value={roleSince ? `${formatShortDate(roleSince)} · ${tenureText(roleSince, today)}` : ""} />
@@ -1187,11 +1191,11 @@ export function Employee360View({
             />
           </Card>
           <Card title="Dependents">
-            {person.dependents.length === 0 ? (
+            {dependents.length === 0 ? (
               <EmptyState title="None recorded" />
             ) : (
               <ul className="todo">
-                {person.dependents.map((d) => {
+                {dependents.map((d) => {
                   const covered = coverage.find((c) => c.name === d.name)?.coveredPlans ?? [];
                   return (
                     <li key={d.name}>

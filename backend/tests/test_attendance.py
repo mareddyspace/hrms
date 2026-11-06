@@ -31,11 +31,11 @@ def test_check_in_late_check_out_and_scope(client, babu, ram, monkeypatch):
     assert client.post("/api/v1/attendance/check-in", headers=babu, json={}).status_code == 409
     assert any(n["title"] == "Babu Menon checked in late" for n in client.get("/api/v1/notifications", headers=ram).json())
 
-    monkeypatch.setattr(rules, "now", lambda: _at(today, 19, 30, IST))
+    monkeypatch.setattr(rules, "now", lambda: _at(today, 18, 45, IST))  # under 9 hours (the 9-hour stop)
     res = client.post("/api/v1/attendance/check-out", headers=babu, json={"break_minutes": 60})
     assert res.status_code == 200, res.text
     s = res.json()
-    assert s["worked_minutes"] == 9 * 60 + 30 - 60 and s["is_early_leave"] is False
+    assert s["worked_minutes"] == 8 * 60 + 45 - 60 and s["is_early_leave"] is False
     assert client.post("/api/v1/attendance/check-out", headers=babu, json={}).status_code == 409
     assert client.post("/api/v1/attendance/check-in", headers=babu, json={}).status_code == 409  # already checked out
 
@@ -47,7 +47,7 @@ def test_check_in_late_check_out_and_scope(client, babu, ram, monkeypatch):
     assert client.get("/api/v1/attendance/summary", headers=sophie, params={"employee_id": "emp-mahesh"}).status_code == 404
 
     summary = client.get("/api/v1/attendance/summary", headers=ram, params={"employee_id": "emp-mahesh", "month": today.strftime("%Y-%m")}).json()
-    assert summary["present"] >= 1 and summary["late"] >= 1 and summary["hours"] >= 8.5 and summary["overtime_hours"] == 0
+    assert summary["present"] >= 1 and summary["late"] >= 1 and summary["hours"] >= 7.75 and summary["overtime_hours"] == 0
     assert summary["working_days"] >= summary["present"] - 10  # sanity: shape is right
 
     with SessionLocal() as db:
@@ -66,14 +66,16 @@ def test_early_leave_uses_country_shift(client, monkeypatch):
     assert s["is_early_leave"] is True and s["early_minutes"] == 90
 
 
-def test_overtime_in_summary(client, ram, monkeypatch):
+def test_attendance_stops_at_nine_hours(client, ram, monkeypatch):
+    """Staying checked in for 11 hours: the session closes at the 9-hour mark (extra hours go through overtime)."""
     today = _today_ist()
     monkeypatch.setattr(rules, "now", lambda: _at(today, 9, 0, IST))
     assert client.post("/api/v1/attendance/check-in", headers=ram, json={}).status_code == 201
     monkeypatch.setattr(rules, "now", lambda: _at(today, 20, 0, IST))
-    assert client.post("/api/v1/attendance/check-out", headers=ram, json={}).json()["worked_minutes"] == 11 * 60
-    summary = client.get("/api/v1/attendance/summary", headers=ram, params={"month": today.strftime("%Y-%m")}).json()
-    assert summary["overtime_hours"] >= 2
+    res = client.post("/api/v1/attendance/check-out", headers=ram, json={})
+    assert res.status_code == 409 and "automatically after 9 hours" in res.json()["detail"]
+    s = next(x for x in client.get("/api/v1/attendance", headers=ram).json() if x["work_date"] == today.isoformat())
+    assert s["worked_minutes"] == 9 * 60 and s["note"].startswith(rules.AUTO_CHECKOUT_NOTE)
 
 
 def test_correction_rules_and_manager_applies(client, babu, ram):
@@ -149,4 +151,5 @@ def test_hr_can_decide_correction(client, babu, farhan):
     res = client.post(f"/api/v1/attendance/corrections/{cid}/decision", headers=farhan, json={"decision": "approve"})
     assert res.status_code == 200
     session = next(s for s in client.get("/api/v1/attendance", headers=babu).json() if s["work_date"] == day.isoformat())
-    assert session["is_late"] is True and session["late_minutes"] == 130 and session["check_out"] is None
+    assert session["is_late"] is True and session["late_minutes"] == 130
+    assert session["note"].startswith(rules.AUTO_CHECKOUT_NOTE)  # left open days ago: stopped at 9 hours

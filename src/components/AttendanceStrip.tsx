@@ -8,9 +8,11 @@ import { ActionButton } from "./ui.tsx";
 import { attendanceContextFor, nonWorkingReason } from "../data/attendanceData.ts";
 import {
   attendanceActionAsync,
+  MAX_WORK_MINUTES,
   attendedMinutes,
   getAttendanceState,
   getCurrentSession,
+  refreshAttendance,
   subscribeAttendance,
 } from "../data/attendanceLocal.ts";
 import { todayISO } from "../model.ts";
@@ -47,11 +49,17 @@ export function useTodayAttendance() {
     [employee, state.holidays, state.leaveRequests],
   );
   const offToday = session.phase === "not_started" ? nonWorkingReason(employee.id, todayISO(), dayContext) : null;
+  const minutes = attendedMinutes(session, now);
+  const capped = open && minutes >= MAX_WORK_MINUTES;
+  useEffect(() => {
+    if (capped) refreshAttendance(); // the server checks out at 9 hours; show its answer
+  }, [capped]);
   return {
     session,
     open,
     checkedOut: session.phase === "checked_out" && !!session.checkOut && session.date === todayISO(),
-    minutes: attendedMinutes(session, now),
+    minutes,
+    capped,
     offToday,
     punch: (action: "check_in" | "end_break" | "check_out") => attendanceActionAsync(employee.id, action, dayContext),
   };
@@ -59,12 +67,16 @@ export function useTodayAttendance() {
 
 /** One line: Check in → "Checked in 9:32 am · 3 h 10 m so far" → Check out → "Worked 9 h 05 m (9:32 am – 6:37 pm)". */
 export function AttendanceStrip({ main = true, compact = false }: { main?: boolean; compact?: boolean }) {
-  const { session, minutes, offToday, punch } = useTodayAttendance();
+  const { session, minutes, capped, offToday, punch } = useTodayAttendance();
   const button = `${main ? "btn" : "btn-ghost"} btn-tiny`;
   let text: string;
   if (session.phase === "not_started") text = offToday ? `${offToday} No check-in needed.` : "Not checked in yet.";
+  else if (session.phase === "checked_out" && session.checkIn && session.checkOut && session.autoCheckout)
+    text = `Stopped at 9 h · checked out automatically at ${clockTime(session.checkOut)}. Add that day's timesheet.`;
   else if (session.phase === "checked_out" && session.checkIn && session.checkOut)
     text = `Worked ${durationText(minutes)} (${clockTime(session.checkIn)} – ${clockTime(session.checkOut)})`;
+  else if (capped)
+    text = `Checked in ${session.checkIn ? clockTime(session.checkIn) : ""} · 9 h reached, the timer has stopped`;
   else
     text = `Checked in ${session.checkIn ? clockTime(session.checkIn) : ""} · ${durationText(minutes)} so far${session.phase === "on_break" ? " · on a break" : ""}`;
   return (
@@ -79,7 +91,12 @@ export function AttendanceStrip({ main = true, compact = false }: { main?: boole
             Check in
           </ActionButton>
         )}
-        {session.phase === "checked_in" && (
+        {session.phase === "checked_out" && session.autoCheckout && (
+          <Link className={button} to={`/timesheet?day=${session.date}`}>
+            Add timesheet
+          </Link>
+        )}
+        {session.phase === "checked_in" && !capped && (
           <ActionButton className={button} busyLabel="Checking out…" doneLabel="Checked out" success="Checked out." toastError onAction={() => punch("check_out")}>
             Check out
           </ActionButton>

@@ -63,7 +63,8 @@ function toPerson(p: PersonOut): PersonRecord {
     employmentStatus: status,
     designation: p.job_title,
     jobFamily: full?.job_family ?? "",
-    jobProfileId: "",
+    jobProfileId: full?.job_profile_id ?? "",
+    ...(full?.job_profile_title ? { jobProfileTitle: full.job_profile_title } : {}),
     positionId: full?.position_id ?? "",
     grade: full?.grade ?? "",
     department: p.department,
@@ -266,6 +267,17 @@ export async function apiDecideLeave(id: string, decision: "approve" | "reject",
   await api.post<LeaveRequestOut>(`/leave/requests/${encodeURIComponent(id)}/decision`, {
     decision,
     note: note?.trim() || null,
+  });
+}
+
+/** Leave correction: new dates or reason for a pending request or upcoming approved leave (approved again). */
+export async function apiChangeLeave(id: string, input: { code: string; from: string; to: string; half?: string; reason: string }) {
+  await api.post<LeaveRequestOut>(`/leave/requests/${encodeURIComponent(id)}/change`, {
+    leave_code: input.code,
+    from: input.from,
+    to: input.to,
+    half: input.from === input.to ? (input.half ?? "none") : "none",
+    reason: input.reason,
   });
 }
 

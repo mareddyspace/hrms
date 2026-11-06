@@ -151,6 +151,7 @@ export function LeaveRequestHistory({
   approverName,
   today,
   onWithdraw,
+  onChange,
   onError,
 }: {
   requests: LeaveRequest[];
@@ -159,8 +160,11 @@ export function LeaveRequestHistory({
   approverName?: string;
   today: string;
   onWithdraw: (r: LeaveRequest) => Promise<string | null>;
+  /** Leave correction (backend mode): new dates or reason; the change is approved again. */
+  onChange?: (r: LeaveRequest, input: { from: string; to: string; reason: string }) => Promise<string | null>;
   onError: (message: string) => void;
 }) {
+  const [changing, setChanging] = useState<{ id: string; from: string; to: string; reason: string } | null>(null);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [type, setType] = useState("");
@@ -267,8 +271,46 @@ export function LeaveRequestHistory({
                           {r.status === "pending" ? "Withdraw" : "Cancel leave"}
                         </ActionButton>
                       )}
+                      {canWithdraw && onChange && (
+                        <button type="button" className="btn-ghost btn-tiny" onClick={() => setChanging(changing?.id === r.id ? null : { id: r.id, from: r.from, to: r.to, reason: r.reason })}>
+                          {changing?.id === r.id ? "Keep as is" : "Change dates"}
+                        </button>
+                      )}
                     </td>
                   </tr>
+                  {changing?.id === r.id && onChange && (
+                    <tr className="lv-detail-row">
+                      <td colSpan={5}>
+                        <div className="lv-detail lv-change">
+                          <label>
+                            <span className="muted">From</span>
+                            <input type="date" value={changing.from} min={today} onChange={(e) => setChanging({ ...changing, from: e.target.value })} />
+                          </label>
+                          <label>
+                            <span className="muted">To</span>
+                            <input type="date" value={changing.to} min={changing.from} onChange={(e) => setChanging({ ...changing, to: e.target.value })} />
+                          </label>
+                          <label>
+                            <span className="muted">Reason</span>
+                            <input value={changing.reason} maxLength={500} onChange={(e) => setChanging({ ...changing, reason: e.target.value })} />
+                          </label>
+                          <ActionButton
+                            className="btn btn-tiny"
+                            success="Leave changed and sent for approval again."
+                            onError={onError}
+                            onAction={async () => {
+                              const error = await onChange(r, { from: changing.from, to: changing.to, reason: changing.reason });
+                              if (!error) setChanging(null);
+                              return error;
+                            }}
+                          >
+                            Save change
+                          </ActionButton>
+                          <span className="muted">The new dates go to {approverName ?? "your approver"} again.</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                   {expanded && (
                     <tr className="lv-detail-row">
                       <td colSpan={5}>

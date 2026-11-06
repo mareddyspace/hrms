@@ -3,6 +3,7 @@ import { getPerson } from "../data/peopleLocal.ts";
 import { hasStarted } from "../data/peopleData.ts";
 import { API_ENABLED } from "../api/client.ts";
 import { apiMyRecruitingActivity, type ActivityOut } from "../api/syncTalent.ts";
+import { apiUploadDocument } from "../api/syncRewards.ts";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   ActionButton,
@@ -1149,6 +1150,59 @@ function emptyPreboarding(joiner: OnboardingJoiner): PreboardingForm {
 }
 
 /** Pre-boarding form: the joiner (or HR) confirms details and asks for equipment and IT access. */
+/** Onboarding documents (pre-boarding "Document submission"): the joiner, or HR for them, uploads ID, education
+ * and past-employment papers. They are saved as the person's documents (POST /documents) for HR to verify. */
+const JOINER_DOC_CATEGORIES = ["Identity", "Education", "Employment", "Personal"] as const;
+
+function JoinerDocumentsCard({ joiner, actor, onResult }: { joiner: OnboardingJoiner; actor: TalentActor; onResult: (n: Notice) => void }) {
+  const self = isJoinerSelf(actor, joiner);
+  const [category, setCategory] = useState<(typeof JOINER_DOC_CATEGORIES)[number]>("Identity");
+  const [title, setTitle] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [uploaded, setUploaded] = useState<string[]>([]);
+  if (!API_ENABLED || !joiner.personId || !(self || isHrRole(actor.role))) return null;
+
+  async function upload(): Promise<string | null> {
+    if (!file) return "Choose a file first.";
+    const name = title.trim() || file.name;
+    const error = await apiUploadDocument(file, { category, title: name, ...(self ? {} : { employeeId: joiner.personId }) });
+    if (!error) {
+      setUploaded((list) => [...list, `${category}: ${name}`]);
+      setTitle("");
+      setFile(null);
+      onResult({ tone: "ok", text: `${name} uploaded. HR will check it.` });
+    }
+    return error;
+  }
+
+  return (
+    <Card title="Onboarding documents" action={<Link to="/documents" className="quiet-link">All documents</Link>}>
+      <p className="muted">{self ? "Upload your ID, certificates and past employment papers before you join." : `Upload documents for ${joiner.name}.`}</p>
+      <div className="row-gap" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
+        <Field label="Type">
+          <select value={category} onChange={(e) => setCategory(e.target.value as (typeof JOINER_DOC_CATEGORIES)[number])}>
+            {JOINER_DOC_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label="Name (optional)">
+          <input value={title} maxLength={200} placeholder="e.g. Passport" onChange={(e) => setTitle(e.target.value)} />
+        </Field>
+        <Field label="File (PDF or image, up to 10 MB)">
+          <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        </Field>
+        <ActionButton className="btn" disabled={!file} busyLabel="Uploading…" doneLabel="Uploaded" toastError onAction={upload}>
+          Upload
+        </ActionButton>
+      </div>
+      {uploaded.length > 0 && (
+        <ul className="todo">
+          {uploaded.map((u) => <li key={u}>{u} · waiting for HR to verify</li>)}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 function PreboardingCard({ joiner, actor, onResult }: { joiner: OnboardingJoiner; actor: TalentActor; onResult: (n: Notice) => void }) {
   const [form, setForm] = useState<PreboardingForm>(() => emptyPreboarding(joiner));
   // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when another joiner opens or the form was saved
@@ -1361,6 +1415,7 @@ export function OnboardingPage() {
       </div>
 
       {joiner && <PreboardingCard joiner={joiner} actor={actor} onResult={setNotice} />}
+      {joiner && <JoinerDocumentsCard key={joiner.id} joiner={joiner} actor={actor} onResult={setNotice} />}
 
       <Card
         title="Onboarding checklist"

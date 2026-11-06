@@ -176,9 +176,11 @@ def test_question_is_audited_without_answer(client, babu, monkeypatch):
         ).first()
         assert row is not None
         after = row.changes["after"]
-        assert after["question"] == question[:80]
+        assert after["question"] == question[:500]
         assert after["model"] == "test/model-a" and after["denied"] is False
-        assert isinstance(after["sources"], list)
+        assert isinstance(after["sources"], list) and isinstance(after["data_accessed"], list)
+        assert after["capability"] == "copilot" and after["outcome"] == "answered by AI"
+        assert after["answer_chars"] == len("Secret answer text") and row.result is None
         assert "Secret answer text" not in str(row.changes)
 
 

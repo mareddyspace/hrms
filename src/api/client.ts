@@ -382,6 +382,8 @@ export interface PersonFullOut extends Omit<PersonBasicOut, "view"> {
   cost_centre: string | null;
   job_family: string | null;
   position_id: string | null;
+  job_profile_id?: string | null;
+  job_profile_title?: string | null;
   grade: string;
   employment_type: string;
   employment_status: string;

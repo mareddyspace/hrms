@@ -113,6 +113,9 @@ class PersonFullOut(ORM):
     cost_centre: str | None
     job_family: str | None
     position_id: str | None
+    # From the position, else the active job profile with the same title (filled by routers/people.py).
+    job_profile_id: str | None = None
+    job_profile_title: str | None = None
     grade: str
     employment_type: str
     employment_status: str

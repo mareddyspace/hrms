@@ -29,6 +29,7 @@ import { API_ENABLED } from "../api/client.ts";
 import { loadApiUtilization, timeMirror, type UtilizationOut } from "../api/syncTimeSheets.ts";
 import { TimesheetTeamDetail } from "./TimesheetTeamDetail.tsx";
 import { AttendanceStrip, durationText, useTodayAttendance } from "../components/AttendanceStrip.tsx";
+import { autoCheckedOutOn, getAttendanceState } from "../data/attendanceLocal.ts";
 import { useProjects, TASK_STATUS_LABEL, type PTask } from "../data/projectStore.ts";
 import { useProjectContext } from "./projectContext.ts";
 import "./tickets.css";
@@ -123,9 +124,11 @@ export function TimesheetPage() {
   const [view, setView] = useState<TimesheetView>(() => (params.get("view") === "team" ? "company" : "mine"));
   const [openRow, setOpenRow] = useState<string | null>(null);
   const teamLabel = "Team timesheets";
-  const [weekStart, setWeekStart] = useState(() => mondayOf(todayISO()));
+  // /timesheet?day=YYYY-MM-DD (from the 9-hour check-out notice) opens that day's week.
+  const linkedDay = /^\d{4}-\d{2}-\d{2}$/.test(params.get("day") ?? "") && (params.get("day") ?? "") <= todayISO() ? params.get("day")! : null;
+  const [weekStart, setWeekStart] = useState(() => mondayOf(linkedDay ?? todayISO()));
   const [range, setRange] = useState<Range>("week");
-  const [focusDay, setFocusDay] = useState(todayISO());
+  const [focusDay, setFocusDay] = useState(linkedDay ?? todayISO());
   const [month, setMonth] = useState(() => todayISO().slice(0, 7));
   const [logOpen, setLogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -295,7 +298,8 @@ export function TimesheetPage() {
     return status === "submitted" || status === "approved";
   };
   const canLogOn = (day: string) =>
-    isWorkDay(day) && !offDayFor(day) && !dayLocked(day) && !legacyDay(day) && (day === todayISO() || weekSentBackFor(mondayOf(day)) || daySentBack(day));
+    isWorkDay(day) && !offDayFor(day) && !dayLocked(day) && !legacyDay(day) &&
+    (day === todayISO() || weekSentBackFor(mondayOf(day)) || daySentBack(day) || autoCheckedOutOn(employee.id, day));
   const canLogThisWeek = workDates.some(canLogOn);
   const approverName = managementChain(employee.id)[0]?.fullName ?? "HR";
   const managerFirstName = approverName.split(" ")[0] || "your manager";
@@ -552,6 +556,12 @@ export function TimesheetPage() {
   const daysToFix = dayRecords
     .filter((r) => r.personId === employee.id && r.date !== today && isFixable(r.status))
     .sort((a, b) => a.date.localeCompare(b.date));
+  // Earlier days the server stopped at 9 hours whose timesheet isn't in yet: log and submit them now, oldest first.
+  const autoDays = getAttendanceState()
+    .sessions.filter((s) => s.employeeId === employee.id && s.autoCheckout && s.date !== today)
+    .map((s) => s.date)
+    .filter((d) => !myDay(d))  // no day record yet = not submitted
+    .sort();
   // One short reason next to "Log time" when nothing can be logged in the week shown.
   const logBlockedReason = canLogThisWeek
     ? null
@@ -942,6 +952,33 @@ export function TimesheetPage() {
               )}
             </div>
           ) : null}
+          {autoDays.length > 0 && (
+            <section aria-label="Days stopped at 9 hours">
+              <h3 className="ts-fix-title">Stopped at 9 hours · add the timesheet · {autoDays.length}</h3>
+              <ul className="ts-sent-back-list">
+                {autoDays.map((d) => {
+                  const total = hoursOn(d);
+                  const short = shortfallText(total, DAY_TARGET);
+                  return (
+                    <li key={d}>
+                      <span>
+                        <strong>{formatShortDate(d)}</strong> checked out automatically after 9 hours · {formatHoursAmount(total)} of {DAY_TARGET} h logged
+                        {short ? <span className="ts-why"> · {short}</span> : null}
+                      </span>
+                      <span className="form-actions" style={{ marginTop: 0 }}>
+                        <button className="btn-ghost btn-tiny" type="button" onClick={() => openLog(d)}>
+                          Log time
+                        </button>
+                        <ActionButton className="btn btn-tiny" disabled={!!short} title={short ?? undefined} onAction={() => onSubmitDay(d)}>
+                          Submit
+                        </ActionButton>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
           {daysToFix.length > 0 && (
             <section aria-label="Days to fix">
               <h3 className="ts-fix-title">Days to fix · {daysToFix.length}</h3>

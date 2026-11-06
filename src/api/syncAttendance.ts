@@ -75,6 +75,9 @@ function hmPlus(hm: string, minutes: number): string {
   return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
+/** Same text the server writes when it stops a session at 9 hours (backend/app/services/attendance.py). */
+const AUTO_CHECKOUT_NOTE = "Checked out automatically after 9 hours of work.";
+
 /** Breaks come from the server (saved on the session); older days that only know a total show it as one break. */
 function toSession(s: AttendanceSessionOut): TodaySession {
   const open = !s.check_out;
@@ -91,6 +94,7 @@ function toSession(s: AttendanceSessionOut): TodaySession {
     checkIn: utcIso(s.check_in),
     checkOut: utcIso(s.check_out),
     breaks: list,
+    ...(s.note?.startsWith(AUTO_CHECKOUT_NOTE) ? { autoCheckout: true } : {}),
   };
 }
 
@@ -140,8 +144,10 @@ const emptyState = (): ApiAttendanceState => ({ sessions: [], corrections: [], d
 
 async function load(): Promise<RawAttendance> {
   const today = todayISO();
-  const [sessions, mine, pending, approved, rejected] = await Promise.all([
+  const [own, others, mine, pending, approved, rejected] = await Promise.all([
     api.get<AttendanceSessionOut[]>("/attendance", { from: addDaysISO(today, -365), to: today }),
+    // Team / company charts and Employee 360: the last 6 weeks of everyone this person may see (none for employees).
+    api.get<AttendanceSessionOut[]>("/attendance/in-scope", { from: addDaysISO(today, -42), to: today }).catch(() => []),
     api.get<CorrectionOut[]>("/attendance/corrections", { view: "mine", limit: 200 }),
     api.get<CorrectionOut[]>("/attendance/corrections", { view: "to-decide", limit: 200 }),
     api.get<CorrectionOut[]>("/attendance/corrections", { view: "to-decide", status: "approved", limit: 100 }),
@@ -149,6 +155,8 @@ async function load(): Promise<RawAttendance> {
   ]);
   const byId = new Map<string, CorrectionOut>();
   for (const c of [...mine, ...pending, ...approved, ...rejected]) byId.set(c.id, c);
+  const ownIds = new Set(own.map((x) => x.id));
+  const sessions = [...own, ...others.filter((x) => !ownIds.has(x.id))];
   return {
     sessions,
     corrections: [...byId.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)),

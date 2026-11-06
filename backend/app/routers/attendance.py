@@ -65,9 +65,18 @@ def _correction_out_one(db: DbSession, viewer_id: str | None, c: AttendanceCorre
     return _correction_out(c, name, chain.progress_map(db, chain.CORRECTION, [c.id], viewer_id).get(c.id))
 
 
+def _stop_at_nine_hours(db: DbSession, employee_id: str) -> list[AttendanceSession]:
+    """The 9-hour stop (services/attendance.py), applied whenever someone's attendance is read or changed."""
+    closed = rules.close_overdue(db, employee_id)
+    if closed:
+        db.commit()
+    return closed
+
+
 @router.post("/check-in", response_model=AttendanceSessionOut, status_code=status.HTTP_201_CREATED)
 def check_in(body: CheckInIn, request: Request, db: DbSession, user: CurrentUserDep) -> AttendanceSession:
     emp = me(user)
+    _stop_at_nine_hours(db, emp.id)
     moment = rules.now()
     work_date = moment.astimezone(rules.zone(emp)).date()
     existing = db.scalar(
@@ -99,6 +108,8 @@ def check_in(body: CheckInIn, request: Request, db: DbSession, user: CurrentUser
 @router.post("/check-out", response_model=AttendanceSessionOut)
 def check_out(body: CheckOutIn, request: Request, db: DbSession, user: CurrentUserDep) -> AttendanceSession:
     emp = me(user)
+    if _stop_at_nine_hours(db, emp.id):
+        raise HTTPException(409, "You were checked out automatically after 9 hours. Add that day's timesheet.")
     moment = rules.now()
     # The open session: today's, or yesterday's for a shift that runs past midnight.
     session = db.scalar(
@@ -160,6 +171,7 @@ def take_break(action: str, request: Request, db: DbSession, user: CurrentUserDe
     if action not in ("start", "end"):
         raise NOT_FOUND
     emp = me(user)
+    _stop_at_nine_hours(db, emp.id)
     session = _open_session(db, emp)
     before = _session_snapshot(session)
     try:
@@ -183,6 +195,7 @@ def list_sessions(
     to_date: Annotated[date | None, Query(alias="to")] = None,
 ) -> list[AttendanceSession]:
     emp = target(db, user, employee_id)
+    _stop_at_nine_hours(db, emp.id)
     to_date = to_date or rules.local_today(emp)
     from_date = from_date or to_date - timedelta(days=30)
     if to_date < from_date or (to_date - from_date).days > 366:
@@ -200,6 +213,29 @@ def list_sessions(
     )
 
 
+@router.get("/in-scope", response_model=list[AttendanceSessionOut])
+def sessions_in_scope(
+    db: DbSession,
+    user: CurrentUserDep,
+    from_date: Annotated[date | None, Query(alias="from")] = None,
+    to_date: Annotated[date | None, Query(alias="to")] = None,
+) -> list[AttendanceSession]:
+    """Everyone else's sessions this person may see (a manager's reporting line, HR's scope), for team and company
+    attendance charts and Employee 360. At most 120 days."""
+    to_date = to_date or (rules.local_today(user.employee) if user.employee else utcnow().date())
+    from_date = from_date or to_date - timedelta(days=42)
+    if to_date < from_date or (to_date - from_date).days > 120:
+        raise HTTPException(422, "Choose a date range of at most 120 days.")
+    rules.close_overdue(db)  # the 9-hour stop, for everyone shown
+    db.commit()
+    return list(db.scalars(
+        select(AttendanceSession).join(Employee, Employee.id == AttendanceSession.employee_id)
+        .where(user.scope.employee_filter(), AttendanceSession.employee_id != (user.employee_id or ""),
+               AttendanceSession.work_date >= from_date, AttendanceSession.work_date <= to_date)
+        .order_by(AttendanceSession.work_date.desc())
+    ))
+
+
 @router.get("/summary", response_model=AttendanceSummaryOut)
 def summary(
     db: DbSession,
@@ -208,6 +244,7 @@ def summary(
     employee_id: str | None = None,
 ) -> AttendanceSummaryOut:
     emp = target(db, user, employee_id)
+    _stop_at_nine_hours(db, emp.id)
     if month:
         year, mon = (int(x) for x in month.split("-"))
     else:

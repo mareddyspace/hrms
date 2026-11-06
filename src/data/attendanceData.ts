@@ -78,6 +78,8 @@ export interface TodaySession {
   checkIn?: string; // ISO
   checkOut?: string;
   breaks: { start: string; end?: string }[];
+  /** The server closed the session at 9 hours of work (backend/app/services/attendance.py). */
+  autoCheckout?: boolean;
 }
 
 /** Sample shift rules — illustrative demo only, not a legal entitlement. */

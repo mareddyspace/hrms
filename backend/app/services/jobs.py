@@ -161,6 +161,9 @@ def archive_expired_cases(db: Session | None = None, today: date | None = None) 
 def run_all(db: Session, now: datetime | None = None) -> dict[str, Any]:
     now = now or utcnow()
     out: dict[str, Any] = {"reminders_sent": send_due_reminders(db, now)}
+    from app.services.attendance import close_overdue  # attendance stops at 9 hours of work
+
+    out["attendance_auto_checkouts"] = len(close_overdue(db, at=now))
     out.update(run_sla_escalation(db, now))
     out["cases_archived"] = archive_expired_cases(db, now.date())
     from app.services.leave_rules import run_carry_forward_safely  # year-end leave carry-forward (idempotent per year)

@@ -151,6 +151,65 @@ def apply_flags(session: AttendanceSession) -> None:
     session.worked_minutes = max(0, worked)
 
 
+# The day's clock stops at 9 hours of work (breaks not counted): the session is closed at that moment and the person
+# adds that day's timesheet when they next sign in (routers/timesheets.py lets them, even on a later day).
+MAX_WORK_MINUTES = 9 * 60
+AUTO_CHECKOUT_NOTE = "Checked out automatically after 9 hours of work."
+
+
+def is_auto_checked_out(session: AttendanceSession | None) -> bool:
+    return bool(session and session.check_out is not None and (session.note or "").startswith(AUTO_CHECKOUT_NOTE))
+
+
+def cap_moment(session: AttendanceSession) -> datetime | None:
+    """When worked time reaches MAX_WORK_MINUTES, or None while it can't yet (checked out, or on a break)."""
+    if session.check_out is not None:
+        return None
+    moment = session.check_in + timedelta(minutes=MAX_WORK_MINUTES)
+    for b in sorted(break_list(session), key=lambda x: x.get("start") or ""):
+        start, end = _parse(b.get("start")), _parse(b.get("end"))
+        if start is None or start >= moment:
+            break
+        if end is None:
+            return None  # on a break that began before the 9-hour mark: the clock is paused
+        moment += end - start
+    return moment
+
+
+def auto_checkout(session: AttendanceSession, at: datetime | None = None) -> bool:
+    """Close an open session at the 9-hour mark once that moment has passed. True when it closed the session."""
+    moment = cap_moment(session)
+    if moment is None or moment > (at or now()):
+        return False
+    session.breaks = [b for b in break_list(session) if (_parse(b.get("start")) or moment) < moment] or None
+    close_breaks(session, moment)
+    session.break_minutes = breaks_minutes(break_list(session))
+    session.check_out = moment
+    session.note = AUTO_CHECKOUT_NOTE + (f" {session.note}" if session.note else "")
+    apply_flags(session)
+    return True
+
+
+def close_overdue(db: Session, employee_id: str | None = None, at: datetime | None = None) -> list[AttendanceSession]:
+    """Auto check-out every open session (or one person's) past 9 hours; audited, and the person is told."""
+    from app.services.activity import notify, record_audit
+
+    stmt = select(AttendanceSession).where(AttendanceSession.check_out.is_(None))
+    if employee_id:
+        stmt = stmt.where(AttendanceSession.employee_id == employee_id)
+    closed = [s for s in db.scalars(stmt) if auto_checkout(s, at)]
+    for s in closed:
+        record_audit(db, actor_id=None, action="attendance_auto_checkout", entity="attendance_session", entity_id=s.id,
+                     subject_id=s.employee_id, before={"check_out": None},
+                     after={"check_out": s.check_out, "worked_minutes": s.worked_minutes})
+        notify(db, recipient_id=s.employee_id, title="Checked out after 9 hours",
+               body=f"Your attendance for {s.work_date} stopped at 9 hours. Add what you worked on and submit that "
+                    "day's timesheet.", href=f"/timesheet?day={s.work_date.isoformat()}")
+    if closed:
+        db.flush()
+    return closed
+
+
 def new_session(employee: Employee, work_date: date, check_in: datetime, work_mode: str, source: str) -> AttendanceSession:
     shift_start, shift_end = shift_for(employee)
     return AttendanceSession(

@@ -249,6 +249,7 @@ def ask(
 ) -> CopilotResult:
     """Answer one Copilot question (the caller commits the audit row)."""
     question = question.strip()
+    ctx = None
     if is_denied(db, user, question):
         result = CopilotResult(answer=DENIED_ANSWER, denied=True)
     else:
@@ -260,13 +261,21 @@ def ask(
         )
     record_audit(
         db, actor_id=user.id, action="asked", entity=AUDIT_ENTITY, entity_id=None, subject_id=user.employee_id,
+        # AI audit (roadmap §55): who asked what, which capability, what data was read, and the outcome.
+        # The answer itself is not stored, only its length. No sign-in "result" here (that column is for sign-ins).
         after={
-            "question": question[:80],
+            "question": question[:500],
+            "capability": "copilot",
+            "agent": agent_id,
+            "data_accessed": [r.ref for r in ctx.data_refs] if ctx else [],
+            "policies_used": [s.ref for s in ctx.sources if s.kind == "policy"] if ctx else [],
             "sources": [s.ref for s in result.sources],
             "model": result.model,
             "used_ai": result.used_ai,
             "denied": result.denied,
-            "agent": agent_id,
+            "outcome": "refused" if result.denied else ("answered by AI" if result.used_ai else "built-in answer"),
+            "answer_chars": len(result.answer or ""),
+            "action_taken": None,  # the Copilot only answers; any action is the person's own, audited separately
         },
         ip=ip,
     )

@@ -406,7 +406,7 @@ def test_today_submit_needs_check_out(client, babu, ram, monkeypatch):
     res = client.post(f"{D}/{today.isoformat()}/submit", headers=babu)
     assert res.status_code == 422 and res.json()["detail"] == "Check out before submitting today's timesheet."
     # checked in, not out
-    start = datetime.now(UTC) - timedelta(hours=9, minutes=30)
+    start = datetime.now(UTC) - timedelta(hours=8, minutes=30)  # under 9 hours, so still checked in
     with SessionLocal() as db:
         emp = db.get(Employee, "emp-mahesh")
         session = att.new_session(emp, today, start, "office", "web")

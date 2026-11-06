@@ -90,7 +90,29 @@ def list_people(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    return Page(items=[present(user, e, m) for e, m in rows], total=total, page=page, page_size=page_size)
+    items = [present(user, e, m) for e, m in rows]
+    _add_job_profiles(db, items, [e for e, _ in rows])
+    return Page(items=items, total=total, page=page, page_size=page_size)
+
+
+def _add_job_profiles(db: DbSession, items: list[PersonBasicOut | PersonFullOut], emps: list[Employee]) -> None:
+    """Job profile for full records: the position's profile, else the active profile with the same job title."""
+    from app.models import JobProfile, Position
+
+    full = [(i, e) for i, e in zip(items, emps, strict=True) if isinstance(i, PersonFullOut)]
+    if not full:
+        return
+    profiles = {p.id: p for p in db.scalars(select(JobProfile))}
+    by_title = {p.title.lower(): p for p in profiles.values() if p.active}
+    pos_ids = {e.position_id for _, e in full if e.position_id}
+    positions = {p.id: p for p in db.scalars(select(Position).where(or_(Position.id.in_(pos_ids or {""}),
+                                                                       Position.code.in_(pos_ids or {""}))))}
+    positions |= {p.code: p for p in positions.values()}
+    for item, emp in full:
+        pos = positions.get(emp.position_id or "")
+        prof = profiles.get(pos.profile_id) if pos else by_title.get((emp.job_title or "").lower())
+        if prof is not None:
+            item.job_profile_id, item.job_profile_title = prof.id, prof.title
 
 
 def _get_visible(db: DbSession, user: CurrentUser, person_id: str) -> Employee:
@@ -107,6 +129,7 @@ def get_person(person_id: str, db: DbSession, user: CurrentUserDep) -> PersonBas
     item = present(user, emp, mgr.full_name if mgr else None)
     if isinstance(item, PersonFullOut):
         item.direct_report_count = db.scalar(select(func.count()).where(Employee.manager_id == emp.id)) or 0
+        _add_job_profiles(db, [item], [emp])
     return item
 
 

@@ -134,3 +134,20 @@ def test_joiner_access_recruiter_only_own_hires_and_no_personal_details_for_it(c
     other = token_for("acc-qa-recruiter2", "recruiter")
     assert client.get(f"{O}/joiners/{joiner['id']}", headers=other).status_code == 404
     assert joiner["id"] not in {j["id"] for j in client.get(f"{O}/joiners", headers=other).json()}
+
+
+def test_joiner_and_hr_upload_onboarding_documents(client, ram, farhan, sophie):
+    from tests.test_documents_letters import upload
+
+    _, joiner = hire(client, sophie, ram, farhan, "Isha Verma", "isha.verma@example.com", start_in_days=30)
+    me = _joiner_login(joiner["employee_id"])
+    res = upload(client, me, category="Identity", title="Passport", filename="passport.pdf")
+    assert res.status_code == 201, res.text
+    res = upload(client, farhan, category="Education", title="Degree certificate", filename="degree.pdf",
+                 employee_id=joiner["employee_id"])
+    assert res.status_code == 201, res.text
+    mine = client.get("/api/v1/documents", headers=me).json()
+    assert {"Passport", "Degree certificate"} <= {d["title"] for d in mine}
+    # the recruiter can't upload documents for the joiner
+    assert upload(client, sophie, category="Identity", title="X", filename="x.pdf",
+                  employee_id=joiner["employee_id"]).status_code in (403, 404)

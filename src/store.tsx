@@ -97,6 +97,7 @@ import { API_ENABLED, ApiError, announceApiSession, apiChangePassword, apiLogin,
 import {
   apiApplyLeave,
   apiCancelLeave,
+  apiChangeLeave,
   apiDecideLeave,
   clearApiPeople,
   loadApiLeave,
@@ -437,6 +438,8 @@ interface PortalApi {
   hoursFor: (projectId: string) => number;
   applyLeave: (input: LeaveInput) => Promise<string | null>;
   setLeaveStatus: (id: string, status: RequestStatus, note?: string) => Promise<string | null>;
+  /** Backend mode: change the dates or reason of a pending request or upcoming approved leave. */
+  changeLeave: (id: string, input: { from: string; to: string; reason: string }) => Promise<string | null>;
   /** Ask the reporting line for permission to apply for leave on past dates. */
   requestBackdatedPermission: (input: LeaveInput) => string | null;
   withdrawBackdatedPermission: (id: string) => string | null;
@@ -1428,6 +1431,19 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       canDecideFor: (employeeId, scope) => canDecideFor(employeeId, scope ?? "none"),
       hasApprover: activeHasApprover,
       canVerifyProofs,
+      changeLeave: async (leaveId, input) => {
+        const request = state.leaveRequests.find((item) => item.id === leaveId);
+        if (!request) return "Leave request not found.";
+        if (!API_ENABLED) return "Changing leave needs the server. Withdraw it and apply again.";
+        if (input.to < input.from) return "The end date can't be before the start date.";
+        try {
+          await apiChangeLeave(leaveId, { code: request.code, from: input.from, to: input.to, half: request.half, reason: input.reason });
+        } catch (error) {
+          return error instanceof Error ? error.message : "Could not change the leave.";
+        }
+        await Promise.all([refreshApiLeave(), refreshApiNotifications(), pendingMirror.reload()]).catch(() => undefined);
+        return null;
+      },
       setLeaveStatus: async (leaveId, status, note) => {
         const request = state.leaveRequests.find((item) => item.id === leaveId);
         if (!request) return "Leave request not found.";

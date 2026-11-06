@@ -83,11 +83,26 @@ ATTENDANCE_REQUIRED = True  # today's day needs a check-out first; tests with fi
 
 def _check_attendance(db: DbSession, emp: Employee, day: date) -> None:
     """Today's timesheet is submitted after checking out (days sent back or reopened don't need attendance)."""
+    from app.services import attendance
+
+    attendance.close_overdue(db, emp.id)  # past 9 hours counts as checked out
     session = db.scalar(
         select(AttendanceSession).where(AttendanceSession.employee_id == emp.id, AttendanceSession.work_date == day)
     )
     if session is None or session.check_out is None:
         raise HTTPException(422, "Check out before submitting today's timesheet.")
+
+
+def _auto_closed_day(db: DbSession, employee_id: str, day: date) -> bool:
+    """A day whose attendance stopped at 9 hours (services/attendance.py): its timesheet can be logged and submitted
+    when the person next signs in, even on a later day, until it is submitted."""
+    from app.services import attendance
+
+    attendance.close_overdue(db, employee_id)
+    session = db.scalar(
+        select(AttendanceSession).where(AttendanceSession.employee_id == employee_id, AttendanceSession.work_date == day)
+    )
+    return attendance.is_auto_checked_out(session)
 
 
 def _today(db: DbSession, employee_id: str) -> date:
@@ -105,7 +120,7 @@ def _check_day(db: DbSession, week: TimesheetWeek, employee_id: str, day: date) 
     if row is not None and row.status in rules.DAY_LOCKED:
         raise HTTPException(409, f"{day} is {row.status} and can't be changed.")
     sent_back = week.status == "rejected" or (row is not None and row.status in rules.DAY_FIXABLE)
-    if TODAY_ONLY and day != _today(db, employee_id) and not sent_back:
+    if TODAY_ONLY and day != _today(db, employee_id) and not sent_back and not _auto_closed_day(db, employee_id, day):
         raise HTTPException(422, "You can only log time for today. For a missed day, ask your manager to reopen it.")
 
 
@@ -462,7 +477,8 @@ def submit_day(work_date: date, request: Request, db: DbSession, user: CurrentUs
     today = _today(db, emp.id)
     if work_date > today:
         raise HTTPException(422, "You can't submit a day that hasn't happened yet.")
-    if TODAY_ONLY and work_date != today and not (row is not None and row.status in rules.DAY_FIXABLE):
+    if (TODAY_ONLY and work_date != today and not (row is not None and row.status in rules.DAY_FIXABLE)
+            and not _auto_closed_day(db, emp.id, work_date)):
         raise HTTPException(422, "You can only submit today's timesheet. For a missed day, ask your manager to send the day back.")
     if (ATTENDANCE_REQUIRED and work_date == today and not (row is not None and row.status in rules.DAY_FIXABLE)
             and rules.day_target(db, emp, work_date)[1] not in ("weekend", "holiday")):  # no check-in on days off

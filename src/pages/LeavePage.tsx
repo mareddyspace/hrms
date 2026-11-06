@@ -57,6 +57,7 @@ export function LeavePage() {
     demoAccounts,
     applyLeave,
     setLeaveStatus,
+    changeLeave,
     requestBackdatedPermission,
     withdrawBackdatedPermission,
     decideBackdatedPermission,
@@ -449,6 +450,7 @@ export function LeavePage() {
               approverName={approver?.fullName}
               today={today}
               onWithdraw={(request) => setLeaveStatus(request.id, "withdrawn")}
+              onChange={API_ENABLED ? (request, input) => changeLeave(request.id, input) : undefined}
               onError={(error) => setMessage({ tone: "err", text: error })}
             />
           </Card>

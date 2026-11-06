@@ -70,6 +70,8 @@ export interface PersonRecord {
   designation: string;
   jobFamily: string;
   jobProfileId: string;
+  /** Backend mode: the job profile's title from the server (its id isn't in the built-in list). */
+  jobProfileTitle?: string;
   positionId: string;
   grade: string;
   department: string;

@@ -586,11 +586,25 @@ export function sessionHours(session: TodaySession): {
 /* ───────── Attendance in the timesheet: today's timesheet is submitted after checking out ───────── */
 
 /** Minutes attended: check-in to check-out (or to now while still in), less breaks. */
+/** The day's clock stops at 9 hours of work; the server then checks the person out (attendance.py, MAX_WORK_MINUTES). */
+export const MAX_WORK_MINUTES = 9 * 60;
+
 export function attendedMinutes(session: TodaySession, now = Date.now()): number {
   if (!session.checkIn) return 0;
   const end = session.checkOut ? new Date(session.checkOut).getTime() : now;
   const gross = Math.max(0, Math.round((end - new Date(session.checkIn).getTime()) / 60000));
-  return Math.max(0, gross - sessionHours(session).breakMinutes);
+  const worked = Math.max(0, gross - sessionHours(session).breakMinutes);
+  return session.checkOut ? worked : Math.min(MAX_WORK_MINUTES, worked);
+}
+
+/** A day the server stopped at 9 hours: its timesheet can still be filled in and submitted later. */
+export function autoCheckedOutOn(employeeId: string, date: string, state = getAttendanceState()): boolean {
+  return state.sessions.some((s) => s.employeeId === employeeId && s.date === date && !!s.autoCheckout);
+}
+
+/** Backend mode: fetch attendance again (picks up a 9-hour automatic check-out). */
+export function refreshAttendance(): void {
+  if (API_ENABLED) void attendanceMirror.reload();
 }
 
 /** True when the person still has to check out before submitting that day's timesheet (today only). */
