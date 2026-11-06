@@ -2920,7 +2920,8 @@ html[data-theme="night"] .help-ticket-btn:hover {
   position: relative;
   text-decoration: none;
 }
-.top-icon-btn:hover { background: var(--soft); color: var(--ink); border-color: var(--line); }
+.top-icon-btn:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-ring); }
+.top-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .top-icon-btn .dot {
   position: absolute;
   top: 7px;
@@ -4376,7 +4377,8 @@ html[data-theme="night"] .orgchart-you {
   position: relative;
   text-decoration: none;
 }
-.top-icon-btn:hover { background: var(--soft); color: var(--ink); border-color: var(--line); }
+.top-icon-btn:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-ring); }
+.top-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .top-icon-btn .dot {
   position: absolute;
   top: 7px;

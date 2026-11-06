@@ -564,7 +564,7 @@ export function Shell() {
               </button>
             )}
             <NotesButton userId={employee.id} timeZone={employee.timeZone} />
-            <Link to="/notifications" className="top-icon-btn" aria-label="Notification center">
+            <Link to="/notifications" className="top-icon-btn" aria-label="Notification center" title="Notifications">
               <Bell size={18} strokeWidth={1.75} />
               {(badges["/notifications"] ?? 0) > 0 && <span className="dot" />}
             </Link>
@@ -572,24 +572,25 @@ export function Shell() {
               <Inbox size={18} strokeWidth={1.75} />
               {(badges["/approvals"] ?? 0) > 0 && <span className="dot" />}
             </Link>
-            <Link to="/help" className="top-icon-btn top-wide-only" aria-label="Help">
+            <Link to="/help" className="top-icon-btn top-wide-only" aria-label="Help" title="Help">
               <CircleHelp size={18} strokeWidth={1.75} />
             </Link>
-            <Link to="/chat" className="top-icon-btn" aria-label="Messages">
+            <Link to="/chat" className="top-icon-btn" aria-label="Messages" title="Messages">
               <MessageSquare size={18} strokeWidth={1.75} />
               {(badges["/chat"] ?? 0) > 0 && <span className="dot" />}
             </Link>
-            <Link to="/mail" className="top-icon-btn" aria-label="Mail">
+            <Link to="/mail" className="top-icon-btn" aria-label="Mail" title="Mail">
               <Mail size={18} strokeWidth={1.75} />
               {(badges["/mail"] ?? 0) > 0 && <span className="dot" />}
             </Link>
-            <Link to="/announcements" className="top-icon-btn top-wide-only" aria-label="Announcements">
+            <Link to="/announcements" className="top-icon-btn top-wide-only" aria-label="Announcements" title="Announcements">
               <FileText size={18} strokeWidth={1.75} />
             </Link>
             <button
               type="button"
               className="top-icon-btn top-wide-only"
               aria-label={theme === "night" ? "Switch to light theme" : "Switch to night theme"}
+              title={theme === "night" ? "Light theme" : "Night theme"}
               onClick={() => updatePreferences(employee.id, { theme: theme === "night" ? "light" : "night" })}
             >
               {theme === "night" ? <Sun size={18} strokeWidth={1.75} /> : <Moon size={18} strokeWidth={1.75} />}
@@ -647,6 +648,7 @@ export function Shell() {
               className="top-icon-btn top-wide-only"
               type="button"
               aria-label="Sign out"
+              title="Sign out"
               onClick={() => {
                 signOut();
                 navigate("/login");

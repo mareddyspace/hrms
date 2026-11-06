@@ -10,11 +10,18 @@
 .lv-bar span { display: block; height: 100%; background: var(--accent, #2563eb); }
 .lv-balance dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 0.82rem; }
 .lv-balance dl div { display: flex; justify-content: space-between; gap: 6px; }
-.lv-balance dt { color: var(--muted, #64748b); }
+.lv-balance dt { color: var(--muted, #64748b); white-space: nowrap; }
 .lv-balance dd { margin: 0; font-weight: 600; }
 .lv-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
 .lv-filters input { min-width: 180px; }
-.lv-row-actions { white-space: nowrap; display: flex; gap: 6px; justify-content: flex-end; }
+/* The cell stays a table cell; the buttons wrap onto a second line rather than run out of the card. */
+.lv-actions-cell { width: 1%; }
+table.requests.lv-requests { min-width: 0; } /* fits the card; the action buttons wrap instead */
+.lv-row-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; min-width: 150px; }
+.lv-row-actions > * { white-space: nowrap; }
+.lv-change { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); align-items: end; }
+.lv-change label { display: grid; gap: 4px; }
+.leave-side input[type="file"] { max-width: 100%; width: 100%; box-sizing: border-box; }
 .lv-detail-row td { background: var(--surface-2, #f8fafc); }
 .lv-detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 4px 2px; }
 .lv-detail p { margin: 0 0 6px; }

@@ -53,7 +53,7 @@ export function LeaveBalanceCards({ rows, showPending, onApply }: { rows: LeaveR
                 <dd>{fmtDays(allowed)}</dd>
               </div>
               <div>
-                <dt>Carried forward</dt>
+                <dt title="Carried forward from last year">Carried fwd</dt>
                 <dd>{fmtDays(carried)}</dd>
               </div>
               <div>
@@ -226,7 +226,7 @@ export function LeaveRequestHistory({
         </label>
       </div>
       <div className="table-scroll">
-        <table className="data requests">
+        <table className="data requests lv-requests">
           <thead>
             <tr>
               <th>Type</th>
@@ -257,7 +257,8 @@ export function LeaveRequestHistory({
                       <StatusPill status={r.status} />
                       {r.status === "pending" && r.approvalProgress && <span className="muted request-decision">{r.approvalProgress}</span>}
                     </td>
-                    <td className="lv-row-actions">
+                    <td className="lv-actions-cell">
+                      <div className="lv-row-actions">
                       <button type="button" className="btn-ghost btn-tiny" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : r.id)}>
                         {expanded ? "Hide" : "Details"}
                       </button>
@@ -276,6 +277,7 @@ export function LeaveRequestHistory({
                           {changing?.id === r.id ? "Keep as is" : "Change dates"}
                         </button>
                       )}
+                      </div>
                     </td>
                   </tr>
                   {changing?.id === r.id && onChange && (
