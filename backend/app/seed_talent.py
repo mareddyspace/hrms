@@ -45,6 +45,14 @@ REQUISITIONS: list[tuple[Any, ...]] = [
      ["Recruiting", "Boolean search"]),
 ]
 
+# Two more openings Sophie recruits for (insert-once by id).
+REQUISITIONS += [
+    ("JOB-235", "Data Engineer", "Engineering", "IN", "Hyderabad", 2, "emp-ram", "approved", "2026-10-10", "2026-10-12",
+     ["Python", "SQL", "Airflow", "Cloud data warehouses"]),
+    ("JOB-238", "Customer Success Manager", "Customer Success", "GB", "London", 1, "demo-ceo", "approved", "2026-10-14",
+     "2026-10-16", ["Account management", "SaaS onboarding", "Renewals"]),
+]
+
 # id, requisition, name, email, phone, source, years, skills, note, applied, stage path (Applied first)
 CANDIDATES: list[tuple[Any, ...]] = [
     ("cand-1", "JOB-221", "Aisha Khan", "aisha.khan@example.com", "+91 98xxx x2144", "LinkedIn", 7,
@@ -68,6 +76,34 @@ CANDIDATES: list[tuple[Any, ...]] = [
      ["Roadmapping", "Stakeholder management"], "Consumer PM; light on B2B.", "2026-10-06", ["Applied", "Screening", "Rejected"]),
     ("cand-12", "JOB-221", "Meera Iyer", "meera.iyer@example.com", "+91 98xxx x4408", "Careers site", 6,
      ["React", "GraphQL"], "Took another offer.", "2026-08-25", ["Applied", "Screening", "Shortlisted", "Withdrawn"]),
+]
+
+# More candidates across every pipeline stage (insert-once by id).
+CANDIDATES += [
+    ("cand-20", "JOB-235", "Rohan Gupta", "rohan.gupta@example.com", "+91 98xxx x4120", "LinkedIn", 5,
+     ["Python", "Airflow", "BigQuery"], "Built batch pipelines for a fintech.", "2026-10-15", ["Applied"]),
+    ("cand-21", "JOB-235", "Sneha Iyer", "sneha.iyer@example.com", "+91 98xxx x5531", "Referral", 6,
+     ["SQL", "dbt", "Snowflake"], "Referred by Priya Nair.", "2026-10-14", ["Applied", "Screening"]),
+    ("cand-22", "JOB-235", "Vikram Joshi", "vikram.joshi@example.com", "+91 98xxx x6642", "Careers site", 7,
+     ["Python", "Spark", "AWS"], "Strong Spark experience; notice period 60 days.", "2026-10-13",
+     ["Applied", "Screening", "Shortlisted"]),
+    ("cand-23", "JOB-235", "Meera Pillai", "meera.pillai@example.com", "+91 98xxx x7753", "Agency", 8,
+     ["Airflow", "Kafka", "GCP"], "Led a data platform team of four.", "2026-10-12",
+     ["Applied", "Screening", "Shortlisted", "Interview"]),
+    ("cand-24", "JOB-235", "Arjun Nair", "arjun.nair@example.com", "+91 98xxx x8864", "LinkedIn", 4,
+     ["SQL", "Python"], "Not enough pipeline experience for this level.", "2026-10-12", ["Applied", "Screening", "Rejected"]),
+    ("cand-25", "JOB-238", "Emily Carter", "emily.carter@example.com", "+44 20 xxx 1290", "Careers site", 6,
+     ["Account management", "Renewals"], "B2B SaaS CSM; London based.", "2026-10-18", ["Applied", "Screening"]),
+    ("cand-26", "JOB-238", "James Wilson", "james.wilson@example.com", "+44 20 xxx 3301", "Referral", 8,
+     ["Onboarding", "Escalations", "Renewals"], "Referred by Oliver Hughes.", "2026-10-17",
+     ["Applied", "Screening", "Shortlisted", "Interview", "Assessment"]),
+    ("cand-27", "JOB-238", "Sofia Rossi", "sofia.rossi@example.com", "+44 20 xxx 4412", "LinkedIn", 9,
+     ["Customer success", "Team lead"], "Final round with Jordan next week.", "2026-10-16",
+     ["Applied", "Screening", "Shortlisted", "Interview", "Assessment", "Final Review"]),
+    ("cand-28", "JOB-221", "Neel Shah", "neel.shah@example.com", "+91 98xxx x9975", "Careers site", 6,
+     ["React", "Next.js", "Testing"], "Good take-home test.", "2026-10-20", ["Applied", "Screening", "Shortlisted"]),
+    ("cand-29", "JOB-230", "Ananya Reddy", "ananya.reddy@example.com", "+91 98xxx x1086", "LinkedIn", 5,
+     ["Product discovery", "SQL"], "Consumer apps background.", "2026-10-21", ["Applied"]),
 ]
 
 CYCLES = [
@@ -177,6 +213,13 @@ POSTINGS: list[tuple[str, str, str]] = [
      "workforce planning. You will be the first people partner for a fast-growing UK team."),
     ("JOB-230", "post-seed-230", "Lead product discovery and delivery for the people analytics area. "
      "Work with engineering, design and HR customers; run user research and own the roadmap."),
+]
+
+POSTINGS += [
+    ("JOB-235", "post-seed-235", "Build and run the data pipelines behind TimeZ people analytics in Hyderabad. "
+     "Python, SQL and Airflow every day; cloud data warehouses a plus."),
+    ("JOB-238", "post-seed-238", "Look after a portfolio of UK customers from onboarding to renewal. "
+     "You will be their trusted contact and work closely with product and support."),
 ]
 
 

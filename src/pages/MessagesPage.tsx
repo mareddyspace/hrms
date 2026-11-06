@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { ActionButton, Banner, EmptyState, Page, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { CHAT_PEOPLE, type ChatAvailability, type Conversation } from "../data/collabData.ts";
 import { API_ENABLED } from "../api/client.ts";
-import { PENDING_DIRECT, apiCreateGroup, apiOpenDirect, apiSendChat, findDirect } from "../api/syncChat.ts";
+import { PENDING_DIRECT, apiChatContacts, apiCreateGroup, apiMessageTeam, apiOpenDirect, apiSendChat, findDirect, type ChatContacts } from "../api/syncChat.ts";
 import { usePeopleList } from "../data/peopleLocal.ts";
 import {
   conversationUnreadCount,
@@ -62,9 +62,31 @@ function Avatar({ name, group }: { name: string; group?: boolean }) {
   );
 }
 
-function useContacts(selfId: string): Contact[] {
+const RELATION_LABEL = { manager: "Your manager", team: "Your team", teammate: "Teammate", hr: "HR" } as const;
+
+/** Backend mode: who this person may start a chat with (the server's reporting-line + HR rule). */
+function useAllowedContacts(): ChatContacts | null {
+  const [allowed, setAllowed] = useState<ChatContacts | null>(null);
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let live = true;
+    apiChatContacts().then((c) => live && setAllowed(c), () => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  return allowed;
+}
+
+function useContacts(selfId: string, allowed: ChatContacts | null): Contact[] {
   const directory = usePeopleList();
   return useMemo(() => {
+    if (allowed && !allowed.anyone) {
+      // Only your manager, teammates, your team and HR (the server refuses anyone else).
+      return allowed.contacts
+        .map((c) => ({ id: c.id, name: c.name, sub: [RELATION_LABEL[c.relation], c.job_title].filter(Boolean).join(" · ") }))
+        .sort(byName);
+    }
     const map = new Map<string, Contact>();
     for (const p of CHAT_PEOPLE) map.set(p.id, { id: p.id, name: p.name, sub: `${p.title} · ${p.department}`, availability: p.availability });
     for (const p of directory) {
@@ -73,7 +95,7 @@ function useContacts(selfId: string): Contact[] {
     }
     map.delete(selfId);
     return [...map.values()].sort(byName);
-  }, [directory, selfId]);
+  }, [directory, selfId, allowed]);
 }
 
 const matches = (c: Contact, q: string) => !q || `${c.name} ${c.sub}`.toLowerCase().includes(q);
@@ -128,7 +150,11 @@ function PeoplePicker({
 export function MessagingPage() {
   const { employee, demoProfile } = usePortal();
   const collab = useSyncExternalStore(subscribeCollab, getCollabState, getCollabState);
-  const contacts = useContacts(employee.id);
+  const allowed = useAllowedContacts();
+  const contacts = useContacts(employee.id, allowed);
+  const hasTeam = !!allowed?.contacts.some((c) => c.relation === "team") || (allowed?.anyone ?? false);
+  const [teamText, setTeamText] = useState("");
+  const [teamOpen, setTeamOpen] = useState(false);
   const self = { id: employee.id, name: employee.fullName };
   const [searchParams, setSearchParams] = useSearchParams();
   const [filter, setFilter] = useState<"all" | "direct" | "group" | "people">("all");
@@ -325,6 +351,11 @@ export function MessagingPage() {
       title="Messages"
       action={
         <div className="row-gap">
+          {API_ENABLED && hasTeam && (
+            <button type="button" className="btn-ghost" onClick={() => setTeamOpen((v) => !v)}>
+              Message my team
+            </button>
+          )}
           <button type="button" className="btn-ghost" onClick={() => setDialog("direct")}>
             New message
           </button>
@@ -341,6 +372,33 @@ export function MessagingPage() {
         </div>
       }
     >
+      {teamOpen && (
+        <div className="chatx-team card">
+          <label className="chatx-label" htmlFor="team-msg">Message everyone who reports to you</label>
+          <textarea id="team-msg" rows={2} maxLength={4000} value={teamText} onChange={(e) => setTeamText(e.target.value)} placeholder="e.g. Stand-up moves to 11:00 today." />
+          <div className="row-gap">
+            <ActionButton
+              className="btn btn-tiny"
+              disabled={!teamText.trim()}
+              success="Sent to your team."
+              toastError
+              onAction={async () => {
+                const res = await apiMessageTeam(teamText.trim());
+                if (!res.ok) return res.error;
+                setTeamText("");
+                setTeamOpen(false);
+                setActiveId(res.id);
+                return null;
+              }}
+            >
+              Send to team
+            </ActionButton>
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => setTeamOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       <div className="chatx-shell">
         <aside className="chatx-side" aria-label="Conversations">
           <div className="chatx-side-head">

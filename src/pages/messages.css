@@ -230,3 +230,7 @@
   .chatx-body.with-panel { grid-template-columns: 1fr; }
   .chatx-panel { border-left: 0; border-top: 1px solid var(--line); }
 }
+
+/* Message my team (managers): one box above the chat. */
+.chatx-team { display: grid; gap: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.chatx-team textarea { width: 100%; box-sizing: border-box; }

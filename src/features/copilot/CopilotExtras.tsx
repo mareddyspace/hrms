@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { API_ENABLED } from "../../api/client.ts";
 import { apiUpdateOwnProfile, type ApiSelfProfileUpdate } from "../../api/syncProfile.ts";
+import { apiChatContacts, apiMessageTeam, apiOpenDirect, apiSendChat, type ChatContacts } from "../../api/syncChat.ts";
+import { Link } from "react-router-dom";
+import { useEffect } from "react";
 import { useProfileCode } from "../../components/ProfileCodeDialog.tsx";
 import { ActionButton, Banner, Field, notify } from "../../components/ui.tsx";
 import type { CopilotAction, CopilotAnswer, CopilotChart as Chart, CopilotLetterDraft } from "../../data/platformData.ts";
@@ -180,7 +183,87 @@ function LetterDraftPanel({ draft }: { draft: CopilotLetterDraft }) {
 /* ───────────── prepared actions ───────────── */
 
 function ActionPanel({ action }: { action: CopilotAction }) {
+  if (action.kind === "message") return <MessageDraft action={action} />;
   return action.kind === "profile" ? <ProfileChange action={action} /> : <LeaveChange action={action} />;
+}
+
+/** A message Copilot drafted: shows who it goes to (only people you may message) and sends after you press Send. */
+function MessageDraft({ action }: { action: Extract<CopilotAction, { kind: "message" }> }) {
+  const { employee } = usePortal();
+  const [text, setText] = useState(action.text);
+  const [allowed, setAllowed] = useState<ChatContacts | null>(null);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [cancelled, setCancelled] = useState(false);
+  useEffect(() => {
+    apiChatContacts().then(setAllowed, () => setAllowed({ anyone: false, contacts: [] }));
+  }, []);
+  const asker = { id: employee.id, name: employee.fullName };
+  const team = allowed?.contacts.filter((c) => c.relation === "team") ?? [];
+  const wanted = (action.name ?? "").toLowerCase();
+  const matches = allowed?.contacts.filter((c) => c.name.toLowerCase().includes(wanted) || c.name.toLowerCase().split(" ")[0] === wanted) ?? [];
+  const target = action.to === "person" && matches.length === 1 ? matches[0] : null;
+
+  if (cancelled) return <p className="note">Not sent.</p>;
+  if (sentTo) return <p className="note">Sent to {sentTo}. <Link to="/chat">Open Messages</Link></p>;
+  if (!allowed) return <p className="note">Checking who you can message…</p>;
+  let problem: string | null = null;
+  if (action.to === "team" && team.length === 0 && !allowed.anyone) problem = "Nobody reports to you, so there is no team to message.";
+  if (action.to === "person" && !target)
+    problem = matches.length > 1
+      ? `More than one person matches "${action.name}": ${matches.map((m) => m.name).join(", ")}. Use the full name.`
+      : allowed.anyone
+        ? `I couldn't match "${action.name}". Start the chat from Messages, where you can search everyone.`
+        : `"${action.name}" isn't someone you can message here. You can message your manager, teammates, your team and HR.`;
+
+  async function send(): Promise<string | null> {
+    if (!text.trim()) return "Write a message first.";
+    if (action.to === "team") {
+      const res = await apiMessageTeam(text.trim());
+      if (!res.ok) return res.error;
+      setSentTo(`your team (${team.length || "everyone"})`);
+    } else if (target) {
+      const chat = await apiOpenDirect(target.id);
+      if (!chat.ok) return chat.error;
+      const error = await apiSendChat(chat.id, text.trim());
+      if (error) return error;
+      setSentTo(target.name);
+    }
+    logCopilotAction("Confirmed", asker, { action: { ...action, text: "" } }, "Sent");
+    return null;
+  }
+
+  return (
+    <div className="copilot-action">
+      <p className="note">
+        <strong>To:</strong>{" "}
+        {action.to === "team" ? `My team${team.length ? ` (${team.length} people: ${team.slice(0, 4).map((t) => t.name.split(" ")[0]).join(", ")}${team.length > 4 ? "…" : ""})` : ""}` : target ? `${target.name} · ${target.relation}` : action.name}
+      </p>
+      {problem ? (
+        <Banner message={{ tone: "warn", text: problem }} />
+      ) : (
+        <>
+          <Field label="Message">
+            <textarea rows={3} maxLength={4000} value={text} onChange={(e) => setText(e.target.value)} />
+          </Field>
+          <div className="row-gap">
+            <ActionButton className="btn" onAction={send} disabled={!text.trim()} busyLabel="Sending…" doneLabel="Sent" toastError>
+              Send
+            </ActionButton>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => {
+                logCopilotAction("Cancelled", asker, { action: { ...action, text: "" } });
+                setCancelled(true);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 const validPhone = (v: string) => /^\+?[\d ]+$/.test(v.trim()) && v.replace(/\D/g, "").length >= 8 && v.replace(/\D/g, "").length <= 15;

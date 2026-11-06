@@ -127,7 +127,9 @@ export interface CopilotLetterDraft {
 
 export type CopilotAction =
   | { kind: "profile"; field: "address" | "mobile"; current: string; proposed: string }
-  | { kind: "leave"; code: LeaveCode; codeName: string; from: string; to: string; half?: "first" | "second"; reason: string; options: { code: LeaveCode; name: string; available: number }[] };
+  | { kind: "leave"; code: LeaveCode; codeName: string; from: string; to: string; half?: "first" | "second"; reason: string; options: { code: LeaveCode; name: string; available: number }[] }
+  /** A chat message Copilot drafted: to the whole team, or to one person by name (matched against who you may message). */
+  | { kind: "message"; to: "team" | "person"; name?: string; text: string };
 
 export interface CopilotSource {
   title: string;

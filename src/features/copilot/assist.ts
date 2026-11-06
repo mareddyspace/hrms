@@ -31,12 +31,14 @@ export function logCopilotAction(
   // Backend mode: the server audit gets the action and stage, never the personal values.
   if (API_ENABLED) {
     const a = what.action;
-    const name = a?.kind === "profile" ? `update_${a.field}` : a?.kind === "leave" ? "apply_leave" : what.letter ? "request_letter" : "other";
+    const name = a?.kind === "profile" ? `update_${a.field}` : a?.kind === "leave" ? "apply_leave" : a?.kind === "message" ? "send_message" : what.letter ? "request_letter" : "other";
     const summary =
       a?.kind === "profile"
         ? a.field === "mobile" ? "Mobile number change" : "Address change"
         : a?.kind === "leave"
           ? `Leave request: ${a.codeName}`
+          : a?.kind === "message"
+            ? a.to === "team" ? "Message to the team" : "Message to one person" // never the message text
           : what.letter
             ? `Letter: ${what.letter.label}`
             : "";
@@ -385,9 +387,42 @@ export interface AssistSources {
   actions: () => ActionSources;
 }
 
-/** The assist hook for CopilotContext: prepared actions, then letters, then analytics. */
+/* ───────────── messages ───────────── */
+
+const TEAM_WORDS = "(?:my |the |whole |entire )*(?:team|reportees|direct reports|everyone|all)";
+
+/**
+ * "message my team: stand-up at 11", "tell everyone the report is out", "text Babu: call me", "send Priya a message
+ * saying ...". Returns a draft to confirm; nothing is sent here. Who may be messaged is checked when it is sent.
+ */
+export function messageAnswer(question: string): Raw | null {
+  const raw = question.trim();
+  const team = raw.match(new RegExp(`^(?:please\\s+)?(?:message|text|tell|send(?:\\s+a\\s+message\\s+to)?|notify|ping)\\s+${TEAM_WORDS}\\b[\\s:,-]*(?:that\\s+|saying\\s+)?(.+)$`, "i"));
+  const person = raw.match(/^(?:please\s+)?(?:message|text|tell|ping|send(?:\s+a\s+message\s+to)?)\s+([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*)?)\s*(?::|,|-|\bthat\b|\bsaying\b|\ba message saying\b)\s*(.+)$/i);
+  const draft = (to: "team" | "person", text: string, name?: string): Raw => {
+    const clean = text.trim().replace(/^["“']|["”']$/g, "");
+    if (!API_ENABLED) {
+      return { kind: "text", summary: "Sending messages from Copilot needs the server. Use Messages instead.", links: [{ label: "Messages", to: "/chat" }] };
+    }
+    return {
+      kind: "text",
+      summary: to === "team"
+        ? "I've drafted a message to your whole team. Check it and press Send."
+        : `I've drafted a message to ${name}. Check it and press Send.`,
+      action: { kind: "message", to, ...(name ? { name } : {}), text: clean },
+      links: [{ label: "Messages", to: "/chat" }],
+    };
+  };
+  if (team && team[1]?.trim()) return draft("team", team[1]);
+  if (person && person[2]?.trim() && !/^(me|my|us|hr about)$/i.test(person[1])) return draft("person", person[2], person[1]);
+  return null;
+}
+
+/** The assist hook for CopilotContext: prepared messages and actions, then letters, then analytics. */
 export function buildAssist(src: AssistSources): (question: string) => Raw | null {
   return (question: string) => {
+    const message = messageAnswer(question);
+    if (message) return message;
     const action = actionAnswer(question, src.actions());
     if (action) return action;
     if (aiFeatureOn("documentAssistant")) {

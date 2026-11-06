@@ -139,6 +139,26 @@ export async function apiRenameGroup(conversationId: string, title: string): Pro
   }
 }
 
+/** Who you may start a chat with (reporting line + HR); anyone = HR, super admins and executives. */
+export interface ChatContacts {
+  anyone: boolean;
+  contacts: { id: string; name: string; job_title: string | null; relation: "manager" | "teammate" | "team" | "hr" }[];
+}
+
+export function apiChatContacts(): Promise<ChatContacts> {
+  return api.get<ChatContacts>("/chat/contacts");
+}
+
+/** A manager messages their whole team (one team group chat, kept in step with who reports to them). */
+export async function apiMessageTeam(text: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  try {
+    const row = upsert(await api.post<ConversationOut>("/chat/team", { text }));
+    return { ok: true, id: row.id };
+  } catch (e) {
+    return { ok: false, error: errorText(e) };
+  }
+}
+
 /** Opens (or reuses) the direct chat and waits for the server: the conversation id, or the error. */
 export async function apiOpenDirect(personId: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   const existing = findDirect(personId);

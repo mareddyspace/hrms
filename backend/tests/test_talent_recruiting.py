@@ -30,8 +30,8 @@ def _req_ids(client, headers) -> set[str]:
 
 def test_seeded_requisitions_and_visibility(client, babu, ram, farhan, sophie, admin):
     assert _req_ids(client, farhan) >= {"JOB-221", "JOB-218", "JOB-205", "JOB-230", "JOB-210"}  # HR: all
-    assert _req_ids(client, ram) == {"JOB-221", "JOB-230"}  # hiring manager: own
-    assert _req_ids(client, sophie) == {"JOB-221", "JOB-218", "JOB-205", "JOB-230"}  # recruiter: assigned
+    assert _req_ids(client, ram) == {"JOB-221", "JOB-230", "JOB-235"}  # hiring manager: own
+    assert _req_ids(client, sophie) == {"JOB-221", "JOB-218", "JOB-205", "JOB-230", "JOB-235", "JOB-238"}  # recruiter: assigned
     assert _req_ids(client, babu) == set()
     assert "JOB-210" in _req_ids(client, admin)  # admin approves its finance step (after HR)
     assert client.get(f"{R}/requisitions/JOB-221", headers=babu).status_code == 404
