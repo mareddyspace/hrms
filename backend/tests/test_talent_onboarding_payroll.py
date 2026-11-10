@@ -118,6 +118,16 @@ def test_payroll_status(client, babu, ram, farhan, admin):
 
 
 def test_payroll_providers_config(client, babu, farhan, admin):
+    seeded = client.get("/api/v1/payroll/providers", headers=farhan).json()["providers"]  # app/seed_admin_data.py
+    assert seeded.get("IN")
+    try:
+        _providers_config(client, babu, farhan, admin)
+    finally:
+        client.put("/api/v1/payroll/providers", headers=admin, json={"providers": seeded})
+
+
+def _providers_config(client, babu, farhan, admin):
+    assert client.put("/api/v1/payroll/providers", headers=admin, json={"providers": {}}).json()["providers"] == {}
     rows = client.get("/api/v1/payroll/status", headers=farhan).json()["rows"]
     assert all(r["provider"] == "Not set" and r["configuration_status"] == "Incomplete" for r in rows)
     assert client.get("/api/v1/payroll/providers", headers=babu).status_code == 403

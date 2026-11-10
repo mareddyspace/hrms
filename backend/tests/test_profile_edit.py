@@ -11,6 +11,18 @@ from tests.conftest import login
 from tests.talent_helpers import token_for
 
 P = "/api/v1/people"
+
+def _blank_fields(emp_id: str, *fields: str) -> None:
+    """Sample profiles are now complete (app/seed_profiles.py); tests about a missing or changed field start blank."""
+    from app.db import SessionLocal as _S
+    from app.models import Employee as _E
+
+    with _S() as db:
+        e = db.get(_E, emp_id)
+        for f in fields:
+            setattr(e, f, None)
+        db.commit()
+
 C = "/api/v1/profile-corrections"
 DOT = "•"
 
@@ -116,7 +128,8 @@ def test_owner_cannot_set_hr_owned_fields(client, babu):
 
 
 def test_hr_edits_in_scope_and_others_cannot(client, babu, ram, farhan, alex, jordan):
-    for headers in (babu, ram, jordan):
+    _blank_fields("TZ0001", "nationality", "work_arrangement", "date_of_birth")
+    for headers in (babu, ram):  # Jordan is above everyone now (seed_profiles), but only HR edits records
         assert client.patch(f"{P}/TZ0001", headers=headers, json={"nationality": "Indian"}).status_code == 403
     res = client.patch(f"{P}/TZ0001", headers=farhan, json={"nationality": "Indian", "work_arrangement": "Hybrid",
                                                             "date_of_birth": "1991-05-06"})
@@ -150,6 +163,7 @@ def test_hr_outside_country_scope_cannot_edit(client, farhan):
 
 
 def test_correction_flow_approve_applies_field(client, babu, ram, farhan):
+    _blank_fields("emp-mahesh", "nationality")
     res = client.post(f"{P}/emp-mahesh/corrections", headers=babu,
                       json={"field": "nationality", "requested_value": "Indian", "reason": "Passport"})
     assert res.status_code == 201, res.text

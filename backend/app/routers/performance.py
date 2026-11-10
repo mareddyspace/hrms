@@ -47,7 +47,8 @@ from app.schemas.talent import (
 from app.services.activity import notify, record_audit
 from app.services.decisions import NOT_FOUND, can_view, me, target
 from app.services.headcount import has_started, started_clause
-from app.services.scope import manager_chain_ids
+from app.services import role_rules
+from app.services.scope import HR_ROLES, manager_chain_ids
 
 router = APIRouter(prefix="/performance", tags=["performance"])
 
@@ -339,6 +340,11 @@ def get_or_open_review(cycle_id: str, employee_id: str, db: DbSession, user: Cur
         _not_closed(cycle)
         if not has_started(emp, date.today()):
             raise HTTPException(409, f"{emp.full_name} hasn't started yet.")
+        if not emp.manager_id:
+            # Nobody could write the manager assessment or the rating (the CEO answers to the board).
+            raise HTTPException(409, f"{emp.full_name} has no manager in the company to review them; executive reviews are run by the board.")
+        if role_rules.is_serving_notice(emp):
+            raise HTTPException(409, f"{emp.full_name} is serving notice: no new review is opened for leavers.")
         review = PerfReview(id=f"rev-{uuid.uuid4().hex[:10]}", cycle_id=cycle.id, employee_id=emp.id, self_status="not_started",
                             manager_status="not_started", released=False)
         db.add(review)
@@ -419,10 +425,15 @@ def propose_rating(review_id: str, body: RatingIn, request: Request, db: DbSessi
 @router.post("/reviews/{review_id}/release", response_model=ReviewOut)
 def release_rating(review_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> ReviewOut:
     review, cycle, emp = _review(db, user, review_id)
-    if not _hr_for(user, emp):
-        raise HTTPException(403, "Only HR can release ratings.")
     if emp.id == user.employee_id:
         raise HTTPException(403, "Another HR person must release your own rating.")
+    if role_rules.account_role(db, emp.id) in HR_ROLES:
+        # An HR person's rating (e.g. the HR Director's): another HR person or someone above them (the CEO), never the
+        # IT administrator acting as super admin.
+        if not (_above(db, user, emp.id) or (user.account.role in HR_ROLES and _hr_for(user, emp))):
+            raise HTTPException(403, "An HR person's rating is released by another HR person or their own manager.")
+    elif not _hr_for(user, emp):
+        raise HTTPException(403, "Only HR can release ratings.")
     if cycle.status != "calibration":
         raise HTTPException(409, "Ratings are released during calibration.")
     if not review.rating:

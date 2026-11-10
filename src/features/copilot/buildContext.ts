@@ -27,7 +27,7 @@ import {
   type PayslipView,
   type PortalState,
 } from "../../model.ts";
-import { courseCatalog, courseOpenTo, skillProfileFor, type getTalentState } from "../../data/talentLocal.ts";
+import { courseCatalog, courseOpenTo, courseRequiredFor, skillProfileFor, type getTalentState } from "../../data/talentLocal.ts";
 import { careerTarget } from "../../data/careerProfile.ts";
 import { dayStatusOf, waitingDays } from "../../data/timesheetDays.ts";
 
@@ -328,7 +328,8 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
       gaps: (target?.gaps ?? []).map((g) => ({ name: g.name, have: g.have, need: g.need, levels: Math.max(0, g.gap) })),
       courses: careerCourses,
     },
-    mandatoryCourses: COURSES.filter((c) => c.mandatory).map((c) => {
+    // Only the mandatory courses meant for this person (audience, and executives are exempt).
+    mandatoryCourses: courseCatalog().filter((c) => courseRequiredFor(c, learner)).map((c) => {
       const mineEnr = enrollments.find((e) => e.courseId === c.id);
       return { title: c.title, audience: c.audience, status: mineEnr?.status ?? "Not assigned", due: mineEnr?.due };
     }),

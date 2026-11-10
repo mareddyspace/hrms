@@ -27,10 +27,13 @@ def test_catalog(client, babu, farhan):
 
 
 def test_enrollments(client, babu, ram, farhan, sophie):
-    res = client.post(f"{L}/enrollments", headers=babu, json={"course_id": "crs-1"})
+    mine = {e["course_id"] for e in client.get(f"{L}/enrollments", headers=babu).json()}  # sample enrollments are seeded
+    free = next(c for c in client.get(f"{L}/courses", headers=babu).json()
+                if c["audience"] in ("All", "Engineering") and c["id"] not in mine)
+    res = client.post(f"{L}/enrollments", headers=babu, json={"course_id": free["id"]})
     assert res.status_code == 201 and res.json()["status"] == "assigned"
     eid = res.json()["id"]
-    assert client.post(f"{L}/enrollments", headers=babu, json={"course_id": "crs-1"}).status_code == 409
+    assert client.post(f"{L}/enrollments", headers=babu, json={"course_id": free["id"]}).status_code == 409
     assert client.post(f"{L}/enrollments", headers=babu, json={"course_id": "crs-3"}).status_code == 403  # managers only
     assert client.post(f"{L}/enrollments", headers=sophie, json={"course_id": "crs-3", "employee_id": "emp-mahesh"}).status_code == 403
     res = client.post(f"{L}/enrollments", headers=ram, json={"course_id": "crs-3", "employee_id": "emp-mahesh", "due": "2026-12-31"})
@@ -48,7 +51,7 @@ def test_enrollments(client, babu, ram, farhan, sophie):
     assert client.post(f"{L}/enrollments/{eid}/complete", headers=farhan, json={}).status_code == 409
     assert client.patch(f"{L}/enrollments/{eid}/progress", headers=babu, json={"progress": 10}).status_code == 409
     assert {e["course_title"] for e in client.get(f"{L}/enrollments", headers=ram, params={"employee_id": "emp-mahesh"}).json()} \
-        >= {"Workplace safety", "Manager essentials"}
+        >= {free["title"], "Manager essentials"}
     assert client.get(f"{L}/enrollments", headers=sophie, params={"employee_id": "emp-mahesh"}).status_code == 404
 
 
@@ -80,7 +83,7 @@ def test_skills_self_edit(client, babu, ram, sophie):
     res = client.put(f"{L}/skills/me", headers=babu, json={"skill": "react", "level": 4, "target_level": 5})
     assert res.json()["id"] == sid and res.json()["level"] == 4 and res.json()["skill"] == "React"
     assert client.put(f"{L}/skills/me", headers=babu, json={"skill": "Go", "level": 6}).status_code == 422
-    assert [s["skill"] for s in client.get(f"{L}/skills", headers=ram, params={"employee_id": "emp-mahesh"}).json()] == ["React"]
+    assert [s["skill"] for s in client.get(f"{L}/skills", headers=ram, params={"employee_id": "emp-mahesh"}).json()].count("React") == 1
     assert client.get(f"{L}/skills", headers=sophie, params={"employee_id": "emp-mahesh"}).status_code == 404
     assert client.delete(f"{L}/skills/me/{sid}", headers=ram).status_code == 404  # only your own
     assert client.delete(f"{L}/skills/me/{sid}", headers=babu).status_code == 204

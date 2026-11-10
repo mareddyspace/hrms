@@ -16,6 +16,7 @@ from sqlalchemy.orm import aliased
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
 from app.models import ApprovalInstance, Employee, EmployeeAssignment, LifecycleAction
 from app.schemas import ApplyDueOut, AssignmentOut, DecisionIn, LifecycleActionIn, LifecycleActionOut
+from app.services import role_rules
 from app.services import approvals as engine
 from app.services import lifecycle as rules
 from app.services.activity import record_audit
@@ -113,6 +114,9 @@ def create_action(body: LifecycleActionIn, request: Request, db: DbSession, user
         raise NOT_FOUND
     if not _can_raise(db, user, emp, body.action_type):
         raise HTTPException(403, "You can't raise this change for this person.")
+    blocked = role_rules.senior_block_reason(db, user.employee_id, emp)
+    if blocked:  # HR / admin never change the job, line or pay of someone above them or an executive
+        raise HTTPException(403, blocked)
     try:
         after, before = rules.validate(db, emp, body.action_type, body.effective_date, body.after)
     except rules.LifecycleError as exc:

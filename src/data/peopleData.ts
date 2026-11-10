@@ -521,8 +521,13 @@ export function getBasePeople(): PersonRecord[] {
 /* ───────────── Positions ───────────── */
 
 const GRADE_RANK = ["L3", "L4", "L5", "L6", "M1", "M2", "M3", "E1"];
+// The 500-person workbook (backend mode) uses G1 (junior) to G9 (senior); same order as backend/app/seed_profiles.py.
+const WORKBOOK_GRADES = ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9"];
 export function gradeRank(grade: string): number {
-  return GRADE_RANK.indexOf(grade);
+  const local = GRADE_RANK.indexOf(grade);
+  if (local >= 0) return local;
+  const workbook = WORKBOOK_GRADES.indexOf(grade);
+  return workbook >= 0 ? workbook : -1;
 }
 
 /** The person at the top of a country's department (the one whose manager sits outside it). */

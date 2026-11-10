@@ -4,6 +4,8 @@ Rules per country are kept in step with src/features/overtime/rules.ts (one tabl
 - a past date only, at most MAX_DAYS_BACK days ago; 0.5 to max_hours hours; one request per person and date;
 - paid: hourly rate = annual pay / (weekly hours x 52), times the multiplier (1.5); paid with the payroll run of
   the work month (the next month when that run is already in review or locked);
+- who: never executives; paid overtime not for managers, the HR head, M / E grades or senior grades G8-G9 (exempt
+  staff, app/services/role_rules.py), who may still take comp-off where the country offers it;
 - comp-off: one day per standard day of overtime, in half days (at least half a day); adds to the comp-off balance.
 Annual pay: the current compensation record in the country's currency, else the country's standard package for the
 role (src/countryPay.ts earnings x payScaleFor).
@@ -22,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.db import utcnow
 from app.models import ApprovalInstance, AttendanceSession, CompensationRecord, Employee, OvertimeRequest, PayrollRun
 from app.services import approvals as engine
+from app.services import role_rules
 from app.services import workflow_defaults
 from app.services.activity import notify, record_audit
 from app.services.leave import today_for
@@ -125,6 +128,12 @@ def day_check(db: Session, emp: Employee, day: date) -> dict[str, Any]:
     elif day < today - timedelta(days=MAX_DAYS_BACK):
         eligible = False
         warnings.append(f"Overtime can be claimed up to {MAX_DAYS_BACK} days back.")
+    blocked = role_rules.overtime_block_reason(db, emp)
+    if role_rules.is_executive(db, emp):
+        eligible = False
+        warnings.append("Overtime doesn't apply to executives.")
+    elif blocked:
+        warnings.append(blocked + (" You can ask for comp-off instead." if rules_for(emp.country_code)["comp_off"] else ""))
     if existing is not None:
         eligible = False
         warnings.append(f"You already asked for overtime on this date ({existing.id.upper()}, {existing.status.lower()}).")
@@ -171,6 +180,11 @@ def create(db: Session, emp: Employee, data: dict[str, Any], actor_id: str, ip: 
         raise RequestError("Choose paid or comp-off.")
     if outcome == "comp_off" and not rules["comp_off"]:
         raise RequestError("Comp-off isn't offered in your country; overtime is paid.")
+    if role_rules.is_executive(db, emp):
+        raise RequestError("Overtime doesn't apply to executives.")
+    blocked = role_rules.overtime_block_reason(db, emp)
+    if outcome == "pay" and blocked:
+        raise RequestError(blocked + (" Ask for comp-off instead." if rules["comp_off"] else ""))
     days = comp_off_days(hours, emp.country_code) if outcome == "comp_off" else 0.0
     if outcome == "comp_off" and days <= 0:
         raise RequestError(f"Comp-off needs at least {rules['day_hours'] / 2:g} hours.")

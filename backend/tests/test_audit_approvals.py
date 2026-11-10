@@ -13,6 +13,18 @@ from app.security import create_access_token
 from tests.conftest import login
 from tests.test_audit_rbac import audit_accounts_cleanup, real_account, sample_employee  # noqa: F401
 
+def _blank_fields(emp_id: str, *fields: str) -> None:
+    """Sample profiles are now complete (app/seed_profiles.py); tests about a missing or changed field start blank."""
+    from app.db import SessionLocal as _S
+    from app.models import Employee as _E
+
+    with _S() as db:
+        e = db.get(_E, emp_id)
+        for f in fields:
+            setattr(e, f, None)
+        db.commit()
+
+
 API = "/api/v1"
 
 
@@ -69,6 +81,7 @@ def test_hr_cannot_approve_own_requests(client):
         client.post(f"{API}/leave/requests/{item['id']}/cancel", headers=hr)
 
     me = client.get(f"{API}/auth/me", headers=hr).json()["employee_id"]
+    _blank_fields(me, "nationality")
     corr = client.post(f"{API}/people/{me}/corrections", headers=hr,
                        json={"field": "nationality", "requested_value": "Indian", "reason": "Audit"})
     assert corr.status_code == 201, corr.text

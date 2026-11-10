@@ -130,8 +130,21 @@ def test_types_and_templates(client, babu):
 
 
 def test_employee_request_rules(client, babu):
-    res = client.post(f"{LETTERS}/requests", headers=babu, json={"letter_type": "Address proof"})
-    assert res.status_code == 422 and "missing: Address" in res.json()["detail"]
+    from app.models import Employee
+
+    with SessionLocal() as db:
+        e = db.get(Employee, "emp-mahesh")
+        saved = (e.address_line, e.address_city, e.address_postcode, e.address_country)
+        e.address_line = e.address_city = e.address_postcode = e.address_country = None
+        db.commit()
+    try:
+        res = client.post(f"{LETTERS}/requests", headers=babu, json={"letter_type": "Address proof"})
+        assert res.status_code == 422 and "missing: Address" in res.json()["detail"]
+    finally:
+        with SessionLocal() as db:
+            e = db.get(Employee, "emp-mahesh")
+            e.address_line, e.address_city, e.address_postcode, e.address_country = saved
+            db.commit()
     assert client.post(f"{LETTERS}/requests", headers=babu, json={"letter_type": "Warning", "details": "x"}).status_code == 403
     assert client.post(f"{LETTERS}/requests", headers=babu, json={"letter_type": "Offer"}).status_code == 403
     assert client.post(f"{LETTERS}/requests", headers=babu, json={"letter_type": "NOC"}).status_code == 422  # purpose

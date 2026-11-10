@@ -1,7 +1,8 @@
 /**
  * Daily timesheets: each working day is submitted on its own for the manager to approve or send back.
  *
- * - A day needs DAY_TARGET (9 h) to submit, HALF_DAY_TARGET (4.5 h) on approved half-day leave; leave days,
+ * - A day needs the person's normal day (dayTargetFor: country day minus break, half for part-time, at most 9 h)
+ *   to submit, half of it on approved half-day leave; leave days,
  *   holidays and weekly offs have nothing to submit.
  * - No record = draft. submitted / approved days are locked; a day sent back ("rejected") or a missed day the
  *   manager reopened ("reopened") can be logged and submitted later.
@@ -15,8 +16,27 @@ import { approvalProgressText } from "../api/approvalProgress.ts";
 import { pendingMirror } from "../api/syncTimeApprovals.ts";
 import { todayISO } from "../model.ts";
 
+/** The longest target (and the attendance auto-stop): 9 hours. */
 export const DAY_TARGET = 9;
 export const HALF_DAY_TARGET = 4.5;
+
+/** Each country's normal working day (shift minus the unpaid break); same as backend/app/services/timesheets.py. */
+const COUNTRY_DAY_HOURS: Record<string, number> = { IN: 9, US: 8, GB: 7.5, AU: 7.6, CA: 8, AE: 8, SA: 8, DE: 8 };
+const PART_TIME_FACTOR = 0.5;
+
+type TargetPerson = { countryCode?: string; employmentType?: string };
+
+/** Hours a person needs on a full working day: their country's day minus the break, half for part-time, at most 9 h. */
+export function dayTargetFor(person: TargetPerson): number {
+  let hours = COUNTRY_DAY_HOURS[person.countryCode ?? ""] ?? DAY_TARGET;
+  if ((person.employmentType ?? "").toLowerCase().replace(/[^a-z]/g, "") === "parttime") hours *= PART_TIME_FACTOR;
+  return Math.round(Math.max(0.5, Math.min(DAY_TARGET, hours)) * 100) / 100;
+}
+
+/** Hours needed on a day of approved half-day leave (half the normal day, at most 4.5 h). */
+export function halfDayTargetFor(person: TargetPerson): number {
+  return Math.min(HALF_DAY_TARGET, Math.round((dayTargetFor(person) / 2) * 100) / 100);
+}
 
 export type DayStatus = "draft" | "submitted" | "approved" | "rejected" | "reopened";
 

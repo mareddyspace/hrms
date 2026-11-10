@@ -48,8 +48,8 @@ def _approved_requisition(client, ram, jordan, farhan, admin, title: str) -> dic
     req = res.json()
     assert req["budget"] == 3200000 and req["budget_currency"] == "INR" and req["reason"] == "new_role"
     assert req["raised_by"] == "emp-ram" and req["posting"] is None
-    # the approval chain from the approvals inbox: department head, HR, finance (admin)
-    for who in (jordan, farhan, admin):
+    # the approval chain from the approvals inbox: department head, HR (no finance approver: that step is skipped)
+    for who in (jordan, farhan):
         res = client.post(f"/api/v1/approvals/{req['approval_id']}/decision", headers=who, json={"decision": "approve"})
         assert res.status_code == 200, res.text
     got = client.get(f"{R}/requisitions/{req['id']}", headers=ram).json()

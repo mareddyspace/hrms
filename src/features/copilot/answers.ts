@@ -459,11 +459,12 @@ function learningAnswer(q: string, ctx: CopilotContext): RawCopilotAnswer {
   const links = [{ label: "Learning", to: "/programs" }];
   if (hasWord(q, ["mandatory", "required", "must"]) && ctx.mandatoryCourses) {
     const m = ctx.mandatoryCourses;
-    // Assigned and unfinished, plus company-wide ("All") courses not yet assigned.
-    const open = m.filter((c) => c.status !== "Completed" && (c.status !== "Not assigned" || c.audience === "All"));
+    if (!m.length) return { kind: "text", summary: "No mandatory courses apply to you.", links };
+    // The list already holds only courses meant for this person, so anything not completed is open.
+    const open = m.filter((c) => c.status !== "Completed");
     return {
       kind: "table",
-      summary: `${m.length} courses are mandatory: ${m.map((c) => c.title).join(", ")}. ${open.length ? `You still have ${open.length} to complete: ${open.map((c) => c.title).join(", ")}.` : "You have none outstanding."}`,
+      summary: `${m.length} ${m.length === 1 ? "course is" : "courses are"} mandatory for you: ${m.map((c) => c.title).join(", ")}. ${open.length ? `You still have ${open.length} to complete: ${open.map((c) => c.title).join(", ")}.` : "You have none outstanding."}`,
       table: { headers: ["Course", "For", "Your status"], rows: m.map((c) => [c.title, c.audience, `${c.status}${c.due && c.status !== "Completed" ? ` · due ${fmtDate(c.due)}` : ""}`]) },
       links,
     };

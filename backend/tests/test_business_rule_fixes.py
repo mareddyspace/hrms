@@ -151,7 +151,7 @@ def test_saudi_weekend_is_friday_saturday():
         # timesheets: Friday is a day off, Sunday a working day
         assert day_target(db, emp, fri) == (0.0, "weekend")
         if sun not in holidays:
-            assert day_target(db, emp, sun)[0] == DAY_TARGET
+            assert 0 < day_target(db, emp, sun)[0] <= DAY_TARGET  # the person's normal day (8 h in Saudi, half part-time)
         # attendance: working days in November skip Fridays and Saturdays
         summary = month_summary(db, emp, 2026, 11)
         nov = [date(2026, 11, d) for d in range(1, 31)]

@@ -158,6 +158,9 @@ def test_timesheet_today_only(client, babu, ram, monkeypatch):
     from datetime import date, timedelta
 
     from app.routers import timesheets
+    from app.services import timesheets as ts_rules
+
+    monkeypatch.setattr(ts_rules, "day_target", lambda db, emp, day: (9.0, None))  # a working day, even on a holiday
 
     monkeypatch.setattr(timesheets, "TODAY_ONLY", True)
     today = date.today()
@@ -259,9 +262,12 @@ def test_sent_back_day_editable_later(client, babu, ram, monkeypatch):
     from datetime import timedelta
 
     from app.routers import timesheets
+    from app.services import timesheets as ts_rules
+
+    monkeypatch.setattr(ts_rules, "day_target", lambda db, emp, day: (9.0, None))  # a working day, even on a holiday
 
     today = date.today()
-    past = today - timedelta(days=1)
+    past = today - timedelta(days=36)  # before the sample timesheets (app/seed_time_activity.py: 28 days)
     while past.weekday() >= 5:
         past -= timedelta(days=1)
     entry = _add(client, babu, past.isoformat(), 9).json()  # logged on the day (rule off while setting up)
@@ -339,7 +345,7 @@ def test_manager_reopens_missed_day(client, babu, ram, farhan, monkeypatch):
     from app.db import SessionLocal
     from app.services.leave import holiday_dates
 
-    missed = date.today() - timedelta(days=14)
+    missed = date.today() - timedelta(days=45)  # before the sample timesheets (app/seed_time_activity.py: 28 days)
     with SessionLocal() as db:
         holidays = holiday_dates(db, "IN", missed - timedelta(days=30), missed)
     while missed.weekday() >= 5 or missed in holidays:
@@ -433,6 +439,9 @@ def test_reopened_past_day_needs_no_attendance(client, babu, ram, monkeypatch):
     from datetime import timedelta
 
     from app.routers import timesheets
+    from app.services import timesheets as ts_rules
+
+    monkeypatch.setattr(ts_rules, "day_target", lambda db, emp, day: (9.0, None))  # a working day, even on a holiday
 
     monkeypatch.setattr(timesheets, "TODAY_ONLY", True)
     monkeypatch.setattr(timesheets, "ATTENDANCE_REQUIRED", True)

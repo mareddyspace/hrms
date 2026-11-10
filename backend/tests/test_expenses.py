@@ -155,10 +155,11 @@ def test_big_claim_needs_finance_and_receipt_access(client, babu, ram, farhan, a
     assert claim(client, babu, 15001, category="Lodging", receipt_ids=[rec["id"]]).status_code == 409
 
     res = client.post(f"{API}/{cid}/decision", headers=ram, json={"decision": "approve"}).json()
-    assert res["status"] == "submitted" and res["current_step"] == 1  # finance (admin fallback) next
-    assert cid in {c["id"] for c in client.get(API, params={"view": "to_decide"}, headers=admin).json()}
+    assert res["status"] == "submitted" and res["current_step"] == 1  # finance next: HR covers it, never the IT admin
+    assert cid in {c["id"] for c in client.get(API, params={"view": "to_decide"}, headers=farhan).json()}
+    assert cid not in {c["id"] for c in client.get(API, params={"view": "to_decide"}, headers=admin).json()}
     # deciding through the generic approvals endpoint updates the claim too
-    res = client.post(f"/api/v1/approvals/{iid}/decision", headers=admin, json={"decision": "approve"})
+    res = client.post(f"/api/v1/approvals/{iid}/decision", headers=farhan, json={"decision": "approve"})
     assert res.status_code == 200 and res.json()["status"] == "approved"
     assert client.get(f"{API}/{cid}", headers=babu).json()["status"] == "approved"
 

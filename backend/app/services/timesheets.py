@@ -3,8 +3,9 @@
 - Weeks start on Monday. Entries can be added, changed or removed while the week is draft or rejected.
 - Submitting checks: at least one entry, at most 24 h per day, nothing logged on a day of approved full-day leave,
   and at most 4.5 h on a day of approved half-day leave (work-from-home "leave" is a working day).
-- Daily timesheets (TimesheetDay): each working day is submitted on its own and needs at least DAY_TARGET (9 h),
-  or HALF_DAY_TARGET (4.5 h) on approved half-day leave. A day of approved full-day leave has nothing to submit;
+- Daily timesheets (TimesheetDay): each working day is submitted on its own and needs at least the person's normal
+  day (full_day_hours: rostered shift or country standard day minus the break, half for Part-Time, at most
+  DAY_TARGET 9 h), or half of it (at most HALF_DAY_TARGET 4.5 h) on approved half-day leave. A day of approved full-day leave has nothing to submit;
   time logged on a weekend or holiday can be submitted with no minimum. A submitted or approved day is locked;
   a day sent back (rejected) or reopened by the manager for a missed day ("reopened") can be corrected and submitted
   again, also on a later date.
@@ -133,8 +134,47 @@ def day_total(db: Session, employee_id: str, day: date) -> float:
     return round(sum(float(e.hours) for e in day_entries(db, employee_id, day)), 2)
 
 
+# The country's normal working day (shift minus the unpaid break), as app/services/leave_rules.COUNTRY_CONFIG.
+COUNTRY_DAY_HOURS = {"IN": 9.0, "US": 8.0, "GB": 7.5, "AU": 7.6, "CA": 8.0, "AE": 8.0, "SA": 8.0, "DE": 8.0}
+PART_TIME_FACTOR = 0.5  # no FTE field: part-time staff work half the normal day
+
+
+def _span_hours(start: str, end: str) -> float:
+    sh, sm = (int(x) for x in start.split(":"))
+    eh, em = (int(x) for x in end.split(":"))
+    return (((eh * 60 + em) - (sh * 60 + sm)) % (24 * 60) or 24 * 60) / 60
+
+
+def full_day_hours(db: Session, employee: Employee, day: date | None = None) -> float:
+    """The person's normal day: their rostered shift (length minus its break) that day, else the country's standard
+    day (Country.standard_daily_hours, i.e. the default shift minus the break); half of it for Part-Time staff.
+    Never more than DAY_TARGET (9 h): attendance stops itself at 9 hours of work (the owner's rule)."""
+    from app.models import Country
+
+    hours: float | None = None
+    if day is not None:
+        try:
+            from app.models import RosterShift, ShiftType
+
+            shift = db.scalar(select(ShiftType).join(RosterShift, RosterShift.shift_id == ShiftType.id)
+                              .where(RosterShift.employee_id == employee.id, RosterShift.work_date == day).limit(1))
+            if shift is not None:
+                hours = _span_hours(shift.start, shift.end) - (shift.break_minutes or 0) / 60
+        except Exception:  # noqa: BLE001 (roster tables missing on an old database)
+            hours = None
+    if hours is None:
+        country = db.get(Country, employee.country_code)
+        hours = float(country.standard_daily_hours) if country and country.standard_daily_hours else None
+    if hours is None:
+        hours = COUNTRY_DAY_HOURS.get(employee.country_code or "", DAY_TARGET)
+    if (employee.employment_type or "").strip().lower().replace("-", "") == "parttime":
+        hours *= PART_TIME_FACTOR
+    return round(max(0.5, min(DAY_TARGET, hours)), 2)
+
+
 def day_target(db: Session, employee: Employee, day: date) -> tuple[float, str | None]:
-    """(minimum hours to submit, why the day is different): 9 h, 4.5 h on half-day leave, 0 on leave / off days."""
+    """(minimum hours to submit, why the day is different): the person's normal day (full_day_hours: shift minus break,
+    pro-rated for part-time, at most 9 h), half of it on half-day leave, 0 on leave / off days."""
     leave = leave_on(db, employee.id, day, day).get(day)
     if leave == "full":
         return 0.0, "leave"
@@ -142,9 +182,10 @@ def day_target(db: Session, employee: Employee, day: date) -> tuple[float, str |
         return 0.0, "weekend"
     if day in holiday_dates_for(db, employee, day, day):
         return 0.0, "holiday"
+    full = full_day_hours(db, employee, day)
     if leave == "half":
-        return HALF_DAY_TARGET, "half-day leave"
-    return DAY_TARGET, None
+        return min(HALF_DAY_TARGET, round(full / 2, 2)), "half-day leave"
+    return full, None
 
 
 def validate_day_submit(db: Session, employee: Employee, day: date, row: TimesheetDay | None) -> float:

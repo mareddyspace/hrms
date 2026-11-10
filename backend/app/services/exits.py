@@ -65,15 +65,25 @@ def label(exit_type: str) -> str:
     return TYPE_LABELS.get(exit_type, exit_type.replace("_", " ").capitalize())
 
 
+# Senior people hand over more: at least this notice by grade band (E = executive, M = manager), whatever the country.
+MIN_NOTICE_BY_BAND = {"E": 90, "M": 60}
+
+
 def notice_days_for(db: Session, emp: Employee) -> int:
+    """Contractors CONTRACTOR_NOTICE_DAYS; otherwise the country's notice, raised to the grade band's minimum
+    (executives 90 days, managers 60) so the CEO doesn't get the same 14 days as a junior engineer."""
     if (emp.employment_type or "").lower().startswith("contract") or emp.employment_status == "Contractor":
         return CONTRACTOR_NOTICE_DAYS
+    from app.services.role_rules import grade_band
+
     country = db.get(Country, emp.country_code)
     if country is not None and country.notice_days:
-        return int(country.notice_days)
-    from app.services.leave_rules import COUNTRY_DEFAULTS, COUNTRY_FALLBACK
+        base = int(country.notice_days)
+    else:
+        from app.services.leave_rules import COUNTRY_DEFAULTS, COUNTRY_FALLBACK
 
-    return int(COUNTRY_DEFAULTS.get(emp.country_code, COUNTRY_FALLBACK).get("notice_days") or DEFAULT_NOTICE_DAYS)
+        base = int(COUNTRY_DEFAULTS.get(emp.country_code, COUNTRY_FALLBACK).get("notice_days") or DEFAULT_NOTICE_DAYS)
+    return max(base, MIN_NOTICE_BY_BAND.get(grade_band(emp.grade), 0))
 
 
 def unused_leave_days(db: Session, emp: Employee) -> float:

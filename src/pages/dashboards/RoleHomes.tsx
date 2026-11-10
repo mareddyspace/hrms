@@ -54,7 +54,7 @@ import {
   subscribeOptionalHolidays,
 } from "../../features/workforce/optionalHolidaysStore.ts";
 import { getRewardState, subscribeReward } from "../../data/rewardLocal.ts";
-import { canApproveCompReviews } from "../../data/rbac.ts";
+import { canApproveCompReviews, isAttendanceExempt } from "../../data/rbac.ts";
 import { attendanceContextFor, formatHm, nonWorkingReason, phaseLabel } from "../../data/attendanceData.ts";
 import { AttendanceStrip } from "../../components/AttendanceStrip.tsx";
 import {
@@ -92,7 +92,7 @@ import {
 import { RegionalFilter } from "../../locale/RegionalFilter.tsx";
 import { useLocale } from "../../locale/LocaleContext.tsx";
 import { usePortal } from "../../store.tsx";
-import { DAY_STATUS_LABEL, DAY_TARGET, HALF_DAY_TARGET, dayRecordFor, useDayRecords } from "../../data/timesheetDays.ts";
+import { DAY_STATUS_LABEL, dayRecordFor, dayTargetFor, halfDayTargetFor, useDayRecords } from "../../data/timesheetDays.ts";
 import { halfDayLeave as halfDayLeaveOn, leaveNameFor, plural } from "../../model.ts";
 import { countWaitingOnMe } from "../ApprovalsCenter.tsx";
 import { AuthShortcuts, DashGreeting, DateRangeFilter, MiniBars, ProgressBar, useDateRange } from "./widgets.tsx";
@@ -240,7 +240,9 @@ function MyApprovalsCard({ waiting, count, people }: { waiting: ReturnType<typeo
 
 /** Self-service strip for people whose home is mostly about others. */
 function MyDayCard() {
-  const { employee, leaveTable, state } = usePortal();
+  const { employee, leaveTable, state, demoProfile } = usePortal();
+  // Attendance-exempt roles (the CEO) aren't nagged to check in.
+  const exempt = isAttendanceExempt(demoProfile.role);
   const attState = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
   const today = todayISO();
   const session = getCurrentSession(employee.id, attState);
@@ -252,8 +254,11 @@ function MyDayCard() {
   return (
     <Card title="My day">
       <p>
-        {session.phase !== "not_started" ? phaseLabel(session.phase) : status === "Working" ? "Not checked in" : status}
-        {session.checkIn ? ` · in ${formatHm(session.checkIn)}` : ""} · {employee.shiftHours}
+        {exempt
+          ? status === "Working" ? "Working day" : status
+          : session.phase !== "not_started" ? phaseLabel(session.phase) : status === "Working" ? "Not checked in" : status}
+        {!exempt && session.checkIn ? ` · in ${formatHm(session.checkIn)}` : ""}
+        {exempt ? "" : ` · ${employee.shiftHours}`}
       </p>
       <ul className="todo">
         {rows.map((r) => (
@@ -264,10 +269,12 @@ function MyDayCard() {
         <li>Next holiday: {next ? `${next.name} · ${formatShortDate(next.date)}` : "None this year"}</li>
       </ul>
       <div className="row-gap" style={{ marginTop: 10 }}>
-        <Link className="btn" to={R.attendance}>
-          {session.phase === "not_started" ? "Check in" : "Attendance"}
-        </Link>
-        <Link className="btn-ghost" to={R.leave}>
+        {!exempt && (
+          <Link className="btn" to={R.attendance}>
+            {session.phase === "not_started" ? "Check in" : "Attendance"}
+          </Link>
+        )}
+        <Link className={exempt ? "btn" : "btn-ghost"} to={R.leave}>
           Apply for leave
         </Link>
       </div>
@@ -438,13 +445,14 @@ export function EmployeeHome() {
   const weekSheets = state.timesheets.filter((t) => t.employeeId === employee.id && t.weekStart === week);
   const weekHours = weekSheets.reduce((n, t) => n + Object.values(t.hours).reduce((a, b) => a + b, 0), 0);
   const olderDrafts = 0; // daily timesheets: each day is submitted on its own (see today's status below)
-  // Target: 9 h on each working day this week (weekly offs and holidays left out).
+  // Target: the person's normal day on each working day this week (weekly offs and holidays left out).
   const holidayDates = new Set(dayContext.holidays.map((h) => h.date));
   const weekWorkDates = workDatesInWeek(week, dayContext.weeklyOffDays).filter((d) => !holidayDates.has(d));
-  const weekTarget = weekWorkDates.length * DAY_TARGET;
+  const fullDay = dayTargetFor(employee); // shift minus break, half for part-time, at most 9 h
+  const weekTarget = weekWorkDates.length * fullDay;
   // Today's timesheet (daily submission): hours vs 9 h (4.5 h on half-day leave) and its status.
   const todayHours = weekSheets.reduce((n, t) => n + (t.hours[today] ?? 0), 0);
-  const todayTarget = !weekWorkDates.includes(today) ? 0 : halfDayLeaveOn(state.leaveRequests, employee.id, today) ? HALF_DAY_TARGET : DAY_TARGET;
+  const todayTarget = !weekWorkDates.includes(today) ? 0 : halfDayLeaveOn(state.leaveRequests, employee.id, today) ? halfDayTargetFor(employee) : fullDay;
   const todayDay = dayRecordFor(dayRecords, employee.id, today);
   const todayStatusLabel = DAY_STATUS_LABEL[todayDay?.status ?? "draft"];
   const sentBackDays = dayRecords.filter((r) => r.personId === employee.id && (r.status === "rejected" || r.status === "reopened") && r.date !== today).length;
@@ -759,7 +767,7 @@ export function EmployeeHome() {
               literal
             />
           </p>
-          {todayTarget > 0 && <ProgressBar value={(todayHours / todayTarget) * 100} label="Today vs 9 h" />}
+          {todayTarget > 0 && <ProgressBar value={(todayHours / todayTarget) * 100} label={`Today vs ${todayTarget} h`} />}
           {todayTarget > 0 && <AttendanceStrip compact main={false} />}
           {todayDay?.status === "rejected" && todayDay.decisionNote && <p className="note warn">Sent back: “{todayDay.decisionNote}”</p>}
           <p className="muted">
@@ -928,7 +936,7 @@ export function EmployeeHome() {
           <MetricCard label="Open tasks" value={myOpenTasks.length} hint={urgentTask ? urgentTask.subject : "You're all caught up"} />
         </Link>
         <Link to={R.timesheet} className="metric-card-link">
-          <MetricCard label="Timesheet" value={todayStatusLabel} hint={`Today · ${todayHours} of ${todayTarget || DAY_TARGET} h · week ${weekHours} h`} />
+          <MetricCard label="Timesheet" value={todayStatusLabel} hint={`Today · ${todayHours} of ${todayTarget || dayTargetFor(employee)} h · week ${weekHours} h`} />
         </Link>
       </MetricGrid>
 

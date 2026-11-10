@@ -156,6 +156,17 @@ const ACCESS_EMPLOYEE: NavAccessId[] = [
   "celebrations",
 ];
 
+/** Employee self-service pages the CEO doesn't get (they make no sense at the top of the organisation). */
+const CEO_EXCLUDED_NAV: readonly NavAccessId[] = [
+  "timesheet",
+  "probation",
+  "internaljobs",
+  "exit",
+  "cashadvance",
+  "encashment",
+  "overtime",
+];
+
 const ACCESS_MANAGER: NavAccessId[] = [
   ...ACCESS_EMPLOYEE,
   "team",
@@ -385,9 +396,11 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     currency: "USD",
     /** Executive reports yes; individual salary/payslips require explicit grant. */
     rbacFlags: { salaryAuthorized: false },
-    // The CEO is exempt from project timesheets and probation.
+    // The CEO is exempt from project timesheets and probation, and the employee self-service items that make no
+    // sense at the top (internal job applications, resigning through the portal, cash advances, leave encashment,
+    // paid overtime): see CEO_EXCLUDED_NAV.
     navAccess: [
-      ...ACCESS_MANAGER.filter((id) => id !== "timesheet" && id !== "probation"),
+      ...ACCESS_MANAGER.filter((id) => !CEO_EXCLUDED_NAV.includes(id)),
       "organization",
       "jobs",
       "recruiting",

@@ -357,6 +357,8 @@ export interface Course {
   audience: CourseAudience;
   /** Skill ids (SKILL_LIBRARY) this course builds. */
   skills: string[];
+  /** Roles a mandatory course doesn't apply to; defaults to executives/founders (COMPLIANCE_EXEMPT_ROLES). */
+  exemptRoles?: string[];
 }
 
 export type CourseAudience = "All" | "Engineering" | "Managers" | "Hiring";

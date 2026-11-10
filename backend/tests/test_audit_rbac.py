@@ -300,11 +300,11 @@ def test_admin_gets_full_profile_and_pii_reveal(client, alex):
     assert client.get(f"{API}/people/emp-mahesh/reveal", headers=alex, params={"field": "mobile"}).status_code == 200
 
 
-def test_executive_cannot_read_performance_of_strangers(client, jordan):
-    stranger = sample_employee("GB", offset=9)
-    for h in (jordan,):
-        for path in ("/performance/goals", "/leave/balances", "/attendance/summary"):
-            assert denied_or_absent(client.get(f"{API}{path}", headers=h, params={"employee_id": stranger}), stranger), path
+def test_executive_reads_everyone_in_his_line_like_a_manager(client, jordan):
+    """Owner decision (10 Nov 2026): every chain ends at the CEO, so he sees people like a top manager, not their pay."""
+    someone = sample_employee("GB", offset=9)
+    for path in ("/performance/goals", "/leave/balances", "/attendance/summary"):
+        assert client.get(f"{API}{path}", headers=jordan, params={"employee_id": someone}).status_code == 200, path
 
 
 # ---------- executive ----------

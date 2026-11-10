@@ -99,9 +99,12 @@ SKILLS_BY_DEPARTMENT = {
     "Sales": ["sk-11", "sk-10"], "Operations": ["sk-11", "sk-6"], "Customer Success": ["sk-10", "sk-11"],
     "Legal": ["sk-8", "sk-11"], "Executive": ["sk-11", "sk-6", "sk-10"], "IT": ["sk-12", "sk-4"],
 }
-GRADE_LEVEL = {"L3": 1, "L4": 1, "L5": 2, "L6": 3, "M1": 3, "M2": 3, "M3": 4, "E1": 4}
-GRADE_INDEX = {"L3": 0, "L4": 0, "L5": 0, "L6": 1, "M1": 2, "M2": 3, "M3": 3, "E1": 3}
-LEADER_GRADES = {"L6", "M1", "M2", "M3", "E1"}
+# Demo accounts use L3-L6 / M1-M3 / E1; the 500-person workbook uses G1 (junior) - G9 (senior), mapped alongside.
+GRADE_LEVEL = {"L3": 1, "L4": 1, "L5": 2, "L6": 3, "M1": 3, "M2": 3, "M3": 4, "E1": 4,
+               "G1": 1, "G2": 1, "G3": 1, "G4": 1, "G5": 2, "G6": 2, "G7": 3, "G8": 3, "G9": 4}
+GRADE_INDEX = {"L3": 0, "L4": 0, "L5": 0, "L6": 1, "M1": 2, "M2": 3, "M3": 3, "E1": 3,
+               "G1": 0, "G2": 0, "G3": 0, "G4": 0, "G5": 0, "G6": 1, "G7": 2, "G8": 3, "G9": 3}
+LEADER_GRADES = {"L6", "M1", "M2", "M3", "E1", "G7", "G8", "G9"}
 
 # careerMatch.ts: requisitions carry no library skills, so each department gets a typical requirement
 DEPARTMENT_SKILLS = {

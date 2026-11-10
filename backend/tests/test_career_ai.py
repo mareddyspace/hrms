@@ -157,7 +157,8 @@ def test_role_matches_port(client, babu, ram, sophie):
         assert m["timeline"] and m["timeline"][-1]["to_week"] == m["total_weeks"]
         for g in m["gaps"]:
             assert g["levels"] > 0
-    assert any(c["id"] == "crs-2" for m in matches for c in m["recommended_courses"])  # Secure coding builds TypeScript
+    enrolled = {e["course_id"] for e in client.get("/api/v1/learning/enrollments", headers=babu).json()}  # seeded samples
+    assert "crs-2" in enrolled or any(c["id"] == "crs-2" for m in matches for c in m["recommended_courses"])  # builds TypeScript
     assert client.get(f"{C}/matches", headers=ram, params={"employee_id": "emp-mahesh"}).status_code == 200
     assert client.get(f"{C}/matches", headers=sophie, params={"employee_id": "emp-mahesh"}).status_code == 404
 
@@ -205,7 +206,7 @@ def test_copilot_shows_only_released_ratings():
         db.commit()
         try:
             babu = _user(db, "babu.menon@timez.com")
-            assert "Exceptional" not in build_context(db, babu, "my rating").text()
+            assert "FY2026 annual review: Exceptional" not in build_context(db, babu, "my rating").text()
             db.get(PerfReview, rid).released = True
             db.commit()
             assert "FY2026 annual review: Exceptional" in build_context(db, babu, "my rating").text()

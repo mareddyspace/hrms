@@ -33,7 +33,7 @@ def test_seeded_requisitions_and_visibility(client, babu, ram, farhan, sophie, a
     assert _req_ids(client, ram) == {"JOB-221", "JOB-230", "JOB-235"}  # hiring manager: own
     assert _req_ids(client, sophie) == {"JOB-221", "JOB-218", "JOB-205", "JOB-230", "JOB-235", "JOB-238"}  # recruiter: assigned
     assert _req_ids(client, babu) == set()
-    assert "JOB-210" in _req_ids(client, admin)  # admin approves its finance step (after HR)
+    assert "JOB-210" in _req_ids(client, admin)  # admin sees every requisition
     assert client.get(f"{R}/requisitions/JOB-221", headers=babu).status_code == 404
     cands = client.get(f"{R}/candidates", headers=sophie, params={"requisition_id": "JOB-221"}).json()
     assert {c["id"] for c in cands} >= {"cand-1", "cand-6", "cand-12"}
@@ -53,18 +53,20 @@ def test_requisition_approval_department_head_hr_finance(client, babu, ram, farh
     assert req["status"] == "pending_approval" and req["recruiter_id"] is None and req["hiring_manager_id"] == "emp-ram"
     with SessionLocal() as db:
         inst = db.get(ApprovalInstance, req["approval_id"])
-        # department head = the person above the hiring manager; then HR; then finance (falls back to admin)
+        # department head = the person above the hiring manager; then HR; then finance - nobody holds it and HR and
+        # the CEO approve earlier, so it is skipped (never the IT admin)
         assert [s["groups"] for s in inst.steps] == [{"skip_manager": ["demo-ceo"]}, {"hr": ["demo-hr-admin"]},
-                                                     {"finance": ["demo-admin"]}]
+                                                     {"finance": []}]
+        assert inst.steps[2]["skipped"] is True and inst.steps[2]["skip_reason"]
     dec = f"{R}/requisitions/{req['id']}/decision"
     assert client.post(dec, headers=ram, json={"decision": "approve"}).status_code == 403  # own requisition
     assert client.post(dec, headers=babu, json={"decision": "approve"}).status_code == 404
     assert client.post(dec, headers=farhan, json={"decision": "approve"}).status_code == 403  # not HR's step yet
     assert client.post(dec, headers=jordan, json={"decision": "approve"}).json()["status"] == "pending_approval"
-    # HR decides from the generic approvals inbox; finance (admin) completes from there too
-    assert client.post(f"/api/v1/approvals/{req['approval_id']}/decision", headers=farhan, json={"decision": "approve"}).status_code == 200
     assert client.get(f"{R}/requisitions/{req['id']}", headers=sophie).status_code == 404  # no recruiter yet
-    assert client.post(f"/api/v1/approvals/{req['approval_id']}/decision", headers=admin, json={"decision": "approve"}).status_code == 200
+    # HR decides from the generic approvals inbox and completes it (the finance step is skipped)
+    assert client.post(f"/api/v1/approvals/{req['approval_id']}/decision", headers=farhan, json={"decision": "approve"}).status_code == 200
+    assert client.post(f"/api/v1/approvals/{req['approval_id']}/decision", headers=admin, json={"decision": "approve"}).status_code == 409
     got = client.get(f"{R}/requisitions/{req['id']}", headers=ram).json()
     assert got["status"] == "approved" and got["recruiter_id"] == "demo-recruiter" and got["recruiter_assigned_on"]
     assert req["id"] in _req_ids(client, sophie)

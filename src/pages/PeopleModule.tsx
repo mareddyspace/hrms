@@ -2,7 +2,7 @@ import { API_ENABLED } from "../api/client.ts";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Card, EmptyState, FilterBar, Page, StatusBadge, notifyError } from "../components/ui.tsx";
-import { FILTER_OPTIONS, type EmploymentStatus, type PersonRecord } from "../data/peopleData.ts";
+import { FILTER_OPTIONS, gradeRank, type EmploymentStatus, type PersonRecord } from "../data/peopleData.ts";
 import { dataScopeFor, dataScopeLabel, personFilterFor, useAccessVersion } from "../data/accessControl.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { canManagePeople, canViewPeopleDirectory, getPeopleListScope } from "../data/peoplePermissions.ts";
@@ -89,6 +89,12 @@ export function PeopleDirectoryPage() {
   const jobs = useMemo(() => [...new Set(scoped.map((p) => p.designation))].sort(), [scoped]);
   // From the people loaded (backend departments differ from the local sample's), so every option finds someone.
   const departments = useMemo(() => [...new Set(people.map((p) => p.department).filter(Boolean))].sort(), [people]);
+  const legalEntities = useMemo(() => [...new Set(people.map((p) => p.legalEntity).filter(Boolean))].sort(), [people]);
+  const businessUnits = useMemo(() => [...new Set(people.map((p) => p.businessUnit).filter(Boolean))].sort(), [people]);
+  const grades = useMemo(
+    () => [...new Set(people.map((p) => p.grade).filter(Boolean))].sort((a, b) => gradeRank(a) - gradeRank(b) || a.localeCompare(b)),
+    [people],
+  );
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -225,7 +231,7 @@ export function PeopleDirectoryPage() {
                 Legal entity
                 <select value={legalEntity} onChange={(e) => { setLegalEntity(e.target.value); setPage(0); }}>
                   <option value="">All</option>
-                  {FILTER_OPTIONS.legalEntities.map((c) => (
+                  {legalEntities.map((c) => (
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
@@ -274,7 +280,7 @@ export function PeopleDirectoryPage() {
                 Business unit
                 <select value={businessUnit} onChange={(e) => { setBusinessUnit(e.target.value); setPage(0); }}>
                   <option value="">All</option>
-                  {FILTER_OPTIONS.businessUnits.map((c) => (
+                  {businessUnits.map((c) => (
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
@@ -291,7 +297,7 @@ export function PeopleDirectoryPage() {
                 Grade
                 <select value={grade} onChange={(e) => { setGrade(e.target.value); setPage(0); }}>
                   <option value="">All</option>
-                  {FILTER_OPTIONS.grades.map((c) => (
+                  {grades.map((c) => (
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>

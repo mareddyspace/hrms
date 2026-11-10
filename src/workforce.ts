@@ -143,7 +143,8 @@ export const TEAMMATE_MANAGER_ID = "emp-ram";
 
 /**
  * Sign-in accounts added after the directory was generated (Oliver Hughes, UK). They are not counted against a
- * country's headcount, so the generated people keep the same ids (wf-TZ…) as the server's directory.
+ * country's headcount, so the generated ids (wf-TZ…) stay stable. Note: this offline sample is generated here and is
+ * NOT the 500-person workbook; signed in to the server (backend mode) the portal shows the workbook people (TZ0001…).
  */
 const OUTSIDE_HEADCOUNT: ReadonlySet<string> = new Set(["emp-oliver"]);
 

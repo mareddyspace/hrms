@@ -79,7 +79,7 @@ def test_employee_context_has_no_team_or_org():
         assert "ORGANISATION" not in text and "YOUR TEAM" not in text
 
 
-@pytest.mark.parametrize("account_id", ["demo-ceo", "demo-recruiter"])
+@pytest.mark.parametrize("account_id", ["demo-recruiter"])  # the CEO is above everyone (app/seed_profiles.py)
 def test_employee_summary_for_non_hr_is_profile_only(account_id):
     with SessionLocal() as db:
         user = _user(db, account_id)

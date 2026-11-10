@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type MouseEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ActionButton, Banner, Card, Dialog, Field, Page, StatusBadge, StatusPill, SubmitButton, downloadText, notify, useAction } from "../components/ui.tsx";
-import { DAY_STATUS_LABEL, DAY_TARGET, HALF_DAY_TARGET, dayRecordFor, isFixable, legacyLockedDate, shortfallText, useDayRecords } from "../data/timesheetDays.ts";
+import { DAY_STATUS_LABEL, DAY_TARGET, dayRecordFor, dayTargetFor, halfDayTargetFor, isFixable, legacyLockedDate, shortfallText, useDayRecords } from "../data/timesheetDays.ts";
 import { DayStatusBadge, HoursMeter, TimesheetTeamDays } from "./TimesheetTeamDays.tsx";
 import { pendingMirror } from "../api/syncTimeApprovals.ts";
 import { managementChain } from "../demoAccounts.ts";
@@ -320,7 +320,7 @@ export function TimesheetPage() {
   const billableTotal = blocks.filter((block) => block.billable).reduce((sum, block) => sum + block.hours, 0);
   const nonBillableTotal = weekTotal - billableTotal;
   // Capacity follows the person's own working days this week.
-  const weekCapacity = workDates.reduce((sum, d) => sum + (offDays[d] ? 0 : DAY_TARGET), 0);
+  const weekCapacity = workDates.reduce((sum, d) => sum + (offDays[d] ? 0 : dayTargetFor(employee)), 0);
 
   /** Tickets carry a project id; tasks a project or client name. Unmatched work goes to the internal project. */
   function projectForWork(type: WorkType, id: string): Project | undefined {
@@ -524,10 +524,10 @@ export function TimesheetPage() {
     return error ?? true;
   }
 
-  /** Minimum hours to submit a day: 9, 4.5 on half-day leave, 0 on leave, holidays and weekly offs. */
+  /** Minimum hours to submit a day: the person's normal day (dayTargetFor), half on half-day leave, 0 on leave / days off. */
   function targetFor(day: string): number {
     if (offDayFor(day) || !isWorkDay(day)) return 0;
-    return halfDayLeave(state.leaveRequests, employee.id, day) ? HALF_DAY_TARGET : DAY_TARGET;
+    return halfDayLeave(state.leaveRequests, employee.id, day) ? halfDayTargetFor(employee) : dayTargetFor(employee);
   }
 
   async function onSubmitDay(day: string) {
@@ -958,11 +958,11 @@ export function TimesheetPage() {
               <ul className="ts-sent-back-list">
                 {autoDays.map((d) => {
                   const total = hoursOn(d);
-                  const short = shortfallText(total, DAY_TARGET);
+                  const short = shortfallText(total, dayTargetFor(employee));
                   return (
                     <li key={d}>
                       <span>
-                        <strong>{formatShortDate(d)}</strong> checked out automatically after 9 hours · {formatHoursAmount(total)} of {DAY_TARGET} h logged
+                        <strong>{formatShortDate(d)}</strong> checked out automatically after 9 hours · {formatHoursAmount(total)} of {dayTargetFor(employee)} h logged
                         {short ? <span className="ts-why"> · {short}</span> : null}
                       </span>
                       <span className="form-actions" style={{ marginTop: 0 }}>
@@ -986,7 +986,7 @@ export function TimesheetPage() {
                 {daysToFix.map((record) => {
                   const d = record.date;
                   const total = hoursOn(d);
-                  const target = halfDayLeave(state.leaveRequests, employee.id, d) ? HALF_DAY_TARGET : DAY_TARGET;
+                  const target = halfDayLeave(state.leaveRequests, employee.id, d) ? halfDayTargetFor(employee) : dayTargetFor(employee);
                   const short = shortfallText(total, target);
                   return (
                     <li key={d}>

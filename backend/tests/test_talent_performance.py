@@ -74,7 +74,7 @@ def test_check_ins(client, babu, ram, sophie):
     assert client.post(f"{P}/check-ins", headers=sophie, json=body).status_code == 403
     res = client.post(f"{P}/check-ins", headers=ram, json=body)
     assert res.status_code == 201 and res.json()["manager_id"] == "emp-ram"
-    assert [c["notes"] for c in client.get(f"{P}/check-ins", headers=babu).json()] == ["Talked about growth"]
+    assert "Talked about growth" in [c["notes"] for c in client.get(f"{P}/check-ins", headers=babu).json()]  # plus seeded 1:1s
     assert client.get(f"{P}/check-ins", headers=sophie, params={"employee_id": "emp-mahesh"}).status_code == 404
 
 

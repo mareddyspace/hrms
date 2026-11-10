@@ -100,17 +100,27 @@ def seed_people(db: Session) -> dict[str, int]:
     if any(p["manager_id"] and p["manager_id"] not in {a["id"] for a in accounts} for p in accounts):
         raise SeedDataError("Account people must report to other account people.")
     # Pass 1 without managers (so foreign keys never point at a row not yet written), pass 2 sets them.
+    # Someone already in the database keeps every value they have (HR edits, profile changes, a manager given by
+    # seed_profiles); only blank fields are filled from the workbook. New people are added in full.
+    def blank(value: object) -> bool:
+        return value is None or value == "" or value == [] or value == {}
+
+    new_ids: set[str] = set()
     for p in people:
         values = {k: v for k, v in p.items() if k != "manager_id"}
         row = db.get(Employee, p["id"])
         if row is None:
             db.add(Employee(**values, manager_id=None))
+            new_ids.add(p["id"])
         else:
             for k, v in values.items():
-                setattr(row, k, v)
+                if blank(getattr(row, k)) and not blank(v):
+                    setattr(row, k, v)
     db.flush()
     for p in people:
-        db.get(Employee, p["id"]).manager_id = p.get("manager_id")  # type: ignore[union-attr]
+        row = db.get(Employee, p["id"])
+        if p["id"] in new_ids or row.manager_id is None:  # type: ignore[union-attr]
+            row.manager_id = p.get("manager_id")  # type: ignore[union-attr]
     db.flush()
     # One open effective-dated assignment per person, starting at joining.
     have = set(db.scalars(select(EmployeeAssignment.employee_id).where(EmployeeAssignment.effective_to.is_(None))))
@@ -301,6 +311,16 @@ def run(reset_passwords: bool = False, *, only_if_free: bool = False) -> dict[st
         stats.update(_seed_project_details(db))  # project milestones, tasks, roles; shift locations (0025)
         stats.update(_seed_pay_benefits(db))  # benefit plan details, tax declaration deadlines and samples (0026)
         stats.update(_seed_teammates(db))  # Priya and Oliver: roster, project tasks, documents, open requests
+        from app.seed_profiles import seed_profiles  # blank profile fields filled, everyone given a manager
+
+        stats.update(seed_profiles(db))
+        db.flush()
+        # Sample activity so no screen is empty (all insert-only; see each module's docstring).
+        from app import seed_admin_data, seed_hr_activity, seed_talent_activity, seed_time_activity
+
+        for module in (seed_admin_data, seed_time_activity, seed_talent_activity, seed_hr_activity):
+            stats.update(module.seed(db))
+            db.flush()
         db.commit()
         del cache
     return stats

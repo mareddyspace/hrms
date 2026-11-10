@@ -137,7 +137,7 @@ def test_correction_rules_and_manager_applies(client, babu, ram):
 
 
 def test_hr_can_decide_correction(client, babu, farhan):
-    day = _today_ist() - timedelta(days=5)
+    day = _today_ist() - timedelta(days=29)  # before the sample attendance (app/seed_time_activity.py: 28 days)
     cid = client.post("/api/v1/attendance/corrections", headers=babu, json={"work_date": day.isoformat(),
                       "requested_check_in": f"{day}T11:00:00", "reason": "Device was down"}).json()["id"]
     url = f"/api/v1/attendance/corrections/{cid}/decision"

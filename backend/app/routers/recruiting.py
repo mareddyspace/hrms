@@ -60,6 +60,7 @@ from app.schemas.talent import (
 )
 from app.services import approvals as engine
 from app.services import onboarding
+from app.services import role_rules
 from app.services import recruiting as rules
 from app.services import storage
 from app.services.activity import notify, record_audit
@@ -372,6 +373,12 @@ def apply_internally(posting_id: str, body: InternalApplyIn, request: Request, d
         raise HTTPException(409, "You're the hiring manager for this role.")
     if req.recruiter_id == emp.id:
         raise HTTPException(409, "You run this role's pipeline.")
+    if role_rules.is_executive(db, emp):
+        raise HTTPException(409, "Internal job applications are for employees, not executives.")
+    if role_rules.is_serving_notice(emp):
+        raise HTTPException(409, "You're serving notice, so you can't apply for internal jobs.")
+    if role_rules.in_probation(db, emp, date.today()):
+        raise HTTPException(409, "You can apply for internal jobs once your probation is confirmed.")
     email = (emp.email or "").strip().lower()
     if db.scalar(select(Candidate.id).where(Candidate.requisition_id == req.id, (Candidate.employee_id == emp.id)
                                             | (func.lower(Candidate.email) == email))):

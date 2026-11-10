@@ -93,7 +93,7 @@ def test_mode_any_and_reject(client, admin, ram, farhan):
     assert _decide(client, ram, iid, "reject", "Duplicate claim").json()["status"] == "rejected"
 
 
-def test_min_amount_finance_fallback_and_skip_manager(client, admin, ram):
+def test_min_amount_finance_fallback_and_skip_manager(client, admin, ram, farhan):
     _workflow(client, admin, "wf_amount", [
         {"roles": ["manager"], "mode": "any"},
         {"roles": ["finance"], "mode": "any", "min_amount": 1000},
@@ -105,10 +105,12 @@ def test_min_amount_finance_fallback_and_skip_manager(client, admin, ram):
     big = _start("wf_amount", "emp-mahesh", 5000, "exp-big")
     res = _decide(client, ram, big).json()
     assert res["status"] == "pending" and res["current_step"] == 1
-    assert res["steps"][1]["groups"]["finance"] == ["demo-admin"]  # nobody holds the finance role
+    # Nobody holds the finance role: HR covers it (clearly labelled), never the IT admin.
+    assert res["steps"][1]["groups"]["finance"] == ["demo-hr-admin"]
+    assert res["steps"][1]["label"].startswith("Finance (covered by")
     assert res["steps"][2]["skipped"] is True
-    assert big in _pending_ids(client, admin)
-    assert _decide(client, admin, big).json()["status"] == "approved"
+    assert big not in _pending_ids(client, admin)
+    assert _decide(client, farhan, big).json()["status"] == "approved"
 
     huge = _start("wf_amount", "emp-mahesh", 20000, "exp-huge")
     with SessionLocal() as db:
@@ -120,12 +122,13 @@ def test_requester_never_approver_and_auto_approve():
     with SessionLocal() as db:
         engine.save_definition(db, "wf_hr", [{"roles": ["hr"], "mode": "any"}], "demo-admin")
         inst = engine.start(db, "wf_hr", "x", db.get(Employee, "demo-hr-admin"))
-        assert inst.steps[0]["groups"]["hr"] == ["demo-admin"]  # Farhan is the only HR person: falls back to admin
+        assert inst.steps[0]["groups"]["hr"] == ["demo-ceo"]  # Farhan is the only HR person: his manager stands in
         with pytest.raises(engine.NotAllowed):
             engine.decide(db, inst, "demo-hr-admin", "approve")
         engine.save_definition(db, "wf_mgr", [{"roles": ["manager"], "mode": "any"}], "demo-admin")
-        # Jordan has no manager: falls back to admin
-        assert engine.start(db, "wf_mgr", "y", db.get(Employee, "demo-ceo")).steps[0]["groups"]["manager"] == ["demo-admin"]
+        # Jordan (CEO) has no manager: the step is skipped and the request auto-approved, never sent to the IT admin
+        top = engine.start(db, "wf_mgr", "y", db.get(Employee, "demo-ceo"))
+        assert top.steps[0]["groups"]["manager"] == [] and top.status == "approved"
         engine.save_definition(db, "wf_none", [{"roles": ["manager"], "mode": "any", "min_amount": 50}], "demo-admin")
         assert engine.start(db, "wf_none", "z", db.get(Employee, "emp-mahesh"), 10).status == "approved"
         with pytest.raises(engine.ApprovalError):
@@ -178,15 +181,15 @@ def test_no_one_approves_two_steps(client, admin, farhan):
 
 def test_sole_approver_of_earlier_step_left_out_at_start():
     with SessionLocal() as db:
-        # Farhan raises it: HR falls back to Alex, so the admin step can't be Alex too -> executive
+        # Farhan raises it: his manager Jordan stands in for HR (not the IT admin); Alex keeps the admin step
         engine.save_definition(db, "wf_chain", [{"roles": ["hr"], "mode": "any"}, {"roles": ["admin"], "mode": "any"},
                                                 {"roles": ["executive"], "mode": "any"}], "demo-admin")
         inst = engine.start(db, "wf_chain", "c", db.get(Employee, "demo-hr-admin"))
-        assert inst.steps[0]["groups"]["hr"] == ["demo-admin"]
-        assert inst.steps[1]["groups"]["admin"] == ["demo-ceo"]
-        # Jordan is the only one left and already holds step 2: the executive step has nobody and is skipped
+        assert inst.steps[0]["groups"]["hr"] == ["demo-ceo"]
+        assert inst.steps[1]["groups"]["admin"] == ["demo-admin"]
+        # Jordan is the only executive and already holds step 1: the executive step has nobody and is skipped
         assert inst.steps[2]["skipped"] is True
-        engine.decide(db, inst, "demo-admin", "approve")
         engine.decide(db, inst, "demo-ceo", "approve")
+        engine.decide(db, inst, "demo-admin", "approve")
         assert inst.status == "approved"
         db.rollback()

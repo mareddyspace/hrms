@@ -25,7 +25,7 @@ import {
   type WeekEntryOut,
 } from "../api/syncTimeSheets.ts";
 import { approvalProgressText } from "../api/approvalProgress.ts";
-import { DAY_STATUS_LABEL, DAY_TARGET, HALF_DAY_TARGET, useDayRecords, type DayStatus } from "../data/timesheetDays.ts";
+import { DAY_STATUS_LABEL, dayTargetFor, halfDayTargetFor, useDayRecords, type DayStatus } from "../data/timesheetDays.ts";
 import "./timesheetDays.css";
 
 export function DayStatusBadge({ status }: { status: string }) {
@@ -149,7 +149,8 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
       const leave = blockingLeave(state.leaveRequests, personId, date);
       const half = halfDayLeave(state.leaveRequests, personId, date);
       const kind = leave ? "leave" : weekday === 0 || weekday === 6 ? "weekend" : holiday ? "holiday" : half ? "half-day leave" : null;
-      const target = kind === "half-day leave" ? HALF_DAY_TARGET : kind ? 0 : DAY_TARGET;
+      const who = getPerson(personId) ?? findDemoById(personId) ?? {};
+      const target = kind === "half-day leave" ? halfDayTargetFor(who) : kind ? 0 : dayTargetFor(who);
       const canDecide = rec?.status === "submitted" && decides(personId);
       return {
         id: rec?.id ?? null,

@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 from tests.conftest import login
 from tests.test_leave import _balance, _workday
 
@@ -7,6 +9,16 @@ LR = "/api/v1/leave/requests"
 
 def _ensure(client, babu, farhan, days_ahead: int) -> str:
     day = _workday(client, babu, days_ahead)
+    # skip days Babu already has leave on (other tests in the full run book leave weeks ahead)
+    taken = set()
+    for r in client.get(LR, headers=babu).json():
+        if r["status"] in ("pending", "approved"):
+            d = date.fromisoformat(r["from"])
+            while d <= date.fromisoformat(r["to"]):
+                taken.add(d)
+                d += timedelta(days=1)
+    while day in taken:
+        day = _workday(client, babu, (day - date.today()).days + 1)
     listed = {h["date"] for h in client.get(OH, headers=babu, params={"year": day.year}).json()}
     if day.isoformat() not in listed:
         res = client.post(OH, headers=farhan, json={"country_code": "IN", "date": day.isoformat(), "name": f"Test {days_ahead}"})

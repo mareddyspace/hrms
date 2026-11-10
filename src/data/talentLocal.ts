@@ -2222,6 +2222,19 @@ export function courseOpenTo(course: Course, learner: Learner): boolean {
   }
 }
 
+/**
+ * Roles that don't take the employee compliance courses (the CEO and founders are covered by
+ * board / leadership compliance instead). A course can name its own list with `exemptRoles`.
+ */
+export const COMPLIANCE_EXEMPT_ROLES: readonly string[] = ["executive", "founder", "cofounder"];
+
+/** True when a mandatory course actually applies to this person: open to them and they aren't exempt. */
+export function courseRequiredFor(course: Course, learner: Learner): boolean {
+  if (!course.mandatory || !courseOpenTo(course, learner)) return false;
+  const exempt = course.exemptRoles ?? COMPLIANCE_EXEMPT_ROLES;
+  return !exempt.includes(learner.role);
+}
+
 export function enrollInCourse(learner: Learner, courseId: string): TalentResult {
   if (API_ENABLED) {
     if (!courseCatalog().some((c) => c.id === courseId)) return "Course not found.";

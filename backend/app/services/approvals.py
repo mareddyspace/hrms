@@ -7,9 +7,13 @@ A workflow definition is a versioned list of steps; each step names role groups 
 
 Approvers are resolved when the request starts and stored on the instance (later org changes don't move it):
 manager, skip_manager (the manager's manager), hr (HR whose country scope covers the requester),
-finance (falls back to admin when nobody holds the finance role), admin, executive.
-The requester is never an approver; a group left empty by that falls back to admin, then executive
-(except skip_manager: with no skip-level manager, e.g. the CEO's own request, that group stays empty).
+finance (when nobody holds the finance role: HR, then the executive, with the step labelled "Finance (covered by
+HR / the executive)"; never the IT admin), admin, executive.
+The requester is never an approver; a group left empty by that falls back to admin, then executive, except:
+skip_manager with no skip-level manager stays empty; the manager group of the top of the organisation (the CEO, no
+manager) stays empty, so the step is skipped and a request with no other step is auto-approved with an audit entry;
+someone else with no manager goes to HR; the HR step of the only HR person's own request goes to their manager
+(skipped when that manager approved an earlier step).
 Nobody approves two steps of one request: whoever approved an earlier step (or is certain to, being its only
 approver) is dropped from the later steps, with the same admin -> executive fallback.
 A step whose groups are all empty is skipped; when no step is left the request is approved straight away.
@@ -111,6 +115,10 @@ def resolve_group(
     """line_from_requester: the requester is the "manager" (e.g. a requisition's hiring manager), so
     skip_manager is the person directly above them (the department head).
     fallback=False: a group nobody holds (no manager) stays empty instead of falling back to admin."""
+    if role == "manager" and not requester.manager_id and is_top_of_org(db, requester):
+        # The CEO / a founder has nobody above them: the manager step is skipped (never sent to the IT admin). A
+        # request with no other step is approved straight away and audited as such (approval_started/approved).
+        return []
     if role == "manager":
         ids = [requester.manager_id] if requester.manager_id else []
     elif role == "skip_manager" and line_from_requester:
@@ -120,8 +128,19 @@ def resolve_group(
         ids = [manager.manager_id] if manager and manager.manager_id else []
     elif role == "hr":
         ids = _accounts_with_roles(db, set(HR_ROLES), requester.country_code)
+        if _only_hr_is_requester(db, requester):
+            # The only HR approver is asking (the HR Director's own long leave, resignation...): their own manager
+            # (the CEO) stands in for HR, not the IT admin. If that manager already approved an earlier step, the HR
+            # step is skipped (start() marks the group no_fallback).
+            ids = [requester.manager_id] if requester.manager_id else []
     elif role == "finance":
-        ids = _accounts_with_roles(db, {"finance"}) or _accounts_with_roles(db, {"admin"})
+        # No Finance account: HR (payroll) covers the finance check (the step says so in its label), then the
+        # executive. Never the IT admin.
+        ids = _accounts_with_roles(db, {"finance"}) or _accounts_with_roles(db, set(HR_ROLES)) or _accounts_with_roles(db, {"executive"})
+        ids = [i for i in ids if i and i != requester.id]
+        if not ids:
+            ids = [i for i in _accounts_with_roles(db, {"executive"}) if i != requester.id]
+        return ids
     elif role == "admin":
         ids = _accounts_with_roles(db, {"admin"})
     elif role == "executive":
@@ -134,6 +153,9 @@ def resolve_group(
     if role == "skip_manager" and not ids:
         # Nobody above the line (e.g. the CEO's own request): the skip-level step is skipped, not sent to admin.
         return []
+    if not ids and role == "manager" and not requester.manager_id:
+        # Nobody above them (a gap in the directory): HR in their country decides, then the executive - not IT admin.
+        ids = [i for i in _accounts_with_roles(db, set(HR_ROLES), requester.country_code) if i != requester.id]
     if not ids and role not in ("admin", "executive"):
         ids = [i for i in _accounts_with_roles(db, {"admin"}) if i != requester.id]
     if not ids and role != "executive":
@@ -141,7 +163,35 @@ def resolve_group(
     return ids
 
 
+TOP_OF_ORG_ROLES = frozenset({"executive", "founder", "cofounder"})
+
+
+def _only_hr_is_requester(db: Session, requester: Employee) -> bool:
+    ids = _accounts_with_roles(db, set(HR_ROLES), requester.country_code)
+    return bool(ids) and all(i == requester.id for i in ids)
+
+
+def is_top_of_org(db: Session, emp: Employee) -> bool:
+    """The CEO / a founder with no manager: nobody in the company approves their own requests."""
+    if emp.manager_id:
+        return False
+    role = db.scalar(select(Account.role).where(Account.employee_id == emp.id, Account.active.is_(True)))
+    return role in TOP_OF_ORG_ROLES
+
+
+def finance_label(db: Session) -> str:
+    """The finance step's name: "Finance", or a clearly named stand-in when nobody holds the finance role."""
+    return "Finance" if _accounts_with_roles(db, {"finance"}) else "Finance (covered by HR / the executive)"
+
+
 def _fallback(db: Session, role: str, excluded: set[str]) -> list[str]:
+    if role == "finance":
+        # Finance stands in with HR (payroll), then the executive; never the IT admin.
+        for alt in (set(HR_ROLES), {"executive"}):
+            ids = [i for i in _accounts_with_roles(db, alt) if i not in excluded]
+            if ids:
+                return ids
+        return []
     for alt in ("admin", "executive"):
         if alt == role or (role == "executive" and alt == "admin"):
             continue
@@ -179,13 +229,16 @@ def retarget(
         groups = {}
         for role, ids in step["groups"].items():
             kept = [x for x in ids if x not in blocked]
-            if not kept and ids:
+            if not kept and ids and role not in (step.get("no_fallback") or []):
                 kept = _fallback(db, role, blocked)
             groups[role] = kept
         step["groups"] = groups
         if excluded:
             step["exclude"] = sorted(set(step.get("exclude") or []) | excluded)
         step["skipped"] = not any(groups.values())
+        if step["skipped"] and "finance" in groups and step["groups"] is groups and any(steps[i]["groups"].get("finance") or []):
+            # Nobody holds the finance role and HR / the executive already approved earlier: recorded on the step.
+            step["skip_reason"] = "No separate finance approver: HR and the executive already approved this request."
         if not step["skipped"]:
             earlier |= _certain_approvers(step)
     return out
@@ -486,6 +539,10 @@ def start(
         for key in ("label", "sla_hours", "condition", "only_if"):
             if raw.get(key) is not None:
                 step[key] = raw[key]
+        if "hr" in raw["roles"] and requester.manager_id and _only_hr_is_requester(db, requester):
+            step["no_fallback"] = ["hr"]  # the manager stands in for HR; never re-routed to the IT admin
+        if "finance" in raw["roles"] and not _accounts_with_roles(db, {"finance"}):
+            step["label"] = finance_label(db)  # name the stand-in clearly
         if not matched:
             step["applies"] = False
         if raw.get("min_amount") is not None:
@@ -513,8 +570,10 @@ def start(
     )
     if instance.current_step >= len(steps):
         _finish(db, instance, requester, "approved")
+        reason = ({"reason": "auto-approved: nobody above the requester (top of the organisation)"}
+                  if is_top_of_org(db, requester) else {})
         record_audit(db, actor_id=actor_id or requester.id, action="approval_approved", entity="approval_instance",
-                     entity_id=instance.id, subject_id=requester.id, after=_snapshot(instance))
+                     entity_id=instance.id, subject_id=requester.id, after=_snapshot(instance) | reason)
     else:
         _notify_step(db, instance, requester)
     return instance

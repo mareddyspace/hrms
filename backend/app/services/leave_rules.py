@@ -67,6 +67,9 @@ EXTRA_TYPES: dict[str, dict] = {
     "paternity": {"name": "Paternity leave", "half_day_allowed": False,
                   "quota": {"IN": 5, "US": 5, "GB": 10, "AU": 10, "CA": 5, "AE": 5, "SA": 3, "DE": 10}},
     "sabbatical": {"name": "Sabbatical", "half_day_allowed": False, "quota": {}, "default_quota": 20},
+    # Gender-neutral: any parent, including adoptive parents and same-sex couples (maternity / paternity stay as they are).
+    "parental": {"name": "Parental / adoption leave", "half_day_allowed": False,
+                 "quota": {"IN": 10, "US": 10, "GB": 10, "AU": 10, "CA": 10, "AE": 5, "SA": 3, "DE": 10}},
 }
 
 # Eligibility defaults per leave code (applied once, while a policy's gender is still NULL).
@@ -76,6 +79,7 @@ RULE_DEFAULTS: dict[str, dict] = {
     "sabbatical": {"min_service_months": 60, "employment_types": ["Full-Time"], "not_in_probation": True,
                    "max_per_request": 20, "min_notice_days": 30},
     "bereavement": {"max_per_request": 5},
+    "parental": {"gender": "any", "max_per_request": 10},
 }
 
 

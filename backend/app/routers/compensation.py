@@ -44,6 +44,7 @@ from app.schemas.compensation import (
     StatementBenefitLine,
 )
 from app.schemas import DecisionIn
+from app.services import role_rules
 from app.services import approvals as engine
 from app.services import compensation as comp
 from app.services.activity import notify, record_audit
@@ -233,6 +234,11 @@ def add_bonus(body: CompBonusIn, request: Request, db: DbSession, user: CurrentU
         if emp.id == user.employee_id:
             raise HTTPException(403, "Someone else must record your own bonus.")
         raise HTTPException(403, "Only HR or compensation can record bonuses.")
+    blocked = role_rules.senior_block_reason(db, user.employee_id, emp)
+    if blocked:
+        raise HTTPException(403, blocked)
+    if role_rules.is_serving_notice(emp):
+        raise HTTPException(409, f"{emp.full_name} is serving notice: no new bonuses for leavers.")
     bonus = CompBonus(id=comp.new_id("bonus"), employee_id=emp.id, bonus_type=body.bonus_type.strip(), period=body.period.strip(),
                       amount=round(body.amount, 2), currency=emp.currency, status="accrued", created_by=user.id)
     db.add(bonus)
@@ -397,6 +403,15 @@ def create_proposal(body: CompProposalIn, request: Request, db: DbSession, user:
         if can_view(db, user, emp):
             raise HTTPException(403, "You can only propose for people below you in the reporting line.")
         raise NOT_FOUND
+    blocked = role_rules.senior_block_reason(db, proposer.id, emp)
+    if blocked:
+        raise HTTPException(403, blocked)
+    if role_rules.is_serving_notice(emp):
+        raise HTTPException(409, f"{emp.full_name} is serving notice: no pay proposals for leavers.")
+    if (emp.employment_type or "").strip().lower() == "contract":
+        raise HTTPException(409, f"{emp.full_name} is a contractor: contract rates aren't part of the pay review.")
+    if role_rules.in_probation(db, emp, _today(user)):
+        raise HTTPException(409, f"{emp.full_name} is still in probation: pay is reviewed once probation is confirmed.")
     cycle = db.get(CompReviewCycle, body.cycle_id)
     if cycle is None:
         raise HTTPException(422, "Cycle not found.")

@@ -23,9 +23,17 @@ def admin():
 
 def _workday(days_ahead: int) -> date:
     day = datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=days_ahead)
-    while day.weekday() >= 5:
+    with SessionLocal() as db:  # skip weekends and India's public holidays, so the test never depends on the calendar
+        hols = leave_rules_holidays(db, day, day + timedelta(days=40))
+    while day.weekday() >= 5 or day in hols:
         day += timedelta(days=1)
     return day
+
+
+def leave_rules_holidays(db, start: date, end: date) -> set[date]:
+    from app.services.leave import holiday_dates
+
+    return holiday_dates(db, "IN", start, end)
 
 
 def _balances(client, headers, year: int | None = None) -> dict[str, dict]:

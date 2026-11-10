@@ -48,6 +48,30 @@ def leaves() -> list[str]:
         ))
 
 
+def _sample_person(*where) -> str:
+    """An active Indian sample employee with a manager and nobody reporting to them, matching `where`."""
+    report = aliased(Employee)
+    with SessionLocal() as db:
+        found = db.scalar(select(Employee.id).where(
+            Employee.source == "hcm_sample", Employee.country_code == "IN", Employee.employment_status == "Active",
+            Employee.manager_id.is_not(None), ~exists().where(report.manager_id == Employee.id), *where,
+        ).order_by(Employee.id.desc()).limit(1))
+    assert found, "expected a matching sample employee"
+    return found
+
+
+@pytest.fixture(scope="module")
+def recent_joiner() -> str:
+    """Probation completion only applies to people who joined in the last 13 months."""
+    return _sample_person(Employee.joining_date >= today_ist() - timedelta(days=300))
+
+
+@pytest.fixture(scope="module")
+def contractor() -> str:
+    """Contract extension only applies to contractors."""
+    return _sample_person(Employee.employment_type == "Contract")
+
+
 @pytest.fixture(scope="module", autouse=True)
 def default_workflow(client, admin):
     assert client.put("/api/v1/workflows/lifecycle", headers=admin, json={"steps": DEFAULT_LIFECYCLE}).status_code == 200
@@ -214,8 +238,8 @@ def test_self_service_leave_withdraw_and_reject(client, babu, ram, farhan):
         assert db.get(Employee, "emp-mahesh").employment_status == "Active"
 
 
-def test_hr_withdraws_scheduled_action(client, farhan, jordan, admin, leaves):
-    who = leaves[4]
+def test_hr_withdraws_scheduled_action(client, farhan, jordan, admin, leaves, recent_joiner):
+    who = recent_joiner
     aid = raise_action(client, farhan, who, "probation_completion", {"probation_end_date": "2027-01-31"},
                        today_ist() + timedelta(days=30)).json()["id"]
     assert approve_all(client, aid, line_manager(who), admin)["status"] == "scheduled"
@@ -225,14 +249,16 @@ def test_hr_withdraws_scheduled_action(client, farhan, jordan, admin, leaves):
         db.rollback()
 
 
-def test_any_and_all_modes(client, admin, farhan, jordan, leaves):
+def test_any_and_all_modes(client, admin, farhan, jordan, leaves, contractor):
     client.put("/api/v1/workflows/lifecycle", headers=admin, json={"steps": [{"roles": ["manager", "hr"], "mode": "any"}]})
-    aid = raise_action(client, farhan, leaves[5], "contract_extension", {"contract_end_date": "2027-12-31"}).json()["id"]
+    with SessionLocal() as db:
+        history = db.scalar(select(func.count()).select_from(EmployeeAssignment).where(EmployeeAssignment.employee_id == contractor))
+    aid = raise_action(client, farhan, contractor, "contract_extension", {"contract_end_date": "2027-12-31"}).json()["id"]
     item = approve_all(client, aid, admin)  # one approval from either group is enough
     assert item["status"] == "applied" and item["after"] == {"contract_end_date": "2027-12-31"}
     with SessionLocal() as db:  # nothing on the employee row changed, so no new history row
         assert db.scalar(select(func.count()).select_from(EmployeeAssignment)
-                         .where(EmployeeAssignment.employee_id == leaves[5])) == 1
+                         .where(EmployeeAssignment.employee_id == contractor)) == history
 
     client.put("/api/v1/workflows/lifecycle", headers=admin, json={"steps": [{"roles": ["manager", "hr"], "mode": "all"}]})
     aid = raise_action(client, farhan, leaves[6], "promotion", {"grade": "G7"}).json()["id"]

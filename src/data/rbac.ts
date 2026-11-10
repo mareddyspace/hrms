@@ -61,6 +61,16 @@ function isExecutive(role: DemoAccount["role"]): boolean {
   return role === "executive" || role === "founder" || role === "cofounder";
 }
 
+/**
+ * Roles not asked to check in / out (the CEO and founders): homes don't nag them with "Not checked in / Check in".
+ * Kept in step with backend/app/services/role_rules.py ATTENDANCE_EXEMPT_ROLES.
+ */
+export const ATTENDANCE_EXEMPT_ROLES: readonly DemoAccount["role"][] = ["executive", "founder", "cofounder"];
+
+export function isAttendanceExempt(role: DemoAccount["role"]): boolean {
+  return ATTENDANCE_EXEMPT_ROLES.includes(role);
+}
+
 function isAdminPlatform(role: DemoAccount["role"]): boolean {
   return role === "it_admin" || role === "compliance"; // admin / super_admin are super admins (isHr)
 }

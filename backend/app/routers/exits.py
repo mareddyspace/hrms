@@ -19,6 +19,7 @@ from app.schemas.exits import (
     ClearanceIn, ClearanceItemOut, ExitCaseOut, ExitDecisionIn, ExitIn, ExitStepOut, InterviewIn, InterviewOut, NoticeOut,
     RetentionIn, RetentionOut, SettlementIn, SettlementOut,
 )
+from app.services import role_rules
 from app.services import approvals as engine
 from app.services import exits as rules
 from app.services.activity import record_audit
@@ -192,6 +193,9 @@ def create_exit(body: ExitIn, request: Request, db: DbSession, user: CurrentUser
             raise NOT_FOUND
         if not _hr(user):
             raise HTTPException(403, "Only HR can raise an exit for someone else.")
+        blocked = role_rules.senior_block_reason(db, raiser.id, emp)
+        if blocked:
+            raise HTTPException(403, blocked)
     else:
         emp = raiser
     try:

@@ -34,6 +34,8 @@ STRING_FIELDS = ("department", "location", "legal_entity", "business_unit", "div
                  "grade", "job_family", "position_id")
 # Exits set "Exited" (services/exits.py); older records may say "Terminated". Either way the person has left.
 LEFT_STATUSES = ("Exited", "Terminated")
+# probation_completion applies to people who joined within this many days (13 months, as the compliance calendar).
+PROBATION_WINDOW_DAYS = 31 * 13
 ASSIGNMENT_FIELDS = ("manager_id", "job_title", "grade", "department", "location", "legal_entity", "employment_status")
 
 
@@ -89,6 +91,13 @@ def validate(db: Session, emp: Employee, action_type: str, effective: date, afte
                              f"they are {emp.employment_status}.")
     if not wanted and emp.employment_status in LEFT_STATUSES:
         raise LifecycleError("This person has left; use a rehire first.")
+    if action_type in ("promotion", "job_change") and (emp.employment_status or "").strip().lower() == "notice period":
+        raise LifecycleError(f"{emp.full_name} is serving notice: no promotions or job changes for leavers.")
+    if action_type == "probation_completion" and emp.joining_date and emp.joining_date < effective - timedelta(days=PROBATION_WINDOW_DAYS):
+        # Only people still in (or just out of) probation: not someone who joined years ago.
+        raise LifecycleError(f"{emp.full_name} joined on {emp.joining_date.isoformat()}; their probation is long over.")
+    if action_type == "contract_extension" and "contract" not in (emp.employment_type or "").lower()             and after.get("employment_type") != "Contract":
+        raise LifecycleError(f"{emp.full_name} is {emp.employment_type or 'not a contractor'}: only contracts can be extended.")
     clean: dict[str, Any] = {}
     for key, value in after.items():
         if key in STRING_FIELDS:

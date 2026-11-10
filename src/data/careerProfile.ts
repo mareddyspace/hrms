@@ -44,8 +44,12 @@ const SKILLS_BY_DEPARTMENT: Record<string, string[]> = {
   IT: ["sk-12", "sk-4"],
 };
 
-const GRADE_LEVEL: Record<string, number> = { L3: 1, L4: 1, L5: 2, L6: 3, M1: 3, M2: 3, M3: 4, E1: 4 };
-const LEADER_GRADES = new Set(["L6", "M1", "M2", "M3", "E1"]);
+// Demo accounts use L3-L6 / M1-M3 / E1; the 500-person workbook G1 (junior) - G9 (senior). Same as backend career.py.
+const GRADE_LEVEL: Record<string, number> = {
+  L3: 1, L4: 1, L5: 2, L6: 3, M1: 3, M2: 3, M3: 4, E1: 4,
+  G1: 1, G2: 1, G3: 1, G4: 1, G5: 2, G6: 2, G7: 3, G8: 3, G9: 4,
+};
+const LEADER_GRADES = new Set(["L6", "M1", "M2", "M3", "E1", "G7", "G8", "G9"]);
 
 function skill(skillId: string, level: number): EmployeeSkill {
   const lv = Math.max(0, Math.min(4, level));
@@ -101,7 +105,10 @@ export function careerTarget(
   const roles = (apiTargetRoles() ?? TARGET_ROLES).filter((r) => r.track === track);
   if (!roles.length) return null;
   const current = roles.findIndex((r) => r.title.toLowerCase() === person.designation.toLowerCase());
-  const byGrade: Record<string, number> = { L3: 0, L4: 0, L5: 0, L6: 1, M1: 2, M2: 3, M3: 3, E1: 3 };
+  const byGrade: Record<string, number> = {
+    L3: 0, L4: 0, L5: 0, L6: 1, M1: 2, M2: 3, M3: 3, E1: 3,
+    G1: 0, G2: 0, G3: 0, G4: 0, G5: 0, G6: 1, G7: 2, G8: 3, G9: 3,
+  };
   const index = current >= 0 ? current + 1 : byGrade[person.grade] ?? 0;
   const role = roles[Math.min(index, roles.length - 1)];
   if (role.title.toLowerCase() === person.designation.toLowerCase()) return null;

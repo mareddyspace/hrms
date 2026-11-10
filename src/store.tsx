@@ -109,7 +109,7 @@ import { setApiNotificationReadHandler } from "./data/collabLocal.ts";
 import type { LeaveRow } from "./model.ts";
 import { apiAddTimeEntry, apiDecideDay, apiDecideWeek, apiRemoveTimeEntry, apiReopenDay, apiSubmitDay, apiUpdateTimeEntry, timeMirror } from "./api/syncTimeSheets.ts";
 import { checkOutNeededToSubmit } from "./data/attendanceLocal.ts";
-import { DAY_TARGET, HALF_DAY_TARGET, dayFromApi, dayRecordFor, getLocalDays, isFixable, legacyLockedDate, saveLocalDays, shortfallText } from "./data/timesheetDays.ts";
+import { dayFromApi, dayTargetFor, halfDayTargetFor, dayRecordFor, getLocalDays, isFixable, legacyLockedDate, saveLocalDays, shortfallText } from "./data/timesheetDays.ts";
 import { halfDayLeave as halfDayLeaveOn, blockingLeave as fullDayLeaveOn, parseISODate } from "./model.ts";
 import { pendingMirror } from "./api/syncTimeApprovals.ts";
 import { bindSharedTasks, mergeSharedTasks, pushTaskChanges } from "./api/syncTasks.ts";
@@ -1774,7 +1774,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       submitDayTimesheet: async (date) => {
         if (date > todayISO()) return "You can't submit a day that hasn't happened yet.";
-        // Backend mode: the API checks the hours (9 h, 4.5 h on half-day leave) and sends the day to the manager.
+        // Backend mode: the API checks the hours (the normal day, half on half-day leave) and sends the day to the manager.
         if (API_ENABLED) return apiSubmitDay(date);
         const records = getLocalDays();
         const existing = dayRecordFor(records, active.id, date);
@@ -1790,7 +1790,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           .filter((entry) => entry.date === date);
         const total = entries.reduce((sum, entry) => sum + entry.hours, 0);
         if (total <= 0) return "Log your time for the day before submitting.";
-        const target = halfDayLeaveOn(state.leaveRequests, active.id, date) ? HALF_DAY_TARGET : DAY_TARGET;
+        const target = halfDayLeaveOn(state.leaveRequests, active.id, date) ? halfDayTargetFor(active) : dayTargetFor(active);
         const short = shortfallText(total, target);
         if (short) return `${short}.`;
         // No one above this person: HR decides (they see it in Team timesheets and Approvals).
