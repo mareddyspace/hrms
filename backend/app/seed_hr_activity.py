@@ -673,6 +673,9 @@ def _tax(db: Session, people: dict[str, Employee], today: date) -> int:
         fy, _ = decl.declarable_years(emp.country_code, today)[0]
         submitted, decided = _at(today - timedelta(days=40)), _at(today - timedelta(days=33))
         verifier = HR if who != HR else ADMIN
+        from app.seed_repairs import align_tax_regime
+
+        align_tax_regime(emp)  # old-regime deductions: the profile shows the same regime
         for i, (section, title, amount) in enumerate(TAX[emp.country_code]):
             db.add(TaxDeclaration(
                 id=f"td-seed-{who}-{i + 1}"[:64], employee_id=who, country_code=emp.country_code, financial_year=fy,

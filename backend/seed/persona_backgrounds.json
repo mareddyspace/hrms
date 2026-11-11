@@ -1,0 +1,183 @@
+{
+ "emp-mahesh": {
+  "education": [
+   {
+    "degree": "BTech Computer Science",
+    "institution": "College of Engineering Trivandrum",
+    "year": 2016
+   }
+  ],
+  "experience": [
+   {
+    "employer": "Northwind Systems",
+    "title": "Associate Software Engineer",
+    "from": "2016-07-04",
+    "to": "2019-04-26"
+   }
+  ]
+ },
+ "emp-priya": {
+  "education": [
+   {
+    "degree": "BTech Information Technology",
+    "institution": "NIT Calicut",
+    "year": 2014
+   }
+  ],
+  "experience": [
+   {
+    "employer": "Globex Solutions",
+    "title": "Software Engineer",
+    "from": "2014-07-14",
+    "to": "2020-06-26"
+   }
+  ]
+ },
+ "emp-oliver": {
+  "education": [
+   {
+    "degree": "BSc Computer Science",
+    "institution": "University of Reading",
+    "year": 2017
+   }
+  ],
+  "experience": [
+   {
+    "employer": "Harbor Digital Ltd",
+    "title": "Test Analyst",
+    "from": "2017-09-04",
+    "to": "2022-08-31"
+   }
+  ]
+ },
+ "emp-ram": {
+  "education": [
+   {
+    "degree": "BE Computer Science",
+    "institution": "Anna University",
+    "year": 2006
+   },
+   {
+    "degree": "MTech Software Systems",
+    "institution": "BITS Pilani",
+    "year": 2010
+   }
+  ],
+  "experience": [
+   {
+    "employer": "Bluefin Analytics",
+    "title": "Software Engineer",
+    "from": "2006-07-03",
+    "to": "2010-12-31"
+   },
+   {
+    "employer": "Globex Solutions",
+    "title": "Senior Software Engineer",
+    "from": "2011-01-10",
+    "to": "2014-05-30"
+   }
+  ]
+ },
+ "demo-hr-admin": {
+  "education": [
+   {
+    "degree": "BA Psychology",
+    "institution": "University of Delhi",
+    "year": 2003
+   },
+   {
+    "degree": "MBA, Human Resources",
+    "institution": "XLRI Jamshedpur",
+    "year": 2006
+   }
+  ],
+  "experience": [
+   {
+    "employer": "Brightpath Consulting",
+    "title": "HR Executive",
+    "from": "2006-06-01",
+    "to": "2010-08-31"
+   },
+   {
+    "employer": "Harbor Health",
+    "title": "HR Manager",
+    "from": "2010-09-15",
+    "to": "2014-12-31"
+   }
+  ]
+ },
+ "demo-recruiter": {
+  "education": [
+   {
+    "degree": "BA Communication",
+    "institution": "University of Texas at Austin",
+    "year": 2012
+   }
+  ],
+  "experience": [
+   {
+    "employer": "Crestline Media",
+    "title": "Recruiting Coordinator",
+    "from": "2012-08-01",
+    "to": "2015-03-31"
+   },
+   {
+    "employer": "Summit Financial",
+    "title": "Recruiter",
+    "from": "2015-04-13",
+    "to": "2018-01-19"
+   }
+  ]
+ },
+ "demo-ceo": {
+  "education": [
+   {
+    "degree": "BA Economics",
+    "institution": "University of Michigan",
+    "year": 1996
+   },
+   {
+    "degree": "MBA",
+    "institution": "Northwestern University (Kellogg)",
+    "year": 2002
+   }
+  ],
+  "experience": [
+   {
+    "employer": "Summit Financial",
+    "title": "Analyst",
+    "from": "1996-07-01",
+    "to": "2000-08-31"
+   },
+   {
+    "employer": "Globex Solutions",
+    "title": "VP Operations",
+    "from": "2002-07-01",
+    "to": "2011-12-30"
+   }
+  ]
+ },
+ "demo-admin": {
+  "education": [
+   {
+    "degree": "BSc Computer Science",
+    "institution": "University of Manchester",
+    "year": 2013
+   }
+  ],
+  "experience": [
+   {
+    "employer": "Crestline Media",
+    "title": "IT Support Analyst",
+    "from": "2013-09-02",
+    "to": "2016-10-31"
+   },
+   {
+    "employer": "Pinecrest Logistics",
+    "title": "Systems Administrator",
+    "from": "2016-11-14",
+    "to": "2019-12-20"
+   }
+  ]
+ }
+}

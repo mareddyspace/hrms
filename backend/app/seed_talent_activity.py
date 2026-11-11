@@ -236,8 +236,10 @@ def _learning(db: Session, ctx: _Ctx) -> dict[str, int]:
             hv = _h(emp.id, c.id, "enr")
             kind = hv % 10
             assigned_by = HR if c.mandatory else (emp.manager_id if hv % 3 == 0 and emp.manager_id else emp.id)
-            if kind < 5:  # completed
+            if kind < 5:  # completed (never before the person joined)
                 done = today - timedelta(days=10 + hv % 200)
+                if done < emp.joining_date:
+                    done = min(today, emp.joining_date + timedelta(days=3 + hv % 25))
                 rows.append(Enrollment(id=f"enr-seed-{emp.id}-{c.id}"[:64], course_id=c.id, employee_id=emp.id, status="completed",
                                        progress=100, due=done + timedelta(days=hv % 20), completed_on=done,
                                        score=70 + hv % 29, assigned_by=assigned_by))
@@ -257,6 +259,8 @@ def _learning(db: Session, ctx: _Ctx) -> dict[str, int]:
         for i, (name, issuer, years) in enumerate(options[: 1 + _h(emp.id, "certs") % 2]):
             hv = _h(emp.id, name)
             issued = today - timedelta(days=60 + hv % 1000)
+            if issued < emp.joining_date:  # earned while working here, so not before joining
+                issued = min(today, emp.joining_date + timedelta(days=20 + hv % 60))
             expires = None
             if years:
                 expires = issued.replace(year=issued.year + years) if not (issued.month == 2 and issued.day == 29) else issued + timedelta(days=365 * years)
@@ -299,6 +303,18 @@ COMMENTS_360 = ("Always willing to help and easy to work with.", "Clear communic
                 "Very reliable on deadlines.", "Brings good ideas to team discussions.", "Could delegate a little more.")
 
 
+def cycle_manager(by_id: dict[str, Employee], emp: Employee, cycle_end: date) -> str | None:
+    """The manager who reviews emp for a cycle that ended on cycle_end: the current manager, or the first one up the
+    reporting line who had joined by then (a manager who joined after the cycle closed cannot have rated it)."""
+    seen: set[str] = set()
+    mid = emp.manager_id if emp.manager_id in by_id else None
+    while mid and mid not in seen and by_id[mid].joining_date > cycle_end:
+        seen.add(mid)
+        nxt = by_id[mid].manager_id
+        mid = nxt if nxt in by_id else None
+    return None if mid in seen else mid
+
+
 def _cycle(db: Session) -> ReviewCycle | None:
     cid, name, start, end, self_due, mgr_due = PAST_CYCLE
     row = db.get(ReviewCycle, cid) or db.scalar(select(ReviewCycle).where(ReviewCycle.name == name))
@@ -332,6 +348,8 @@ def _performance(db: Session, ctx: _Ctx) -> dict[str, int]:
             hv = _h(emp.id, cycle.id)
             rid = f"rev-seed-{cycle.id}-{emp.id}"[:64]
             mgr = emp.manager_id if emp.manager_id in ctx.by_id else None
+            if is_past:  # the manager who rates a closed cycle must have been here during it
+                mgr = cycle_manager(ctx.by_id, emp, cycle.end_date)
             self_at = _at(cycle.self_review_due - timedelta(days=1 + hv % 6), 11)
             mgr_at = _at(cycle.manager_review_due - timedelta(days=1 + hv % 5), 15)
             r = PerfReview(id=rid, cycle_id=cycle.id, employee_id=emp.id, self_status="submitted", self_text=_self_text(emp, cycle),
@@ -356,7 +374,8 @@ def _performance(db: Session, ctx: _Ctx) -> dict[str, int]:
                     r.rating, r.rating_proposed_by, r.rating_proposed_at = _pick(RATINGS, emp.id, "rating2"), mgr, mgr_at
             reviews.append(r)
             if is_past and (emp.id in DEMO_IDS or hv % 3 == 0):
-                pool = sorted(set(ctx.colleagues(emp)) - {emp.id}, key=lambda i: _h(emp.id, i))
+                pool = sorted((i for i in set(ctx.colleagues(emp)) - {emp.id} if ctx.by_id[i].joining_date <= cycle.end_date),
+                              key=lambda i: _h(emp.id, i))
                 for i, rev_id in enumerate(pool[: 2 + hv % 2]):
                     reviewers.append(Reviewer360(review_id=rid, reviewer_id=rev_id, nominated_by=emp.id,
                                                  nominated_at=self_at - timedelta(days=10), rating=3 + _h(rid, rev_id) % 3,

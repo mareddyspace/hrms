@@ -164,6 +164,9 @@ def _tax_declarations(db: Session, today: date) -> int:
         if emp is None or db.get(TaxDeclaration, tid) is not None or emp.country_code not in decl.SECTIONS:
             continue
         fy, _ = decl.declarable_years(emp.country_code, today)[0]
+        from app.seed_repairs import align_tax_regime
+
+        align_tax_regime(emp)  # an old-regime deduction: the profile shows the same regime
         now = utcnow()
         history = [{"at": now.isoformat(), "by": emp.id, "action": "Saved as draft"}]
         if status != "draft":

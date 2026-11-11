@@ -123,6 +123,105 @@ def _blank(value: Any) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
 
+def _timeline(e: Employee) -> tuple[int, date, date, bool]:
+    """Graduation year and previous job that fit together: born -> graduated at 21+ -> previous job starts after
+    graduating and ends 3-13 weeks before joining TimeZ. With no room for a job, a student internship instead."""
+    key = e.id
+    joined = e.joining_date or date(2020, 1, 1)
+    dob = e.date_of_birth if isinstance(e.date_of_birth, date) else None
+    prev_end = joined - timedelta(days=_num(key + "pe", 20, 90))
+    years = _num(key + "ps", 2, 6)
+    earliest = (dob.year + 21) if dob else 1985
+    latest = prev_end.year - 1  # at least about a year in the previous job
+    grad = min(max(prev_end.year - years - _num(key + "gap", 0, 1), earliest), date.today().year - 1)
+    if grad > latest:  # straight from university: an internship in the final year
+        grad = max(earliest, min(joined.year, date.today().year - 1))
+        start = date(grad - 1, 6, 1)
+        return grad, start, start + timedelta(days=_num(key + "in", 60, 90)), True
+    start = max(prev_end - timedelta(days=365 * years), date(grad, 7, 1))
+    return grad, start, prev_end, False
+
+
+def _old_background(e: Employee) -> tuple[list[dict], list[dict]]:
+    """The education / job values the first version of this seeder wrote (graduation and job picked separately),
+    so repair_backgrounds() can recognise and correct only those, never values a person or HR entered."""
+    cc = e.country_code or "IN"
+    key = e.id
+    _division, family, degree = DEPARTMENT_INFO.get(e.department or "", ("Corporate", e.department or "General", "Bachelor's degree"))
+    joined = e.joining_date or date(2020, 1, 1)
+    grad_year = max(1985, min(joined.year - _num(key + "gap", 1, 8), date.today().year - 1))
+    prev_end = joined - timedelta(days=_num(key + "pe", 20, 90))
+    prev_start = prev_end - timedelta(days=365 * _num(key + "ps", 2, 6))
+    edu = [{"degree": degree, "institution": _pick(key + "uni", UNIVERSITIES.get(cc, ["State University"])), "year": grad_year}]
+    exp = [{"employer": _pick(key + "emp", EMPLOYERS), "title": _pick(key + "pt", [
+        f"Associate {family}", f"{family} Analyst", f"{family} Specialist", f"Junior {e.job_title or family}"]),
+        "from": prev_start.strftime("%Y-%m"), "to": prev_end.strftime("%Y-%m")}]
+    return edu, exp
+
+
+def min_joining_age(e: Employee) -> int:
+    """Youngest believable age at joining for this grade / title (graduate roles 22, senior and director roles older)."""
+    grade = (e.grade or "").upper()
+    title = (e.job_title or "").lower()
+    age = {"G1": 21, "G2": 22, "G3": 22, "G4": 23, "G5": 25, "G6": 27, "G7": 30, "G8": 33, "G9": 36}.get(grade, 22)
+    if any(w in title for w in ("director", "head of", "vp", "chief")):
+        age = max(age, 32)
+    elif any(w in title for w in ("manager", "lead")):
+        age = max(age, 27)
+    return age
+
+
+def repair_young_joiners(db: Session) -> int:
+    """The sample workbook has people who joined at 13-20 (even directors). Move such a birth date back so the person
+    was at least min_joining_age() when joining; day and month stay, joining date and everything else stay."""
+    fixed = 0
+    for e in db.scalars(select(Employee).where(Employee.date_of_birth.is_not(None), Employee.joining_date.is_not(None))):
+        need = min_joining_age(e)
+        dob, joined = e.date_of_birth, e.joining_date
+        age = joined.year - dob.year - ((joined.month, joined.day) < (dob.month, dob.day))
+        if age >= need:
+            continue
+        year = joined.year - need - _num(e.id + "dobfix", 0, 4) - 1
+        day = min(dob.day, 28) if dob.month == 2 else dob.day
+        e.date_of_birth = date(year, dob.month, day)
+        fixed += 1
+    return fixed
+
+
+def _personas() -> dict[str, dict]:
+    """The sign-in people's own education and jobs (the same as their portal personas, src/data/personProfileSeed.ts)."""
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "seed" / "persona_backgrounds.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def repair_backgrounds(db: Session) -> int:
+    """Correct generated education / previous-job values whose dates contradict each other (a job before
+    graduating, or titles like "Junior Senior …"), and give the sign-in people their persona background.
+    Only rows still holding exactly what this seeder generated (or nothing) are changed."""
+    fixed = 0
+    personas = _personas()
+    for e in db.scalars(select(Employee)):
+        old_edu, old_exp = _old_background(e)
+        new = _profile_values(e)
+        generated = (e.education, e.experience) in ((old_edu, old_exp), (new["education"], new["experience"]))
+        blank = not e.education and not e.experience
+        if e.id in personas and (generated or blank):
+            want = personas[e.id]
+            if e.education != want.get("education") or e.experience != want.get("experience"):
+                e.education, e.experience = want.get("education") or [], want.get("experience") or []
+                fixed += 1
+            continue
+        if e.education != old_edu or e.experience != old_exp:
+            continue
+        if new["education"] != old_edu or new["experience"] != old_exp:
+            e.education, e.experience = new["education"], new["experience"]
+            fixed += 1
+    return fixed
+
+
 def _profile_values(e: Employee) -> dict[str, Any]:
     cc = e.country_code or "IN"
     key = e.id
@@ -135,12 +234,14 @@ def _profile_values(e: Employee) -> dict[str, Any]:
     if cc == "IN" and CITY_LANGUAGE.get(city) and CITY_LANGUAGE[city] not in langs:
         langs.append(CITY_LANGUAGE[city])
     joined = e.joining_date or date(2020, 1, 1)
-    grad_year = max(1985, min(joined.year - _num(key + "gap", 1, 8), date.today().year - 1))
-    prev_end = joined - timedelta(days=_num(key + "pe", 20, 90))
-    prev_start = prev_end - timedelta(days=365 * _num(key + "ps", 2, 6))
+    grad_year, prev_start, prev_end, intern = _timeline(e)
     rel = _pick(key + "rel", ["Spouse", "Parent", "Sibling"])
     contact = f"{_pick(key + 'efn', FIRST.get(cc, FIRST['IN']))} {last or _pick(key + 'eln', ['Smith', 'Khan', 'Rao'])}"
-    birth = date(joined.year - _num(key + "age", 23, 40), _num(key + "bm", 1, 12), _num(key + "bd", 1, 28))
+    if contact.lower() == f"{first} {last}".strip().lower():  # never the person themself as their emergency contact
+        others = [n for n in FIRST.get(cc, FIRST["IN"]) if n.lower() != first.lower()]
+        contact = f"{_pick(key + 'efn2', others)} {last or _pick(key + 'eln', ['Smith', 'Khan', 'Rao'])}"
+    # a generated birth date fits the timeline: graduated at 21-23
+    birth = date(grad_year - _num(key + "age", 21, 23), _num(key + "bm", 1, 12), _num(key + "bd", 1, 28))
     return {
         "nationality": NATIONALITY.get(cc, "Other"),
         "personal_email": f"{handle}{_num(key + 'em', 1, 99)}@mail.example",
@@ -160,8 +261,8 @@ def _profile_values(e: Employee) -> dict[str, Any]:
         "languages": langs,
         "education": [{"degree": degree, "institution": _pick(key + "uni", UNIVERSITIES.get(cc, ["State University"])),
                        "year": grad_year}],
-        "experience": [{"employer": _pick(key + "emp", EMPLOYERS), "title": _pick(key + "pt", [
-            f"Associate {family}", f"{family} Analyst", f"{family} Specialist", f"Junior {e.job_title or family}"]),
+        "experience": [{"employer": _pick(key + "emp", EMPLOYERS), "title": (f"{family} Intern" if intern else _pick(key + "pt", [
+            f"Associate {family}", f"{family} Analyst", f"{family} Specialist", f"{family} Executive"])),
             "from": prev_start.strftime("%Y-%m"), "to": prev_end.strftime("%Y-%m")}],
         "career_goals": _pick(key + "cg", [
             f"Grow into a senior {e.job_title or family} role within two years.",
@@ -251,9 +352,22 @@ def assign_missing_managers(db: Session) -> int:
     return assigned
 
 
+def hiring_manager_for(e: Employee, people: dict[str, Employee]) -> str:
+    """Who hired this person: their manager if the manager was already here on the joining day, otherwise the first
+    person up the reporting line who was (a manager who joined later cannot have hired them); the board for the CEO."""
+    if e.id == CEO:
+        return "Board of Directors"
+    boss, seen = people.get(e.manager_id or ""), set()
+    while boss is not None and boss.id not in seen and boss.joining_date and e.joining_date and boss.joining_date > e.joining_date:
+        seen.add(boss.id)
+        boss = people.get(boss.manager_id or "")
+    return boss.full_name if boss is not None and boss.id not in seen else "Board of Directors"
+
+
 def fill_hiring(db: Session) -> int:
     """Blank "hired by" (a recruiter: someone in HR / talent in the same country who joined earlier) and "hiring
-    manager" (the person's manager; the board for the CEO). Fills blanks only."""
+    manager" (the person's manager, or the first one up the line who had joined by then; the board for the CEO).
+    Fills blanks only."""
     people = {e.id: e for e in db.scalars(select(Employee))}
     recruiters: dict[str, list[Employee]] = {}
     for e in people.values():
@@ -265,8 +379,7 @@ def fill_hiring(db: Session) -> int:
     filled = 0
     for e in people.values():
         if _blank(e.hiring_manager):
-            boss = people.get(e.manager_id or "")
-            e.hiring_manager = "Board of Directors" if e.id == CEO else (boss.full_name if boss else "Board of Directors")
+            e.hiring_manager = hiring_manager_for(e, people)
             filled += 1
         if _blank(e.hired_by):
             if e.id == CEO:
@@ -281,9 +394,13 @@ def fill_hiring(db: Session) -> int:
 
 
 def seed_profiles(db: Session) -> dict[str, int]:
-    out = {"profile_fields_filled": fill_missing_profiles(db)}
+    out = {"birth_dates_repaired": repair_young_joiners(db)}
+    db.flush()
+    out["profile_fields_filled"] = fill_missing_profiles(db)
     db.flush()
     out["managers_assigned"] = assign_missing_managers(db)
+    db.flush()
+    out["backgrounds_repaired"] = repair_backgrounds(db)
     db.flush()
     out["hiring_fields_filled"] = fill_hiring(db)
     db.flush()

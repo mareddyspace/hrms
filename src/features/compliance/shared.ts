@@ -76,7 +76,8 @@ export function privacyLawFor(countryCode: string): string {
 }
 
 /** Generic tolerant localStorage store: per-field fallback, cached snapshot, safe write. */
-export function createLocalStore<T extends Record<string, unknown>>(key: string, defaults: () => T) {
+/** revive: corrects a saved state on load (for example sample rows that were wrong in an earlier version). */
+export function createLocalStore<T extends Record<string, unknown>>(key: string, defaults: () => T, revive?: (state: T) => T) {
   const listeners = new Set<() => void>();
   let cache: T | null = null;
 
@@ -94,7 +95,7 @@ export function createLocalStore<T extends Record<string, unknown>>(key: string,
           (base as Record<keyof T, unknown>)[field] = value;
         }
       }
-      return base;
+      return revive ? revive(base) : base;
     } catch {
       return base;
     }

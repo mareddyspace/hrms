@@ -24,7 +24,7 @@ export interface ExperienceRecord {
 
 export interface DependentRecord {
   name: string;
-  relation: "Spouse" | "Child" | "Parent";
+  relation: "Spouse" | "Partner" | "Child" | "Parent";
   dateOfBirth: string;
 }
 
@@ -190,6 +190,7 @@ export function ageOn(dateOfBirth: string, on: string): number {
 
 /* ───────────── Personas (hand-written) ───────────── */
 
+// Dependents match the benefits dependents seeded for the same people (backend seed_rewards.py, seed_hr_activity.py).
 const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "lastName"> & { firstName?: string; lastName?: string }> = {
   "emp-mahesh": {
     preferredName: "Babu",
@@ -199,7 +200,7 @@ const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "
     education: [{ degree: "BTech Computer Science", institution: "College of Engineering Trivandrum", year: 2016 }],
     experience: [{ employer: "Northwind Systems", title: "Associate Software Engineer", from: "2016-07-04", to: "2019-04-26" }],
     dependents: [
-      { name: "Ananya Menon", relation: "Spouse", dateOfBirth: "1995-03-11" },
+      { name: "Ananya Menon", relation: "Spouse", dateOfBirth: "1993-08-21" },
       { name: "Arjun Menon", relation: "Child", dateOfBirth: "2025-05-30" },
     ],
   },
@@ -219,7 +220,7 @@ const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "
     workArrangement: "Hybrid",
     education: [{ degree: "BSc Computer Science", institution: "University of Reading", year: 2017 }],
     experience: [{ employer: "Harbor Digital Ltd", title: "Test Analyst", from: "2017-09-04", to: "2022-08-31" }],
-    dependents: [{ name: "Emily Hughes", relation: "Spouse", dateOfBirth: "1996-06-18" }],
+    dependents: [{ name: "Emily Hughes", relation: "Spouse", dateOfBirth: "1996-04-18" }],
   },
   "emp-ram": {
     preferredName: "Ram",
@@ -235,8 +236,8 @@ const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "
       { employer: "Globex Solutions", title: "Senior Software Engineer", from: "2011-01-10", to: "2014-05-30" },
     ],
     dependents: [
-      { name: "Lakshmi Ram", relation: "Spouse", dateOfBirth: "1987-07-02" },
-      { name: "Nila Ram", relation: "Child", dateOfBirth: "2016-04-11" },
+      { name: "Lakshmi Krishnan", relation: "Spouse", dateOfBirth: "1987-04-11" },
+      { name: "Arjun Krishnan", relation: "Child", dateOfBirth: "2016-09-02" },
     ],
   },
   "demo-hr-admin": {
@@ -254,8 +255,8 @@ const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "
       { employer: "Harbor Health", title: "HR Manager", from: "2010-09-15", to: "2014-12-31" },
     ],
     dependents: [
-      { name: "Sana Ali", relation: "Spouse", dateOfBirth: "1985-04-18" },
-      { name: "Zara Ali", relation: "Child", dateOfBirth: "2013-09-05" },
+      { name: "Ayesha Ali", relation: "Spouse", dateOfBirth: "1986-12-19" },
+      { name: "Imran Ali", relation: "Parent", dateOfBirth: "1956-03-07" },
     ],
   },
   "demo-recruiter": {
@@ -268,7 +269,7 @@ const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "
       { employer: "Crestline Media", title: "Recruiting Coordinator", from: "2012-08-01", to: "2015-03-31" },
       { employer: "Summit Financial", title: "Recruiter", from: "2015-04-13", to: "2018-01-19" },
     ],
-    dependents: [],
+    dependents: [{ name: "Daniel Clark", relation: "Spouse", dateOfBirth: "1988-06-23" }],
   },
   "demo-ceo": {
     middleName: "Alexander",
@@ -285,9 +286,9 @@ const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "
       { employer: "Globex Solutions", title: "VP Operations", from: "2002-07-01", to: "2011-12-30" },
     ],
     dependents: [
-      { name: "Claire Blake", relation: "Spouse", dateOfBirth: "1976-08-09" },
-      { name: "Ethan Blake", relation: "Child", dateOfBirth: "2008-02-14" },
-      { name: "Lily Blake", relation: "Child", dateOfBirth: "2011-10-03" },
+      { name: "Rachel Blake", relation: "Spouse", dateOfBirth: "1976-02-14" },
+      { name: "Ethan Blake", relation: "Child", dateOfBirth: "2010-05-30" },
+      { name: "Lily Blake", relation: "Child", dateOfBirth: "2013-11-08" },
     ],
   },
   "demo-admin": {
@@ -300,7 +301,7 @@ const PERSONA_DETAILS: Record<string, Omit<PersonProfileDetails, "firstName" | "
       { employer: "Crestline Media", title: "IT Support Analyst", from: "2013-09-02", to: "2016-10-31" },
       { employer: "Pinecrest Logistics", title: "Systems Administrator", from: "2016-11-14", to: "2019-12-20" },
     ],
-    dependents: [],
+    dependents: [{ name: "Sam Morgan", relation: "Partner", dateOfBirth: "1990-08-17" }],
   },
 };
 

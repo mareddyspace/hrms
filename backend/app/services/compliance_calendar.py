@@ -217,6 +217,10 @@ def run_alerts(db: Session, today: date, send: Any) -> int:
 
 
 # ---------- seed: a few immigration documents and contract end dates so the calendar has people items ----------
+# Nationalities given to the sample visa / work-permit holders (app/seed_repairs.py uses the same list).
+IMMIGRANT_NATIONALITY = ("Indian", "South African", "Filipino", "Brazilian")
+
+
 def seed_people_items(db: Session, today: date) -> dict[str, int]:
     from app.seed_hr_content import _pdf
     from app.models import DocumentVersion
@@ -229,6 +233,8 @@ def seed_people_items(db: Session, today: date) -> dict[str, int]:
         doc_id = f"doc-seed-imm-{i}"
         if db.get(EmployeeDocument, doc_id) is not None:
             continue
+        if not emp.nationality:  # someone who needs a visa or work permit is not a national of that country
+            emp.nationality = IMMIGRANT_NATIONALITY[i % len(IMMIGRANT_NATIONALITY)]
         data = _pdf(title, [emp.full_name, f"{title} (sample)", f"Valid until {(today + timedelta(days=offset)):%d %b %Y}"])
         vid = f"dv-seed-imm-{i}"
         saved = docs.save_bytes(f"documents/{emp.id}", vid, data, "application/pdf")

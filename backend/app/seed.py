@@ -320,9 +320,9 @@ def run(reset_passwords: bool = False, *, only_if_free: bool = False) -> dict[st
         stats.update(seed_profiles(db))
         db.flush()
         # Sample activity so no screen is empty (all insert-only; see each module's docstring).
-        from app import seed_admin_data, seed_comms, seed_hr_activity, seed_pay_claims, seed_reimbursements, seed_shift_roster, seed_talent_activity, seed_time_activity, seed_fill_gaps, seed_hr_period
+        from app import seed_admin_data, seed_comms, seed_hr_activity, seed_pay_claims, seed_reimbursements, seed_shift_roster, seed_talent_activity, seed_time_activity, seed_fill_gaps, seed_hr_period, seed_repairs
 
-        for module in (seed_admin_data, seed_time_activity, seed_talent_activity, seed_hr_activity, seed_shift_roster, seed_pay_claims, seed_reimbursements, seed_comms, seed_fill_gaps, seed_hr_period):
+        for module in (seed_admin_data, seed_time_activity, seed_talent_activity, seed_hr_activity, seed_shift_roster, seed_pay_claims, seed_reimbursements, seed_comms, seed_fill_gaps, seed_hr_period, seed_repairs):
             stats.update(module.seed(db))
             db.flush()
         db.commit()

@@ -102,6 +102,9 @@ def seed(db: Session) -> dict[str, int]:
              "doc": True},
             {"id": "td-seed-3", "section": "HRA", "title": "Rent — Kochi flat (Apr–Mar)", "amount": 180000, "status": "draft"},
         ]
+        from app.seed_repairs import align_tax_regime
+
+        align_tax_regime(babu)  # 80C / 80D / HRA are old-regime deductions: the profile shows the same regime
         for s in samples:
             if db.get(TaxDeclaration, s["id"]) is not None:
                 continue

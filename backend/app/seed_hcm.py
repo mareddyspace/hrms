@@ -48,6 +48,24 @@ class SeedDataError(ValueError):
     pass
 
 
+# The workbook's Gender column was filled at random (a "Rahul" marked Female, an "Olivia" Male). For the first names
+# the workbook uses, the gender that goes with the name wins; any other name keeps the workbook value.
+NAME_GENDER = {
+    **dict.fromkeys(("Aarav", "Aditya", "Arjun", "Daniel", "Ethan", "George", "Harry", "Jack", "James", "Karan", "Liam",
+                     "Lucas", "Nikhil", "Noah", "Oliver", "Rahul", "Rohan", "Sanjay", "Vikram", "Vivaan"), "Male"),
+    **dict.fromkeys(("Aisha", "Amelia", "Ananya", "Charlotte", "Chloe", "Diya", "Ella", "Emily", "Emma", "Grace", "Ishita",
+                     "Kavya", "Meera", "Mia", "Neha", "Olivia", "Priya", "Riya", "Sneha", "Sophia"), "Female"),
+}
+
+# Values exactly as the workbook has them, before the corrections in load_employees (id -> {"gender", "manager_id"}).
+# app/seed_repairs.py uses them to recognise rows that still hold the uncorrected workbook value.
+WORKBOOK_RAW: dict[str, dict[str, str | None]] = {}
+
+
+def _grade_no(grade: str | None) -> int | None:
+    return int(grade[1:]) if grade and grade[0] == "G" and grade[1:].isdigit() else None
+
+
 def _as_date(value: Any) -> date | None:
     if value in (None, ""):
         return None
@@ -103,7 +121,16 @@ def load_employees(path: Path = WORKBOOK) -> tuple[list[dict[str, Any]], dict[st
         p["cost_centre"] = cost_centre(p["country_code"], p["department"] or "")
         p["company"] = p["company"] or "TimeZ"
         p["source"] = "hcm_sample"
+        WORKBOOK_RAW[p["id"]] = {"gender": p["gender"], "manager_id": p["manager_id"]}
+        p["gender"] = NAME_GENDER.get(p["first_name"] or "", p["gender"])
         people.append(p)
+    # A manager must not be on a lower grade than the person (the workbook has a few G3 "Controllers" managing G5-G6
+    # staff): such a link is dropped, and app/seed_profiles.py gives the person their department head instead.
+    grade_of = {p["id"]: _grade_no(p["grade"]) for p in people}
+    for p in people:
+        mine, boss = grade_of.get(p["id"]), grade_of.get(p["manager_id"] or "")
+        if mine is not None and boss is not None and boss < mine:
+            p["manager_id"] = None
 
     errors: list[str] = []
     ids = [p["id"] for p in people]

@@ -101,21 +101,23 @@ function defaults(): BgvState {
         createdOn: relDay(-3),
         checks: blankChecks(),
       },
+      // The employees' own files: the check every new hire went through, consent about three weeks before joining
+      // and every check done before the start date (Babu joined 2019-05-13, Priya 2020-07-06, Oliver 2022-09-12).
       {
         id: "bgv-emp-mahesh",
         subjectKind: "employee",
         subjectId: "emp-mahesh",
         subjectName: "Babu Menon",
         role: "Software Engineer",
-        consent: { givenOn: "2026-08-01", recordedById: "emp-mahesh", at: "2026-08-01T09:00:00.000Z" },
-        createdOn: "2026-08-01",
+        consent: { givenOn: "2019-04-22", recordedById: "emp-mahesh", at: "2019-04-22T09:00:00.000Z" },
+        createdOn: "2019-04-22",
         checks: [
-          check("Identity", "Clear", "SecureCheck", "2026-08-02", "2026-08-04"),
-          check("Education", "Clear", "SecureCheck", "2026-08-02", "2026-08-14"),
-          check("Previous employment", "Clear", "SecureCheck", "2026-08-02", "2026-08-19"),
-          check("Criminal record", "In progress", "SecureCheck", "2026-08-02"),
-          check("Address", "Clear", "SecureCheck", "2026-08-02", "2026-08-10"),
-          check("Reference", "In progress", "SecureCheck", "2026-08-05"),
+          check("Identity", "Clear", "AuthBridge", "2019-04-23", "2019-04-25"),
+          check("Education", "Clear", "AuthBridge", "2019-04-23", "2019-05-03"),
+          check("Previous employment", "Clear", "AuthBridge", "2019-04-23", "2019-05-07"),
+          check("Criminal record", "Clear", "AuthBridge", "2019-04-23", "2019-05-06"),
+          check("Address", "Clear", "AuthBridge", "2019-04-23", "2019-04-30"),
+          check("Reference", "Clear", "AuthBridge", "2019-04-24", "2019-05-02"),
         ],
       },
       {
@@ -124,15 +126,15 @@ function defaults(): BgvState {
         subjectId: "emp-priya",
         subjectName: "Priya Nair",
         role: "Senior Software Engineer",
-        consent: { givenOn: "2026-07-15", recordedById: "emp-priya", at: "2026-07-15T09:00:00.000Z" },
-        createdOn: "2026-07-15",
+        consent: { givenOn: "2020-06-15", recordedById: "emp-priya", at: "2020-06-15T09:00:00.000Z" },
+        createdOn: "2020-06-15",
         checks: [
-          check("Identity", "Clear", "SecureCheck", "2026-07-16", "2026-07-17"),
-          check("Education", "Clear", "SecureCheck", "2026-07-16", "2026-07-24"),
-          check("Previous employment", "Clear", "SecureCheck", "2026-07-16", "2026-07-29"),
-          check("Criminal record", "Clear", "SecureCheck", "2026-07-16", "2026-07-30"),
-          check("Address", "Clear", "SecureCheck", "2026-07-16", "2026-07-22"),
-          check("Reference", "In progress", "SecureCheck", "2026-07-16"),
+          check("Identity", "Clear", "AuthBridge", "2020-06-16", "2020-06-17"),
+          check("Education", "Clear", "AuthBridge", "2020-06-16", "2020-06-24"),
+          check("Previous employment", "Clear", "AuthBridge", "2020-06-16", "2020-06-29"),
+          check("Criminal record", "Clear", "AuthBridge", "2020-06-16", "2020-06-30"),
+          check("Address", "Clear", "AuthBridge", "2020-06-16", "2020-06-22"),
+          check("Reference", "Clear", "AuthBridge", "2020-06-16", "2020-06-26"),
         ],
       },
       {
@@ -141,23 +143,89 @@ function defaults(): BgvState {
         subjectId: "emp-oliver",
         subjectName: "Oliver Hughes",
         role: "QA Engineer",
-        consent: { givenOn: "2026-08-03", recordedById: "emp-oliver", at: "2026-08-03T09:00:00.000Z" },
-        createdOn: "2026-08-03",
+        consent: { givenOn: "2022-08-22", recordedById: "emp-oliver", at: "2022-08-22T09:00:00.000Z" },
+        createdOn: "2022-08-22",
         checks: [
-          check("Identity", "Clear", "HireRight", "2026-08-04", "2026-08-05", "Right to work: British passport"),
-          check("Criminal record", "Clear", "HireRight", "2026-08-04", "2026-08-12", "Basic DBS check"),
-          check("Address", "Clear", "HireRight", "2026-08-04", "2026-08-07"),
-          check("Education", "Clear", "HireRight", "2026-08-04", "2026-08-15"),
-          check("Previous employment", "Clear", "HireRight", "2026-08-04", "2026-08-21"),
-          check("Reference", "In progress", "HireRight", "2026-08-06"),
+          check("Identity", "Clear", "HireRight", "2022-08-23", "2022-08-24", "Right to work: British passport"),
+          check("Criminal record", "Clear", "HireRight", "2022-08-23", "2022-08-31", "Basic DBS check"),
+          check("Address", "Clear", "HireRight", "2022-08-23", "2022-08-26"),
+          check("Education", "Clear", "HireRight", "2022-08-23", "2022-09-01"),
+          check("Previous employment", "Clear", "HireRight", "2022-08-23", "2022-09-06"),
+          check("Reference", "Clear", "HireRight", "2022-08-25", "2022-09-02"),
         ],
       },
     ],
   };
 }
 
+/**
+ * The first sample files of Babu, Priya and Oliver started in 2026, years after they joined (a background check is done
+ * before joining). A browser that saved one of them untouched would keep showing it, so a saved record still exactly
+ * equal to that old sample is read as the corrected one above; a record HR or the employee changed is kept as it is.
+ */
+const OLD_EMPLOYEE_SAMPLES: BgvRecord[] = [
+  {
+    id: "bgv-emp-mahesh",
+    subjectKind: "employee",
+    subjectId: "emp-mahesh",
+    subjectName: "Babu Menon",
+    role: "Software Engineer",
+    consent: { givenOn: "2026-08-01", recordedById: "emp-mahesh", at: "2026-08-01T09:00:00.000Z" },
+    createdOn: "2026-08-01",
+    checks: [
+      check("Identity", "Clear", "SecureCheck", "2026-08-02", "2026-08-04"),
+      check("Education", "Clear", "SecureCheck", "2026-08-02", "2026-08-14"),
+      check("Previous employment", "Clear", "SecureCheck", "2026-08-02", "2026-08-19"),
+      check("Criminal record", "In progress", "SecureCheck", "2026-08-02"),
+      check("Address", "Clear", "SecureCheck", "2026-08-02", "2026-08-10"),
+      check("Reference", "In progress", "SecureCheck", "2026-08-05"),
+    ],
+  },
+  {
+    id: "bgv-emp-priya",
+    subjectKind: "employee",
+    subjectId: "emp-priya",
+    subjectName: "Priya Nair",
+    role: "Senior Software Engineer",
+    consent: { givenOn: "2026-07-15", recordedById: "emp-priya", at: "2026-07-15T09:00:00.000Z" },
+    createdOn: "2026-07-15",
+    checks: [
+      check("Identity", "Clear", "SecureCheck", "2026-07-16", "2026-07-17"),
+      check("Education", "Clear", "SecureCheck", "2026-07-16", "2026-07-24"),
+      check("Previous employment", "Clear", "SecureCheck", "2026-07-16", "2026-07-29"),
+      check("Criminal record", "Clear", "SecureCheck", "2026-07-16", "2026-07-30"),
+      check("Address", "Clear", "SecureCheck", "2026-07-16", "2026-07-22"),
+      check("Reference", "In progress", "SecureCheck", "2026-07-16"),
+    ],
+  },
+  {
+    id: "bgv-emp-oliver",
+    subjectKind: "employee",
+    subjectId: "emp-oliver",
+    subjectName: "Oliver Hughes",
+    role: "QA Engineer",
+    consent: { givenOn: "2026-08-03", recordedById: "emp-oliver", at: "2026-08-03T09:00:00.000Z" },
+    createdOn: "2026-08-03",
+    checks: [
+      check("Identity", "Clear", "HireRight", "2026-08-04", "2026-08-05", "Right to work: British passport"),
+      check("Criminal record", "Clear", "HireRight", "2026-08-04", "2026-08-12", "Basic DBS check"),
+      check("Address", "Clear", "HireRight", "2026-08-04", "2026-08-07"),
+      check("Education", "Clear", "HireRight", "2026-08-04", "2026-08-15"),
+      check("Previous employment", "Clear", "HireRight", "2026-08-04", "2026-08-21"),
+      check("Reference", "In progress", "HireRight", "2026-08-06"),
+    ],
+  },
+];
+const STALE_SAMPLE = new Map(OLD_EMPLOYEE_SAMPLES.map((r) => [r.id, JSON.stringify(r)]));
+
+function withCorrectedSamples(state: BgvState): BgvState {
+  if (!state.records.some((r) => STALE_SAMPLE.get(r.id) === JSON.stringify(r))) return state;
+  const fresh = new Map(defaults().records.map((r) => [r.id, r]));
+  return { ...state, records: state.records.map((r) => (STALE_SAMPLE.get(r.id) === JSON.stringify(r) ? (fresh.get(r.id) ?? r) : r)) };
+}
+
 // v2: Babu's and Oliver's education, employment and reference checks moved on; saved v1 copies would hide that.
-const store = createLocalStore<BgvState>("kastech.bgv.v2", defaults);
+const store = createLocalStore<BgvState>("kastech.bgv.v2", defaults, withCorrectedSamples);
 
 export const subscribeBgv = store.subscribe;
 export const getBgvState = store.getState;

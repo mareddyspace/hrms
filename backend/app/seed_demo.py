@@ -126,7 +126,12 @@ def _lifecycle(db: Session, today: date) -> int:
         ).order_by(Employee.joining_date, Employee.id))
         manager = db.get(Employee, person.manager_id) if person and person.manager_id else None
         if person is not None and manager is not None:
-            end = person.joining_date + timedelta(days=182)
+            from app.models import Country
+            from app.services.compliance_calendar import probation_end
+
+            country = db.get(Country, person.country_code)
+            # the same end date the compliance calendar shows (joining + the country's probation months)
+            end = probation_end(person, country.probation_months if country else 6) or person.joining_date + timedelta(days=182)
             action = LifecycleAction(id="lca-seed-probation", employee_id=person.id, action_type="probation_completion",
                                      effective_date=max(end, today), before={}, after={"probation_end_date": end.isoformat()},
                                      reason="Met all probation goals; recommend confirmation.", status="submitted",

@@ -109,6 +109,9 @@ def _praise(db: Session, ctx: _Ctx) -> int:
         for n, sender in enumerate(senders):
             hv = _h(emp.id, sender, "praise")
             day = ctx.today - timedelta(days=14 + hv % 120)
+            both_here = max(emp.joining_date, ctx.by_id[sender].joining_date)  # not before either of them joined
+            if day < both_here:
+                day = min(ctx.today, both_here + timedelta(days=7 + hv % 21))
             rows.append(PerfFeedback(id=f"gap-praise-{emp.id}-{n}"[:64], kind="praise", from_id=sender, to_id=emp.id,
                                      badge=BADGES[hv % len(BADGES)], message=PRAISE_TEXT[(hv >> 4) % len(PRAISE_TEXT)],
                                      created_at=_at(day, 9 + hv % 8)))
