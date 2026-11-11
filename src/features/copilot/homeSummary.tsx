@@ -3,6 +3,8 @@
  * own live data (rule-based, no chat). Each builder takes numbers the home already computed.
  */
 import { Link } from "react-router-dom";
+import { AlertTriangle, Clock3, GraduationCap, Inbox, ListChecks, Palmtree, PartyPopper, Sparkles, Timer, Users, Wallet, type LucideIcon } from "lucide-react";
+import "../../styles/home-summary.css";
 import { Card } from "../../components/ui.tsx";
 import { useAiSettings } from "../../data/aiSettings.ts";
 import { parseISODate } from "../../model.ts";
@@ -14,15 +16,47 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 const day = (iso: string) => parseISODate(iso.slice(0, 10)).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 const names = (list: string[], max = 3) => (list.length <= max ? list.join(", ") : `${list.slice(0, max).join(", ")} and ${list.length - max} more`);
 
+type Tone = { cls: string; Icon: LucideIcon };
+
+/** A colour and icon per topic, from the line's link (red for anything overdue or missing). */
+function toneOf(line: SummaryLine): Tone {
+  const to = line.to ?? "";
+  const text = line.text.toLowerCase();
+  if (/overdue|missing|not checked out|late/.test(text)) return { cls: "tone-alert", Icon: AlertTriangle };
+  if (to.startsWith("/attendance")) return { cls: "tone-time", Icon: Clock3 };
+  if (to.startsWith("/timesheet")) return { cls: "tone-sheet", Icon: Timer };
+  if (to.startsWith("/holidays") || to.includes("optional-holidays") || /holiday/.test(text)) return { cls: "tone-holiday", Icon: PartyPopper };
+  if (to.startsWith("/leave")) return { cls: "tone-leave", Icon: Palmtree };
+  if (to.startsWith("/approvals") || to.startsWith("/requests") || to.startsWith("/workflows")) return { cls: "tone-wait", Icon: Inbox };
+  if (to.startsWith("/tasks") || to.startsWith("/tickets")) return { cls: "tone-wait", Icon: ListChecks };
+  if (to.startsWith("/learning") || to.startsWith("/performance") || to.startsWith("/talent")) return { cls: "tone-grow", Icon: GraduationCap };
+  if (to.startsWith("/payslips") || to.startsWith("/benefits")) return { cls: "tone-grow", Icon: Wallet };
+  if (to.startsWith("/recruiting") || to.startsWith("/onboarding") || to.startsWith("/people")) return { cls: "tone-people", Icon: Users };
+  return { cls: "tone-info", Icon: Sparkles };
+}
+
 export function TodaySummaryCard({ lines }: { lines: SummaryLine[] }) {
   const settings = useAiSettings();
   if (settings.disabledFeatures.includes("homeSummaries") || !lines.length) return null;
   return (
-    <Card title="Today's summary">
-      <ul className="todo">
-        {lines.slice(0, MAX_LINES).map((l) => (
-          <li key={l.text}>{l.to ? <Link to={l.to}>{l.text}</Link> : l.text}</li>
-        ))}
+    <Card title="Today's summary" className="home-summary-card">
+      <ul className="todo home-summary-lines">
+        {lines.slice(0, MAX_LINES).map((l) => {
+          const { cls, Icon } = toneOf(l);
+          const body = (
+            <>
+              <span className="sum-icon" aria-hidden>
+                <Icon size={16} />
+              </span>
+              <span className="sum-text">{l.text}</span>
+            </>
+          );
+          return (
+            <li key={l.text} className={`sum-line ${cls}`}>
+              {l.to ? <Link to={l.to}>{body}</Link> : <span className="sum-static">{body}</span>}
+            </li>
+          );
+        })}
       </ul>
     </Card>
   );

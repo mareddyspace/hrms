@@ -1,0 +1,45 @@
+/* Today's summary (homeSummary.tsx): each line has a coloured icon and a soft tint by topic. */
+.home-summary-lines { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.home-summary-lines .sum-line { --tone: #0f766e; --tone-soft: #e6f4f1; padding: 0 !important; border: 0 !important; }
+.home-summary-lines .sum-line > a,
+.home-summary-lines .sum-line > .sum-static {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--tone-soft);
+  border-left: 4px solid var(--tone);
+  color: var(--ink);
+  font-weight: 500;
+  text-decoration: none;
+}
+.home-summary-lines .sum-line > a::after { content: "›"; margin-left: auto; color: var(--tone); font-size: 20px; line-height: 1; }
+.home-summary-lines .sum-line > a:hover { filter: brightness(0.97); text-decoration: none; }
+.home-summary-lines .sum-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--tone);
+  color: #fff;
+}
+.home-summary-lines .sum-text { line-height: 1.35; }
+
+.sum-line.tone-time { --tone: #0f766e; --tone-soft: #e6f4f1; }
+.sum-line.tone-sheet { --tone: #4f46e5; --tone-soft: #eef0fe; }
+.sum-line.tone-leave { --tone: #7c3aed; --tone-soft: #f3edfe; }
+.sum-line.tone-holiday { --tone: #2563eb; --tone-soft: #eaf1fe; }
+.sum-line.tone-wait { --tone: #b45309; --tone-soft: #fdf3e3; }
+.sum-line.tone-grow { --tone: #15803d; --tone-soft: #e8f6ec; }
+.sum-line.tone-people { --tone: #0e7490; --tone-soft: #e5f5f9; }
+.sum-line.tone-info { --tone: #475569; --tone-soft: #f1f5f9; }
+.sum-line.tone-alert { --tone: #b91c1c; --tone-soft: #fdecec; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .home-summary-lines .sum-line { --tone-soft: color-mix(in srgb, var(--tone) 18%, transparent); }
+}
+:root[data-theme="dark"] .home-summary-lines .sum-line { --tone-soft: color-mix(in srgb, var(--tone) 18%, transparent); }

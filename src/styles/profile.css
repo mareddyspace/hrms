@@ -78,3 +78,22 @@ html[data-theme="night"] .prof-agenda-kind.k-leave { background: rgba(245, 158, 
   .prof-agenda-date { grid-column: 1 / -1; }
   .prof-row { grid-template-columns: 1fr; }
 }
+
+
+/* Edit dialogs: Cancel / Save (and any error) stay pinned to the bottom of the dialog, always in view. */
+.prof-edit-actions {
+  position: sticky;
+  bottom: -18px;
+  z-index: 2;
+  margin: 8px -18px -18px;
+  padding: 12px 18px;
+  background: var(--card);
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.prof-edit-error {
+  margin: 0 auto 0 0;
+}

@@ -774,8 +774,8 @@ export function ProfileEditDialog({
     }
     const changed = changedKeys();
     if (!changed.length && !photo) {
-      setError("Nothing changed.");
-      return false;
+      onClose();  // nothing to save: Save simply closes, like Cancel
+      return true;
     }
     const done = () => onSaved(isSelf ? "Profile saved." : `Profile saved for ${record.fullName}.`);
     if (!isSelf) {
@@ -968,8 +968,8 @@ export function ProfileEditDialog({
               </p>
             )
           )}
-          {error && <p className="note err">{error}</p>}
-          <div className="dialog-actions">
+          <div className="dialog-actions prof-edit-actions">
+            {error && <p className="note err prof-edit-error">{error}</p>}
             <button type="button" className="btn-ghost" onClick={onClose}>
               Cancel
             </button>
