@@ -413,7 +413,7 @@ def encash_policy(db: Session, emp: Employee) -> dict[str, Any]:
         rows = []
     out = []
     for b in rows:
-        if b.code not in ENCASHABLE:
+        if not getattr(b, "encashable", b.code in ENCASHABLE):
             out.append({"code": b.code, "name": b.name, "available": float(b.available), "encashable": 0.0,
                         "used_this_year": 0.0, "eligible": False, "why_not": "Not encashable"})
             continue
@@ -456,8 +456,8 @@ def create_encashment(db: Session, emp: Employee, code: str, days: float, actor_
         raise RequestError("Choose whole or half days.")
     policy = encash_policy(db, emp)
     row = next((t for t in policy["types"] if t["code"] == code), None)
-    if row is None or code not in ENCASHABLE:
-        raise RequestError("Only privilege leave can be encashed.")
+    if row is None or row.get("why_not") == "Not encashable":
+        raise RequestError("This leave type can't be encashed.")
     if db.scalar(select(EncashmentRequest.id).where(EncashmentRequest.employee_id == emp.id,
                                                     EncashmentRequest.status.in_(PENDING))):
         raise RequestError("You already have an encashment waiting for approval.")
@@ -474,6 +474,23 @@ def create_encashment(db: Session, emp: Employee, code: str, days: float, actor_
                  subject_id=emp.id, after={"days": days, "amount": item.amount}, ip=ip)
     _start(db, ENCASH, item, emp, item.amount, actor_id)
     return item
+
+
+def encashment_problem(db: Session, row: EncashmentRequest, emp: Employee) -> str | None:
+    """Re-check the balance when an encashment is approved: leave taken since it was asked for may have used it up.
+    The request's own days are already counted as pending, so they are added back before comparing."""
+    policy = encash_policy(db, emp)
+    t = next((x for x in policy["types"] if x["code"] == row.leave_code), None)
+    if t is None or t.get("why_not") == "Not encashable":
+        return "This leave type can't be encashed any more."
+    allowed_balance = max(0.0, float(t["available"]) + float(row.days) - ENCASH_KEEP_DAYS)
+    approved, pending = encashed_days(db, emp.id, row.leave_code, row.year)
+    allowed_year = max(0.0, ENCASH_MAX_DAYS_A_YEAR - approved - (pending - float(row.days)))
+    allowed = min(allowed_balance, allowed_year)
+    if float(row.days) > allowed:
+        return (f"The balance has changed: only {allowed:g} days can be encashed now "
+                f"(at least {ENCASH_KEEP_DAYS:g} days must stay in the balance). Decline it or ask for fewer days.")
+    return None
 
 
 def withdraw_encashment(db: Session, row: EncashmentRequest, actor: Employee, actor_id: str, ip: str | None) -> None:
@@ -555,6 +572,8 @@ def create_software(db: Session, emp: Employee, title: SoftwareTitle, reason: st
         if direct:
             notify(db, recipient_id=emp.id, title=f"{title.name} assigned to you", body=f"Licence {row.licence_key}.",
                    href="/software")
+        else:
+            _tell_it(db, emp, f"Set up {title.name} for {emp.full_name}", f"Self-service licence {row.licence_key}.")
     else:
         _start(db, SOFTWARE, row, emp, None, actor_id)
     record_audit(db, actor_id=actor_id, action="software_requested" if not direct else "software_assigned",
@@ -576,6 +595,10 @@ def end_licence(db: Session, row: SoftwareRequest, actor: Employee, actor_id: st
     row.ended_by = actor.full_name
     record_audit(db, actor_id=actor_id, action=f"software_{how.lower()}", entity="software_requests", entity_id=row.id,
                  subject_id=row.employee_id, after={"status": how}, ip=ip)
+    if how == "Returned":
+        title = db.get(SoftwareTitle, row.title_id)
+        _tell_it(db, db.get(Employee, row.employee_id), f"{title.name if title else 'Software'} licence returned",
+                 f"{actor.full_name} returned licence {row.licence_key or ''}; reclaim the seat.".replace("  ", " "))
     if how == "Revoked":
         title = db.get(SoftwareTitle, row.title_id)
         notify(db, recipient_id=row.employee_id, title=f"{title.name if title else 'Software'} licence removed",
@@ -589,15 +612,38 @@ def _software_finished(db: Session, instance: ApprovalInstance) -> None:
         return
     emp = db.get(Employee, row.employee_id)
     title = db.get(SoftwareTitle, row.title_id)
-    if instance.status == "approved":
-        _grant(db, row, today_for(emp) if emp else date.today())
+    today = today_for(emp) if emp else date.today()
+    full = bool(title and title.seats and seats_used(db, title.id, today) >= title.seats)
+    if instance.status == "approved" and not full:
+        _grant(db, row, today)
     else:
         row.status = "Rejected"
+    if instance.status == "approved" and full:  # approved, but every seat went while it waited
+        name = title.name if title else "Software"
+        for rid in _it_ids(db, emp.country_code if emp else None):
+            notify(db, recipient_id=rid, title=f"No {name} seats left",
+                   body=f"An approved request from {emp.full_name if emp else 'someone'} could not be granted. Add seats.",
+                   href="/software")
     record_audit(db, actor_id=_last_decider(db, instance), action=f"software_{'granted' if row.status == 'Active' else 'rejected'}",
                  entity="software_requests", entity_id=row.id, subject_id=row.employee_id, after={"status": row.status})
     name = title.name if title else "Software"
     notify(db, recipient_id=row.employee_id, title=f"{name} {'approved' if row.status == 'Active' else 'not approved'}",
-           body=f"Licence {row.licence_key}." if row.licence_key else "Open it to see the note.", href="/software")
+           body=f"Licence {row.licence_key}." if row.licence_key else
+           ("Approved, but no seats are left; IT has been told." if instance.status == "approved" else "Open it to see the note."),
+           href="/software")
+    if row.status == "Active":
+        _tell_it(db, emp, f"Set up {name} for {emp.full_name if emp else 'a colleague'}", f"Licence {row.licence_key}.")
+
+
+def _it_ids(db: Session, country: str | None) -> list[str]:
+    return engine._accounts_with_roles(db, set(IT_ROLES), country)
+
+
+def _tell_it(db: Session, emp: Employee | None, title: str, body: str) -> None:
+    """IT provisions / reclaims licences: tell them when a licence starts or ends without their own action."""
+    for rid in _it_ids(db, emp.country_code if emp else None):
+        if emp is None or rid != emp.id:
+            notify(db, recipient_id=rid, title=title, body=body, href="/software")
 
 
 def summary_for(db: Session, inst: ApprovalInstance) -> str | None:

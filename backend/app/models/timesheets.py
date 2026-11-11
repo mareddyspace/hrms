@@ -23,6 +23,9 @@ class Project(TimestampMixin, Base):
     end_date: Mapped[date | None] = mapped_column(Date)
     budget_hours: Mapped[float | None] = mapped_column(Numeric(8, 2, asdecimal=False))
     manager_id: Mapped[str | None] = mapped_column(String(64))  # employees.id
+    # Migration 0033: delivery status and the manager's health call (none = worked out from hours and dates).
+    status: Mapped[str | None] = mapped_column(String(16))  # planned | active | on_hold | completed | cancelled
+    health: Mapped[str | None] = mapped_column(String(16))  # on_track | at_risk | off_track
 
 
 class ProjectMember(TimestampMixin, Base):
@@ -35,6 +38,7 @@ class ProjectMember(TimestampMixin, Base):
     title: Mapped[str | None] = mapped_column(String(100))
     responsibilities: Mapped[str | None] = mapped_column(Text)
     budget_hours: Mapped[float | None] = mapped_column(Numeric(8, 2, asdecimal=False))
+    allocation_pct: Mapped[int | None] = mapped_column(Integer)  # migration 0033: share of their week on this project
 
 
 class TimesheetWeek(TimestampMixin, Base):

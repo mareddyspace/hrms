@@ -8,11 +8,13 @@ import {
   backdatedPermissionFor,
   formatShortDate,
   holidaySet,
+  allHolidaysForCountry,
   holidaysForPerson,
   leaveNameFor,
   leaveRows,
   localPolicy,
   needsBackdatedPermission,
+  placeOfPerson,
   plural,
   SICK_LEAVE_GRACE_DAYS,
   todayISO,
@@ -35,6 +37,7 @@ import {
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
+import { LeaveMonthCalendar } from "./LeaveMonthCalendar.tsx";
 import "../styles/home-leave-desk.css";
 
 const PERMISSION_LABEL: Record<BackdatedLeavePermission["status"], { text: string; tone: "ok" | "warn" | "danger" | "neutral" | "info" }> = {
@@ -159,6 +162,9 @@ export function LeavePage() {
         (API_ENABLED ? Boolean(apiLeaveMeta.get(r.id)?.canDecide) || canDecideFor(r.employeeId) : canDecideFor(r.employeeId)),
     )
     .sort((a, b) => a.from.localeCompare(b.from));
+  const isTeamRequest = (r: { id: string; employeeId: string }) =>
+    r.employeeId !== employee.id &&
+    (API_ENABLED ? Boolean(apiLeaveMeta.get(r.id)?.canDecide) || canDecideFor(r.employeeId) : canDecideFor(r.employeeId));
   const isManager = teamAway.length > 0 || teamLeave.length > 0 || people.some((p) => p.id !== employee.id && canDecideFor(p.id));
   const upcomingHolidays = myHolidays.filter((h) => h.date >= today).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 6);
   const balanceAfter = selectedRow && code !== "unpaid" ? selectedRow.available - days : null;
@@ -356,6 +362,18 @@ export function LeavePage() {
             {/* Unpaid leave has no balance; it stays available in the apply form below. */}
             <LeaveBalanceCards rows={yearRows.filter((row) => row.code !== "unpaid")} showPending={hasApprover} onApply={startApply} />
           </Card>
+          <LeaveMonthCalendar
+            meId={employee.id}
+            requests={state.leaveRequests}
+            isTeam={isTeamRequest}
+            holidays={allHolidaysForCountry(state.holidays, employee.countryCode)}
+            place={placeOfPerson(employee.id)}
+            weeklyOffDays={activeOffs}
+            today={today}
+            nameOf={nameOf}
+            leaveName={leaveName}
+            leaveCodes={leaveTable.map((row) => row.code)}
+          />
           {isManager && (
             <Card
               title={`Team on leave · next 2 weeks (${teamAway.length})`}

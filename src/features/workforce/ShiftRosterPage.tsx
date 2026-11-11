@@ -45,6 +45,12 @@ import {
   swapCoverageImpact,
   weekCoverage,
   WEEKDAY_NAMES,
+  availabilityOn,
+  copyWeek,
+  isOvernight,
+  paidHours,
+  rosterWarnings,
+  SHIFT_COLORS,
   type CoverageSlot,
   type RosterContext,
   type ShiftDef,
@@ -54,6 +60,7 @@ import {
 import { API_ENABLED } from "../../api/syncOps.ts";
 import { canDecideFor, fmt, isHrRole, rosterTeamFor, isWeekend, personName, shortDay, swapPartnerError, weekStartOf, type WorkforceActor } from "./workforceShared.ts";
 import { apiSwapPartners } from "../../api/syncOpsShifts.ts";
+import { AvailabilityTab, BulkAssignDialog, bulkMessage, RepeatWeekDialog, ShiftLegend, TeamCalendar, UnpublishDialog, weeklyOffFor } from "./ShiftPlanning.tsx";
 import "./workforce.css";
 import "./coverage.css";
 import "../../styles/pay-claims.css";
@@ -81,6 +88,8 @@ export function ShiftRosterPage() {
   const ctx = useRosterContext();
   const tabs = [
     { id: "mine", label: "My shifts" },
+    { id: "team-cal", label: "Team calendar" },
+    { id: "availability", label: "Availability" },
     { id: "swaps", label: "Swaps" },
     { id: "compoff", label: "Comp-off" },
     ...(team.length ? [{ id: "roster", label: "Team roster" }] : []),
@@ -99,6 +108,8 @@ export function ShiftRosterPage() {
     <Page title="Shifts & roster">
       <Tabs tabs={tabs} value={active} onChange={setTab} />
       {active === "mine" && <MyShifts actor={actor} />}
+      {active === "team-cal" && <TeamCalendar actor={actor} />}
+      {active === "availability" && <AvailabilityTab actor={actor} />}
       {active === "swaps" && <Swaps actor={actor} />}
       {active === "compoff" && <CompOff actor={actor} />}
       {active === "roster" && <TeamRoster actor={actor} />}
@@ -343,6 +354,7 @@ function MyShifts({ actor }: { actor: WorkforceActor }) {
             })}
           </div>
         )}
+        <ShiftLegend shifts={data.shifts.filter((s) => mine.some((a) => a.shiftId === s.id && (mode === "week" ? shown.includes(a.date) : monthDays.includes(a.date))))} />
       </Card>
       <Card
         title="Upcoming"
@@ -861,6 +873,8 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
   const gaps = useMemo(() => coverageGaps(data, ctx, actor.id, weekStart), [data, ctx, actor.id, weekStart]);
   const gapDays = new Set(gaps.map((g) => g.date));
   const [confirmGaps, setConfirmGaps] = useState(false);
+  const [dialog, setDialog] = useState<"bulk" | "repeat" | "unpublish" | null>(null);
+  const warnings = useMemo(() => rosterWarnings(data, ctx, actor.id, dates, weeklyOffFor), [data, ctx, actor.id, dates]);
   const weekOver = weekDays[6] < today;
   const publishAction = useAction();
   const copyAction = useAction();
@@ -899,6 +913,10 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
     const error = await assignShift(actor, ctx, personId, date, shiftId || null);
     setMsg(error ? { tone: "err", text: error } : null);
     setConfirmGaps(false);
+    if (!error && shiftId) {
+      const fresh = rosterWarnings(getShiftState(), ctx, actor.id, [date], weeklyOffFor).filter((w) => w.personId === personId);
+      if (fresh.length) setMsg({ tone: "warn", text: fresh.map((w) => w.message).join(" ") });
+    }
     if (!error) {
       const shiftName = shiftId ? shiftById(shiftId, data)?.name : undefined;
       notify(shiftName ? `${personName(personId)} assigned to ${shiftName} on ${shortDay(date)}.` : `Shift cleared for ${personName(personId)} on ${shortDay(date)}.`);
@@ -906,26 +924,10 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
   }
 
   async function copyLastWeek() {
-    const prevDays = weekDates(prevWeek);
-    // Not the manager's own shifts: nobody can roster themselves, so copying them only produced "Skipped" warnings.
-    const source = data.assignments.filter((a) => a.managerId === actor.id && a.personId !== actor.id && prevDays.includes(a.date));
-    if (source.length === 0) return "Last week has no shifts to copy.";
-    let copied = 0;
-    const skipped: string[] = [];
-    for (const row of source) {
-      const date = addDaysISO(row.date, 7);
-      if (date <= today) continue;
-      if (getShiftState().assignments.some((a) => a.personId === row.personId && a.date === date)) continue;
-      const error = await assignShift(actor, ctx, row.personId, date, row.shiftId);
-      if (error) skipped.push(`${personName(row.personId)} ${shortDay(date)}: ${error}`);
-      else copied += 1;
-    }
-    setMsg(
-      skipped.length
-        ? { tone: "warn", text: `Copied ${copied}. Skipped ${skipped.length}: ${skipped.slice(0, 3).join(" · ")}${skipped.length > 3 ? " …" : ""}` }
-        : { tone: "ok", text: copied ? `Copied ${copied} shifts from last week.` : "Nothing new to copy. Those days are already filled." },
-    );
-    if (copied) notify(`Copied ${copied} shifts from last week.`);
+    const out = await copyWeek(actor, ctx, prevWeek, weekStart, 1, weeklyOffFor);
+    if (typeof out === "string") return out;
+    setMsg(out.applied || out.skipped.length ? bulkMessage(out, "Copied") : { tone: "ok", text: "Nothing new to copy. Those days are already filled." });
+    if (out.applied) notify(`Copied ${out.applied} shifts from last week.`);
     setConfirmGaps(false);
     return null;
   }
@@ -958,6 +960,9 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
   function cell(personId: string, personFull: string, date: string) {
     const current = data.assignments.find((a) => a.personId === personId && a.date === date);
     const leave = leaveOn(personId, date, ctx.leaves);
+    const avail = availabilityOn(personId, date, data);
+    const unavailable = avail.find((a) => a.kind === "unavailable");
+    const preferred = avail.find((a) => a.kind === "preferred" && a.shiftId !== current?.shiftId);
     const otherOwner = current && current.managerId !== actor.id;
     const locked = date <= today || !!otherOwner;
     const shift = current ? shiftById(current.shiftId, data) : undefined;
@@ -1013,6 +1018,16 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
           </select>
         )}
         {leave && <span className="wf-tag warn">{short ? "L" : "On leave"}</span>}
+        {!leave && unavailable && (
+          <span className="sh-unavail" title={unavailable.note ? `Unavailable: ${unavailable.note}` : "Unavailable"}>
+            {short ? "U" : "Unavailable"}
+          </span>
+        )}
+        {!leave && !unavailable && preferred && !short && (
+          <span className="sh-pref" title={`Prefers ${shiftById(preferred.shiftId ?? "", data)?.name ?? "another shift"}`}>
+            Prefers {shiftById(preferred.shiftId ?? "", data)?.name ?? "another"}
+          </span>
+        )}
       </td>
     );
   }
@@ -1057,6 +1072,17 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
                   <ActionButton className="btn-ghost" disabled={busy} action={copyAction} onAction={copyLastWeek} onError={(m) => setMsg({ tone: "err", text: m })}>
                     Copy last week
                   </ActionButton>
+                  <button className="btn-ghost" type="button" disabled={busy} onClick={() => setDialog("repeat")}>
+                    Repeat week
+                  </button>
+                  <button className="btn-ghost" type="button" disabled={busy} onClick={() => setDialog("bulk")}>
+                    Bulk assign
+                  </button>
+                  {published && weekStart > today && (
+                    <button className="btn-ghost" type="button" disabled={busy} onClick={() => setDialog("unpublish")}>
+                      Unpublish
+                    </button>
+                  )}
                   {!published && (
                     <ActionButton
                       className="btn"
@@ -1122,6 +1148,20 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
               ))}
             </div>
           )}
+          {warnings.length > 0 && (
+            <details className="sh-warnings">
+              <summary>
+                {warnings.length} {warnings.length === 1 ? "assignment to check" : "assignments to check"}
+              </summary>
+              <ul>
+                {warnings.map((w) => (
+                  <li key={`${w.personId}-${w.date}-${w.message}`}>
+                    <strong>{shortDay(w.date)}</strong> · {w.message}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           {team.length === 0 ? (
             <EmptyState title="No one reports to you" />
           ) : (
@@ -1171,8 +1211,12 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
               </table>
             </div>
           )}
+          <ShiftLegend shifts={activeShifts} />
         </div>
       </Card>
+      {dialog === "bulk" && <BulkAssignDialog actor={actor} ctx={ctx} dates={dates} onClose={() => setDialog(null)} onDone={setMsg} />}
+      {dialog === "repeat" && <RepeatWeekDialog actor={actor} ctx={ctx} weekStart={weekStart} onClose={() => setDialog(null)} onDone={setMsg} />}
+      {dialog === "unpublish" && <UnpublishDialog actor={actor} weekStart={weekStart} onClose={() => setDialog(null)} onDone={setMsg} />}
       {mode === "week" && (
         <Card title="Coverage">
           <div className="stack">
@@ -1322,7 +1366,7 @@ function CoverageSettings({ actor }: { actor: WorkforceActor }) {
 
 // ---------- Shift types (HR) ----------
 
-const BLANK = { name: "", start: "09:00", end: "17:00", weekendOnly: false, breakMinutes: "60", location: "" };
+const BLANK = { name: "", start: "09:00", end: "17:00", weekendOnly: false, breakMinutes: "60", location: "", color: "", countryCode: "" };
 
 function ShiftTypes({ actor }: { actor: WorkforceActor }) {
   const data = useShifts();
@@ -1332,7 +1376,7 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
 
   function edit(s: ShiftDef) {
     setEditing(s.id);
-    setForm({ name: s.name, start: s.start, end: s.end, weekendOnly: s.weekendOnly, breakMinutes: String(s.breakMinutes ?? 60), location: s.location ?? "" });
+    setForm({ name: s.name, start: s.start, end: s.end, weekendOnly: s.weekendOnly, breakMinutes: String(s.breakMinutes ?? 60), location: s.location ?? "", color: s.color ?? "", countryCode: s.countryCode ?? "" });
     setMsg(null);
   }
 
@@ -1353,12 +1397,14 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
       <Banner message={msg} />
       <Card title="Shift types">
         <DataTable
-          headers={["Shift", "Hours", "Break", "Location", "Days", "Status", ""]}
+          headers={["Shift", "Time", "Paid hours", "Break", "Location", "Country", "Days", "Status", ""]}
           rows={data.shifts.map((s) => [
-            s.name,
-            `${s.start}–${s.end}`,
+            <ShiftChip key="c" shift={s} />,
+            `${s.start}–${s.end}${isOvernight(s) ? " (+1)" : ""}`,
+            `${paidHours(s)} h`,
             `${s.breakMinutes ?? 60} min`,
             s.location || "—",
+            s.countryCode || "Any",
             s.weekendOnly ? "Sat–Sun" : "Any day",
             <StatusBadge key="s" status={s.active ? "Active" : "Inactive"} tone={s.active ? "ok" : "neutral"} literal />,
             <div key="a" className="row-gap">
@@ -1400,6 +1446,26 @@ function ShiftTypes({ actor }: { actor: WorkforceActor }) {
             <Field label="Location">
               <input value={form.location} maxLength={100} placeholder="e.g. Kochi office" onChange={(e) => setForm({ ...form, location: e.target.value })} />
             </Field>
+            <Field label="Colour">
+              <select value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })}>
+                <option value="">Automatic</option>
+                {SHIFT_COLORS.map((c) => (
+                  <option key={c} value={c}>
+                    {c[0]!.toUpperCase() + c.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Country">
+              <input value={form.countryCode} maxLength={2} placeholder="Any" onChange={(e) => setForm({ ...form, countryCode: e.target.value.toUpperCase() })} />
+            </Field>
+          </div>
+          <div className="sh-type-preview">
+            <ShiftChip shift={{ id: editing ?? "new", name: form.name.trim() || "Shift", start: form.start, end: form.end, weekendOnly: form.weekendOnly, active: true, breakMinutes: Number(form.breakMinutes) || 0, color: form.color || undefined }} />
+            <span className="muted">
+              {paidHours({ id: "x", name: "", start: form.start, end: form.end, weekendOnly: false, active: true, breakMinutes: Number(form.breakMinutes) || 0 })} paid hours
+              {form.start && form.end && form.end <= form.start ? " · overnight" : ""}
+            </span>
           </div>
           <label className="row-gap">
             <input type="checkbox" checked={form.weekendOnly} onChange={(e) => setForm({ ...form, weekendOnly: e.target.checked })} />

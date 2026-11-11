@@ -1,4 +1,6 @@
 import { todayISO } from "../../model.ts";
+import { API_ENABLED, subscribeAll } from "../../api/syncOps.ts";
+import { privacyApi, privacyMirror, type HistoryEntry } from "../../api/syncExperience.ts";
 import {
   createLocalStore,
   daysBetween,
@@ -42,6 +44,12 @@ export type DataRequest = {
   handledById?: string;
   closedOn?: string;
   outcome?: string;
+  /* Backend mode only. */
+  personName?: string;
+  countryCode?: string;
+  handledByName?: string;
+  history?: HistoryEntry[];
+  canHandle?: boolean;
 };
 
 export type RetentionUnit = "months" | "years";
@@ -108,8 +116,44 @@ function defaults(): PrivacyState {
 
 const store = createLocalStore<PrivacyState>("kastech.privacy.v1", defaults);
 
-export const subscribePrivacy = store.subscribe;
-export const getPrivacyState = store.getState;
+let apiCache: { source: unknown; state: PrivacyState } | null = null;
+
+/** Backend mode: my consents and requests, HR's queue and the retention policy, in the local state's shape. */
+function apiState(): PrivacyState {
+  const source = privacyMirror.get();
+  if (apiCache?.source === source) return apiCache.state;
+  const me = source.me;
+  const toRequest = (r: (typeof source.mine)[number]): DataRequest => ({
+    id: r.id,
+    personId: r.employee_id,
+    type: r.kind,
+    details: r.details,
+    createdOn: r.created_on,
+    dueOn: r.due_on,
+    status: r.status as RequestStatus,
+    closedOn: r.closed_on ?? undefined,
+    outcome: r.outcome ?? undefined,
+    personName: r.employee_name,
+    countryCode: r.country_code,
+    handledByName: r.handled_by_name ?? undefined,
+    history: r.history,
+    canHandle: r.can_handle,
+  });
+  const byId = new Map<string, DataRequest>();
+  for (const r of [...source.mine, ...source.queue]) byId.set(r.id, toRequest(r));
+  const state: PrivacyState = {
+    consents: source.history
+      .filter((c) => c.at)
+      .map((c, i) => ({ id: `api-cs-${i}`, personId: me, key: c.topic as ConsentKey, granted: c.granted, at: c.at as string })),
+    requests: [...byId.values()],
+    retention: source.retention.map((r) => ({ id: r.id, category: r.category, period: r.period, unit: r.unit, legalBasis: r.legal_basis, updatedOn: r.updated_on })),
+  };
+  apiCache = { source, state };
+  return state;
+}
+
+export const subscribePrivacy = API_ENABLED ? subscribeAll(store.subscribe, privacyMirror.subscribe) : store.subscribe;
+export const getPrivacyState: () => PrivacyState = API_ENABLED ? apiState : store.getState;
 export const resetPrivacy = store.reset;
 export const PRIVACY_KEY = store.key;
 
@@ -127,7 +171,8 @@ export function currentConsents(state: PrivacyState, personId: string): Record<C
   return out;
 }
 
-export function setConsent(actor: ComplianceActor, key: ConsentKey, granted: boolean): ComplianceResult {
+export function setConsent(actor: ComplianceActor, key: ConsentKey, granted: boolean): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return privacyApi.consent(key, granted);
   return store.guarded((s) => {
     if (!CONSENT_TOPICS.some((t) => t.key === key)) return "Unknown consent topic.";
     const current = currentConsents(s, actor.id)[key];
@@ -159,10 +204,12 @@ export function daysLeft(req: DataRequest, today = todayISO()): number {
 }
 
 export function canHandleRequest(actor: ComplianceActor, req: DataRequest): boolean {
+  if (req.canHandle !== undefined) return req.canHandle || (req.personId !== actor.id && !isRequestOpen(req) && isHr(actor.role));
   return isHr(actor.role) && req.personId !== actor.id;
 }
 
-export function raiseRequest(actor: ComplianceActor, type: RequestType, details: string): ComplianceResult {
+export function raiseRequest(actor: ComplianceActor, type: RequestType, details: string): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return privacyApi.raise(type, details);
   return store.guarded((s) => {
     if (!REQUEST_TYPES.includes(type)) return "Choose a request type.";
     const text = details.trim();
@@ -185,7 +232,8 @@ export function raiseRequest(actor: ComplianceActor, type: RequestType, details:
   });
 }
 
-export function withdrawRequest(actor: ComplianceActor, id: string): ComplianceResult {
+export function withdrawRequest(actor: ComplianceActor, id: string): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return privacyApi.withdraw(id);
   return store.guarded((s) => {
     const row = s.requests.find((r) => r.id === id);
     if (!row) return "Request not found.";
@@ -197,7 +245,8 @@ export function withdrawRequest(actor: ComplianceActor, id: string): ComplianceR
   });
 }
 
-export function moveRequest(actor: ComplianceActor, id: string, next: "In progress" | "Completed" | "Rejected", outcome = ""): ComplianceResult {
+export function moveRequest(actor: ComplianceActor, id: string, next: "In progress" | "Completed" | "Rejected", outcome = ""): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return privacyApi.move(id, next, outcome);
   return store.guarded((s) => {
     const row = s.requests.find((r) => r.id === id);
     if (!row) return "Request not found.";
@@ -237,7 +286,11 @@ function validateRule(input: RetentionInput, rules: RetentionRule[], editingId?:
   return null;
 }
 
-export function saveRetentionRule(actor: ComplianceActor, input: RetentionInput, id?: string): ComplianceResult {
+export function saveRetentionRule(actor: ComplianceActor, input: RetentionInput, id?: string): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) {
+    const error = validateRule(input, getPrivacyState().retention, id);
+    return error ?? privacyApi.saveRetention(input, id);
+  }
   return store.guarded((s) => {
     if (!isHr(actor.role)) return "Only HR can change retention policy.";
     const error = validateRule(input, s.retention, id);
@@ -254,7 +307,8 @@ export function saveRetentionRule(actor: ComplianceActor, input: RetentionInput,
   });
 }
 
-export function removeRetentionRule(actor: ComplianceActor, id: string): ComplianceResult {
+export function removeRetentionRule(actor: ComplianceActor, id: string): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return privacyApi.removeRetention(id);
   return store.guarded((s) => {
     if (!isHr(actor.role)) return "Only HR can change retention policy.";
     if (!s.retention.some((r) => r.id === id)) return "Rule not found.";

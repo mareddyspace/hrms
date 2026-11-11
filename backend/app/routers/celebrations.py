@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db import utcnow
 from app.deps import CurrentUserDep, DbSession, client_ip
-from app.models import Employee, Kudos
+from app.models import AuditLog, Employee, Kudos
 from app.services.activity import notify, record_audit
 from app.services.decisions import me
 from app.services.headcount import has_started
@@ -100,29 +100,44 @@ def celebrations(db: Session, today: date, days: int, viewer_id: str | None, yea
     start, end = today - timedelta(days=1), today + timedelta(days=days - 1)
     if year is not None:
         start, end = date(year, 1, 1), date(year, 12, 31)
-    wished = set()
+    # (person, kind) pairs this viewer wished in the last 14 days. The kind is in the wish's audit row; an older wish
+    # without one counts for every kind (None).
+    wished: set[tuple[str, str | None]] = set()
     if viewer_id:
-        wished = {(to, msg_kind) for to, msg_kind in db.execute(
-            select(Kudos.to_id, Kudos.message).where(Kudos.from_id == viewer_id, Kudos.value == WISH_VALUE,
-                                                     Kudos.created_at >= utcnow() - timedelta(days=14)))}
-    wished_ids = {to for to, _ in wished}
+        recent = dict(db.execute(
+            select(Kudos.id, Kudos.to_id).where(Kudos.from_id == viewer_id, Kudos.value == WISH_VALUE,
+                                                Kudos.created_at >= utcnow() - timedelta(days=14))).all())
+        kinds: dict[str, str] = {}
+        if recent:
+            for entity_id, changes in db.execute(select(AuditLog.entity_id, AuditLog.changes).where(
+                    AuditLog.action == "celebration_wish_sent", AuditLog.entity_id.in_(list(recent)))):
+                kind = ((changes or {}).get("after") or {}).get("kind")
+                if entity_id and kind:
+                    kinds[entity_id] = kind
+        wished = {(to, kinds.get(kid)) for kid, to in recent.items()}
+
+    def wished_for(emp_id: str, kind: str) -> bool:
+        return (emp_id, kind) in wished or (emp_id, None) in wished
+
     out: list[CelebrationOut] = []
     people = select(Employee).where(Employee.employment_status.not_in(LEFT))
     if circle:
         people = people.where(Employee.id.in_(circle_ids(db, viewer_id)))
     for emp in db.scalars(people):
         base = dict(employee_id=emp.id, name=emp.full_name, job_title=emp.job_title,
-                    department=emp.department, location=emp.location, wished_by_me=emp.id in wished_ids)
+                    department=emp.department, location=emp.location)
         if emp.date_of_birth and not emp.hide_birthday and has_started(emp, today):
             if occ := _next_in(emp.date_of_birth, start, end):
-                out.append(CelebrationOut(**base, kind="birthday", date=occ))
+                out.append(CelebrationOut(**base, kind="birthday", date=occ, wished_by_me=wished_for(emp.id, "birthday")))
         if emp.joining_date and has_started(emp, today):
             occ = _next_in(emp.joining_date, start, end)
             years = occ.year - emp.joining_date.year if occ else 0
             if occ and years >= 1 and (not circle or is_milestone(years)):
-                out.append(CelebrationOut(**base, kind="anniversary", date=occ, years=years))
+                out.append(CelebrationOut(**base, kind="anniversary", date=occ, years=years,
+                                          wished_by_me=wished_for(emp.id, "anniversary")))
             elif year is None and today - timedelta(days=7) <= emp.joining_date <= today:
-                out.append(CelebrationOut(**base, kind="new_joiner", date=emp.joining_date))
+                out.append(CelebrationOut(**base, kind="new_joiner", date=emp.joining_date,
+                                          wished_by_me=wished_for(emp.id, "new_joiner")))
     out.sort(key=lambda c: (c.date, c.kind, c.name))
     return out
 

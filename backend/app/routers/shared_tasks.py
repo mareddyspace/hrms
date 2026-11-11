@@ -9,16 +9,20 @@ notified (assigned, accepted, declined, status, comments, help, review).
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Any
+import secrets
+from datetime import date, datetime, timezone
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.deps import CurrentUserDep, DbSession, client_ip
 from app.models import Project, ProjectMember, SharedTask
+from app.services import storage
+from app.services import work_attachments as files
 from app.services.activity import record_audit
+from app.services.uploads import UPLOAD_OPENAPI
 from app.services.scope import HR_ACCESS_ROLES, manager_chain_ids
 from app.services.sharing import managed_ids, person_exists, person_name, tell
 
@@ -116,6 +120,45 @@ def _valid(data: dict[str, Any], task_id: str) -> None:
         raise HTTPException(422, "Unknown status.")
     if len(str(data)) > 200_000:
         raise HTTPException(413, "This task is too large.")
+    start, due = _day(data.get("startDate")), _day(data.get("due"))
+    if start and due and due < start:
+        raise HTTPException(422, "The due date can't be before the start date.")
+    if data.get("priority") not in (None, "low", "medium", "high", "urgent"):
+        raise HTTPException(422, "Pick a priority.")
+
+
+def _day(value: Any) -> date | None:
+    try:
+        return date.fromisoformat(str(value)[:10]) if value else None
+    except ValueError:
+        return None
+
+
+def _attachments(db, task_id: str) -> list[dict[str, Any]]:  # type: ignore[no-untyped-def]
+    """The task's files as the portal shows them (data.attachments); the database is the source of truth."""
+    return [{"id": a.id, "name": a.file_name, "at": a.created_at.isoformat(), "size": a.size_bytes,
+             "contentType": a.content_type, "by": a.uploaded_by} for a in files.list_for(db, "task", task_id)]
+
+
+def _fresh_comments(old: dict[str, Any], new: dict[str, Any]) -> list[dict[str, Any]]:
+    seen = {c.get("id") for c in old.get("comments") or [] if isinstance(c, dict)}
+    return [c for c in new.get("comments") or [] if isinstance(c, dict) and c.get("id") not in seen]
+
+
+def _mentions(db, t: SharedTask, data: dict[str, Any], fresh: list[dict[str, Any]], me: str, my_name: str,
+              below: set[str]) -> None:  # type: ignore[no-untyped-def]
+    """@mentioned people hear about the comment; someone who could not see the task is added to its cc."""
+    cc = [str(x) for x in data.get("ccIds") or [] if isinstance(x, str)]
+    for c in fresh:
+        for pid in dict.fromkeys(str(x) for x in (c.get("mentions") or []) if isinstance(x, str)):
+            if pid == me or not person_exists(db, pid):
+                continue
+            if pid not in {t.assignee_id, t.created_by, *(t.people_ids or []), *cc}:
+                cc.append(pid)
+            tell(db, pid, me, f"{data['code']}: {my_name} mentioned you",
+                 f"{data['subject']} — {str(c.get('text', ''))[:140]}", f"/tasks?task={t.id}")
+    if cc != list(data.get("ccIds") or []):
+        data["ccIds"] = cc
 
 
 def _due(data: dict[str, Any]) -> date | None:
@@ -142,9 +185,12 @@ def save_task(task_id: str, payload: TaskIn, request: Request, db: DbSession, us
     if t is None:
         if not can_assign(db, user, me, below, assignee):
             raise HTTPException(403, ASSIGN_RULE)
+        data["attachments"] = []
         t = SharedTask(id=task_id, code=code, assignee_id=assignee, created_by=me, people_ids=_people(data),
                        status=data["status"], due=_due(data), data=data, version=1)
         db.add(t)
+        _mentions(db, t, data, _fresh_comments({}, data), me, my_name, below)
+        t.people_ids = _people(data)
         record_audit(db, actor_id=user.id, action="task.create", entity="task", entity_id=task_id, subject_id=assignee,
                      after={"code": code, "subject": subject, "assignee": assignee, "due": data.get("due")},
                      ip=client_ip(request))
@@ -156,6 +202,9 @@ def save_task(task_id: str, payload: TaskIn, request: Request, db: DbSession, us
     if not _can_view(t, me, below):
         raise HTTPException(404, "Task not found.")
     old = t.data or {}
+    # Files are added and removed through /tasks/{id}/attachments; a save never changes them.
+    data["attachments"] = _attachments(db, task_id)
+    old = {**old, "attachments": data["attachments"]}
     editor = me in {t.assignee_id, t.created_by} or t.assignee_id in below
     if not editor and not _comment_only(old, data):
         raise HTTPException(403, "People following this task can comment on it but not change it.")
@@ -168,6 +217,8 @@ def save_task(task_id: str, payload: TaskIn, request: Request, db: DbSession, us
         text = str((data.get("comments") or [{}])[-1].get("text", ""))[:120]
         for person in {t.assignee_id, t.created_by}:
             tell(db, person, me, f"{code}: comment from {my_name}", f"{subject} — {text}", href)
+        _mentions(db, t, data, _fresh_comments(old, data), me, my_name, below)
+        t.people_ids = _people(data)
         t.data = data
         t.version += 1
         db.commit()
@@ -198,6 +249,10 @@ def save_task(task_id: str, payload: TaskIn, request: Request, db: DbSession, us
     fresh = [c for c in data.get("comments") or [] if isinstance(c, dict) and c.get("id") not in old_comments]
     if fresh:
         news.append(f"comment: {str(fresh[-1].get('text', ''))[:120]}")
+    _mentions(db, t, data, fresh, me, my_name, below)
+    if data.get("blocked") and not old.get("blocked"):
+        record_audit(db, actor_id=user.id, action="task.blocked", entity="task", entity_id=task_id, subject_id=assignee,
+                     after={"reason": str(data.get("blocked"))[:300]}, ip=client_ip(request))
     if news and assignee == t.assignee_id:
         tell(db, other, me, f"{code}: {news[0]}", f"{subject} — {my_name}" + (f" · {'; '.join(news[1:])}" if news[1:] else ""), href)
 
@@ -209,5 +264,76 @@ def save_task(task_id: str, payload: TaskIn, request: Request, db: DbSession, us
     t.due = _due(data)
     t.version += 1
     db.commit()
+    db.refresh(t)
+    return _out(t)
+
+
+# ---------- attachments ----------
+
+def _viewable(db, user, task_id: str) -> tuple[SharedTask, str, set[str]]:  # type: ignore[no-untyped-def]
+    me = _me(user)
+    below = managed_ids(db, user)
+    t = db.get(SharedTask, task_id)
+    if t is None or not _can_view(t, me, below):
+        raise HTTPException(404, "Task not found.")
+    return t, me, below
+
+
+def _touch(db, t: SharedTask, me: str, action: str, detail: str) -> None:  # type: ignore[no-untyped-def]
+    data = dict(t.data or {})
+    data["attachments"] = _attachments(db, t.id)
+    now = datetime.now(timezone.utc).isoformat()
+    data["activity"] = [*(data.get("activity") or []),
+                        {"id": f"act-{secrets.token_hex(5)}", "at": now, "actor": person_name(db, me), "action": action,
+                         "detail": detail}]
+    data["lastActivityAt"] = now
+    t.data = data
+    t.version += 1
+
+
+@router.post("/{task_id}/attachments", response_model=TaskOut, status_code=201, openapi_extra=UPLOAD_OPENAPI)
+async def upload_attachment(task_id: str, request: Request, db: DbSession, user: CurrentUserDep,
+                            filename: Annotated[str | None, Query(max_length=255)] = None) -> TaskOut:
+    """Anyone who can see the task may attach a file (PDF or image, up to 5 MB)."""
+    t, me, _ = _viewable(db, user, task_id)
+    row = await files.add(db, request, "task", t.id, me, filename)
+    db.flush()
+    _touch(db, t, me, "File attached", row.file_name)
+    for person in {t.assignee_id, t.created_by}:
+        tell(db, person, me, f"{t.code}: file added", f"{person_name(db, me)} attached {row.file_name}",
+             f"/tasks?task={t.id}")
+    record_audit(db, actor_id=user.id, action="task.attachment_added", entity="task", entity_id=t.id,
+                 subject_id=t.assignee_id, after={"file": row.file_name, "size": row.size_bytes}, ip=client_ip(request))
+    try:
+        db.commit()
+    except Exception:
+        storage.delete_quietly(row.storage_path)
+        raise
+    db.refresh(t)
+    return _out(t)
+
+
+@router.get("/{task_id}/attachments/{file_id}/file")
+def download_attachment(task_id: str, file_id: str, db: DbSession, user: CurrentUserDep) -> Response:
+    t, _, _ = _viewable(db, user, task_id)
+    return files.download(files.get(db, "task", t.id, file_id))
+
+
+@router.delete("/{task_id}/attachments/{file_id}", response_model=TaskOut)
+def delete_attachment(task_id: str, file_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> TaskOut:
+    """The person who added the file, or anyone who may change the task, removes it."""
+    t, me, below = _viewable(db, user, task_id)
+    row = files.get(db, "task", t.id, file_id)
+    editor = me in {t.assignee_id, t.created_by} or t.assignee_id in below
+    if row.uploaded_by != me and not editor:
+        raise HTTPException(403, "Only the person who added the file, or the task owner, can remove it.")
+    path, name = row.storage_path, row.file_name
+    db.delete(row)
+    db.flush()
+    _touch(db, t, me, "File removed", name)
+    record_audit(db, actor_id=user.id, action="task.attachment_removed", entity="task", entity_id=t.id,
+                 subject_id=t.assignee_id, after={"file": name}, ip=client_ip(request))
+    db.commit()
+    storage.delete_quietly(path)
     db.refresh(t)
     return _out(t)

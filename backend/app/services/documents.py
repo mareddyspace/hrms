@@ -3,8 +3,11 @@
 - upload: PDF, PNG, JPEG, GIF, WebP or Word (.docx), at most 10 MB; the content is sniffed, the declared type must match
 - every upload of an existing document is a new version; older versions stay downloadable
 - who sees a document: the owner, HR whose scope covers the owner, and the owner's managers (anyone above them in
-  the line) for the categories in MANAGER_CATEGORIES only
-- "Letters" documents are created only by issuing a letter (app/services/letters.py)
+  the line) for the categories HR marks "managers can see" (defaults: MANAGER_CATEGORIES)
+- per-category rules (HR / admin, platform setting document_categories): label, HR verification, employee upload,
+  manager visibility, expiry date required, required for every employee, allowed file kinds and maximum size
+- "Letters" documents are created only by issuing a letter (app/services/letters.py) and are never deleted
+- delete is soft (deleted_at): the owner while their own upload is unverified, HR in scope otherwise
 """
 
 from __future__ import annotations
@@ -25,9 +28,16 @@ from app.services.scope import HR_ACCESS_ROLES, manager_chain_ids
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 DOCUMENT_TYPES = {**storage.ALLOWED_TYPES, DOCX: "docx"}
-DOCUMENT_CATEGORIES = ("Personal", "Identity", "Education", "Employment", "Contracts", "Certifications", "Compliance",
-                       "Medical", "Payroll", "Policies", "Letters", "Other")
+DOCUMENT_CATEGORIES = ("Personal", "Identity", "Immigration", "Education", "Employment", "Contracts", "Certifications",
+                       "Compliance", "Medical", "Payroll", "Policies", "Letters", "Other")
 MANAGER_CATEGORIES = frozenset({"Education", "Employment", "Certifications", "Compliance"})
+# File kinds a category may allow (HR picks a subset per category) -> the content types they cover.
+FILE_KINDS: dict[str, frozenset[str]] = {
+    "pdf": frozenset({"application/pdf"}),
+    "image": frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"}),
+    "docx": frozenset({DOCX}),
+}
+KIND_LABELS = {"pdf": "PDF", "image": "image", "docx": "Word (.docx)"}
 LETTERS_CATEGORY = "Letters"
 
 
@@ -90,9 +100,29 @@ def is_hr_for(user: CurrentUser, emp: Employee) -> bool:
 
 
 def can_see_document(db: Session, user: CurrentUser, doc: EmployeeDocument, owner: Employee) -> bool:
+    if doc.deleted_at is not None:
+        return False
     if owner.id == user.employee_id or is_hr_for(user, owner):
         return True
-    return doc.category in MANAGER_CATEGORIES and user.employee_id is not None and user.employee_id in manager_chain_ids(db, owner.id)
+    return (doc.category in manager_categories(db) and user.employee_id is not None
+            and user.employee_id in manager_chain_ids(db, owner.id))
+
+
+def can_delete(db: Session, user: CurrentUser, doc: EmployeeDocument, owner: Employee) -> str | None:
+    """None when this user may delete the document, else the reason (403)."""
+    if doc.category == LETTERS_CATEGORY or doc.letter_request_id:
+        return "Issued letters stay on record and can't be deleted."
+    if is_hr_for(user, owner):
+        return None
+    if owner.id != user.employee_id:
+        return "Only the employee or HR can delete documents."
+    if not category_config(db).get(doc.category, {}).get("employee_upload"):
+        return "HR manages documents in this category."
+    if doc.uploaded_by and doc.uploaded_by != user.id:
+        return "HR added this document; ask HR to remove it."
+    if doc.verification_status == "verified":
+        return "HR has verified this document; ask HR to remove it, or upload a new version."
+    return None
 
 
 def can_upload_for(user: CurrentUser, owner: Employee) -> bool:
@@ -101,22 +131,29 @@ def can_upload_for(user: CurrentUser, owner: Employee) -> bool:
 
 # ---------- category configuration and verification (migration 0028) ----------
 CATEGORY_SETTING = "document_categories"
-# Defaults: what each category is called on screen, whether an employee's own upload waits for HR verification, and
-# whether employees may upload it themselves (company policies and salary documents come from HR / payroll).
+# Defaults: what each category is called on screen, whether an employee's own upload waits for HR verification, whether
+# employees may upload it themselves (company policies and salary documents come from HR / payroll), whether their
+# managers can see it, whether an expiry date is required, whether every employee should have one (folder checklist),
+# the file kinds allowed and the maximum size in MB (never above the 10 MB platform limit).
+_ALL_KINDS = ["pdf", "image", "docx"]
+MAX_MB = MAX_DOCUMENT_BYTES // (1024 * 1024)
 DEFAULT_CATEGORY_CONFIG: dict[str, dict[str, object]] = {
     "Personal": {"label": "Personal", "verification": False, "employee_upload": True},
-    "Identity": {"label": "Identity proofs", "verification": True, "employee_upload": True},
-    "Education": {"label": "Education certificates", "verification": True, "employee_upload": True},
-    "Employment": {"label": "Employment", "verification": True, "employee_upload": True},
+    "Identity": {"label": "Identity proofs", "verification": True, "employee_upload": True, "required": True},
+    "Immigration": {"label": "Visas & work permits", "verification": True, "employee_upload": True, "requires_expiry": True},
+    "Education": {"label": "Education", "verification": True, "employee_upload": True, "manager_visible": True},
+    "Employment": {"label": "Employment", "verification": True, "employee_upload": True, "manager_visible": True},
     "Contracts": {"label": "Contracts", "verification": False, "employee_upload": False},
-    "Certifications": {"label": "Certifications", "verification": True, "employee_upload": True},
-    "Compliance": {"label": "Compliance", "verification": False, "employee_upload": True},
+    "Certifications": {"label": "Certificates", "verification": True, "employee_upload": True, "manager_visible": True},
+    "Compliance": {"label": "Compliance", "verification": False, "employee_upload": True, "manager_visible": True},
     "Medical": {"label": "Medical", "verification": False, "employee_upload": True},
-    "Payroll": {"label": "Salary documents", "verification": False, "employee_upload": False},
+    "Payroll": {"label": "Payroll & tax", "verification": False, "employee_upload": False},
     "Policies": {"label": "Company policies", "verification": False, "employee_upload": False},
-    "Letters": {"label": "Letters", "verification": False, "employee_upload": False},
+    "Letters": {"label": "Letters", "verification": False, "employee_upload": False, "types": ["pdf"]},
     "Other": {"label": "Other", "verification": False, "employee_upload": True},
 }
+_RULE_DEFAULTS: dict[str, object] = {"manager_visible": False, "requires_expiry": False, "required": False,
+                                     "types": _ALL_KINDS, "max_mb": MAX_MB}
 EXPIRY_REMINDER_DAYS = (30, 7, 0)
 
 
@@ -128,17 +165,44 @@ def category_config(db: Session) -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
     for name, base in DEFAULT_CATEGORY_CONFIG.items():
         mine = saved.get(name) if isinstance(saved, dict) else None
-        row = dict(base)
+        row = _RULE_DEFAULTS | dict(base)
         if isinstance(mine, dict):
             if isinstance(mine.get("label"), str) and mine["label"].strip():
                 row["label"] = mine["label"].strip()[:60]
-            for key in ("verification", "employee_upload"):
+            for key in ("verification", "employee_upload", "manager_visible", "requires_expiry", "required"):
                 if isinstance(mine.get(key), bool):
                     row[key] = mine[key]
+            kinds = mine.get("types")
+            if isinstance(kinds, list) and any(k in FILE_KINDS for k in kinds):
+                row["types"] = [k for k in _ALL_KINDS if k in kinds]
+            size = mine.get("max_mb")
+            if isinstance(size, int) and not isinstance(size, bool):
+                row["max_mb"] = max(1, min(size, MAX_MB))
         if name == LETTERS_CATEGORY:
-            row["employee_upload"] = False
+            row["employee_upload"], row["required"] = False, False
         out[name] = row
     return out
+
+
+def manager_categories(db: Session) -> frozenset[str]:
+    return frozenset(name for name, row in category_config(db).items() if row.get("manager_visible"))
+
+
+def check_category_file(db: Session, category: str, content_type: str, size: int) -> str | None:
+    """None when the file fits the category's rules, else the reason."""
+    row = category_config(db).get(category, {})
+    label = str(row.get("label", category))
+    kinds = [k for k in row.get("types", _ALL_KINDS) if k in FILE_KINDS]  # type: ignore[union-attr]
+    if not any(content_type in FILE_KINDS[k] for k in kinds):
+        return f"{label} accepts {' or '.join(KIND_LABELS[k] for k in kinds)} files only."
+    max_mb = int(row.get("max_mb", MAX_MB))  # type: ignore[call-overload]
+    if size > max_mb * 1024 * 1024:
+        return f"The file is larger than {max_mb} MB, the limit for {label.lower()}."
+    return None
+
+
+def requires_expiry(db: Session, category: str) -> bool:
+    return bool(category_config(db).get(category, {}).get("requires_expiry"))
 
 
 def needs_verification(db: Session, user: CurrentUser, owner: Employee, category: str) -> bool:
@@ -153,15 +217,19 @@ def can_employee_upload(db: Session, user: CurrentUser, owner: Employee, categor
 
 
 def send_expiry_reminders(db: Session, today, send) -> int:  # noqa: ANN001
-    """Documents expiring in 30 / 7 / 0 days (or already expired): one reminder to the owner per threshold."""
+    """Documents expiring in 30 / 7 / 0 days (or already expired): one reminder to the owner per threshold, and one
+    digest a day to the HR team when any document crossed the 7-day or expiry line."""
     from datetime import timedelta
 
     from sqlalchemy import select
 
-    from app.models import ReminderLog
+    from app.models import Account, ReminderLog
+    from app.services.scope import HR_ROLES
 
     sent = 0
+    urgent = 0
     for doc in db.scalars(select(EmployeeDocument).where(EmployeeDocument.expiry_date.is_not(None),
+                                                         EmployeeDocument.deleted_at.is_(None),
                                                          EmployeeDocument.expiry_date <= today + timedelta(days=30))):
         days = (doc.expiry_date - today).days
         threshold = next((t for t in sorted(EXPIRY_REMINDER_DAYS) if days <= t), None)
@@ -174,4 +242,12 @@ def send_expiry_reminders(db: Session, today, send) -> int:  # noqa: ANN001
         if send(db, key, doc.employee_id, today, "document_expiry", f"{doc.title} {when}",
                 "Upload a renewed copy in Documents & letters.", "/documents"):
             sent += 1
+            urgent += threshold <= 7
+    if urgent:
+        for hr_id in db.scalars(select(Account.employee_id).where(Account.role.in_(tuple(HR_ROLES)),
+                                                                   Account.employee_id.is_not(None))):
+            if send(db, f"doc-expiry-hr:{today}", hr_id, today, "document_expiry_hr",
+                    f"{urgent} document{'s' if urgent != 1 else ''} expiring within 7 days or expired",
+                    "Open Documents & letters > Expiring documents to follow up.", "/documents"):
+                sent += 1
     return sent

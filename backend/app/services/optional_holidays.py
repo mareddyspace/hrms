@@ -12,6 +12,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Country, Employee, OptionalHoliday
+from app.services.holiday_rules import region_of
 
 CODE = "optional"
 
@@ -78,7 +79,10 @@ def list_for(db: Session, country_code: str, year: int, employee: Employee | Non
     )
     if employee is not None:
         stmt = stmt.where(
-            or_(OptionalHoliday.region.is_(None), OptionalHoliday.region == (employee.holiday_calendar or "")),
+            # region: the person's holiday calendar, office (city) or the office's state (holiday_rules.CITY_REGION)
+            or_(OptionalHoliday.region.is_(None),
+                OptionalHoliday.region.in_([v for v in (employee.holiday_calendar, employee.location,
+                                                        region_of(employee.location)) if v] or [""])),
             or_(OptionalHoliday.legal_entity.is_(None), OptionalHoliday.legal_entity == (employee.legal_entity or "")),
         )
     return list(db.scalars(stmt))

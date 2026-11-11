@@ -1,0 +1,243 @@
+/* Employee experience pages: assets, visas & permits, privacy centre — status timelines, step trails, asset cards.
+   Uses the shared tokens in styles.css. Class prefix: xp- */
+
+.xp-small {
+  font-size: var(--text-sm);
+}
+
+/* ───────── status timeline ───────── */
+.xp-timeline {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: var(--text-sm);
+}
+
+.xp-timeline li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.xp-timeline li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 12px;
+  bottom: -8px;
+  width: 2px;
+  background: var(--line);
+}
+
+.xp-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--chip-border);
+  position: relative;
+  z-index: 1;
+}
+
+.xp-timeline li.current .xp-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.xp-timeline .xp-note {
+  margin: 2px 0 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.xp-timeline.compact {
+  gap: 2px;
+  font-size: var(--text-xs);
+}
+
+.xp-timeline-more {
+  display: block !important;
+  color: var(--muted);
+  font-style: italic;
+  padding-left: 22px;
+}
+
+/* ───────── step trail ───────── */
+.xp-steps {
+  list-style: none;
+  margin: var(--space-2) 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.xp-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.xp-step:not(:last-child)::after {
+  content: "";
+  width: 18px;
+  height: 2px;
+  background: var(--line);
+  margin-left: 4px;
+}
+
+.xp-step-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--chip-border);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--card);
+}
+
+.xp-step.done {
+  color: var(--ok);
+}
+
+.xp-step.done .xp-step-dot {
+  border-color: var(--ok);
+  background: var(--ok);
+  color: #fff;
+}
+
+.xp-step.now {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.xp-step.now .xp-step-dot {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.xp-step.failed {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.xp-step.failed .xp-step-dot {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ───────── asset cards and request items ───────── */
+.xp-asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--space-3);
+}
+
+.xp-asset {
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--surface-tint);
+  display: grid;
+  gap: 6px;
+}
+
+.xp-asset-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.xp-tag {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.xp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--space-1);
+}
+
+.xp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.xp-item {
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--card);
+}
+
+.xp-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.xp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin-top: 4px;
+}
+
+.xp-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+}
+
+.xp-form .wide {
+  grid-column: 1 / -1;
+}
+
+.xp-hint {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.xp-counter {
+  float: right;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.xp-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: end;
+  margin-bottom: var(--space-3);
+}
+
+.xp-filters .field {
+  min-width: 160px;
+}
+
+@media (max-width: 640px) {
+  .xp-asset-grid {
+    grid-template-columns: 1fr;
+  }
+}

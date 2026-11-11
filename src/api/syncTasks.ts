@@ -7,6 +7,7 @@ import type { Task } from "../model.ts";
 import { notify } from "../components/ui.tsx";
 import { API_ENABLED, ApiError, api, apiRequest, apiSessionAccount, onApiSession, sessionLoad } from "./client.ts";
 import { errorText } from "./syncOps.ts";
+import { apiDelete, downloadBlob, uploadRaw } from "./syncShared.ts";
 import { keepFresh } from "./syncShare.ts";
 
 interface TaskOut {
@@ -102,7 +103,9 @@ export function pushTaskChanges(tasks: Task[]): void {
       .then((out) => {
         known.set(out.id, { json: stable(out.data), version: out.version });
         pending.delete(task.id);
-        pushTaskChanges(latest); // a later change made while this one was on its way
+        // The server may add to the task (cc for @mentions, the attached files): take its copy.
+        if (stable(out.data) !== json) void load();
+        else pushTaskChanges(latest); // a later change made while this one was on its way
       })
       .catch((error) => {
         pending.delete(task.id);
@@ -111,3 +114,56 @@ export function pushTaskChanges(tasks: Task[]): void {
       });
   }
 }
+
+/* ───────── Attachments (stored on the server; PDF or image up to 5 MB) ───────── */
+
+const FILE_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"];
+const MAX_FILE = 5 * 1024 * 1024;
+const OFFLINE = "Files can be attached when TimeZ is connected to the server.";
+
+/** Checks a file before it is sent; null when it can be uploaded. */
+export function checkWorkFile(file: File): string | null {
+  if (!FILE_TYPES.includes(file.type)) return "Attach a PDF or an image (PNG, JPG, WebP, GIF).";
+  if (file.size > MAX_FILE) return "The file is larger than 5 MB.";
+  return null;
+}
+
+async function afterFileChange(run: () => Promise<TaskOut>): Promise<string | null> {
+  try {
+    const out = await run();
+    known.set(out.id, { json: stable(out.data), version: out.version });
+    await load();
+    return null;
+  } catch (error) {
+    return errorText(error);
+  }
+}
+
+export async function uploadTaskFile(taskId: string, file: File): Promise<string | null> {
+  if (!API_ENABLED) return OFFLINE;
+  const bad = checkWorkFile(file);
+  if (bad) return bad;
+  if (pending.has(taskId) || !known.has(taskId)) return "Save the task first, then attach files.";
+  return afterFileChange(() => uploadRaw<TaskOut>(`/tasks/${encodeURIComponent(taskId)}/attachments`, file, file.type, file.name));
+}
+
+export async function removeTaskFile(taskId: string, fileId: string): Promise<string | null> {
+  if (!API_ENABLED) return OFFLINE;
+  return afterFileChange(() => apiDelete<TaskOut>(`/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(fileId)}`));
+}
+
+/** Opens an attached file in a new tab (fetched with the sign-in token). */
+export async function openWorkFile(path: string): Promise<string | null> {
+  if (!API_ENABLED) return OFFLINE;
+  try {
+    const url = URL.createObjectURL(await downloadBlob(path));
+    window.open(url, "_blank", "noopener,noreferrer");
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return null;
+  } catch (error) {
+    return errorText(error);
+  }
+}
+
+export const taskFilePath = (taskId: string, fileId: string) =>
+  `/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(fileId)}/file`;

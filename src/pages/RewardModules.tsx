@@ -1,4 +1,6 @@
 import { DocumentRepository } from "../features/documents/DocumentRepository.tsx";
+import { LetterTemplatesAdmin } from "../features/documents/LetterTemplatesAdmin.tsx";
+import { canConfigure as canConfigureDocs } from "../features/documents/docRepo.ts";
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { API_ENABLED } from "../api/client.ts";
 import { Link } from "react-router-dom";
@@ -1401,6 +1403,8 @@ export function DocumentsLettersPage() {
           { id: "letters", label: "Letters & templates" },
           { id: "history", label: "Request & approval history" },
           { id: "personal", label: "My letters & documents" },
+          // Template wording lives on the server; HR / admin edit it there (backend mode).
+          ...(API_ENABLED && canConfigureDocs(demoProfile.role) ? [{ id: "templates", label: "Letter templates" }] : []),
         ]}
         value={tab}
         onChange={setTab}
@@ -1411,6 +1415,8 @@ export function DocumentsLettersPage() {
       {tab === "letters" && <LetterRequestsPanel actor={demoProfile} onOpen={setOpenLetter} />}
 
       {tab === "history" && <LetterHistoryPanel actor={demoProfile} onOpen={setOpenLetter} />}
+
+      {tab === "templates" && API_ENABLED && canConfigureDocs(demoProfile.role) && <LetterTemplatesAdmin actor={demoProfile} />}
 
       {tab === "personal" && (
         <>

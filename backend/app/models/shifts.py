@@ -22,6 +22,21 @@ class ShiftType(TimestampMixin, Base):
     # Migration 0025: unpaid break inside the shift and where it is worked.
     break_minutes: Mapped[int] = mapped_column(Integer, default=60, server_default="60")
     location: Mapped[str | None] = mapped_column(String(100))
+    # Migration 0034: roster colour (palette name, see SHIFT_COLORS) and the country it applies to (None = any).
+    color: Mapped[str | None] = mapped_column(String(16))
+    country_code: Mapped[str | None] = mapped_column(String(2))
+
+    @property
+    def overnight(self) -> bool:
+        return self.end <= self.start  # "HH:MM" strings compare in time order
+
+    @property
+    def paid_hours(self) -> float:
+        """Length (overnight runs into the next day) minus the unpaid break."""
+        sh, sm = (int(x) for x in self.start.split(":"))
+        eh, em = (int(x) for x in self.end.split(":"))
+        span = ((eh * 60 + em) - (sh * 60 + sm)) % 1440 or 1440
+        return round(max(0, span - (self.break_minutes or 0)) / 60, 2)
 
 
 class RosterShift(TimestampMixin, Base):
@@ -81,3 +96,18 @@ class CoverageMinimum(TimestampMixin, Base):
     shift_id: Mapped[str] = mapped_column(ForeignKey("shift_types.id"))
     weekday: Mapped[int] = mapped_column(Integer)  # 0 = Sunday ... 6 = Saturday (same as the portal)
     minimum: Mapped[int] = mapped_column(Integer)
+
+
+class ShiftAvailability(TimestampMixin, Base):
+    """An employee's availability (migration 0034): unavailable on a date or every given weekday, or a preferred shift.
+    The roster warns the manager when they assign against it (it does not block)."""
+
+    __tablename__ = "shift_availability"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # unavailable | preferred
+    work_date: Mapped[date | None] = mapped_column(Date)
+    weekday: Mapped[int | None] = mapped_column(Integer)  # 0 = Sunday ... 6 = Saturday
+    shift_id: Mapped[str | None] = mapped_column(String(64))
+    note: Mapped[str | None] = mapped_column(String(300))

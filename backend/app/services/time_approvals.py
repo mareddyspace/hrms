@@ -215,7 +215,7 @@ def apply_correction(db: Session, item: AttendanceCorrection, emp: Employee, act
     if session is None:
         if item.requested_check_in is None:
             raise Conflict("There is no attendance for that day and the request has no check-in time.")
-        session = attendance_rules.new_session(emp, item.work_date, item.requested_check_in, "office", "web")
+        session = attendance_rules.new_session(emp, item.work_date, item.requested_check_in, "office", "web", db)
         db.add(session)
     elif item.requested_check_in is not None:
         session.check_in = item.requested_check_in

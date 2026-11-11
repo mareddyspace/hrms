@@ -240,3 +240,23 @@ def test_cash_advance_for_manager_and_ceo_routes_up_never_to_self(client, ram):
     ceo = res.json()
     assert [s["label"] for s in ceo["steps"]] == ["Finance / HR"] and "demo-ceo" not in ceo["steps"][0]["approver_ids"]
     assert client.post(f"{CASH}/{ceo['id']}/withdraw", headers=jordan).json()["status"] == "Withdrawn"
+
+
+def test_encashment_approval_rechecks_the_balance(client, farhan, people, monkeypatch):
+    """Leave taken after asking can use up the balance: the approval is refused with a clear reason."""
+    from app.services import self_service as rules
+
+    emp_id, mgr_id = people[2]
+    me, mgr = account_for(emp_id), account_for(mgr_id, "manager")
+    for r in client.get(ENC, headers=me).json():  # one waiting request at a time: clear any left by other tests
+        if r["can_withdraw"]:
+            client.post(f"{ENC}/{r['id']}/withdraw", headers=me)
+    res = client.post(ENC, headers=me, json={"leave_code": "pto", "days": 1})
+    assert res.status_code == 201, res.text
+    url = f"{ENC}/{res.json()['id']}"
+    monkeypatch.setattr(rules, "ENCASH_KEEP_DAYS", 10_000)  # as if the balance had been used up meanwhile
+    refused = decide(client, url, mgr)
+    assert refused.status_code == 422 and "balance has changed" in refused.json()["detail"]
+    monkeypatch.setattr(rules, "ENCASH_KEEP_DAYS", 5)
+    assert decide(client, url, mgr).json()["status"] == "Manager approved"
+    assert decide(client, url, farhan).json()["status"] == "Approved"

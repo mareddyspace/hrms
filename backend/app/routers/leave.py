@@ -19,6 +19,7 @@ from app.schemas import (
     LeaveRequestOut,
 )
 from app.schemas.leave_rules import LeaveBalanceRuleOut, LeaveBalancesRuleOut
+from app.services import holiday_rules
 from app.services import leave as rules
 from app.services import leave_rules as eligibility
 from app.services import time_approvals as chain
@@ -103,18 +104,32 @@ def list_policies(db: DbSession, user: CurrentUserDep, employee_id: str | None =
 
 @router.get("/holidays", response_model=list[HolidayOut])
 def list_holidays(db: DbSession, user: CurrentUserDep,
-                  year: Annotated[int | None, Query(ge=2000, le=2100)] = None) -> list[Holiday]:
+                  year: Annotated[int | None, Query(ge=2000, le=2100)] = None,
+                  all_locations: bool = False) -> list[HolidayOut]:
+    """The caller's days off for the year: national, company and their office's state holidays (optional holidays
+    are listed by /optional-holidays). all_locations=true also lists the country's other offices' holidays with
+    applies = False, for the holiday calendar's location filter."""
     emp = _me(user)
     year = year or rules.today_for(emp).year
-    return list(
-        db.scalars(
-            select(Holiday)
-            .where(Holiday.country_code == emp.country_code, Holiday.date >= date(year, 1, 1), Holiday.date <= date(year, 12, 31),
-                   Holiday.active.is_(True),
-                   or_(Holiday.calendar.is_(None), Holiday.calendar == (emp.holiday_calendar or "")))
-            .order_by(Holiday.date)
-        )
+    rows = db.scalars(
+        select(Holiday)
+        .where(Holiday.country_code == emp.country_code, Holiday.date >= date(year, 1, 1), Holiday.date <= date(year, 12, 31),
+               Holiday.active.is_(True),
+               or_(Holiday.calendar.is_(None), Holiday.calendar == (emp.holiday_calendar or "")))
+        .order_by(Holiday.date)
     )
+    out: list[HolidayOut] = []
+    for h in rows:
+        if holiday_rules.kind(h) == "optional":
+            continue
+        mine = holiday_rules.applies_to(h, emp)
+        if not mine and not all_locations:
+            continue
+        item = HolidayOut.model_validate(h)
+        item.holiday_type = holiday_rules.kind(h)
+        item.applies = mine
+        out.append(item)
+    return out
 
 
 @router.get("/balances", response_model=LeaveBalancesRuleOut)

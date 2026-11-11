@@ -12,30 +12,49 @@ import {
   type OptionalHoliday,
 } from "../features/workforce/optionalHolidaysStore.ts";
 import { isWeeklyOffDate, scheduleForEmployee } from "../data/workSchedule.ts";
-import { buildHolidayIcs, canEditHolidays, downloadIcs, loadApiHolidays, removeHoliday, saveHoliday } from "../data/holidayAdmin.ts";
+import { buildHolidayIcs, canEditHolidays, downloadIcs, loadApiHolidays, removeHoliday, saveHoliday, type HolidayInput } from "../data/holidayAdmin.ts";
+import {
+  HOLIDAY_TYPES,
+  HOLIDAY_TYPE_LABEL,
+  OFFICES,
+  appliesAt,
+  appliesText,
+  holidayKind,
+  holidayRegions,
+  regionOf,
+  regionsOf,
+} from "../data/holidayRules.ts";
 import { API_ENABLED } from "../api/client.ts";
 import {
   TIMEZ_COUNTRIES,
   formatShortDate,
-  holidaysForCountry,
-  holidaysForPerson,
+  allHolidaysForCountry,
   monthCells,
   parseISODate,
+  placeOfPerson,
   todayISO,
   type CountryCode,
   type Holiday,
+  type HolidayType,
 } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import "./holidays.css";
 import "../styles/pay-claims.css";
+import "../styles/leave-holidays.css";
 
 type View = "list" | "calendar";
-type Kind = "public" | "regional" | "optional" | "weekly";
-type Row = { id: string; date: string; name: string; kind: Kind; region?: string; description?: string; pick?: string };
+type Kind = HolidayType | "weekly";
+type Row = { id: string; date: string; name: string; kind: Kind; where: string; description?: string; pick?: string; applies: boolean };
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const KIND_LABEL: Record<Kind, string> = { public: "Public holiday", regional: "Regional holiday", optional: "Optional holiday", weekly: "Weekly off" };
+const KIND_LABEL: Record<Kind, string> = {
+  national: "National holiday",
+  regional: "Regional holiday",
+  company: "Company holiday",
+  optional: "Optional holiday",
+  weekly: "Weekly off",
+};
 const countryName = (code: string) => TIMEZ_COUNTRIES.find((c) => c.code === code)?.name ?? code;
 const longDate = (iso: string) => parseISODate(iso).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 const weekdayShort = (iso: string) => parseISODate(iso).toLocaleDateString("en-GB", { weekday: "short" });
@@ -50,21 +69,29 @@ function whenText(iso: string, today: string): string {
 
 function describe(row: Row, country: string): string {
   if (row.description) return row.description;
-  if (row.kind === "public") return `Public holiday in ${countryName(country)}. Offices are closed and it doesn't count as leave.`;
-  if (row.kind === "regional") return `Holiday for the ${row.region} region of ${countryName(country)} only.`;
+  if (row.kind === "national") return `National holiday in ${countryName(country)}. Offices are closed and it doesn't count as leave.`;
+  if (row.kind === "company") return "Company holiday. Offices are closed and it doesn't count as leave.";
+  if (row.kind === "regional") return `Holiday for ${row.where} only.`;
   if (row.kind === "optional") return "Optional holiday. Select it to take the day off; it counts against your yearly optional holiday limit.";
   return "Weekly day off under your work schedule.";
 }
 
-/** The viewer's public holidays for a year, grouped by month (or as a year calendar); optional holidays in their own card. HR edits per country. */
+/** "mine" = the viewer's own office; "all" = every office in the country; otherwise one office (city). */
+type Office = "mine" | "all" | string;
+
+/** The viewer's holidays for a year (by office and type), as a list or a year calendar; optional holidays in their
+ * own card. HR and admins edit holidays per country, with type and the states / offices they apply to. */
 export function HolidaysPage() {
   const today = todayISO();
   const currentYear = Number(today.slice(0, 4));
   const { state, employee, demoProfile, replaceHolidays } = usePortal();
   const editor = canEditHolidays(demoProfile.role);
   const myCountry = String(employee.countryCode ?? "IN");
+  const myPlace = placeOfPerson(employee.id);
   const [country, setCountry] = useState(myCountry);
   const viewingOwn = country === myCountry;
+  const [office, setOffice] = useState<Office>("mine");
+  const [types, setTypes] = useState<Set<HolidayType>>(() => new Set(HOLIDAY_TYPES));
   const [view, setView] = useState<View>("list");
   const [year, setYear] = useState(currentYear);
   const [showPast, setShowPast] = useState(true);
@@ -72,6 +99,7 @@ export function HolidaysPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
   const [icsOpen, setIcsOpen] = useState(false);
+  const effectiveOffice: Office = !viewingOwn && office === "mine" ? "all" : office;
 
   // Backend mode: the year's list from the server, into portal state (so leave counts and other pages agree).
   useEffect(() => {
@@ -85,11 +113,18 @@ export function HolidaysPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [country, year, editor]);
 
+  const countryHolidays = useMemo(() => allHolidaysForCountry(state.holidays, country as CountryCode), [state.holidays, country]);
+  const offices = OFFICES[country] ?? [];
+  const placeFor = (o: Office) => (o === "mine" ? myPlace : o === "all" ? null : { location: o });
+  const appliesHere = (h: Holiday, o: Office = effectiveOffice) => {
+    const place = placeFor(o);
+    return place === null || appliesAt(h, place);
+  };
   const holidays = useMemo(
-    () => (viewingOwn ? holidaysForPerson(state.holidays, employee.id) : holidaysForCountry(state.holidays, country as CountryCode)),
-    [state.holidays, employee.id, country, viewingOwn],
+    () => countryHolidays.filter((h) => holidayKind(h) !== "optional" && appliesHere(h)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [countryHolidays, effectiveOffice, myPlace.location, myPlace.legalEntity],
   );
-  const byDate = useMemo(() => new Map(holidays.map((h) => [h.date, h])), [holidays]);
   const optionalState = useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState, getOptionalHolidayState);
   const optional = optionalHolidaysFor(country, year, optionalState, viewingOwn);
   const optionalByDate = new Map(optional.map((h) => [h.date, h]));
@@ -106,49 +141,76 @@ export function HolidaysPage() {
     const pick = requestOn(myOptional, date);
     return pick?.status === "approved" ? "Selected" : pick?.status === "pending" ? "Waiting" : undefined;
   };
-  const publicRows: Row[] = holidays
+  const yearRows: Row[] = holidays
     .filter((h) => h.date.startsWith(`${year}-`))
-    .map((h) => ({ id: h.id, date: h.date, name: h.name, kind: (h.region ? "regional" : "public") as Kind, region: h.region, description: h.description }))
+    .map((h) => ({
+      id: h.id,
+      date: h.date,
+      name: h.name,
+      kind: holidayKind(h) as Kind,
+      where: appliesText(h),
+      description: h.description,
+      applies: !viewingOwn || appliesAt(h, myPlace),
+    }))
     .sort((a, b) => a.date.localeCompare(b.date));
+  const dayOffDates = new Set(yearRows.map((r) => r.date));
   const optionalRows: Row[] = optional
-    .filter((h) => !byDate.has(h.date))
-    .map((h) => ({ id: h.id, date: h.date, name: h.name, kind: "optional" as Kind, region: h.region, description: h.description, pick: pickText(h.date) }));
-  const icsRows = [...publicRows, ...optionalRows].sort((a, b) => a.date.localeCompare(b.date));
+    .filter((h) => !dayOffDates.has(h.date))
+    .map((h) => ({
+      id: h.id,
+      date: h.date,
+      name: h.name,
+      kind: "optional" as Kind,
+      where: h.region ?? "Whole country",
+      description: h.description,
+      pick: pickText(h.date),
+      applies: true,
+    }));
+  const publicRows = yearRows.filter((r) => types.has(r.kind as HolidayType));
+  const shownOptional = types.has("optional") ? optionalRows : [];
+  const byDate = new Map<string, Row>();
+  for (const r of [...publicRows, ...shownOptional]) if (!byDate.has(r.date)) byDate.set(r.date, r);
+  const icsRows = [...publicRows, ...shownOptional].sort((a, b) => a.date.localeCompare(b.date));
   const thisYear = year === currentYear;
-  const upcoming = publicRows.filter((r) => r.date >= today);
+  const upcoming = yearRows.filter((r) => r.date >= today);
   const next = upcoming[0];
-  const passed = thisYear ? publicRows.length - upcoming.length : 0;
-  const listed = thisYear && !showPast ? upcoming : publicRows;
+  const listedAll = [...publicRows, ...shownOptional].sort((a, b) => a.date.localeCompare(b.date));
+  const passed = thisYear ? listedAll.filter((r) => r.date < today).length : 0;
+  const listed = thisYear && !showPast ? listedAll.filter((r) => r.date >= today) : listedAll;
   const groups = MONTHS.map((label, m) => ({ label, m, rows: listed.filter((r) => Number(r.date.slice(5, 7)) - 1 === m) })).filter((g) => g.rows.length);
-  const editable = new Set(holidaysForCountry(state.holidays, country as CountryCode).map((h) => h.id));
+  const editable = new Set(countryHolidays.map((h) => h.id));
   const actor = { id: demoProfile.id, fullName: demoProfile.fullName, role: demoProfile.role };
+  const countBy = (kind: Kind) => yearRows.filter((r) => r.kind === kind).length;
+  const officeLabel =
+    effectiveOffice === "mine"
+      ? [myPlace.location, regionOf(myPlace.location)].filter(Boolean).join(", ") || countryName(country)
+      : effectiveOffice === "all"
+        ? `All offices · ${countryName(country)}`
+        : [effectiveOffice, regionOf(effectiveOffice)].filter(Boolean).join(", ");
+  const officeSummary = editor
+    ? offices.map((city) => ({
+        city,
+        region: regionOf(city),
+        daysOff: countryHolidays.filter((h) => h.date.startsWith(`${year}-`) && holidayKind(h) !== "optional" && appliesAt(h, { location: city })).length,
+      }))
+    : [];
 
-  const rowOn = (date: string): Row | undefined => {
-    const holiday = byDate.get(date);
-    if (holiday) {
-      return (
-        publicRows.find((r) => r.id === holiday.id) ?? {
-          id: holiday.id,
-          date,
-          name: holiday.name,
-          kind: holiday.region ? "regional" : "public",
-          region: holiday.region,
-          description: holiday.description,
-        }
-      );
-    }
-    const opt = optionalByDate.get(date);
-    if (opt) return { id: opt.id, date, name: opt.name, kind: "optional", region: opt.region, description: opt.description, pick: pickText(date) };
-    return undefined;
-  };
+  const toggleType = (t: HolidayType) =>
+    setTypes((prev) => {
+      const nextSet = new Set(prev);
+      if (nextSet.has(t)) nextSet.delete(t);
+      else nextSet.add(t);
+      return nextSet.size ? nextSet : new Set(HOLIDAY_TYPES);
+    });
+
+  const rowOn = (date: string): Row | undefined => byDate.get(date);
 
   const dayCell = (date: string) => {
     const row = rowOn(date);
     const cls = [
       "day",
       "hol-day",
-      row?.kind === "public" || row?.kind === "regional" ? "holiday" : "",
-      row?.kind === "regional" ? "regional" : "",
+      row && row.kind !== "optional" ? `holiday lh-${row.kind}` : "",
       row?.kind === "optional" ? (row.pick === "Selected" ? "optional picked" : "optional") : "",
       !row && isWeeklyOffDate(date, schedule.weeklyOffDays) ? "weekend" : "",
       date === today ? "today" : "",
@@ -172,6 +234,7 @@ export function HolidaysPage() {
 
   const detailRow = detail ? rowOn(detail) : undefined;
   const detailOptional: OptionalHoliday | undefined = detail && viewingOwn && detailRow?.kind === "optional" ? optionalByDate.get(detail) : undefined;
+  const editHoliday = (id: string) => countryHolidays.find((h) => h.id === id) ?? null;
 
   return (
     <Page title="Holiday calendar" action={<Link className="btn-ghost" to="/workforce/optional-holidays">Optional holidays</Link>}>
@@ -200,15 +263,6 @@ export function HolidaysPage() {
             onChange={(v) => setView(v as View)}
           />
           <span className="form-actions pc-hol-tools">
-            {editor && (
-              <select aria-label="Country" value={country} onChange={(e) => setCountry(e.target.value)}>
-                {TIMEZ_COUNTRIES.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            )}
             <button type="button" className="btn-ghost" onClick={() => setIcsOpen(true)}>
               Add to my calendar
             </button>
@@ -220,17 +274,69 @@ export function HolidaysPage() {
           </span>
         </div>
 
+        <div className="lh-filters">
+          {editor && (
+            <label className="lh-filter">
+              <span>Country</span>
+              <select
+                value={country}
+                onChange={(e) => {
+                  setCountry(e.target.value);
+                  setOffice(e.target.value === myCountry ? "mine" : "all");
+                }}
+              >
+                {TIMEZ_COUNTRIES.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="lh-filter">
+            <span>Location</span>
+            <select value={effectiveOffice} onChange={(e) => setOffice(e.target.value)}>
+              {viewingOwn && <option value="mine">My office{myPlace.location ? ` (${myPlace.location})` : ""}</option>}
+              <option value="all">All offices</option>
+              {offices.map((city) => (
+                <option key={city} value={city}>
+                  {city}
+                  {regionOf(city) && regionOf(city) !== city ? ` · ${regionOf(city)}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="lh-chips" role="group" aria-label="Holiday type">
+            {HOLIDAY_TYPES.map((t) => (
+              <button
+                key={t}
+                type="button"
+                className={`lh-chip lh-chip-${t}${types.has(t) ? " is-on" : ""}`}
+                aria-pressed={types.has(t)}
+                onClick={() => toggleType(t)}
+              >
+                {HOLIDAY_TYPE_LABEL[t]}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="pc-hol-stats">
           <div>
-            <span className="muted">Public holidays · {countryName(country)}</span>
-            <strong>{publicRows.length}</strong>
+            <span className="muted">Days off · {officeLabel}</span>
+            <strong>{yearRows.length}</strong>
           </div>
-          {thisYear && (
-            <div>
-              <span className="muted">Still to come</span>
-              <strong>{upcoming.length}</strong>
-            </div>
-          )}
+          <div className="lh-stat-split">
+            <span className="muted">By type</span>
+            <span>
+              {(["national", "company", "regional"] as Kind[]).map((k) => (
+                <span key={k} className={`lh-dot lh-${k}`}>
+                  {countBy(k)} {HOLIDAY_TYPE_LABEL[k as HolidayType].toLowerCase()}
+                </span>
+              ))}
+              <span className="lh-dot lh-optional">{optionalRows.length} optional</span>
+            </span>
+          </div>
           {next && (
             <div className="pc-hol-next">
               <span className="muted">Next holiday</span>
@@ -245,11 +351,11 @@ export function HolidaysPage() {
         <Banner message={loadError ? { tone: "err", text: loadError } : null} />
 
         {view === "list" &&
-          (publicRows.length === 0 ? (
-            <EmptyState title="No holidays listed" description={`Nothing for ${countryName(country)} in ${year} yet.`} />
+          (listedAll.length === 0 ? (
+            <EmptyState title="No holidays listed" description={`Nothing for ${officeLabel} in ${year} with these filters.`} />
           ) : (
             <>
-              {groups.length === 0 && <EmptyState title="No more holidays this year" description={`All ${publicRows.length} have passed.`} />}
+              {groups.length === 0 && <EmptyState title="No more holidays this year" description={`All ${listedAll.length} have passed.`} />}
               <div className="pc-hol-months">
                 {groups.map((g) => (
                   <section key={g.m} className="pc-hol-month">
@@ -260,7 +366,10 @@ export function HolidaysPage() {
                       {g.rows.map((r) => {
                         const when = whenText(r.date, today);
                         return (
-                          <li key={r.id} className={`pc-hol-row${r.date < today ? " is-past" : ""}${r.date === today ? " is-today" : ""}`}>
+                          <li
+                            key={`${r.kind}-${r.id}`}
+                            className={`pc-hol-row lh-row-${r.kind}${r.date < today ? " is-past" : ""}${r.date === today ? " is-today" : ""}`}
+                          >
                             <button type="button" className="pc-hol-open" onClick={() => setDetail(r.date)}>
                               <span className="pc-hol-date">
                                 <strong>{Number(r.date.slice(-2))}</strong>
@@ -268,13 +377,18 @@ export function HolidaysPage() {
                               </span>
                               <span className="pc-hol-name">
                                 <strong>{r.name}</strong>
-                                {r.region && <span className="muted">{r.region} only</span>}
+                                <span className="muted">
+                                  <span className={`lh-tag lh-${r.kind}`}>{KIND_LABEL[r.kind]}</span>
+                                  {r.kind === "regional" || r.where !== "Whole country" ? ` ${r.where}` : ""}
+                                  {r.pick ? ` · ${r.pick.toLowerCase()}` : ""}
+                                  {viewingOwn && effectiveOffice !== "mine" && !r.applies ? " · not your office" : ""}
+                                </span>
                               </span>
                               {when && <span className="pc-hol-when">{when}</span>}
                             </button>
-                            {editor && editable.has(r.id) && (
+                            {editor && r.kind !== "optional" && editable.has(r.id) && (
                               <span className="pc-hol-actions">
-                                <button type="button" className="btn-ghost btn-tiny" onClick={() => setEditing(holidays.find((h) => h.id === r.id) ?? null)}>
+                                <button type="button" className="btn-ghost btn-tiny" onClick={() => setEditing(editHoliday(r.id))}>
                                   Edit
                                 </button>
                                 <ActionButton
@@ -303,34 +417,52 @@ export function HolidaysPage() {
           ))}
 
         {view === "calendar" && (
-          <>
-            <div className="holiday-year">
-              {Array.from({ length: 12 }, (_, m) => (
-                <section key={m} className="holiday-mini">
-                  <div className="holiday-mini-title">{MONTHS[m]}</div>
-                  <div className="cal cal-mini">
-                    {WEEKDAYS.map((label) => (
-                      <div key={label} className="cal-head">
-                        {label[0]}
-                      </div>
-                    ))}
-                    {monthCells(year, m).map((date, i) => (date ? dayCell(date) : <div key={`b-${i}`} />))}
-                  </div>
-                </section>
-              ))}
-            </div>
-            <p className="muted holiday-legend">
-              <span className="hol-swatch is-holiday" /> Public holiday
-              {optionalRows.length > 0 && (
-                <>
-                  <span className="hol-swatch is-optional" /> Optional
-                </>
-              )}
-              <span className="hol-swatch is-weekly" /> Weekly off
-            </p>
-          </>
+          <div className="holiday-year">
+            {Array.from({ length: 12 }, (_, m) => (
+              <section key={m} className="holiday-mini">
+                <div className="holiday-mini-title">{MONTHS[m]}</div>
+                <div className="cal cal-mini">
+                  {WEEKDAYS.map((label) => (
+                    <div key={label} className="cal-head">
+                      {label[0]}
+                    </div>
+                  ))}
+                  {monthCells(year, m).map((date, i) => (date ? dayCell(date) : <div key={`b-${i}`} />))}
+                </div>
+              </section>
+            ))}
+          </div>
         )}
+        <p className="muted holiday-legend lh-legend">
+          {(["national", "company", "regional"] as Kind[]).map((k) => (
+            <span key={k} className="lh-legend-item">
+              <span className={`lh-swatch lh-${k}`} /> {HOLIDAY_TYPE_LABEL[k as HolidayType]}
+            </span>
+          ))}
+          <span className="lh-legend-item">
+            <span className="hol-swatch is-optional" /> Optional
+          </span>
+          <span className="lh-legend-item">
+            <span className="hol-swatch is-weekly" /> Weekly off
+          </span>
+        </p>
       </Card>
+
+      {editor && officeSummary.length > 0 && (
+        <Card title={`Days off by office · ${countryName(country)} ${year}`}>
+          <ul className="lh-offices">
+            {officeSummary.map((o) => (
+              <li key={o.city}>
+                <button type="button" className={`lh-office${effectiveOffice === o.city ? " is-on" : ""}`} onClick={() => setOffice(o.city)}>
+                  <strong>{o.city}</strong>
+                  <span className="muted">{o.region ?? "—"}</span>
+                  <span className="lh-office-count">{o.daysOff}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       {viewingOwn ? (
         <OptionalHolidaysCard />
@@ -360,9 +492,9 @@ export function HolidaysPage() {
           optionalDeadline={detailRow?.kind === "optional" && optionalByDate.get(detail) ? pickDeadline(optionalByDate.get(detail)!) : undefined}
           onClose={() => setDetail(null)}
           onEdit={
-            editor && detailRow && editable.has(detailRow.id)
+            editor && detailRow && detailRow.kind !== "optional" && editable.has(detailRow.id)
               ? () => {
-                  setEditing(holidays.find((h) => h.id === detailRow.id) ?? null);
+                  setEditing(editHoliday(detailRow.id));
                   setDetail(null);
                 }
               : undefined
@@ -420,8 +552,8 @@ function HolidayDetail({
             <dd>{countryName(country)}</dd>
           </div>
           <div>
-            <dt>Region</dt>
-            <dd>{row?.region ?? "Whole country"}</dd>
+            <dt>Applies to</dt>
+            <dd>{row && row.kind !== "weekly" ? row.where : "Whole country"}</dd>
           </div>
           {optionalDeadline && (
             <div>
@@ -539,19 +671,40 @@ function HolidayEditor({
   country: string;
   defaultDate: string;
   onClose: () => void;
-  onSave: (input: { id?: string; countryCode: string; date: string; name: string; description?: string }) => Promise<string | null>;
+  onSave: (input: HolidayInput) => Promise<string | null>;
 }) {
   const [date, setDate] = useState(holiday?.date ?? defaultDate);
   const [name, setName] = useState(holiday?.name ?? "");
   const [description, setDescription] = useState(holiday?.description ?? "");
+  const [type, setType] = useState<HolidayType>(holiday ? holidayKind(holiday) : "national");
+  const [regions, setRegions] = useState<string[]>(holiday ? holidayRegions(holiday) : []);
+  const [extra, setExtra] = useState("");
+  const [legalEntity, setLegalEntity] = useState(holiday?.legalEntity ?? "");
   const [msg, setMsg] = useState<{ tone: "err"; text: string } | null>(null);
   const act = useAction();
+  const homeCountry = holiday?.countryCode ?? country;
+  const choices = [...new Set([...regionsOf(homeCountry), ...(OFFICES[homeCountry] ?? []), ...regions])];
+  const toggle = (r: string) => setRegions((prev) => (prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]));
+  const scoped = type !== "national";
   return (
     <Dialog open title={holiday ? "Edit holiday" : `Add holiday · ${countryName(country)}`} onClose={onClose}>
       <form
         onSubmit={act.submit(
           async () => {
-            const error = await onSave({ id: holiday?.id, countryCode: holiday?.countryCode ?? country, date, name, description });
+            const typed = extra
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            const error = await onSave({
+              id: holiday?.id,
+              countryCode: homeCountry,
+              date,
+              name,
+              description,
+              holidayType: type,
+              regions: scoped ? [...regions, ...typed] : [],
+              legalEntity: scoped ? legalEntity : "",
+            });
             setMsg(error ? { tone: "err", text: error } : null);
             return error;
           },
@@ -566,6 +719,32 @@ function HolidayEditor({
           <Field label="Name">
             <input value={name} onChange={(e) => setName(e.target.value)} maxLength={200} required />
           </Field>
+          <Field label="Type">
+            <select value={type} onChange={(e) => setType(e.target.value as HolidayType)}>
+              {HOLIDAY_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {KIND_LABEL[t]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {scoped && (
+            <Field label="Legal entity">
+              <input value={legalEntity} onChange={(e) => setLegalEntity(e.target.value)} maxLength={200} placeholder="Every entity" />
+            </Field>
+          )}
+          {scoped && (
+            <Field label={type === "regional" ? "States / offices" : "Only for (optional)"} wide>
+              <div className="lh-region-pick">
+                {choices.map((r) => (
+                  <label key={r} className="hol-check">
+                    <input type="checkbox" checked={regions.includes(r)} onChange={() => toggle(r)} /> {r}
+                  </label>
+                ))}
+                <input value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="Other states, comma separated" maxLength={300} />
+              </div>
+            </Field>
+          )}
           <Field label="Description" wide>
             <input value={description} onChange={(e) => setDescription(e.target.value)} maxLength={1000} />
           </Field>

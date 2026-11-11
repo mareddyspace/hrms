@@ -500,6 +500,10 @@ interface PortalApi {
     client?: string;
     notes?: string;
     due?: string;
+    /** Planned start (on or before the due date). */
+    startDate?: string;
+    /** Checklist items to start with. */
+    checklist?: string[];
     estimatedHours?: number;
     peopleIds?: string[];
     taskType?: TaskType;
@@ -510,14 +514,17 @@ interface PortalApi {
     allowedOwnerIds?: string[];
   }) => string | null;
   /** Change a task's name, description, priority or due date (its creator, or a manager above the owner). */
-  editTask: (taskId: string, change: { subject?: string; notes?: string; priority?: TaskPriority; due?: string }) => string | null;
+  editTask: (taskId: string, change: { subject?: string; notes?: string; priority?: TaskPriority; due?: string; startDate?: string }) => string | null;
+  /** Add or remove a checklist item (whoever may work on or edit the task). */
+  addTaskSubtask: (taskId: string, title: string) => string | null;
+  removeTaskSubtask: (taskId: string, subtaskId: string) => string | null;
   taskAction: (
     taskId: string,
     action: "accept" | "decline" | "start" | "progress" | "block" | "unblock" | "help" | "review" | "complete",
     payload?: { progressPct?: number; blockedReason?: string; dependsOn?: string; comment?: string },
   ) => string | null;
   toggleTaskSubtask: (taskId: string, subtaskId: string) => string | null;
-  addTaskComment: (taskId: string, text: string) => string | null;
+  addTaskComment: (taskId: string, text: string, mentions?: string[]) => string | null;
   /** Automatic mode: append system activity entries (e.g. reminders sent). */
   recordTaskAutoEvents: (events: { taskId: string; action: string; detail?: string }[]) => void;
   addReimbursement: (input: Omit<Reimbursement, "id" | "employeeId" | "status">) => string | null;
@@ -586,6 +593,13 @@ setNavOverrideSource((accountId) => getNavOverrides(accountId));
 setHolidayContext(
   (employeeId) => findDemoById(employeeId)?.countryCode ?? (employeeId.startsWith("emp-") ? "IN" : undefined),
   () => [],
+  // Office and legal entity decide regional / entity holidays (src/data/holidayRules.ts).
+  (employeeId) => {
+    const demo = findDemoById(employeeId);
+    if (demo?.location) return { location: demo.location, legalEntity: demo.legalEntity };
+    const person = getPerson(employeeId);
+    return person ? { location: person.location, legalEntity: person.legalEntity } : {};
+  },
 );
 // Comp-off days granted for working weekends or holidays add to the comp-off balance.
 // Latest leave requests, so comp-off credits used before they expired stay counted.
@@ -2248,6 +2262,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (!due) return "Choose a due date.";
         if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return "Use a valid due date (YYYY-MM-DD).";
         if (due < todayISO()) return "The due date can't be in the past.";
+        const startDate = (input.startDate || "").trim();
+        if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return "Use a valid start date (YYYY-MM-DD).";
+        if (startDate && startDate > due) return "The start date must be on or before the due date.";
+        const checklist = (input.checklist ?? []).map((x) => x.trim().replace(/\s+/g, " ").slice(0, 160)).filter(Boolean);
+        if (checklist.length > 30) return "Keep the checklist to 30 items.";
         const estimate = input.estimatedHours ?? 1;
         if (!Number.isFinite(estimate) || estimate < 0.5 || estimate > 200) return "Estimate between 0.5 and 200 hours.";
         const duplicate = state.tasks.some(
@@ -2303,12 +2322,13 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           score: 70,
           lastActivityAt: now,
           due,
+          ...(startDate ? { startDate } : {}),
           peopleIds,
           progressPct: 0,
           // Your own to-do needs no "accept" step.
           accepted: own,
           inReview: false,
-          subtasks: [],
+          subtasks: checklist.map((title) => ({ id: uid("sub"), title, done: false })),
           attachments: [],
           comments: [],
           activity: [
@@ -2602,8 +2622,15 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }
         if (change.due !== undefined && change.due !== task.due) {
           if (change.due && !/^\d{4}-\d{2}-\d{2}$/.test(change.due)) return "Use a valid due date.";
+          if (change.due && task.startDate && change.due < task.startDate) return "The due date can't be before the start date.";
           next.due = change.due;
           notes.push(change.due ? `due ${change.due}` : "due date removed");
+        }
+        if (change.startDate !== undefined && change.startDate !== (task.startDate ?? "")) {
+          if (change.startDate && !/^\d{4}-\d{2}-\d{2}$/.test(change.startDate)) return "Use a valid start date.";
+          if (change.startDate && task.due && change.startDate > (change.due ?? task.due)) return "The start date must be on or before the due date.";
+          next.startDate = change.startDate || undefined;
+          notes.push(change.startDate ? `starts ${change.startDate}` : "start date removed");
         }
         if (!notes.length) return null;
         const now = new Date().toISOString();
@@ -2618,7 +2645,48 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }));
         return null;
       },
-      addTaskComment: (taskId, text) => {
+      addTaskSubtask: (taskId, title) => {
+        const task = state.tasks.find((item) => item.id === taskId);
+        if (!task) return "Task not found.";
+        const may = task.employeeId === active.id || task.createdById === active.id || canApproveFor(task.employeeId);
+        if (!may) return "Only the owner, whoever created the task or the owner's manager can change the checklist.";
+        if (task.status === "done") return "Completed tasks can't be changed.";
+        const clean = title.trim().replace(/\s+/g, " ").slice(0, 160);
+        if (!clean) return "Enter the checklist item.";
+        if ((task.subtasks ?? []).length >= 30) return "Keep the checklist to 30 items.";
+        const now = new Date().toISOString();
+        const actor = active.fullName.split(" ")[0] || "User";
+        setState((prev) => ({
+          ...prev,
+          tasks: patchById(prev.tasks, taskId, {
+            subtasks: [...(task.subtasks ?? []), { id: uid("sub"), title: clean, done: false }],
+            lastActivityAt: now,
+            activity: [...(task.activity ?? []), { id: uid("tact"), at: now, actor, action: "Checklist item added", detail: clean }],
+          }),
+        }));
+        return null;
+      },
+      removeTaskSubtask: (taskId, subtaskId) => {
+        const task = state.tasks.find((item) => item.id === taskId);
+        if (!task) return "Task not found.";
+        const may = task.employeeId === active.id || task.createdById === active.id || canApproveFor(task.employeeId);
+        if (!may) return "Only the owner, whoever created the task or the owner's manager can change the checklist.";
+        if (task.status === "done") return "Completed tasks can't be changed.";
+        const item = (task.subtasks ?? []).find((x) => x.id === subtaskId);
+        if (!item) return "That checklist item was removed.";
+        const now = new Date().toISOString();
+        const actor = active.fullName.split(" ")[0] || "User";
+        setState((prev) => ({
+          ...prev,
+          tasks: patchById(prev.tasks, taskId, {
+            subtasks: (task.subtasks ?? []).filter((x) => x.id !== subtaskId),
+            lastActivityAt: now,
+            activity: [...(task.activity ?? []), { id: uid("tact"), at: now, actor, action: "Checklist item removed", detail: item.title }],
+          }),
+        }));
+        return null;
+      },
+      addTaskComment: (taskId, text, mentions) => {
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return "Task not found.";
         const follower = !!task.peopleIds?.includes(active.id) || !!task.ccIds?.includes(active.id);
@@ -2638,7 +2706,10 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({
           ...prev,
           tasks: patchById(prev.tasks, taskId, {
-            comments: [...(task.comments ?? []), { id: uid("tc"), author: actor, text: trimmed, at: now }],
+            comments: [
+              ...(task.comments ?? []),
+              { id: uid("tc"), author: actor, text: trimmed, at: now, ...(mentions?.length ? { mentions: [...new Set(mentions)].slice(0, 10) } : {}) },
+            ],
             lastActivityAt: now,
             ...(autoStart
               ? { status: "progress" as TaskStatus, progressPct: Math.max(taskProgress(task), 10), automationNote: "In progress" }

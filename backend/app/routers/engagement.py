@@ -69,6 +69,25 @@ def in_audience(s: EngagementSurvey, emp: Employee) -> bool:
     return True
 
 
+def _announce(db: DbSession, s: EngagementSurvey, actor_id: str | None) -> int:
+    """Tell everyone in the audience that a survey was published (open now or opening later)."""
+    stmt = select(Employee.id).where(Employee.employment_status == "Active", started_clause(date.today()))
+    if s.audience_type == "department":
+        stmt = stmt.where(Employee.department == s.audience_value)
+    elif s.audience_type == "country":
+        stmt = stmt.where(Employee.country_code == s.audience_value)
+    when = "now open" if s.open_date <= date.today() else f"opens {s.open_date.isoformat()}"
+    sent = 0
+    for emp_id in db.scalars(stmt):
+        if emp_id == actor_id:
+            continue
+        notify(db, recipient_id=emp_id, title=f"Survey {when}: {s.title}",
+               body=f"Share your view by {s.close_date.isoformat()}." + (" Answers are anonymous." if s.anonymous else ""),
+               href="/engagement-surveys")
+        sent += 1
+    return sent
+
+
 def audience_count(db: DbSession, s: EngagementSurvey) -> int:
     stmt = select(func.count()).select_from(Employee).where(Employee.employment_status == "Active", started_clause(date.today()))
     if s.audience_type == "department":
@@ -172,6 +191,8 @@ def create_survey(body: SurveyCreateIn, request: Request, db: DbSession, user: C
     db.flush()
     record_audit(db, actor_id=user.id, action="survey_created", entity="survey", entity_id=s.id,
                  after={"title": s.title, "kind": s.kind, "anonymous": s.anonymous, "published": s.published}, ip=client_ip(request))
+    if s.published:
+        _announce(db, s, user.employee_id)
     db.commit()
     return _survey_out(db, s, user.employee_id)
 
@@ -193,6 +214,7 @@ def publish_survey(survey_id: str, request: Request, db: DbSession, user: Curren
         raise HTTPException(409, "The open date has passed. Create the survey again with new dates.")
     s.published = True
     record_audit(db, actor_id=user.id, action="survey_published", entity="survey", entity_id=s.id, ip=client_ip(request))
+    _announce(db, s, user.employee_id)
     db.commit()
     return _survey_out(db, s, user.employee_id)
 
@@ -341,8 +363,11 @@ def give_kudos(body: KudosIn, request: Request, db: DbSession, user: CurrentUser
     emp = me(user)
     if body.to_id == emp.id:
         raise HTTPException(422, "You can't give kudos to yourself.")
-    if db.get(Employee, body.to_id) is None:
+    to = db.get(Employee, body.to_id)
+    if to is None:
         raise HTTPException(422, "Pick a colleague from the list.")
+    if to.employment_status in ("Terminated", "Exited"):
+        raise HTTPException(422, f"{to.full_name} has left the company.")
     if body.points > MAX_POINTS_PER_KUDOS:
         raise HTTPException(422, f"Up to {MAX_POINTS_PER_KUDOS} points per kudos.")
     message = " ".join(body.message.split())
@@ -357,9 +382,12 @@ def give_kudos(body: KudosIn, request: Request, db: DbSession, user: CurrentUser
     notify(db, recipient_id=body.to_id, title="You received kudos",
            body=f"{emp.full_name} recognised you for {body.value}" + (f" (+{body.points} points)." if body.points else "."),
            href="/recognition")
-    if body.points:
-        record_audit(db, actor_id=user.id, action="recognition_points_given", entity="kudos", entity_id=k.id,
-                     subject_id=body.to_id, after={"points": body.points, "value": body.value}, ip=client_ip(request))
+    if to.manager_id and to.manager_id != emp.id:
+        notify(db, recipient_id=to.manager_id, title=f"{to.full_name} was recognised",
+               body=f"{emp.full_name} recognised {to.full_name} for {body.value}.", href="/recognition")
+    record_audit(db, actor_id=user.id, action="recognition_points_given" if body.points else "recognition_kudos_given",
+                 entity="kudos", entity_id=k.id, subject_id=body.to_id, after={"points": body.points, "value": body.value},
+                 ip=client_ip(request))
     db.commit()
     return _kudos_outs(db, [k], user.employee_id)[0]
 

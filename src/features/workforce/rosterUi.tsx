@@ -9,6 +9,7 @@ const PALETTE = ["amber", "green", "blue", "violet", "teal", "rose", "slate"];
 
 export function shiftColor(shift: ShiftDef | undefined): string {
   if (!shift) return "";
+  if (shift.color && PALETTE.includes(shift.color)) return shift.color;
   if (shift.id in KNOWN) return PALETTE[KNOWN[shift.id]!]!;
   let h = 0;
   for (const ch of shift.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;

@@ -227,6 +227,14 @@ function seedHolidays(): PortalState["holidays"] {
     { id: "h-de-05-25", date: "2026-05-25", name: "Pfingstmontag", countryCode: "DE" },
     { id: "h-de-10-03", date: "2026-10-03", name: "Tag der Deutschen Einheit", countryCode: "DE" },
     { id: "h-de-12-25", date: "2026-12-25", name: "1. Weihnachtstag", countryCode: "DE" },
+    // State holidays by office (same ids as backend/app/services/holiday_rules.py EXTRA_REGIONAL). The rows above
+    // get their type and regions from src/data/holidayRules.ts classify().
+    { id: "h-in-r-pongal-tn", date: "2026-01-15", name: "Thai Pongal", countryCode: "IN", holidayType: "regional", regions: ["Tamil Nadu"] },
+    { id: "h-in-r-onam", date: "2026-08-26", name: "Thiruvonam (Onam)", countryCode: "IN", holidayType: "regional", regions: ["Kerala"] },
+    { id: "h-au-r-labour-vic", date: "2026-03-09", name: "Labour Day (Victoria)", countryCode: "AU", holidayType: "regional", regions: ["Victoria"] },
+    { id: "h-au-r-melb-cup", date: "2026-11-03", name: "Melbourne Cup Day", countryCode: "AU", holidayType: "regional", regions: ["Victoria"] },
+    { id: "h-de-r-drei-koenige", date: "2026-01-06", name: "Heilige Drei Könige", countryCode: "DE", holidayType: "regional", regions: ["Bavaria"] },
+    { id: "h-de-r-fronleichnam", date: "2026-06-04", name: "Fronleichnam", countryCode: "DE", holidayType: "regional", regions: ["Bavaria", "Hesse"] },
   ];
 }
 

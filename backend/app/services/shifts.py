@@ -7,6 +7,11 @@
   Holidays (manager's country) need no one. People on approved leave don't count.
 - Publishing a week with under-covered upcoming slots is refused unless allow_gaps is set.
 - Approving a swap re-checks the rules and coverage; a swap that creates a new gap is refused unless allow_gaps.
+- At most MAX_WEEK_HOURS paid hours a week (shift length minus its break); a shift type for one country only goes to
+  people working in that country.
+- Warnings (shown, not blocking): the person marked themselves unavailable, prefers another shift, or the day is
+  their weekly off or a public holiday.
+- Attendance and the timesheet day target use the person's shift on the published roster that day (rostered_shift).
 """
 
 from __future__ import annotations
@@ -17,15 +22,21 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Account, CoverageMinimum, Employee, LeaveRequest, RosterShift, RosterWeek, ShiftType
+from app.models import (
+    Account, CoverageMinimum, Employee, LeaveRequest, RosterShift, RosterWeek, ShiftAvailability, ShiftType,
+)
 from app.services.headcount import has_started
 from app.services.leave import holiday_dates
 
 MIN_REST_HOURS = 11
 MAX_DAYS_PER_WEEK = 6
+MAX_WEEK_HOURS = 48
+MIN_SHIFT_HOURS, MAX_SHIFT_HOURS = 4, 12
+SHIFT_COLORS = ("amber", "green", "blue", "violet", "teal", "rose", "slate")
 MAX_COVERAGE = 20
 COMPANY_SCOPE = "*"
 WEEKDAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+DAY_NAMES = ("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
 DEFAULT_MINIMUMS: dict[str, tuple[int, int]] = {  # shift id -> (weekday, weekend)
     "sh-morning": (1, 0),
     "sh-general": (1, 0),
@@ -97,6 +108,44 @@ def _span(shift: ShiftType, d: date) -> tuple[datetime, datetime]:
     return start, end
 
 
+def span_minutes(start: str, end: str) -> int:
+    """Length of a shift in minutes; an end at or before the start is on the next day (overnight)."""
+    return (_minutes(end) - _minutes(start)) % 1440 or 1440
+
+
+def is_overnight(shift: ShiftType) -> bool:
+    return _minutes(shift.end) <= _minutes(shift.start)
+
+
+def paid_hours(shift: ShiftType) -> float:
+    """Paid hours: the shift's length minus its unpaid break."""
+    return round(max(0, span_minutes(shift.start, shift.end) - (shift.break_minutes or 0)) / 60, 2)
+
+
+def shift_type_error(start: str, end: str, break_minutes: int, color: str | None, country_code: str | None) -> str | None:
+    """Validation for a shift template (same as the portal's saveShift)."""
+    if start == end:
+        return "Start and end can't be the same."
+    length = span_minutes(start, end)
+    if length < MIN_SHIFT_HOURS * 60 or length > MAX_SHIFT_HOURS * 60:
+        return f"A shift must be between {MIN_SHIFT_HOURS} and {MAX_SHIFT_HOURS} hours long."
+    if break_minutes >= length:
+        return "The break can't be as long as the shift."
+    if color and color not in SHIFT_COLORS:
+        return "Pick one of the roster colours."
+    if country_code and (len(country_code) != 2 or not country_code.isalpha()):
+        return "Country must be a 2-letter code."
+    return None
+
+
+def rostered_shift(db: Session, employee_id: str, day: date) -> ShiftType | None:
+    """The person's shift on the published roster that day (attendance late/early flags and the timesheet day)."""
+    row = db.scalar(select(RosterShift).where(RosterShift.employee_id == employee_id, RosterShift.work_date == day))
+    if row is None or not is_published(db, row):
+        return None
+    return db.get(ShiftType, row.shift_id)
+
+
 def rule_error(db: Session, employee_id: str, d: date, shift: ShiftType, exclude: set[str] | None = None,
                override: dict[str, str] | None = None) -> str | None:
     """Leave, 6-days-a-week and 11-hour-rest checks for putting this person on this shift that day."""
@@ -104,6 +153,10 @@ def rule_error(db: Session, employee_id: str, d: date, shift: ShiftType, exclude
         return f"{shift.name} runs only on weekends."
     if on_leave(db, employee_id, d):
         return "That person is on approved leave that day."
+    if shift.country_code:
+        emp = db.get(Employee, employee_id)
+        if emp is not None and (emp.country_code or "").upper() != shift.country_code.upper():
+            return f"{shift.name} is for people working in {shift.country_code.upper()}."
     exclude = exclude or set()
     override = override or {}
     others = [r for r in db.scalars(select(RosterShift).where(
@@ -112,6 +165,13 @@ def rule_error(db: Session, employee_id: str, d: date, shift: ShiftType, exclude
     ws = week_start_of(d)
     if len([r for r in others if week_start_of(r.work_date) == ws]) + 1 > MAX_DAYS_PER_WEEK:
         return f"At most {MAX_DAYS_PER_WEEK} shift days a week."
+    week_hours = paid_hours(shift)
+    for r in others:
+        if week_start_of(r.work_date) == ws:
+            other = db.get(ShiftType, override.get(r.id, r.shift_id))
+            week_hours += paid_hours(other) if other else 0
+    if week_hours > MAX_WEEK_HOURS:
+        return f"Weekly hours: that would be {week_hours:g} paid hours in the week (max {MAX_WEEK_HOURS})."
     start, end = _span(shift, d)
     for r in others:
         if abs((r.work_date - d).days) != 1:
@@ -124,6 +184,38 @@ def rule_error(db: Session, employee_id: str, d: date, shift: ShiftType, exclude
         if gap < timedelta(hours=MIN_REST_HOURS):
             return f"Rest rule: {MIN_REST_HOURS} hours are needed between shifts."
     return None
+
+
+def availability_for(db: Session, employee_id: str, d: date) -> list[ShiftAvailability]:
+    """The person's availability entries that apply on day d (that date, or that weekday every week)."""
+    return list(db.scalars(select(ShiftAvailability).where(
+        ShiftAvailability.employee_id == employee_id,
+        (ShiftAvailability.work_date == d) | (ShiftAvailability.weekday == portal_weekday(d)))))
+
+
+def assign_warnings(db: Session, employee_id: str, d: date, shift: ShiftType) -> list[str]:
+    """Reasons to think twice (not rule breaks): unavailable, prefers another shift, weekly off, public holiday."""
+    from app.services.leave import holiday_dates_for, weekly_off_for_employee
+
+    out: list[str] = []
+    emp = db.get(Employee, employee_id)
+    name = emp.full_name if emp else employee_id
+    for a in availability_for(db, employee_id, d):
+        when = "that day" if a.work_date else f"every {DAY_NAMES[a.weekday or 0]}"
+        if a.kind == "unavailable":
+            out.append(f"{name} marked themselves unavailable {when}" + (f" ({a.note})." if a.note else "."))
+        elif a.kind == "preferred" and a.shift_id and a.shift_id != shift.id:
+            pref = db.get(ShiftType, a.shift_id)
+            out.append(f"{name} prefers {pref.name if pref else 'another shift'} {when}.")
+    if emp is not None:
+        try:
+            if d.weekday() in weekly_off_for_employee(db, emp):
+                out.append(f"{d.strftime('%A')} is {name}'s weekly off.")
+        except Exception:  # noqa: BLE001 (no schedule data)
+            pass
+        if d in holiday_dates_for(db, emp, d, d):
+            out.append(f"{d.isoformat()} is a public holiday for {name}.")
+    return out
 
 
 def coverage_minimum(db: Session, scope: str, shift: ShiftType, weekday: int) -> int:

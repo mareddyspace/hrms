@@ -12,6 +12,10 @@ import { canDecide as canDecideLifecycle, getLifecycleActions, subscribeLifecycl
 import { getPerson, listPeople, subscribePeople, getExitDetails } from "../../data/peopleLocal.ts";
 import { TASK_TEAM } from "../../data/taskTeam.ts";
 import { useTeamToday } from "../../api/syncTeam.ts";
+import { API_ENABLED } from "../../api/client.ts";
+import { ContractorsCard, LeadershipDashboard } from "../../features/leadership/LeadershipDashboard.tsx";
+import { hoursText, STATUS_TEXT as TEAM_STATUS_TEXT, STATUS_TONE as TEAM_STATUS_TONE, useTeamSummaryRows } from "../../features/manager/teamSummary.ts";
+import "../../styles/manager.css";
 import { inHeadcount } from "../../data/peopleData.ts";
 import { getPlatformVersion, listAuditLog, listIntegrations, subscribePlatform } from "../../data/platformLocal.ts";
 import {
@@ -1068,6 +1072,23 @@ export function ManagerHome() {
   );
   const leaveQueue = state.leaveRequests.filter((r) => r.status === "pending" && data.waiting.some((w) => w.id === r.id));
   const timesheetQueue = data.waiting.filter((w) => w.kind === "Timesheet");
+  // Hours vs target, late days and open work per report (GET /team/summary; same figures locally).
+  const teamPeopleList = useMemo(
+    () => data.team.map((t) => peopleById.get(t.id)).filter((p): p is NonNullable<typeof p> => Boolean(p)),
+    [data.team, peopleById],
+  );
+  const pendingBy = new Map<string, number>();
+  for (const w of data.waiting) if (teamIds.has(w.employeeId)) pendingBy.set(w.employeeId, (pendingBy.get(w.employeeId) ?? 0) + 1);
+  const teamSummary = useTeamSummaryRows(teamPeopleList, pendingBy);
+  const workTotals = teamSummary.rows.reduce(
+    (t, r) => ({
+      tasks: t.tasks + r.open_tasks,
+      overdueTasks: t.overdueTasks + r.overdue_tasks,
+      tickets: t.tickets + r.open_tickets,
+      overdueTickets: t.overdueTickets + r.overdue_tickets,
+    }),
+    { tasks: 0, overdueTasks: 0, tickets: 0, overdueTickets: 0 },
+  );
   const upcomingLeave = state.leaveRequests
     .filter((r) => teamIds.has(r.employeeId) && r.status === "approved" && r.to >= today)
     .sort((a, b) => a.from.localeCompare(b.from))
@@ -1152,6 +1173,57 @@ export function ManagerHome() {
     { id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> },
     { id: "myday", label: "My day", node: <MyDayCard /> },
     { id: "team", label: "Team attendance today", node: <TeamTodayCard statuses={data.statuses} title="Team attendance today" checkedIn={checkedIn} /> },
+    {
+      id: "team-hours",
+      label: "Team hours this week",
+      node: (
+        <Card title="Team hours this week" to="/team">
+          <DataTable
+            headers={["Person", "Today", "Week", "Late (month)", "Timesheets"]}
+            rows={teamSummary.rows.slice(0, 8).map((r) => [
+              <PersonNameLink key={r.employee_id} id={r.employee_id} name={r.full_name} />,
+              <StatusBadge key="s" status={TEAM_STATUS_TEXT[r.status] ?? r.status} tone={TEAM_STATUS_TONE[r.status]} literal keepCase />,
+              `${hoursText(r.week_minutes)} / ${hoursText(r.week_target_minutes)}`,
+              r.late_days_month ? plural(r.late_days_month, "day") : "—",
+              r.timesheet_missing_days ? (
+                <span key="t" className="mgr-flag danger">{r.timesheet_missing_days} missing</span>
+              ) : r.timesheet_submitted ? (
+                <span key="t" className="mgr-flag warn">{r.timesheet_submitted} to review</span>
+              ) : (
+                "Up to date"
+              ),
+            ])}
+            empty={<p className="note">{teamSummary.loaded ? "No one reports to you." : "Loading…"}</p>}
+          />
+        </Card>
+      ),
+    },
+    {
+      id: "team-work",
+      label: "Team tasks and tickets",
+      node: (
+        <Card title="Team tasks and tickets">
+          <ul className="todo">
+            <li>
+              <Link to="/tasks">{plural(workTotals.tasks, "open task")}</Link>
+              {workTotals.overdueTasks > 0 && <> <span className="mgr-flag danger">{workTotals.overdueTasks} overdue</span></>}
+            </li>
+            <li>
+              <Link to="/tickets">{plural(workTotals.tickets, "open ticket")}</Link>
+              {workTotals.overdueTickets > 0 && <> <span className="mgr-flag danger">{workTotals.overdueTickets} overdue</span></>}
+            </li>
+            {teamSummary.rows
+              .filter((r) => r.overdue_tasks + r.overdue_tickets > 0)
+              .slice(0, 5)
+              .map((r) => (
+                <li key={r.employee_id}>
+                  {r.full_name} · {plural(r.overdue_tasks + r.overdue_tickets, "overdue item")}
+                </li>
+              ))}
+          </ul>
+        </Card>
+      ),
+    },
     { id: "team-workplace", label: "Where the team works", node: <WhereTeamWorksCard members={workplace} /> },
     {
       id: "alerts",
@@ -1935,6 +2007,8 @@ export function ExecutiveHome() {
   useTitle("Executive home");
 
   const sections: Section[] = [
+    // Backend mode: contractors with contract end alerts and extension requests (GET /insights/contractors).
+    ...(API_ENABLED ? [{ id: "contractors", label: "Contractors", node: <ContractorsCard /> }] : []),
     { id: "approvals", label: "My approvals", node: <MyApprovalsCard waiting={data.waiting} count={data.waitingCount} people={data.people} /> },
     { id: "myday", label: "My day", node: <MyDayCard /> },
     { id: "direct", label: "Direct reports", node: <TeamTodayCard statuses={direct} title="Direct reports today" /> },
@@ -2022,14 +2096,22 @@ export function ExecutiveHome() {
   return (
     <div className="stack">
       <DashGreeting title="Executive home" subtitle={`${dayGreeting(employee.fullName)} · Workforce overview`} />
-      <DateRangeFilter value={range} onChange={setRange} extras={<RegionalFilter label="Country" />} />
-      <MetricGrid>
-        <MetricCard label="Headcount" value={stats.headcount} hint={country === "ALL" ? "All countries" : stats.byCountry[0]?.name} />
-        <MetricCard label="Net growth" value={`${stats.joiners - stats.exits >= 0 ? "+" : ""}${stats.joiners - stats.exits}`} hint={rangeLabel(range as RangeKey)} />
-        <MetricCard label="Attrition" value={`${stats.attritionPct}%`} hint={rangeLabel(range as RangeKey)} />
-        <MetricCard label="Pending approvals" value={data.waitingCount} hint="Waiting on you" />
-      </MetricGrid>
-      <HomeSections userId={employee.id} sections={sections} />
+      {API_ENABLED ? (
+        // Backend mode: the director dashboard computed on the server from live records — headcount, attrition,
+        // hiring, performance, learning by country / department with drill-down; pay only when authorised.
+        <LeadershipDashboard initialCountry={country} />
+      ) : (
+        <>
+          <DateRangeFilter value={range} onChange={setRange} extras={<RegionalFilter label="Country" />} />
+          <MetricGrid>
+            <MetricCard label="Headcount" value={stats.headcount} hint={country === "ALL" ? "All countries" : stats.byCountry[0]?.name} />
+            <MetricCard label="Net growth" value={`${stats.joiners - stats.exits >= 0 ? "+" : ""}${stats.joiners - stats.exits}`} hint={rangeLabel(range as RangeKey)} />
+            <MetricCard label="Attrition" value={`${stats.attritionPct}%`} hint={rangeLabel(range as RangeKey)} />
+            <MetricCard label="Pending approvals" value={data.waitingCount} hint="Waiting on you" />
+          </MetricGrid>
+        </>
+      )}
+      <HomeSections userId={employee.id} sections={API_ENABLED ? sections.filter((x) => x.id !== "countries" && x.id !== "departments") : sections} />
     </div>
   );
 }

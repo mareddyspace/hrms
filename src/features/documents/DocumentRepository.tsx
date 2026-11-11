@@ -6,9 +6,14 @@ import { isAboveInLine } from "../lifecycle/lifecycleShared.ts";
 import { CsvButton, Facts, LoadState, RequestThread, useServerValue } from "../payrequests/requestKit.tsx";
 import type { ThreadContext } from "../payrequests/threadStore.ts";
 import {
+  FILE_KIND_LABELS,
   canConfigure,
+  categoryAccepts,
+  deleteBlocker,
+  deleteDoc,
   fileProblem,
   isDocHr,
+  loadFolders,
   loadDoc,
   loadDocs,
   loadExpiring,
@@ -24,11 +29,13 @@ import {
   uploadVersion,
   verifyDoc,
   type CategoryConfig,
+  type FileKind,
   type RepoDoc,
   type RepoRules,
   type RepoVersion,
 } from "./docRepo.ts";
 import "../payrequests/payrequests.css";
+import "../../styles/documents.css";
 
 type Actor = { id: string; fullName: string; role: string };
 type Msg = { tone: "ok" | "err" | "warn"; text: string } | null;
@@ -74,9 +81,35 @@ function Preview({ doc, version }: { doc: RepoDoc; version: RepoVersion }) {
   if (state === null) return <p className="muted">Loading preview…</p>;
   if (typeof state === "string") return <p className="muted">{state}</p>;
   return state.type.startsWith("image/") ? (
-    <img src={state.url} alt={`Preview of ${doc.title}`} style={{ maxWidth: "100%", maxHeight: 360, borderRadius: 8, border: "1px solid var(--line)" }} />
+    <img src={state.url} alt={`Preview of ${doc.title}`} className="doc-preview-image" />
   ) : (
-    <iframe title={`Preview of ${doc.title}`} src={state.url} style={{ width: "100%", height: 360, border: "1px solid var(--line)", borderRadius: 8 }} />
+    <iframe title={`Preview of ${doc.title}`} src={state.url} className="doc-preview-frame" />
+  );
+}
+
+/** What the chosen category accepts: file kinds, size, and whether expiry / HR verification apply. */
+function RuleHint({ rules, category }: { rules: RepoRules; category?: CategoryConfig }) {
+  const { text, maxBytes } = categoryAccepts(rules, category);
+  return (
+    <p className="doc-rule-hint">
+      <span className="doc-chip">{text}</span>
+      <span className="doc-chip">up to {sizeText(maxBytes)}</span>
+      {category?.requiresExpiry && <span className="doc-chip is-required">Expiry date required</span>}
+      {category?.verification && <span className="doc-chip">HR verifies employee uploads</span>}
+      {category?.managerVisible && <span className="doc-chip">Managers can see</span>}
+    </p>
+  );
+}
+
+function UploadProgress({ percent }: { percent: number | null }) {
+  if (percent === null) return null;
+  return (
+    <div className="doc-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label="Upload progress">
+      <div className="doc-progress-track">
+        <div className="doc-progress-bar" style={{ width: `${percent}%` }} />
+      </div>
+      <small>{percent >= 100 ? "Uploaded" : `Uploading… ${percent}%`}</small>
+    </div>
   );
 }
 
@@ -103,9 +136,12 @@ function UploadDialog({
   const [category, setCategory] = useState(allowed[0]?.name ?? "Other");
   const [expiry, setExpiryValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
   const act = useAction();
   const cat = rules.categories.find((c) => c.name === (doc?.category ?? category));
   const willVerify = !!cat?.verification && ownerId === actor.id && !hr;
+  const accepts = categoryAccepts(rules, cat);
+  const expiryNeeded = !!cat?.requiresExpiry && !(doc && doc.expiryDate);
 
   return (
     <Dialog open title={doc ? `Replace · ${doc.title}` : "Upload document"} onClose={onClose}>
@@ -113,10 +149,13 @@ function UploadDialog({
         className="stack"
         onSubmit={act.submit(async () => {
           if (!file) return "Choose a file.";
+          if (expiryNeeded && !expiry) return `Enter the expiry date: ${cat?.label.toLowerCase()} need one.`;
+          setProgress(0);
           const err = doc
-            ? await uploadVersion(actor, doc, file, rules, expiry || undefined)
-            : await uploadDoc(actor, file, { category, title, description, expiryDate: expiry || undefined, employeeId: ownerId }, rules);
+            ? await uploadVersion(actor, doc, file, rules, expiry || undefined, setProgress)
+            : await uploadDoc(actor, file, { category, title, description, expiryDate: expiry || undefined, employeeId: ownerId }, rules, setProgress);
           if (err) {
+            setProgress(null);
             setError(err);
             return err;
           }
@@ -129,12 +168,13 @@ function UploadDialog({
         <Field label="File">
           <input
             type="file"
-            accept={rules.contentTypes.join(",")}
+            accept={accepts.accept}
             onChange={(e) => {
               const next = e.target.files?.[0] ?? null;
               setError(null);
+              setProgress(null);
               if (next) {
-                const problem = fileProblem(next, rules);
+                const problem = fileProblem(next, rules, cat?.name);
                 if (problem) {
                   setError(problem);
                   setFile(null);
@@ -147,13 +187,25 @@ function UploadDialog({
             required
           />
         </Field>
-        <p className="note">
-          {rules.contentTypes.some((t) => t.includes("word")) ? "PDF, Word (.docx) or image" : "PDF or image"} · up to {sizeText(rules.maxBytes)}.{file ? ` ${file.name} · ${sizeText(file.size)}` : ""}
-        </p>
+        <RuleHint rules={rules} category={cat} />
+        {file && (
+          <p className="note">
+            {file.name} · {sizeText(file.size)}
+          </p>
+        )}
         {!doc && (
           <>
             <Field label="Category">
-              <select value={category} onChange={(e) => setCategory(e.target.value)}>
+              <select
+                value={category}
+                onChange={(e) => {
+                  setCategory(e.target.value);
+                  // The new category may not accept the chosen file.
+                  const problem = file ? fileProblem(file, rules, e.target.value) : null;
+                  setError(problem);
+                  if (problem) setFile(null);
+                }}
+              >
                 {allowed.map((c) => (
                   <option key={c.name} value={c.name}>
                     {c.label}
@@ -169,17 +221,18 @@ function UploadDialog({
             </Field>
           </>
         )}
-        <Field label={doc ? "New expiry date (optional)" : "Expiry date (optional)"}>
-          <input type="date" value={expiry} onChange={(e) => setExpiryValue(e.target.value)} />
+        <Field label={expiryNeeded ? "Expiry date (required)" : doc ? "New expiry date (optional)" : "Expiry date (optional)"}>
+          <input type="date" value={expiry} onChange={(e) => setExpiryValue(e.target.value)} required={expiryNeeded} />
         </Field>
         {willVerify && <p className="pr-note" style={{ margin: 0 }}>HR checks documents in {cat?.label} before they are marked verified. You'll be notified when it's verified or if it's rejected.</p>}
         {doc && <p className="note">The current version stays available in the version history.</p>}
+        <UploadProgress percent={progress} />
         {error && <Banner message={{ tone: "err", text: error }} />}
         <div className="dialog-actions">
           <button type="button" className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <SubmitButton action={act} className="btn" disabled={!file || (!doc && !title.trim())}>
+          <SubmitButton action={act} className="btn" disabled={!file || (!doc && !title.trim()) || (expiryNeeded && !expiry)}>
             {doc ? "Upload new version" : willVerify ? "Upload and submit for verification" : "Upload"}
           </SubmitButton>
         </div>
@@ -203,23 +256,45 @@ function CategoriesDialog({ actor, rules, onClose, onSaved }: { actor: Actor; ru
           return true;
         })}
       >
-        <DataTable
-          headers={["Category", "Shown as", "HR verifies employee uploads", "Employees may upload"]}
-          rows={rows.map((c, i) => [
-            c.name,
-            <input key={`l-${c.name}`} value={c.label} maxLength={60} aria-label={`Label for ${c.name}`} onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, label: e.target.value } : r)))} />,
-            <input key={`v-${c.name}`} type="checkbox" checked={c.verification} aria-label={`${c.name} needs verification`} onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, verification: e.target.checked } : r)))} />,
-            <input
-              key={`u-${c.name}`}
-              type="checkbox"
-              checked={c.employeeUpload}
-              disabled={c.name === "Letters"}
-              aria-label={`Employees may upload ${c.name}`}
-              onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, employeeUpload: e.target.checked } : r)))}
-            />,
-          ])}
-        />
-        <p className="note">Letters are always added by HR when a letter is issued.</p>
+        <div className="doc-config-table">
+          <DataTable
+            headers={["Category", "Shown as", "HR verifies", "Employees upload", "Managers see", "Expiry required", "Everyone needs one", "File types", "Max MB"]}
+            rows={rows.map((c, i) => {
+              const set = (patch: Partial<CategoryConfig>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+              const toggleKind = (k: FileKind, on: boolean) => set({ types: on ? (["pdf", "image", "docx"] as FileKind[]).filter((x) => x === k || c.types.includes(x)) : c.types.filter((x) => x !== k) });
+              const letters = c.name === "Letters";
+              return [
+                c.name,
+                <input key={`l-${c.name}`} value={c.label} maxLength={60} aria-label={`Label for ${c.name}`} onChange={(e) => set({ label: e.target.value })} />,
+                <input key={`v-${c.name}`} type="checkbox" checked={c.verification} aria-label={`${c.name} needs verification`} onChange={(e) => set({ verification: e.target.checked })} />,
+                <input key={`u-${c.name}`} type="checkbox" checked={c.employeeUpload} disabled={letters} aria-label={`Employees may upload ${c.name}`} onChange={(e) => set({ employeeUpload: e.target.checked })} />,
+                <input key={`m-${c.name}`} type="checkbox" checked={c.managerVisible} aria-label={`Managers can see ${c.name}`} onChange={(e) => set({ managerVisible: e.target.checked })} />,
+                <input key={`x-${c.name}`} type="checkbox" checked={c.requiresExpiry} disabled={letters} aria-label={`${c.name} needs an expiry date`} onChange={(e) => set({ requiresExpiry: e.target.checked })} />,
+                <input key={`r-${c.name}`} type="checkbox" checked={c.required} disabled={letters} aria-label={`Every employee needs ${c.name}`} onChange={(e) => set({ required: e.target.checked })} />,
+                <span key={`t-${c.name}`} className="doc-kinds">
+                  {(["pdf", "image", "docx"] as FileKind[]).map((k) => (
+                    <label key={k}>
+                      <input type="checkbox" checked={c.types.includes(k)} disabled={letters} onChange={(e) => toggleKind(k, e.target.checked)} />
+                      {FILE_KIND_LABELS[k]}
+                    </label>
+                  ))}
+                </span>,
+                <input
+                  key={`s-${c.name}`}
+                  className="doc-size-input"
+                  type="number"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={c.maxMb}
+                  aria-label={`Maximum size for ${c.name} in MB`}
+                  onChange={(e) => set({ maxMb: Math.round(Number(e.target.value) || 1) })}
+                />,
+              ];
+            })}
+          />
+        </div>
+        <p className="note">Letters are always added by HR when a letter is issued (PDF). "Managers see" lets anyone above the employee in the reporting line open documents in that category; HR always sees documents of people in their scope.</p>
         <div className="dialog-actions">
           <button type="button" className="btn-ghost" onClick={onClose}>
             Cancel
@@ -233,7 +308,50 @@ function CategoriesDialog({ actor, rules, onClose, onSaved }: { actor: Actor; ru
   );
 }
 
-function DocDetail({ actor, doc, rules, onChanged, onReplace, setMsg }: { actor: Actor; doc: RepoDoc; rules: RepoRules; onChanged: (text?: string) => void; onReplace: () => void; setMsg: (m: Msg) => void }) {
+function DeleteSection({ actor, doc, rules, onDeleted }: { actor: Actor; doc: RepoDoc; rules: RepoRules; onDeleted: (text: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const act = useAction();
+  if (deleteBlocker(actor, doc, rules)) return null;
+  const forOther = doc.employeeId !== actor.id;
+  return (
+    <section className="doc-danger-zone">
+      {!open ? (
+        <button type="button" className="btn-ghost btn-tiny" onClick={() => setOpen(true)}>
+          Delete document
+        </button>
+      ) : (
+        <form
+          className="stack"
+          onSubmit={act.submit(async () => {
+            const err = await deleteDoc(actor, doc, rules, reason);
+            if (err) return err;
+            notify(`${doc.title} deleted.`);
+            onDeleted(`${doc.title} deleted.${forOther ? ` ${doc.employeeName} was told why.` : ""}`);
+            return true;
+          })}
+        >
+          <p className="note">
+            {doc.title} and all {doc.versions.length || doc.currentVersion} version(s) will disappear from the library. HR keeps the record in the audit log.
+          </p>
+          <Field label={forOther ? "Reason (sent to the employee)" : "Reason (optional)"}>
+            <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} required={forOther} />
+          </Field>
+          <div className="pr-actions">
+            <button type="button" className="btn-ghost" onClick={() => setOpen(false)}>
+              Keep it
+            </button>
+            <SubmitButton action={act} className="btn btn-danger" disabled={forOther && !reason.trim()}>
+              Delete
+            </SubmitButton>
+          </div>
+        </form>
+      )}
+    </section>
+  );
+}
+
+function DocDetail({ actor, doc, rules, onChanged, onDeleted, onReplace, setMsg }: { actor: Actor; doc: RepoDoc; rules: RepoRules; onChanged: (text?: string) => void; onDeleted: (text: string) => void; onReplace: () => void; setMsg: (m: Msg) => void }) {
   const [version, setVersion] = useState<RepoVersion | null>(null);
   const [expiry, setExpiryValue] = useState(doc.expiryDate ?? "");
   const [note, setNote] = useState("");
@@ -349,15 +467,15 @@ function DocDetail({ actor, doc, rules, onChanged, onReplace, setMsg }: { actor:
           <form
             className="form-actions"
             onSubmit={expiryAct.submit(async () => {
-              const err = await setExpiry(actor, doc, expiry || null);
+              const err = await setExpiry(actor, doc, expiry || null, rules);
               if (err) return err;
               onChanged(expiry ? `Expiry set to ${formatShortDate(expiry)}.` : "Expiry removed.");
               return true;
             })}
           >
             <label className="filter-label">
-              Expiry date
-              <input type="date" value={expiry} onChange={(e) => setExpiryValue(e.target.value)} />
+              Expiry date{cat?.requiresExpiry ? " (required)" : ""}
+              <input type="date" value={expiry} onChange={(e) => setExpiryValue(e.target.value)} required={!!cat?.requiresExpiry} />
             </label>
             <SubmitButton action={expiryAct} className="btn-ghost">
               Save expiry
@@ -365,8 +483,139 @@ function DocDetail({ actor, doc, rules, onChanged, onReplace, setMsg }: { actor:
           </form>
         </section>
       )}
+      <DeleteSection actor={actor} doc={doc} rules={rules} onDeleted={onDeleted} />
       <RequestThread type="document" id={doc.id} ctx={ctx} showFiles={false} refreshKey={`${doc.currentVersion}|${doc.verification}`} />
     </div>
+  );
+}
+
+/** HR / managers: one folder per employee with what needs attention; opening one shows that person's library. */
+function FoldersCard({ actor, rules, people, ownerId, tick, onOpen }: { actor: Actor; rules: RepoRules; people: Parameters<typeof loadFolders>[2]; ownerId: string; tick: string; onOpen: (id: string) => void }) {
+  const [q, setQ] = useState("");
+  const [only, setOnly] = useState("");
+  const [limit, setLimit] = useState(12);
+  const folders = useServerValue(() => loadFolders(actor, rules, people, q), `${q}|${tick}`);
+  const all = folders.value ?? [];
+  // Most urgent first: to verify, expired, rejected, expiring, then missing required documents.
+  const urgency = (f: (typeof all)[number]) => f.pending * 1000 + f.expired * 100 + f.rejected * 50 + f.expiring * 10 + f.missing.length;
+  const shown = all
+    .filter((f) => !only || (only === "missing" ? f.missing.length > 0 : only === "pending" ? f.pending > 0 : f.expiring + f.expired > 0))
+    .sort((a, b) => urgency(b) - urgency(a) || a.employeeName.localeCompare(b.employeeName));
+  if (folders.value && all.length <= 1 && !q) return null; // just yourself: the library below is your folder
+  return (
+    <Card title="Employee folders">
+      <FilterBar>
+        <label className="filter-label">
+          Find
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name, code or department" />
+        </label>
+        <label className="filter-label">
+          Show
+          <select value={only} onChange={(e) => setOnly(e.target.value)}>
+            <option value="">Everyone</option>
+            <option value="missing">Missing required documents</option>
+            <option value="pending">Waiting for verification</option>
+            <option value="expiry">Expiring or expired</option>
+          </select>
+        </label>
+        <CsvButton
+          filename="document-folders.csv"
+          headers={["Employee", "Code", "Department", "Documents", "Pending", "Rejected", "Expiring (30d)", "Expired", "Missing"]}
+          rows={() => shown.map((f) => [f.employeeName, f.employeeCode, f.department, f.documents, f.pending, f.rejected, f.expiring, f.expired, f.missing.join("; ")])}
+        />
+      </FilterBar>
+      {!folders.value ? (
+        <LoadState error={folders.error} onRetry={folders.retry} />
+      ) : shown.length === 0 ? (
+        <EmptyState title="No folders match" description="Clear the search or the filter." />
+      ) : (
+        <div className="doc-folder-grid">
+          {shown.slice(0, limit).map((f) => (
+            <button key={f.employeeId} type="button" className="doc-folder" aria-pressed={ownerId === f.employeeId} onClick={() => onOpen(f.employeeId)}>
+              <strong>{f.employeeName}</strong>
+              <span className="doc-folder-meta">
+                {f.employeeCode}
+                {f.department ? ` · ${f.department}` : ""} · {f.documents} document{f.documents === 1 ? "" : "s"}
+              </span>
+              <span className="doc-folder-flags">
+                {f.pending > 0 && <span className="doc-flag warn">{f.pending} to verify</span>}
+                {f.rejected > 0 && <span className="doc-flag danger">{f.rejected} rejected</span>}
+                {f.expired > 0 && <span className="doc-flag danger">{f.expired} expired</span>}
+                {f.expiring > 0 && <span className="doc-flag warn">{f.expiring} expiring</span>}
+                {f.missing.map((m) => (
+                  <span key={m} className="doc-flag danger">
+                    Missing: {m}
+                  </span>
+                ))}
+                {!f.pending && !f.rejected && !f.expired && !f.expiring && !f.missing.length && <span className="doc-flag ok">All in order</span>}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {shown.length > limit && (
+        <div className="pr-actions">
+          <span className="note">
+            Showing {limit} of {shown.length}, most urgent first.
+          </span>
+          <button type="button" className="btn-ghost btn-tiny" onClick={() => setLimit(limit + 24)}>
+            Show more
+          </button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Expiring documents with a window HR can change; employees see their own, managers their team's visible ones. */
+function ExpiringCard({ actor, labelOf, tick, onOpen }: { actor: Actor; labelOf: Map<string, string>; tick: string; onOpen: (d: RepoDoc) => void }) {
+  const hr = isDocHr(actor.role);
+  const [days, setDays] = useState(30);
+  const expiring = useServerValue(() => loadExpiring(days, actor), `${days}|${tick}`);
+  const rows = expiring.value ?? [];
+  if (!hr && rows.length === 0) return null;
+  return (
+    <Card
+      title={`Expiring documents (${rows.length})`}
+      action={
+        <span className="pr-actions">
+          <label className="filter-label">
+            Within
+            <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+              {[7, 30, 60, 90, 180].map((n) => (
+                <option key={n} value={n}>
+                  {n} days
+                </option>
+              ))}
+            </select>
+          </label>
+          <CsvButton
+            filename={`expiring-documents-${days}d.csv`}
+            headers={["Employee", "Document", "Category", "Expires", "Days left"]}
+            rows={() => rows.map((d) => [d.employeeName, d.title, labelOf.get(d.category) ?? d.category, d.expiryDate ?? "", d.daysToExpiry ?? ""])}
+          />
+        </span>
+      }
+    >
+      {!expiring.value ? (
+        <LoadState error={expiring.error} onRetry={expiring.retry} />
+      ) : (
+        <DataTable
+          headers={["Employee", "Document", "Category", "Expires", ""]}
+          rows={rows.map((d) => [
+            d.employeeName,
+            d.title,
+            labelOf.get(d.category) ?? d.category,
+            <ExpiryText key={`e-${d.id}`} d={d} />,
+            <button key={d.id} type="button" className="quiet-link" onClick={() => onOpen(d)}>
+              Open
+            </button>,
+          ])}
+          empty={<EmptyState title="Nothing expiring" description={`No documents expire within ${days} days, and none have expired.`} />}
+        />
+      )}
+      <p className="note">Owners are reminded 30 and 7 days before expiry and on the day; HR gets a daily summary when anything is within 7 days or expired.</p>
+    </Card>
   );
 }
 
@@ -387,7 +636,6 @@ export function DocumentRepository({ actor }: { actor: Actor }) {
   const [msg, setMsg] = useState<Msg>(null);
   const rules = useServerValue(loadRules, tick);
   const docs = useServerValue(() => loadDocs(ownerId, actor.id), `${ownerId}|${tick}|${localTick}`);
-  const expiring = useServerValue(() => loadExpiring(30, actor), `${tick}|${localTick}`);
   const queue = useServerValue(() => loadVerificationQueue(actor), `${tick}|${localTick}`);
   const refresh = (text?: string) => {
     if (text) setMsg({ tone: "ok", text });
@@ -446,9 +694,22 @@ export function DocumentRepository({ actor }: { actor: Actor }) {
           />
         </Card>
       )}
+      {rules.value && (
+        <FoldersCard
+          actor={actor}
+          rules={rules.value}
+          people={people}
+          ownerId={ownerId}
+          tick={`${tick}|${localTick}`}
+          onOpen={(id) => {
+            setOwnerId(id);
+            setSelectedId(null);
+          }}
+        />
+      )}
       <div className="mgr-home-grid">
         <Card
-          title="Document repository"
+          title={mine ? "My documents" : `Documents · ${people.find((p) => p.id === ownerId)?.fullName ?? "employee"}`}
           action={
             <span className="pr-actions">
               {canConfigure(actor.role) && rules.value && (
@@ -535,40 +796,38 @@ export function DocumentRepository({ actor }: { actor: Actor }) {
               empty={<EmptyState title={all.length ? "No documents match" : "No documents"} description={all.length ? "Pick another category or clear the search." : "Upload a document to start your library."} />}
             />
           )}
-          <p className="note">Files are stored securely and only you, HR and (for work documents) your managers can open them. Older versions stay available after an update.</p>
+          <p className="note">
+            Files are stored securely. Only the employee, HR and — for {(rules.value?.categories ?? []).filter((c) => c.managerVisible).map((c) => c.label.toLowerCase()).join(", ") || "no categories"} — their managers can open them. Every view, download, upload and delete is logged. Older versions stay available after an update.
+          </p>
         </Card>
         <Card title={selected ? selected.title : "Details"}>
           {!selected || !rules.value ? (
             <EmptyState title="Select a document" description="Its details, preview, versions and verification appear here." />
           ) : (
-            <DocDetail actor={actor} doc={selected} rules={rules.value} onChanged={refresh} onReplace={() => setUpload({ doc: selected })} setMsg={setMsg} />
+            <DocDetail
+              actor={actor}
+              doc={selected}
+              rules={rules.value}
+              onChanged={refresh}
+              onDeleted={(text) => {
+                setSelectedId(null);
+                refresh(text);
+              }}
+              onReplace={() => setUpload({ doc: selected })}
+              setMsg={setMsg}
+            />
           )}
         </Card>
       </div>
-      {(expiring.value ?? []).length > 0 && (
-        <Card title="Expiring within 30 days">
-          <DataTable
-            headers={["Employee", "Document", "Category", "Expires", ""]}
-            rows={(expiring.value ?? []).map((d) => [
-              d.employeeName,
-              d.title,
-              labelOf.get(d.category) ?? d.category,
-              <ExpiryText key={`e-${d.id}`} d={d} />,
-              <button
-                key={d.id}
-                type="button"
-                className="quiet-link"
-                onClick={() => {
-                  setOwnerId(d.employeeId);
-                  setSelectedId(d.id);
-                }}
-              >
-                Open
-              </button>,
-            ])}
-          />
-        </Card>
-      )}
+      <ExpiringCard
+        actor={actor}
+        labelOf={labelOf}
+        tick={`${tick}|${localTick}`}
+        onOpen={(d) => {
+          setOwnerId(d.employeeId);
+          setSelectedId(d.id);
+        }}
+      />
       {upload && rules.value && (
         <UploadDialog
           actor={actor}

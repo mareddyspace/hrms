@@ -210,6 +210,10 @@ class HolidayOut(ORM):
     country_code: str
     calendar: str | None = None
     description: str | None = None
+    holiday_type: str | None = "national"  # national | regional | company | optional (migration 0032)
+    regions: list[str] | None = None
+    legal_entity: str | None = None
+    applies: bool = True  # a day off for the caller (False: another office's holiday, listed for reference)
 
 
 class LeaveBalanceOut(BaseModel):

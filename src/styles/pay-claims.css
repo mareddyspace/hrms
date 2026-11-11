@@ -141,3 +141,12 @@
 .tr-history .tr-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tr-history td { vertical-align: top; }
 /* ===== end travel reimbursements ===== */
+
+/* ===== profile: Payslips tab ===== */
+.pc-profile-slips .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pc-profile-slips td { vertical-align: middle; }
+@media (max-width: 640px) {
+  .pc-profile-slips th:nth-child(4),
+  .pc-profile-slips td:nth-child(4) { display: none; }
+}
+/* ===== end profile payslips ===== */

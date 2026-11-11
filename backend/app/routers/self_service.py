@@ -313,6 +313,10 @@ def create_encash(body: EncashIn, request: Request, db: DbSession, user: Current
 @encash_router.post("/{row_id}/decision", response_model=EncashOut)
 def decide_encash(row_id: str, body: DecisionIn, request: Request, db: DbSession, user: CurrentUserDep) -> EncashOut:
     row, emp = _get(db, user, EncashmentRequest, row_id, _hr_or_admin(user))
+    if body.decision == "approve":
+        problem = rules.encashment_problem(db, row, emp)
+        if problem:
+            raise HTTPException(422, problem)
     _decide(db, user, row, body, request)
     db.commit()
     return _encash_out(db, user, row, emp)

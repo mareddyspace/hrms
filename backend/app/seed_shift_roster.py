@@ -8,6 +8,8 @@ Runs at the end of app.seed.run(), after the plain General-shift roster (app/see
 - weekend support isn't required for Ram's team (team rule 0 on Sat/Sun, only if Ram has no rule yet).
 - swaps: the old Babu <-> Ram sample (Ram is Babu's manager) is cancelled while still open; Priya <-> Babu waits for
   Ram's decision and Oliver asks Babu (Babu responds). Insert-once by id, only when the roster rules allow.
+- shift colours (migration 0034): set only where a seeded shift type has none; Priya's sample availability
+  (unavailable on Fridays) is inserted once by id.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import CoverageMinimum, Employee, RosterShift, RosterWeek, ShiftSwap, ShiftType
+from app.models import CoverageMinimum, Employee, RosterShift, RosterWeek, ShiftAvailability, ShiftSwap, ShiftType
 from app.services import shifts as rules
 from app.services.leave import holiday_dates
 
@@ -113,6 +115,23 @@ def _swaps(db: Session, today: date) -> dict[str, int]:
     return stats
 
 
+COLORS = {"sh-morning": "amber", "sh-general": "green", "sh-evening": "blue", "sh-night": "violet", "sh-weekend": "teal"}
+
+
+def _colours_and_availability(db: Session) -> dict[str, int]:
+    stats = {"colours_set": 0, "availability_added": 0}
+    for sid, color in COLORS.items():
+        shift = db.get(ShiftType, sid)
+        if shift is not None and not shift.color:  # fill-blank only
+            shift.color = color
+            stats["colours_set"] += 1
+    if db.get(Employee, PRIYA) is not None and db.get(ShiftAvailability, "av-seed-priya-fri") is None:
+        db.add(ShiftAvailability(id="av-seed-priya-fri", employee_id=PRIYA, kind="unavailable", weekday=5,
+                                 note="Evening class"))
+        stats["availability_added"] += 1
+    return stats
+
+
 def seed(db: Session) -> dict[str, int]:
     if db.get(Employee, RAM) is None:
         return {}
@@ -122,4 +141,5 @@ def seed(db: Session) -> dict[str, int]:
     today = date.today()
     stats = _roster(db, team, today)
     stats.update(_swaps(db, today))
+    stats.update(_colours_and_availability(db))
     return {f"shift_{k}": v for k, v in stats.items()}

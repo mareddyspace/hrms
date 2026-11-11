@@ -161,6 +161,8 @@ class ShiftTypeIn(BaseModel):
     active: bool = True
     break_minutes: int = Field(default=60, ge=0, le=240)
     location: str | None = Field(default=None, max_length=100)
+    color: str | None = Field(default=None, max_length=16)
+    country_code: str | None = Field(default=None, max_length=2)
 
 
 class ShiftTypeOut(BaseModel):
@@ -173,6 +175,10 @@ class ShiftTypeOut(BaseModel):
     active: bool
     break_minutes: int = 60
     location: str | None = None
+    color: str | None = None
+    country_code: str | None = None
+    overnight: bool = False
+    paid_hours: float = 0
 
 
 class RosterAssignIn(BaseModel):
@@ -200,6 +206,12 @@ class CoverageSlotOut(BaseModel):
     status: str
 
 
+class RosterWarningOut(BaseModel):
+    employee_id: str
+    date: date
+    message: str
+
+
 class RosterWeekOut(BaseModel):
     manager_id: str
     week_start: date
@@ -209,11 +221,67 @@ class RosterWeekOut(BaseModel):
     shifts: list[RosterShiftOut]
     coverage: list[CoverageSlotOut]
     gaps: list[CoverageSlotOut]
+    warnings: list[RosterWarningOut] = []
 
 
 class RosterPublishIn(BaseModel):
     week_start: date
     allow_gaps: bool = False
+
+
+class RosterBulkIn(BaseModel):
+    employee_ids: list[str] = Field(min_length=1, max_length=50)
+    dates: list[date] = Field(min_length=1, max_length=62)
+    shift_id: str | None = None  # None clears those days
+
+
+class RosterCopyIn(BaseModel):
+    from_week: date  # Monday of the week to copy
+    to_week: date  # Monday of the first week to fill
+    weeks: int = Field(default=1, ge=1, le=8)  # repeat the pattern this many weeks
+
+
+class RosterSkipOut(BaseModel):
+    employee_id: str
+    date: date
+    message: str
+
+
+class RosterBulkOut(BaseModel):
+    applied: int
+    skipped: list[RosterSkipOut]
+    warnings: list[RosterWarningOut]
+
+
+class RosterUnpublishIn(BaseModel):
+    week_start: date
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class AvailabilityIn(BaseModel):
+    kind: Literal["unavailable", "preferred"]
+    work_date: date | None = None
+    weekday: int | None = Field(default=None, ge=0, le=6)  # 0 = Sunday
+    shift_id: str | None = Field(default=None, max_length=64)
+    note: str | None = Field(default=None, max_length=300)
+
+
+class AvailabilityOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    employee_id: str
+    kind: str
+    work_date: date | None
+    weekday: int | None
+    shift_id: str | None
+    note: str | None
+
+
+class TeamCalendarRowOut(BaseModel):
+    employee_id: str
+    full_name: str
+    date: date
+    shift_id: str
 
 
 class ShiftSwapIn(BaseModel):

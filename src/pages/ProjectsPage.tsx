@@ -6,10 +6,17 @@ import { usePortal } from "../store.tsx";
 import { ticketsAssignedTo, useTickets } from "../data/ticketStore.ts";
 import { useProjectContext } from "./projectContext.ts";
 import {
+  HEALTH_CALL_LABEL,
+  PROJECT_STATUS_LABEL,
+  TASK_PRIORITIES,
   TASK_STATUS_LABEL,
   addLink,
+  addMember,
   addPost,
   completionOf,
+  exportProjectCsv,
+  milestoneProgress,
+  removeMember,
   deadlineAlerts,
   deleteDocument,
   deleteMilestone,
@@ -26,17 +33,24 @@ import {
   setTaskStatus,
   uploadDocument,
   useProject,
+  useProjectReport,
   useProjects,
+  type HealthCall,
   type LocalContext,
   type PMember,
   type PMilestone,
   type PTask,
   type ProjectHealth,
   type ProjectInfo,
+  type ProjectStatus,
+  type TaskPriority,
   type TaskStatus,
 } from "../data/projectStore.ts";
+import { usePeopleList } from "../data/peopleLocal.ts";
+import { BarChart, HBarChart, LineChart } from "./dashboards/charts.tsx";
 import "./projects.css";
 import "../styles/workspace.css";
+import "../styles/projects.css";
 
 const HEALTH_TONE: Record<ProjectHealth, "ok" | "warn" | "danger" | "neutral"> = {
   "On track": "ok",
@@ -47,6 +61,8 @@ const HEALTH_TONE: Record<ProjectHealth, "ok" | "warn" | "danger" | "neutral"> =
 const STATUS_TONE: Record<TaskStatus, "ok" | "warn" | "info" | "neutral"> = { todo: "neutral", in_progress: "info", in_review: "warn", done: "ok" };
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 type SortKey = "status" | "progress" | "deadline" | "name";
+type DetailTab = "overview" | "tasks" | "team" | "hours" | "updates";
+const PRIORITY_RANK: Record<TaskPriority, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
 
 function Progress({ value, label, tone }: { value: number; label: string; tone?: "warn" | "danger" }) {
   return (
@@ -214,6 +230,7 @@ function ProjectCard({ project: p, viewerId, onOpen }: { project: ProjectInfo; v
         <span className="ws-proj-id">
           <span className="ws-proj-code">{p.code}</span>
           <StatusBadge status={health} tone={HEALTH_TONE[health]} literal />
+          {p.status !== "active" && p.status !== "completed" && <StatusBadge status={PROJECT_STATUS_LABEL[p.status]} tone="neutral" literal />}
         </span>
         <strong className="ws-proj-name">{p.name}</strong>
         <span className="ws-proj-client">{p.client || "Internal"}</span>
@@ -284,7 +301,9 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
   const [openTask, setOpenTask] = useState<PTask | "new" | null>(null);
   const [openMember, setOpenMember] = useState<PMember | null>(null);
   const [editAbout, setEditAbout] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [taskFilter, setTaskFilter] = useState<"mine" | "all" | "open">("mine");
+  const [tab, setTab] = useState<DetailTab>("overview");
 
   const health = healthOf(p, today);
   const done = completionOf(p);
@@ -293,7 +312,10 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
   const next = nextMilestone(p);
   const alerts = deadlineAlerts(p, ctx.viewerId, today);
   const myTickets = ticketsAssignedTo(employee.id, tickets).filter((t) => t.projectId === p.id || t.projectName === p.name);
-  const tasks = p.tasks.filter((t) => (taskFilter === "mine" ? t.assigneeId === ctx.viewerId : taskFilter === "open" ? t.status !== "done" : true));
+  const tasks = p.tasks
+    .filter((t) => (taskFilter === "mine" ? t.assigneeId === ctx.viewerId : taskFilter === "open" ? t.status !== "done" : true))
+    .sort((a, b) => Number(a.status === "done") - Number(b.status === "done") || PRIORITY_RANK[a.priority ?? "medium"] - PRIORITY_RANK[b.priority ?? "medium"] || (a.due ?? "9999").localeCompare(b.due ?? "9999"));
+  const allocated = p.members.reduce((a, m) => a + (m.allocationPct ?? 0), 0);
   const logTime = (taskId?: string) => navigate(`/timesheet?project=${encodeURIComponent(p.id)}${taskId ? `&ptask=${encodeURIComponent(taskId)}` : ""}`);
   const result = (error: string | null, ok: string) => {
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
@@ -331,6 +353,7 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
         <div className="ws-proj-hero-main">
           <span className="row-gap">
             <StatusBadge status={health} tone={HEALTH_TONE[health]} literal />
+            {p.status !== "active" && <StatusBadge status={PROJECT_STATUS_LABEL[p.status]} tone="neutral" literal />}
             <span className="muted">{p.start ? `${formatShortDate(p.start)} – ${p.end ? formatShortDate(p.end) : "ongoing"}` : p.end ? `Ends ${formatShortDate(p.end)}` : "Ongoing"}</span>
           </span>
           <div className="ws-proj-hero-progress">
@@ -371,6 +394,20 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
         <MetricCard label="Next milestone" value={next ? formatShortDate(next.due) : "—"} hint={next?.name ?? "All milestones done"} />
       </MetricGrid>
 
+      <Tabs
+        tabs={[
+          { id: "overview", label: "Overview" },
+          { id: "tasks", label: `Tasks (${p.tasks.filter((t) => t.status !== "done").length})` },
+          { id: "team", label: `Team (${p.members.length})` },
+          { id: "hours", label: "Hours and reports" },
+          { id: "updates", label: "Updates and files" },
+        ]}
+        value={tab}
+        onChange={(id) => setTab(id as DetailTab)}
+      />
+
+      {tab === "overview" && (
+      <>
       <div className="split">
         <Card
           title="About"
@@ -388,9 +425,14 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
             <dt>Client</dt>
             <dd>{p.client || "—"}</dd>
             <dt>Status</dt>
+            <dd>{PROJECT_STATUS_LABEL[p.status]}</dd>
+            <dt>Health</dt>
             <dd>
               <StatusBadge status={health} tone={HEALTH_TONE[health]} literal />
+              {p.healthCall ? <span className="muted"> · set by the manager</span> : null}
             </dd>
+            <dt>Hours budget</dt>
+            <dd>{p.budgetHours != null ? `${p.budgetHours} h` : "—"}</dd>
             <dt>Start</dt>
             <dd>{p.start ? formatShortDate(p.start) : "—"}</dd>
             <dt>End</dt>
@@ -461,6 +503,7 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
             <ul className="project-milestones">
               {p.milestones.map((m) => {
                 const late = !m.completedOn && m.due < today;
+                const prog = milestoneProgress(p, m);
                 return (
                   <li key={m.id} className={m.completedOn ? "done" : late ? "late" : undefined}>
                     <span aria-hidden>{m.completedOn ? "✓" : "○"}</span>
@@ -471,6 +514,10 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
                       {formatShortDate(m.due)}
                       {late ? " · overdue" : m.completedOn ? " · done" : ""}
                     </span>
+                    <span className="pj-ms-progress">
+                      <Progress value={prog.pct} label={`${prog.pct}% of its tasks done`} tone={late ? "danger" : undefined} />
+                      <span className="muted">{prog.total ? `${prog.done}/${prog.total} tasks · ${prog.pct}%` : m.completedOn ? "100%" : "No tasks"}</span>
+                    </span>
                   </li>
                 );
               })}
@@ -478,29 +525,89 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
           )}
         </Card>
 
-        <Card title={`Team · ${p.members.length}`}>
-          {p.members.length === 0 ? (
-            <p className="muted">No team listed.</p>
+        <Card title="Recent activity">
+          {p.activity.length === 0 ? (
+            <p className="muted">No activity yet.</p>
           ) : (
-            <ul className="project-team">
-              {p.members.map((m) => (
-                <li key={m.employeeId} className="ws-team-row">
-                  <PersonAvatar id={m.employeeId} name={m.name} size={32} />
-                  <span className="ws-team-who">
-                    <button type="button" className="link-btn" onClick={() => setOpenMember(m)}>
-                      {m.name}
-                      {m.employeeId === ctx.viewerId ? " (you)" : ""}
-                    </button>
-                    <span className="muted">{m.title || m.role}</span>
+            <ul className="project-activity">
+              {p.activity.slice(0, 10).map((a) => (
+                <li key={a.id}>
+                  <span className="muted">{formatShortDate(a.on)}</span>
+                  <span>
+                    <strong>{a.who}</strong> {a.text}
                   </span>
-                  <span className="muted ws-team-hours">{h(m.loggedHours)}</span>
                 </li>
               ))}
             </ul>
           )}
         </Card>
       </div>
+      </>
+      )}
 
+      {tab === "team" && (
+        <Card
+          title={`Team · ${p.members.length}`}
+          action={
+            p.canEdit ? (
+              <button type="button" className="btn-ghost btn-tiny" onClick={() => setAdding(true)}>
+                Add member
+              </button>
+            ) : undefined
+          }
+        >
+          {p.members.length === 0 ? (
+            <p className="muted">No team listed.</p>
+          ) : (
+            <div className="table-scroll">
+              <table className="data pj-team-table">
+                <thead>
+                  <tr>
+                    <th>Person</th>
+                    <th>Role</th>
+                    <th>Allocation</th>
+                    <th>Hours</th>
+                    <th>Open tasks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {p.members.map((m) => {
+                    const over = !!m.budgetHours && m.loggedHours > m.budgetHours;
+                    return (
+                      <tr key={m.employeeId}>
+                        <td>
+                          <span className="pj-person">
+                            <PersonAvatar id={m.employeeId} name={m.name} size={28} />
+                            <button type="button" className="link-btn" onClick={() => setOpenMember(m)}>
+                              {m.name}
+                              {m.employeeId === ctx.viewerId ? " (you)" : ""}
+                            </button>
+                          </span>
+                        </td>
+                        <td>
+                          {m.title || (m.role === "lead" ? "Lead" : "Member")}
+                          {m.employeeId === p.managerId && !/manager/i.test(m.title ?? "") ? <span className="muted"> · manager</span> : null}
+                        </td>
+                        <td>{m.allocationPct != null ? `${m.allocationPct}%` : "—"}</td>
+                        <td className={over ? "pj-over" : undefined}>
+                          {h(m.loggedHours)}
+                          {m.budgetHours ? ` / ${m.budgetHours} h` : ""}
+                        </td>
+                        <td>{p.tasks.filter((t) => t.assigneeId === m.employeeId && t.status !== "done").length}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {allocated > 0 && <p className="muted pj-foot">Planned capacity: {Math.round((allocated / 100) * 40)} h a week ({allocated}% across the team, 40 h weeks).</p>}
+        </Card>
+      )}
+
+      {tab === "hours" && <ReportPanel p={p} onDone={result} />}
+
+      {tab === "tasks" && (
       <Card
         title="Tasks"
         action={
@@ -526,6 +633,7 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
               <thead>
                 <tr>
                   <th>Task</th>
+                  <th>Priority</th>
                   <th>Assignee</th>
                   <th>Due</th>
                   <th>Estimate</th>
@@ -540,6 +648,9 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
                       <button type="button" className="link-btn" onClick={() => setOpenTask(t)}>
                         {t.code} {t.title}
                       </button>
+                    </td>
+                    <td>
+                      <span className={`pj-prio ${t.priority ?? "medium"}`}>{t.priority ?? "medium"}</span>
                     </td>
                     <td>{t.assigneeName ?? "—"}</td>
                     <td>
@@ -561,6 +672,9 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
                           {t.id} {t.title}
                         </Link>
                       </td>
+                      <td>
+                        <span className={`pj-prio ${t.priority}`}>{t.priority}</span>
+                      </td>
                       <td>You (ticket)</td>
                       <td>{t.due ? formatShortDate(t.due) : "—"}</td>
                       <td>—</td>
@@ -575,28 +689,14 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
           </div>
         )}
       </Card>
+      )}
 
-      <div className="split">
-        <PostsCard p={p} actorId={actor.id} onDone={result} actor={actor} />
-        <DocumentsCard p={p} actor={actor} onDone={result} />
-      </div>
-
-      <Card title="Recent activity">
-        {p.activity.length === 0 ? (
-          <p className="muted">No activity yet.</p>
-        ) : (
-          <ul className="project-activity">
-            {p.activity.slice(0, 15).map((a) => (
-              <li key={a.id}>
-                <span className="muted">{formatShortDate(a.on)}</span>
-                <span>
-                  <strong>{a.who}</strong> {a.text}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      {tab === "updates" && (
+        <div className="split">
+          <PostsCard p={p} actorId={actor.id} onDone={result} actor={actor} />
+          <DocumentsCard p={p} actor={actor} onDone={result} />
+        </div>
+      )}
 
       {editAbout && <AboutDialog p={p} actor={actor} onClose={() => setEditAbout(false)} onDone={result} />}
       {openMilestone && <MilestoneDialog p={p} actor={actor} milestone={openMilestone === "new" ? null : openMilestone} onClose={() => setOpenMilestone(null)} onDone={result} />}
@@ -611,6 +711,7 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
         />
       )}
       {openMember && <MemberDialog p={p} actor={actor} member={openMember} onClose={() => setOpenMember(null)} onDone={result} />}
+      {adding && <AddMemberDialog p={p} actor={actor} onClose={() => setAdding(false)} onDone={result} />}
     </Page>
   );
 }
@@ -619,7 +720,15 @@ type Done = (error: string | null, ok: string) => string | null;
 type Actor = { id: string; name: string };
 
 function AboutDialog({ p, actor, onClose, onDone }: { p: ProjectInfo; actor: Actor; onClose: () => void; onDone: Done }) {
-  const [form, setForm] = useState({ description: p.description, start: p.start, end: p.end, budget: p.budgetHours == null ? "" : String(p.budgetHours) });
+  const [form, setForm] = useState({
+    description: p.description,
+    client: p.client === "Internal" ? "" : p.client,
+    start: p.start,
+    end: p.end,
+    budget: p.budgetHours == null ? "" : String(p.budgetHours),
+    status: p.status,
+    health: (p.healthCall ?? "") as HealthCall | "",
+  });
   const [err, setErr] = useState<string | null>(null);
   return (
     <Dialog
@@ -635,7 +744,15 @@ function AboutDialog({ p, actor, onClose, onDone }: { p: ProjectInfo; actor: Act
             className="btn"
             success="Project saved."
             onAction={async () => {
-              const error = await saveProject(p, actor, { description: form.description, start: form.start, end: form.end, budgetHours: form.budget === "" ? null : Number(form.budget) });
+              const error = await saveProject(p, actor, {
+                description: form.description,
+                start: form.start,
+                end: form.end,
+                budgetHours: form.budget === "" ? null : Number(form.budget),
+                client: form.client,
+                status: form.status,
+                healthCall: form.health || null,
+              });
               setErr(error);
               if (!error) {
                 onDone(null, "Project details saved.");
@@ -662,6 +779,28 @@ function AboutDialog({ p, actor, onClose, onDone }: { p: ProjectInfo; actor: Act
           </Field>
           <Field label="Hours budget">
             <input type="number" min={0} step={1} value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} />
+          </Field>
+          <Field label="Client">
+            <input value={form.client} maxLength={200} placeholder="Internal" onChange={(e) => setForm({ ...form, client: e.target.value })} />
+          </Field>
+          <Field label="Status">
+            <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}>
+              {(Object.keys(PROJECT_STATUS_LABEL) as ProjectStatus[]).map((st) => (
+                <option key={st} value={st}>
+                  {PROJECT_STATUS_LABEL[st]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Health">
+            <select value={form.health} onChange={(e) => setForm({ ...form, health: e.target.value as HealthCall | "" })}>
+              <option value="">Automatic (dates and hours)</option>
+              {(Object.keys(HEALTH_CALL_LABEL) as HealthCall[]).map((hc) => (
+                <option key={hc} value={hc}>
+                  {HEALTH_CALL_LABEL[hc]}
+                </option>
+              ))}
+            </select>
           </Field>
         </div>
         {err && <p className="note warn">{err}</p>}
@@ -766,6 +905,8 @@ function MilestoneDialog({ p, actor, milestone, onClose, onDone }: { p: ProjectI
               <StatusBadge status={daysLeft === 0 ? "Due today" : `${daysLeft} days left`} tone={daysLeft <= 7 ? "warn" : "info"} literal keepCase />
             )}
           </dd>
+          <dt>Progress</dt>
+          <dd>{milestoneProgress(p, milestone).pct}% from its tasks</dd>
           <dt>Tasks</dt>
           <dd>{linked.length ? linked.map((t) => `${t.code} (${TASK_STATUS_LABEL[t.status]})`).join(", ") : "None linked"}</dd>
         </dl>
@@ -799,6 +940,7 @@ function TaskDialog({
     due: task?.due ?? "",
     estimate: String(task?.estimate ?? 0),
     status: (task?.status ?? "todo") as TaskStatus,
+    priority: (task?.priority ?? "medium") as TaskPriority,
   });
   const [status, setStatus] = useState<TaskStatus>(task?.status ?? "todo");
   const [err, setErr] = useState<string | null>(null);
@@ -912,6 +1054,15 @@ function TaskDialog({
             <Field label="Estimated hours">
               <input type="number" min={0} step={0.5} value={form.estimate} onChange={(e) => setForm({ ...form, estimate: e.target.value })} />
             </Field>
+            <Field label="Priority">
+              <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value as TaskPriority })}>
+                {TASK_PRIORITIES.map((pr) => (
+                  <option key={pr} value={pr}>
+                    {pr[0].toUpperCase() + pr.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="Status">
               <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as TaskStatus })}>
                 {(Object.keys(TASK_STATUS_LABEL) as TaskStatus[]).map((s) => (
@@ -929,6 +1080,10 @@ function TaskDialog({
           <dl className="meta">
             <dt>Assignee</dt>
             <dd>{task.assigneeName ?? "Unassigned"}</dd>
+            <dt>Priority</dt>
+            <dd>
+              <span className={`pj-prio ${task.priority ?? "medium"}`}>{task.priority ?? "medium"}</span>
+            </dd>
             <dt>Deadline</dt>
             <dd>
               {task.due ? formatShortDate(task.due) : "—"}
@@ -965,7 +1120,13 @@ function TaskDialog({
 
 function MemberDialog({ p, actor, member, onClose, onDone }: { p: ProjectInfo; actor: Actor; member: PMember; onClose: () => void; onDone: Done }) {
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ title: member.title ?? "", responsibilities: member.responsibilities ?? "", budget: member.budgetHours == null ? "" : String(member.budgetHours) });
+  const [form, setForm] = useState({
+    title: member.title ?? "",
+    responsibilities: member.responsibilities ?? "",
+    budget: member.budgetHours == null ? "" : String(member.budgetHours),
+    allocation: member.allocationPct == null ? "" : String(member.allocationPct),
+    role: (member.role === "lead" ? "lead" : "member") as "member" | "lead",
+  });
   const [err, setErr] = useState<string | null>(null);
   const theirTasks = p.tasks.filter((t) => t.assigneeId === member.employeeId);
   const editable = p.canEdit && !member.employeeId.startsWith("name:");
@@ -984,7 +1145,13 @@ function MemberDialog({ p, actor, member, onClose, onDone }: { p: ProjectInfo; a
               className="btn"
               success="Role saved."
               onAction={async () => {
-                const error = await saveMember(p, actor, member.employeeId, { title: form.title, responsibilities: form.responsibilities, budgetHours: form.budget === "" ? null : Number(form.budget) });
+                const error = await saveMember(p, actor, member.employeeId, {
+                  title: form.title,
+                  responsibilities: form.responsibilities,
+                  budgetHours: form.budget === "" ? null : Number(form.budget),
+                  allocationPct: form.allocation === "" ? null : Number(form.allocation),
+                  role: form.role,
+                });
                 setErr(error);
                 if (!error) {
                   onDone(null, `${member.name}'s role saved.`);
@@ -998,6 +1165,25 @@ function MemberDialog({ p, actor, member, onClose, onDone }: { p: ProjectInfo; a
           </>
         ) : (
           <>
+            {editable && member.employeeId !== p.managerId && (
+              <ActionButton
+                className="btn-ghost"
+                success="Removed from the project."
+                onAction={async () => {
+                  const open = theirTasks.filter((t) => t.status !== "done").length;
+                  if (!window.confirm(`Remove ${member.name} from ${p.name}?${open ? ` Their ${open} open task(s) become unassigned.` : ""}`)) return false;
+                  const error = await removeMember(p, actor, member.employeeId);
+                  setErr(error);
+                  if (!error) {
+                    onDone(null, `${member.name} removed from the project.`);
+                    onClose();
+                  }
+                  return error;
+                }}
+              >
+                Remove
+              </ActionButton>
+            )}
             {editable && (
               <button type="button" className="btn-ghost" onClick={() => setEditing(true)}>
                 Edit role
@@ -1018,14 +1204,29 @@ function MemberDialog({ p, actor, member, onClose, onDone }: { p: ProjectInfo; a
           <Field label="Responsibilities">
             <textarea rows={3} value={form.responsibilities} onChange={(e) => setForm({ ...form, responsibilities: e.target.value })} />
           </Field>
-          <Field label="Hours budget">
-            <input type="number" min={0} value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} />
-          </Field>
+          <div className="form-grid-2">
+            <Field label="Hours budget">
+              <input type="number" min={0} value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} />
+            </Field>
+            <Field label="Allocation (% of the week)">
+              <input type="number" min={0} max={100} step={5} value={form.allocation} onChange={(e) => setForm({ ...form, allocation: e.target.value })} />
+            </Field>
+            {member.employeeId !== p.managerId && (
+              <Field label="Access">
+                <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as "member" | "lead" })}>
+                  <option value="member">Member</option>
+                  <option value="lead">Lead (can edit the project)</option>
+                </select>
+              </Field>
+            )}
+          </div>
         </div>
       ) : (
         <dl className="meta">
           <dt>Role</dt>
           <dd>{member.title || (member.role === "lead" ? "Project lead" : "Member")}</dd>
+          <dt>Allocation</dt>
+          <dd>{member.allocationPct != null ? `${member.allocationPct}% of the week` : "—"}</dd>
           <dt>Job title</dt>
           <dd>{member.jobTitle || "—"}</dd>
           <dt>Responsibilities</dt>
@@ -1188,5 +1389,199 @@ function DocumentsCard({ p, actor, onDone }: { p: ProjectInfo; actor: Actor; onD
         </div>
       </div>
     </Card>
+  );
+}
+
+function AddMemberDialog({ p, actor, onClose, onDone }: { p: ProjectInfo; actor: Actor; onClose: () => void; onDone: Done }) {
+  const people = usePeopleList();
+  const onProject = new Set(p.members.map((m) => m.employeeId));
+  const pool = people
+    .filter((x) => !onProject.has(x.id) && x.employmentStatus !== "Terminated")
+    .sort((a, b) => a.fullName.localeCompare(b.fullName));
+  const [form, setForm] = useState({ id: "", title: "", allocation: "", budget: "", role: "member" as "member" | "lead" });
+  const [err, setErr] = useState<string | null>(null);
+  const person = pool.find((x) => x.id === form.id);
+  return (
+    <Dialog
+      open
+      title={`Add to ${p.name}`}
+      onClose={onClose}
+      actions={
+        <>
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <ActionButton
+            className="btn"
+            disabled={!person}
+            success="Added."
+            onAction={async () => {
+              if (!person) return "Pick someone to add.";
+              const error = await addMember(p, actor, { id: person.id, name: person.fullName, jobTitle: person.designation }, {
+                title: form.title,
+                responsibilities: "",
+                budgetHours: form.budget === "" ? null : Number(form.budget),
+                allocationPct: form.allocation === "" ? null : Number(form.allocation),
+                role: form.role,
+              });
+              setErr(error);
+              if (!error) {
+                onDone(null, `${person.fullName} added to the project.`);
+                onClose();
+              }
+              return error;
+            }}
+          >
+            Add member
+          </ActionButton>
+        </>
+      }
+    >
+      <div className="stack">
+        <Field label="Person">
+          <select value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })}>
+            <option value="">Pick someone…</option>
+            {pool.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.fullName}
+                {x.designation ? ` · ${x.designation}` : ""}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="form-grid-2">
+          <Field label="Role on the project">
+            <input value={form.title} maxLength={100} placeholder="e.g. QA engineer" onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          </Field>
+          <Field label="Allocation (% of the week)">
+            <input type="number" min={0} max={100} step={5} value={form.allocation} onChange={(e) => setForm({ ...form, allocation: e.target.value })} />
+          </Field>
+          <Field label="Hours budget">
+            <input type="number" min={0} value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} />
+          </Field>
+          <Field label="Access">
+            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as "member" | "lead" })}>
+              <option value="member">Member</option>
+              <option value="lead">Lead (can edit the project)</option>
+            </select>
+          </Field>
+        </div>
+        {err && <p className="note warn">{err}</p>}
+      </div>
+    </Dialog>
+  );
+}
+
+/** Hours from timesheets: weekly bars, burn-down against the budget, hours by member and the task summary. */
+function ReportPanel({ p, onDone }: { p: ProjectInfo; onDone: Done }) {
+  const { report, error, loading } = useProjectReport(p);
+  if (loading) return <p className="muted">Loading the report…</p>;
+  if (error || !report) return <EmptyState title="The report could not load" description={error ?? undefined} />;
+  const weeks = report.weeks.slice(-26);
+  const recent = report.weeks.slice(-8);
+  const label = (iso: string) => formatShortDate(iso).replace(/\s\d{4}$/, "");
+  const budget = report.budgetHours;
+  const usedPctNow = budget ? Math.round((report.logged / budget) * 100) : null;
+  const statusLabels: Record<string, string> = TASK_STATUS_LABEL;
+  return (
+    <div className="stack">
+      <div className="pj-report-head">
+        <MetricGrid>
+          <MetricCard label="Logged" value={h(report.logged)} hint={budget ? `${usedPctNow}% of ${budget} h` : "No budget set"} />
+          <MetricCard label="Approved" value={h(report.approved)} hint={report.logged ? `${Math.round((report.approved / report.logged) * 100)}% of logged` : undefined} />
+          <MetricCard label="Billable" value={h(report.billable)} />
+          <MetricCard label="Work done" value={`${report.progressPct}%`} hint={`${report.tasks.byStatus.done ?? 0} of ${report.tasks.total} tasks`} />
+        </MetricGrid>
+        <ActionButton
+          className="btn-ghost"
+          success="Report downloaded."
+          onAction={async () => {
+            const err = await exportProjectCsv(p, report);
+            if (err) onDone(err, "");
+            return err;
+          }}
+        >
+          Export CSV
+        </ActionButton>
+      </div>
+      <div className="split">
+        <Card title="Hours by week">
+          {recent.length ? (
+            <BarChart
+              ariaLabel="Hours logged each week"
+              unit=" h"
+              data={recent.map((w) => ({ label: label(w.weekStart), title: `Week of ${formatShortDate(w.weekStart)}`, value: w.hours, note: `${h(w.approved)} approved` }))}
+            />
+          ) : (
+            <p className="muted">Weekly hours appear here once time is logged (connected to the server).</p>
+          )}
+        </Card>
+        <Card title="Burn-down" className="pj-burn">
+          {budget && weeks.length ? (
+            <LineChart
+              ariaLabel="Budget hours left against plan"
+              labels={weeks.map((w) => label(w.weekStart))}
+              labelEvery={Math.max(1, Math.ceil(weeks.length / 6))}
+              series={[
+                { name: "Hours left", values: weeks.map((w) => Math.max(0, w.remaining ?? 0)) },
+                ...(weeks.some((w) => w.idealRemaining != null) ? [{ name: "Plan", values: weeks.map((w) => Math.max(0, w.idealRemaining ?? 0)), dashed: true }] : []),
+              ]}
+            />
+          ) : (
+            <p className="muted">{budget ? "No hours logged yet." : "Set an hours budget to see the burn-down."}</p>
+          )}
+        </Card>
+      </div>
+      <div className="split">
+        <Card title={report.fullTeam ? "Hours by member" : "My hours"}>
+          {report.members.length ? (
+            <HBarChart ariaLabel="Hours by member" unit=" h" data={report.members.map((m) => ({ label: m.name, value: m.hours, note: m.budgetHours ? `budget ${m.budgetHours} h` : undefined }))} />
+          ) : (
+            <p className="muted">No hours logged.</p>
+          )}
+          {report.fullTeam && report.members.length > 0 && (
+            <div className="table-scroll">
+              <table className="data pj-hours-table">
+                <thead>
+                  <tr>
+                    <th>Member</th>
+                    <th>Allocation</th>
+                    <th>Logged</th>
+                    <th>Approved</th>
+                    <th>Budget</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.members.map((m) => (
+                    <tr key={m.employeeId}>
+                      <td>{m.name}</td>
+                      <td>{m.allocationPct != null ? `${m.allocationPct}%` : "—"}</td>
+                      <td className={m.budgetHours && m.hours > m.budgetHours ? "pj-over" : undefined}>{h(m.hours)}</td>
+                      <td>{h(m.approved)}</td>
+                      <td>{m.budgetHours != null ? `${m.budgetHours} h` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+        <Card title="Tasks">
+          <HBarChart
+            ariaLabel="Tasks by status"
+            max={Math.max(1, report.tasks.total)}
+            data={Object.entries(report.tasks.byStatus).map(([k, v]) => ({ label: statusLabels[k] ?? k, value: v }))}
+          />
+          <dl className="meta">
+            <dt>Overdue</dt>
+            <dd className={report.tasks.overdue ? "pj-over" : undefined}>{report.tasks.overdue}</dd>
+            <dt>Estimated</dt>
+            <dd>{h(report.tasks.estimate)}</dd>
+            <dt>Logged on tasks</dt>
+            <dd>{h(report.tasks.loggedOnTasks)}</dd>
+          </dl>
+        </Card>
+      </div>
+    </div>
   );
 }

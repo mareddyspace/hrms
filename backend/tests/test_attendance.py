@@ -22,16 +22,21 @@ def _at(day, hh, mm, tz):
 
 def test_check_in_late_check_out_and_scope(client, babu, ram, monkeypatch):
     today = _today_ist()
-    monkeypatch.setattr(rules, "now", lambda: _at(today, 10, 0, IST))
+    from app.models import Employee
+
+    with SessionLocal() as db:  # the published roster shift today (seeded rotation), else 09:30-18:30
+        start, end = rules.shift_for(db.get(Employee, "emp-mahesh"), db, today)
+    sh, sm = (int(x) for x in start.split(":"))
+    monkeypatch.setattr(rules, "now", lambda: _at(today, sh, sm, IST) + timedelta(minutes=30))
     res = client.post("/api/v1/attendance/check-in", headers=babu, json={"work_mode": "wfh", "source": "mobile"})
     assert res.status_code == 201, res.text
     s = res.json()
-    assert s["work_date"] == today.isoformat() and s["shift_start"] == "09:30" and s["shift_end"] == "18:30"
+    assert s["work_date"] == today.isoformat() and s["shift_start"] == start and s["shift_end"] == end
     assert s["is_late"] is True and s["late_minutes"] == 30 and s["work_mode"] == "wfh" and s["source"] == "mobile"
     assert client.post("/api/v1/attendance/check-in", headers=babu, json={}).status_code == 409
     assert any(n["title"] == "Babu Menon checked in late" for n in client.get("/api/v1/notifications", headers=ram).json())
 
-    monkeypatch.setattr(rules, "now", lambda: _at(today, 18, 45, IST))  # under 9 hours (the 9-hour stop)
+    monkeypatch.setattr(rules, "now", lambda: _at(today, sh, sm, IST) + timedelta(minutes=30 + 8 * 60 + 45))  # under 9 hours
     res = client.post("/api/v1/attendance/check-out", headers=babu, json={"break_minutes": 60})
     assert res.status_code == 200, res.text
     s = res.json()

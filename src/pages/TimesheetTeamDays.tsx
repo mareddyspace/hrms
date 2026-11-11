@@ -1,5 +1,8 @@
 import { Fragment, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ActionButton, Card } from "../components/ui.tsx";
+import { DecisionDialog, type DecisionKind } from "../features/manager/DecisionDialog.tsx";
+import { attendedMinutes, getAttendanceState, subscribeAttendance } from "../data/attendanceLocal.ts";
+import "../styles/manager.css";
 import {
   addDaysISO,
   blockingLeave,
@@ -17,6 +20,7 @@ import { managementChain, findDemoById } from "../demoAccounts.ts";
 import { directReportIds, getPerson } from "../data/peopleLocal.ts";
 import { API_ENABLED } from "../api/client.ts";
 import {
+  apiBulkDecideDays,
   loadApiTeamDays,
   loadApiWaitingDays,
   timeMirror,
@@ -28,6 +32,9 @@ import { approvalProgressText } from "../api/approvalProgress.ts";
 import { DAY_STATUS_LABEL, DAY_STATUS_TONE, dayTargetFor, halfDayTargetFor, useDayRecords, type DayStatus, type TimeTone } from "../data/timesheetDays.ts";
 import "./timesheetDays.css";
 import "../styles/time.css";
+
+/** Logged vs attended hours further apart than this are flagged (backend: MISMATCH_TOLERANCE_HOURS). */
+const MISMATCH_TOLERANCE_HOURS = 1;
 
 /** A status chip in the shared time legend (src/styles/time.css). */
 export function ToneChip({ tone, label, dashed = false, title }: { tone: TimeTone; label: string; dashed?: boolean; title?: string }) {
@@ -82,11 +89,13 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
   const { state, employee, canDecideFor, decideTimesheetDay, reopenTimesheetDay } = portal;
   const records = useDayRecords();
   const apiTime = useSyncExternalStore(timeMirror.subscribe, timeMirror.get, timeMirror.get);
+  const attState = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [dialog, setDialog] = useState<{ days: TimesheetDayOut[]; decision: DecisionKind } | null>(null);
   const [apiTeam, setApiTeam] = useState<TeamPersonOut[] | null>(null);
   const [apiWaiting, setApiWaiting] = useState<TimesheetDayOut[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [open, setOpen] = useState<string | null>(null);
-  const [comments, setComments] = useState<Record<string, string>>({});
   // "Reopen a day": a missed past working day the person can then log and submit.
   const [reopenFor, setReopenFor] = useState<string | null>(null);
   const [reopenDate, setReopenDate] = useState("");
@@ -161,7 +170,12 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
       const who = getPerson(personId) ?? findDemoById(personId) ?? {};
       const target = kind === "half-day leave" ? halfDayTargetFor(who) : kind ? 0 : dayTargetFor(who);
       const canDecide = rec?.status === "submitted" && decides(personId);
+      const session = attState.sessions.find((x) => x.employeeId === personId && x.date === date && x.checkIn);
+      const attended = session ? attendedMinutes(session) : null;
+      const logged = entries.reduce((a, e) => a + e.hours, 0);
       return {
+        attendance_minutes: attended,
+        hours_mismatch: (attended != null || (logged > 0 && target > 0)) && Math.abs(logged - (attended ?? 0) / 60) > MISMATCH_TOLERANCE_HOURS,
         id: rec?.id ?? null,
         employee_id: personId,
         employee_name: nameOf(personId),
@@ -208,57 +222,71 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
       .sort((a, b) => a.date.localeCompare(b.date))
       .map((r) => dayOut(r.personId, r.date, entriesOf(r.personId, r.date, r.date)));
     return { team, waiting };
-  }, [canDecideFor, employee.id, portal.demoProfile.role, records, state.holidays, state.leaveRequests, state.projects, state.timesheets, weekStart]);
+  }, [attState.sessions, canDecideFor, employee.id, portal.demoProfile.role, records, state.holidays, state.leaveRequests, state.projects, state.timesheets, weekStart]);
 
   const team = API_ENABLED ? apiTeam : local.team;
   const waiting = API_ENABLED ? apiWaiting : local.waiting;
-  const readyCount = (waiting ?? []).filter((d) => d.total_hours >= d.target_hours).length;
+  // "Ready": meets the day's target and matches attendance (within the tolerance).
+  const ready = (waiting ?? []).filter((d) => d.id && d.total_hours >= d.target_hours && !d.hours_mismatch);
+  const readyCount = ready.length;
+  const selectedDays = (waiting ?? []).filter((d) => d.id && selected.has(d.id));
 
   useEffect(() => {
     onWaitingCount?.((waiting ?? []).length);
   }, [waiting, onWaitingCount]);
 
-  async function decide(day: TimesheetDayOut, decision: "approved" | "rejected") {
-    if (!day.id) return "Nothing submitted for this day.";
-    const note = comments[day.id]?.trim();
-    if (decision === "rejected" && !note) return "Add a comment saying what to change.";
-    const error = await decideTimesheetDay(day.id, decision, note);
-    if (error) return error;
-    setComments((c) => ({ ...c, [day.id!]: "" }));
-    if (API_ENABLED) setApiWaiting((list) => (list ?? []).filter((d) => d.id !== day.id));
-    return null;
-  }
-
-  async function approveAllReady() {
-    const ready = (waiting ?? []).filter((d) => d.total_hours >= d.target_hours && d.id);
-    if (ready.length === 0) return "No submitted day meets 9 h.";
-    let failed = 0;
-    for (const d of ready) {
-      const error = await decideTimesheetDay(d.id!, "approved");
-      if (error) failed += 1;
+  /** Approve or send back days (one comment for all): one bulk call in backend mode, one by one in local mode. */
+  async function decideDays(days: TimesheetDayOut[], decision: DecisionKind, note: string): Promise<string | null> {
+    const ids = days.map((d) => d.id).filter((id): id is string => Boolean(id));
+    if (ids.length === 0) return "Nothing submitted for these days.";
+    if (decision === "reject" && !note.trim()) return "Add a comment saying what to change.";
+    let failed: { id: string; error: string }[] = [];
+    if (API_ENABLED) {
+      const out = await apiBulkDecideDays(ids, decision, note);
+      if (typeof out === "string") return out;
+      failed = out.failed;
+      const done = new Set(out.decided.map((d) => d.id));
+      setApiWaiting((list) => (list ?? []).filter((d) => !done.has(d.id)));
+    } else {
+      for (const id of ids) {
+        const error = await decideTimesheetDay(id, decision === "approve" ? "approved" : "rejected", note || undefined);
+        if (error) failed.push({ id, error });
+      }
     }
-    if (API_ENABLED) setApiWaiting((list) => (list ?? []).filter((d) => !ready.some((r) => r.id === d.id)));
-    return failed ? `${ready.length - failed} approved, ${failed} couldn't be approved.` : null;
+    setSelected(new Set());
+    if (failed.length === 0) return null;
+    const who = (id: string) => {
+      const d = days.find((x) => x.id === id);
+      return d ? `${d.employee_name ?? ""} ${formatShortDate(d.work_date)}` : id;
+    };
+    return `${ids.length - failed.length} done; ${failed.map((f) => `${who(f.id)}: ${f.error}`).join(" ")}`;
   }
 
   function decideControls(day: TimesheetDayOut) {
     if (!day.id || day.status !== "submitted" || !day.can_decide) return null;
-    const who = day.employee_name ?? "them";
     return (
       <div className="ts-decide">
-        <ActionButton className="btn btn-tiny" success={`${who}'s ${formatShortDate(day.work_date)} approved.`} toastError onAction={() => decide(day, "approved")}>
+        <button type="button" className="btn btn-tiny" onClick={() => setDialog({ days: [day], decision: "approve" })}>
           Approve
-        </ActionButton>
-        <input
-          aria-label="Comment"
-          placeholder="Comment (needed to send back)"
-          value={comments[day.id] ?? ""}
-          onChange={(e) => setComments((c) => ({ ...c, [day.id!]: e.target.value }))}
-        />
-        <ActionButton className="btn-ghost btn-tiny" success={`Sent back to ${who}.`} toastError onAction={() => decide(day, "rejected")}>
+        </button>
+        <button type="button" className="btn-ghost btn-tiny" onClick={() => setDialog({ days: [day], decision: "reject" })}>
           Send back
-        </ActionButton>
+        </button>
       </div>
+    );
+  }
+
+  function attendanceCell(day: TimesheetDayOut) {
+    const mins = day.attendance_minutes;
+    return (
+      <span className="mgr-hours">
+        <span>{mins == null ? "No check-in" : formatHoursAmount(Math.round((mins / 60) * 100) / 100)}</span>
+        {day.hours_mismatch && (
+          <span className="mgr-flag warn" title={`Logged ${formatHoursAmount(day.total_hours)} vs attended; more than ${MISMATCH_TOLERANCE_HOURS} h apart`}>
+            Differs
+          </span>
+        )}
+      </span>
     );
   }
 
@@ -309,15 +337,9 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
         title={`Waiting for you · ${(waiting ?? []).length}`}
         action={
           (waiting ?? []).length > 0 ? (
-            <ActionButton
-              className="btn btn-tiny"
-              disabled={readyCount === 0}
-              success={`Approved ${readyCount} day${readyCount === 1 ? "" : "s"}.`}
-              toastError
-              onAction={approveAllReady}
-            >
-              Approve all that meet 9 h ({readyCount})
-            </ActionButton>
+            <button type="button" className="btn btn-tiny" disabled={readyCount === 0} onClick={() => setDialog({ days: ready, decision: "approve" })}>
+              Approve all ready ({readyCount})
+            </button>
           ) : undefined
         }
       >
@@ -326,13 +348,37 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
         ) : waiting.length === 0 ? (
           <p className="muted">No timesheets waiting for you.</p>
         ) : (
+          <>
+          {selectedDays.length > 0 && (
+            <div className="mgr-bulk">
+              <strong className="grow">{selectedDays.length} selected</strong>
+              <button type="button" className="btn btn-tiny" onClick={() => setDialog({ days: selectedDays, decision: "approve" })}>
+                Approve {selectedDays.length}
+              </button>
+              <button type="button" className="btn-ghost btn-tiny" onClick={() => setDialog({ days: selectedDays, decision: "reject" })}>
+                Send back {selectedDays.length}
+              </button>
+              <button type="button" className="btn-ghost btn-tiny" onClick={() => setSelected(new Set())}>
+                Clear
+              </button>
+            </div>
+          )}
           <div className="table-scroll">
             <table className="data ts-team-table">
               <thead>
                 <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all"
+                      checked={waiting.every((d) => !d.can_decide || (d.id && selected.has(d.id)))}
+                      onChange={(e) => setSelected(e.target.checked ? new Set(waiting.filter((d) => d.can_decide && d.id).map((d) => d.id!)) : new Set())}
+                    />
+                  </th>
                   <th>Employee</th>
                   <th>Day</th>
-                  <th>Hours</th>
+                  <th>Logged</th>
+                  <th>Attended</th>
                   <th>Projects</th>
                   <th>Submitted</th>
                   <th>Decision</th>
@@ -345,6 +391,23 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
                     <Fragment key={key}>
                       <tr>
                         <td>
+                          {day.can_decide && day.id && (
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${day.employee_name} ${day.work_date}`}
+                              checked={selected.has(day.id)}
+                              onChange={(e) =>
+                                setSelected((prev) => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) next.add(day.id!);
+                                  else next.delete(day.id!);
+                                  return next;
+                                })
+                              }
+                            />
+                          )}
+                        </td>
+                        <td>
                           <button type="button" className="link-btn" onClick={() => setOpen(open === key ? null : key)} aria-expanded={open === key}>
                             <strong>{day.employee_name}</strong>
                           </button>
@@ -356,6 +419,7 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
                         <td className="ts-hours-cell">
                           <HoursMeter total={day.total_hours} target={day.target_hours} />
                         </td>
+                        <td>{attendanceCell(day)}</td>
                         <td>
                           <div className="ts-proj-split">
                             {projectSplit(day.entries).map(([name, h]) => (
@@ -375,7 +439,7 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
                       </tr>
                       {open === key && (
                         <tr>
-                          <td colSpan={6}>{entriesTable(day)}</td>
+                          <td colSpan={8}>{entriesTable(day)}</td>
                         </tr>
                       )}
                     </Fragment>
@@ -384,8 +448,36 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
               </tbody>
             </table>
           </div>
+          </>
         )}
       </Card>
+
+      {dialog && (
+        <DecisionDialog
+          decision={dialog.decision}
+          count={dialog.days.length}
+          rejectLabel="Send back"
+          title={
+            dialog.days.length === 1
+              ? `Timesheet · ${dialog.days[0].employee_name ?? ""} · ${formatShortDate(dialog.days[0].work_date)}`
+              : `${dialog.decision === "approve" ? "Approve" : "Send back"} ${dialog.days.length} days`
+          }
+          summary={
+            <ul className="todo">
+              {dialog.days.slice(0, 8).map((d) => (
+                <li key={d.id ?? d.work_date}>
+                  <strong>{d.employee_name}</strong> · {formatShortDate(d.work_date)} · logged {formatHoursAmount(d.total_hours)}
+                  {d.attendance_minutes != null ? ` · attended ${formatHoursAmount(Math.round((d.attendance_minutes / 60) * 100) / 100)}` : " · no check-in"}
+                  {d.hours_mismatch && <> <span className="mgr-flag warn">Differs</span></>}
+                </li>
+              ))}
+              {dialog.days.length > 8 && <li className="muted">and {dialog.days.length - 8} more</li>}
+            </ul>
+          }
+          onConfirm={(note) => decideDays(dialog.days, dialog.decision, note)}
+          onClose={() => setDialog(null)}
+        />
+      )}
 
       <Card title="Who logged what this week" action={<span className="muted">Click a day to see entries</span>}>
         {team === null ? (

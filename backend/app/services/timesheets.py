@@ -146,7 +146,7 @@ def _span_hours(start: str, end: str) -> float:
 
 
 def full_day_hours(db: Session, employee: Employee, day: date | None = None) -> float:
-    """The person's normal day: their rostered shift (length minus its break) that day, else the country's standard
+    """The person's normal day: their shift on the published roster (length minus its break) that day, else the country's standard
     day (Country.standard_daily_hours, i.e. the default shift minus the break); half of it for Part-Time staff.
     Never more than DAY_TARGET (9 h): attendance stops itself at 9 hours of work (the owner's rule)."""
     from app.models import Country
@@ -154,10 +154,9 @@ def full_day_hours(db: Session, employee: Employee, day: date | None = None) -> 
     hours: float | None = None
     if day is not None:
         try:
-            from app.models import RosterShift, ShiftType
+            from app.services.shifts import rostered_shift  # same shift attendance checks late / early against
 
-            shift = db.scalar(select(ShiftType).join(RosterShift, RosterShift.shift_id == ShiftType.id)
-                              .where(RosterShift.employee_id == employee.id, RosterShift.work_date == day).limit(1))
+            shift = rostered_shift(db, employee.id, day)
             if shift is not None:
                 hours = _span_hours(shift.start, shift.end) - (shift.break_minutes or 0) / 60
         except Exception:  # noqa: BLE001 (roster tables missing on an old database)

@@ -24,6 +24,7 @@ import {
 import { COMPANY_NAME } from "../brand.ts";
 import { ActionButton, Banner, Card, Dialog, EmptyState, Field, Page, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { MaskedValue } from "../components/MaskedValue.tsx";
+import { canSeePayslipsOf, ProfilePayslips } from "../features/payroll/ProfilePayslips.tsx";
 import { canRevealPersonal, personRevealer } from "../data/piiReveal.ts";
 import { initials } from "../components/OrgChart.tsx";
 import { startDirectChat } from "../data/collabLocal.ts";
@@ -794,7 +795,13 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
             hideHeader
             hideSummary
             onlyTabs={isMe ? OWN_TABS : OTHER_TABS}
-            extraTabs={[{ id: "calendar", label: "Calendar", node: <ProfileCalendar personId={person.id} isSelf={ownRecord} /> }]}
+            extraTabs={[
+              { id: "calendar", label: "Calendar", node: <ProfileCalendar personId={person.id} isSelf={ownRecord} /> },
+              // Payslips: the person themself, or HR / payroll for people in scope (the server checks again).
+              ...(canSeePayslipsOf(demoProfile.role, ownRecord)
+                ? [{ id: "payslips", label: "Payslips", node: <ProfilePayslips personId={person.id} isSelf={ownRecord} person={person.record} /> }]
+                : []),
+            ]}
           />
         </section>
       )}

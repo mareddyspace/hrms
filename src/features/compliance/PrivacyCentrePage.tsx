@@ -30,7 +30,13 @@ import { formatStamp, isHr, personCountry, privacyLawFor, type ComplianceActor }
 import { Switch, toneFor } from "./ComplianceUi.tsx";
 import { buildMyDataExport, downloadJson } from "./dataExport.ts";
 import { useComplianceActor } from "./useActor.ts";
+import { API_ENABLED } from "../../api/client.ts";
+import { privacyApi } from "../../api/syncExperience.ts";
+import { HistoryTimeline } from "../experience/HistoryTimeline.tsx";
 import "./compliance.css";
+import "../../styles/experience.css";
+
+type Result = string | null | Promise<string | null>;
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -59,8 +65,10 @@ export function PrivacyCentrePage() {
     tabs.push({ id: "retention", label: "Retention policy" });
   }
 
-  function report(error: string | null, ok: string) {
+  async function report(result: Result, ok: string): Promise<string | null> {
+    const error = await result;
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
+    return error;
   }
 
   return (
@@ -83,7 +91,7 @@ export function PrivacyCentrePage() {
   );
 }
 
-function ConsentsTab({ actor, onResult }: { actor: ComplianceActor; onResult: (error: string | null, ok: string) => void }) {
+function ConsentsTab({ actor, onResult }: { actor: ComplianceActor; onResult: (result: Result, ok: string) => Promise<string | null> }) {
   const state = useSyncExternalStore(subscribePrivacy, getPrivacyState, getPrivacyState);
   const current = currentConsents(state, actor.id);
   const history = state.consents.filter((c) => c.personId === actor.id).sort((a, b) => b.at.localeCompare(a.at));
@@ -105,7 +113,7 @@ function ConsentsTab({ actor, onResult }: { actor: ComplianceActor; onResult: (e
                 <Switch
                   checked={on}
                   label={topic.label}
-                  onChange={(next) => onResult(setConsent(actor, topic.key, next), next ? "Consent given." : "Consent withdrawn.")}
+                  onChange={(next) => void onResult(setConsent(actor, topic.key, next), next ? "Consent given." : "Consent withdrawn.")}
                 />
               </div>
             );
@@ -130,9 +138,10 @@ function ConsentsTab({ actor, onResult }: { actor: ComplianceActor; onResult: (e
 function MyDataTab({ actor, onResult }: { actor: ComplianceActor; onResult: (msg: Msg) => void }) {
   const [summary, setSummary] = useState<{ section: string; count: number }[] | null>(null);
 
-  function download() {
+  async function download() {
     try {
-      const data = buildMyDataExport(actor);
+      // Backend mode: the server's own copy of everything it holds about me (the download is audited there).
+      const data = API_ENABLED ? await privacyApi.myData() : buildMyDataExport(actor);
       const code = getPerson(actor.id)?.employeeCode ?? actor.id;
       downloadJson(`my-data-${code}-${new Date().toISOString().slice(0, 10)}.json`, data);
       setSummary(data.summary);
@@ -146,9 +155,9 @@ function MyDataTab({ actor, onResult }: { actor: ComplianceActor; onResult: (msg
     <Card title="Download my data">
       <div className="stack">
         <div>
-          <button className="btn" type="button" onClick={download}>
+          <ActionButton className="btn" busyLabel="Preparing…" doneLabel="Downloaded" onAction={download}>
             Download my data
-          </button>
+          </ActionButton>
         </div>
         {summary && (
           <DataTable headers={["Section", "Records"]} rows={summary.map((s) => [s.section, s.count])} />
@@ -162,11 +171,12 @@ function RequestRow({ req, children, showPerson = false }: { req: DataRequest; c
   const overdue = isRequestOverdue(req);
   const left = daysLeft(req);
   const person = showPerson ? getPerson(req.personId) : undefined;
+  const personLabel = person?.fullName ?? req.personName ?? "Unknown";
   return (
     <li className="cmp-item">
       <div className="cmp-item-head">
         <strong>
-          {showPerson ? `${person?.fullName ?? "Unknown"} · ` : ""}
+          {showPerson ? `${personLabel} · ` : ""}
           {req.type} request
         </strong>
         <span className="row-gap">
@@ -179,16 +189,18 @@ function RequestRow({ req, children, showPerson = false }: { req: DataRequest; c
         <span>Raised {formatShortDate(req.createdOn)}</span>
         <span>Due {formatShortDate(req.dueOn)}</span>
         {isRequestOpen(req) && !overdue && <span>{left} days left</span>}
-        {showPerson && person && <span>{privacyLawFor(String(person.countryCode))}</span>}
+        {showPerson && (person || req.countryCode) && <span>{privacyLawFor(String(person?.countryCode ?? req.countryCode))}</span>}
+        {req.handledByName && <span>Handled by {req.handledByName}</span>}
         {req.closedOn && <span>Closed {formatShortDate(req.closedOn)}</span>}
       </div>
       {req.outcome && <p className="muted">Outcome: {req.outcome}</p>}
+      {req.history && req.history.length > 0 && <HistoryTimeline entries={req.history} compact />}
       {children}
     </li>
   );
 }
 
-function MyRequestsTab({ actor, requests, onResult }: { actor: ComplianceActor; requests: DataRequest[]; onResult: (error: string | null, ok: string) => void }) {
+function MyRequestsTab({ actor, requests, onResult }: { actor: ComplianceActor; requests: DataRequest[]; onResult: (result: Result, ok: string) => Promise<string | null> }) {
   const [type, setType] = useState<RequestType>("Access");
   const [details, setDetails] = useState("");
 
@@ -217,9 +229,8 @@ function MyRequestsTab({ actor, requests, onResult }: { actor: ComplianceActor; 
             <ActionButton
               className="btn"
               success={`${type} request sent to HR.`}
-              onAction={() => {
-                const error = raiseRequest(actor, type, details);
-                onResult(error, `${type} request submitted.`);
+              onAction={async () => {
+                const error = await onResult(raiseRequest(actor, type, details), `${type} request submitted.`);
                 if (!error) setDetails("");
                 return error;
               }}
@@ -241,11 +252,7 @@ function MyRequestsTab({ actor, requests, onResult }: { actor: ComplianceActor; 
                     <ActionButton
                       className="btn-ghost btn-tiny"
                       success={`${r.type} request withdrawn.`}
-                      onAction={() => {
-                        const error = withdrawRequest(actor, r.id);
-                        onResult(error, "Request withdrawn.");
-                        return error;
-                      }}
+                      onAction={() => onResult(withdrawRequest(actor, r.id), "Request withdrawn.")}
                     >
                       Withdraw
                     </ActionButton>
@@ -260,7 +267,7 @@ function MyRequestsTab({ actor, requests, onResult }: { actor: ComplianceActor; 
   );
 }
 
-function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; requests: DataRequest[]; onResult: (error: string | null, ok: string) => void }) {
+function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; requests: DataRequest[]; onResult: (result: Result, ok: string) => Promise<string | null> }) {
   const [filter, setFilter] = useState("open");
   const [closing, setClosing] = useState<{ req: DataRequest; next: "Completed" | "Rejected" } | null>(null);
   const [outcome, setOutcome] = useState("");
@@ -303,11 +310,7 @@ function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; r
                         busyLabel="Starting…"
                         doneLabel="Started"
                         success={`${r.type} request for ${getPerson(r.personId)?.fullName ?? "the employee"} started.`}
-                        onAction={() => {
-                          const error = moveRequest(actor, r.id, "In progress");
-                          onResult(error, "Request started.");
-                          return error;
-                        }}
+                        onAction={() => onResult(moveRequest(actor, r.id, "In progress"), "Request started.")}
                       >
                         Start
                       </ActionButton>
@@ -359,14 +362,14 @@ function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; r
               success={() =>
                 closing?.next === "Rejected" ? "Request rejected." : closing && closesManually(closing.req.type) ? "Request closed." : "Request completed."
               }
-              onAction={() => {
+              onAction={async () => {
                 if (!closing) return false;
-                const err = moveRequest(actor, closing.req.id, closing.next, outcome);
+                const err = await moveRequest(actor, closing.req.id, closing.next, outcome);
                 if (err) {
                   setError(err);
                   return false;
                 }
-                onResult(
+                void onResult(
                   null,
                   closing.next === "Rejected" ? "Request rejected." : closesManually(closing.req.type) ? "Request closed (manual)." : "Request completed.",
                 );
@@ -401,15 +404,14 @@ function RequestQueue({ actor, requests, onResult }: { actor: ComplianceActor; r
   );
 }
 
-function RetentionTab({ actor, rules, onResult }: { actor: ComplianceActor; rules: RetentionRule[]; onResult: (error: string | null, ok: string) => void }) {
+function RetentionTab({ actor, rules, onResult }: { actor: ComplianceActor; rules: RetentionRule[]; onResult: (result: Result, ok: string) => Promise<string | null> }) {
   const blank = { category: "", period: "", unit: "years" as RetentionUnit, legalBasis: "" };
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  function save() {
+  async function save() {
     const input: RetentionInput = { category: form.category, period: form.period.trim() === "" ? NaN : Number(form.period), unit: form.unit, legalBasis: form.legalBasis };
-    const error = saveRetentionRule(actor, input, editingId ?? undefined);
-    onResult(error, editingId ? "Retention rule updated." : "Retention rule added.");
+    const error = await onResult(saveRetentionRule(actor, input, editingId ?? undefined), editingId ? "Retention rule updated." : "Retention rule added.");
     if (!error) {
       setForm(blank);
       setEditingId(null);
@@ -489,11 +491,7 @@ function RetentionTab({ actor, rules, onResult }: { actor: ComplianceActor; rule
               <ActionButton
                 className="btn-ghost btn-tiny"
                 success={`Retention rule for ${r.category} removed.`}
-                onAction={() => {
-                  const error = removeRetentionRule(actor, r.id);
-                  onResult(error, "Retention rule removed.");
-                  return error;
-                }}
+                onAction={() => onResult(removeRetentionRule(actor, r.id), "Retention rule removed.")}
               >
                 Remove
               </ActionButton>

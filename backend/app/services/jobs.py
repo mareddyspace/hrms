@@ -181,6 +181,15 @@ def run_all(db: Session, now: datetime | None = None) -> dict[str, Any]:
     from app.services.documents import send_expiry_reminders  # documents expiring within 30 days, or expired
 
     out["document_expiry_reminders"] = send_expiry_reminders(db, now.date(), _send)
+    from app.services.experience import send_expiry_reminders as immigration_reminders  # visas / permits / passports
+
+    out["immigration_expiry_reminders"] = immigration_reminders(db, now.date(), _send)
+    from app.services.task_reminders import send_task_reminders  # tasks due tomorrow, today or overdue
+
+    out["task_reminders"] = send_task_reminders(db, now.date(), _send)
+    from app.services.tickets import run_escalation  # work tickets past their resolve target
+
+    out["tickets_escalated"] = run_escalation(db, now.date(), _send)
     return out
 
 

@@ -5,7 +5,8 @@
  */
 import { api, API_ENABLED } from "../api/client.ts";
 import { leaveAdminApi } from "../api/syncLeaveAdmin.ts";
-import type { CountryCode, Holiday } from "../model.ts";
+import type { CountryCode, Holiday, HolidayType } from "../model.ts";
+import { holidayKind, holidayRegions } from "./holidayRules.ts";
 import { appendAuditEntries } from "./auditTrail.ts";
 
 export function canEditHolidays(role: string): boolean {
@@ -17,21 +18,34 @@ type Actor = { id: string; fullName: string; role: string };
 
 const inYear = (h: Holiday, country: string, year: number) => (h.countryCode ?? "IN") === country && h.date.startsWith(`${year}-`);
 
-/** Backend mode: the year's holidays for a country into portal state (HR reads any country; others their own). */
+type ApiHoliday = {
+  id: string;
+  date: string;
+  name: string;
+  country_code: string;
+  calendar?: string | null;
+  description?: string | null;
+  holiday_type?: HolidayType | null;
+  regions?: string[] | null;
+  legal_entity?: string | null;
+};
+
+/** Backend mode: the year's holidays for a country into portal state (HR reads any country with every type; others
+ * their own country, every office, so the location filter works; holidaysForPerson keeps only their own). */
 export async function loadApiHolidays(replace: Replace, country: string, year: number, asAdmin: boolean): Promise<string | null> {
   if (!API_ENABLED) return null;
   try {
-    const rows = asAdmin
+    const rows: ApiHoliday[] = asAdmin
       ? (await leaveAdminApi.holidays(country, year)).filter((h) => h.active && !h.calendar)
-      : await api.get<{ id: string; date: string; name: string; country_code: string; calendar?: string | null; description?: string | null }[]>(
-          "/leave/holidays",
-          { year },
-        );
+      : await api.get<ApiHoliday[]>("/leave/holidays", { year, all_locations: true });
     const list: Holiday[] = rows.map((h) => ({
       id: h.id,
       date: h.date,
       name: h.name,
       countryCode: h.country_code as CountryCode,
+      holidayType: h.holiday_type ?? "national",
+      ...(h.regions?.length ? { regions: h.regions } : {}),
+      ...(h.legal_entity ? { legalEntity: h.legal_entity } : {}),
       ...(h.calendar ? { region: h.calendar } : {}),
       ...(h.description ? { description: h.description } : {}),
     }));
@@ -43,34 +57,56 @@ export async function loadApiHolidays(replace: Replace, country: string, year: n
   }
 }
 
-function validate(all: Holiday[], input: { id?: string; countryCode: string; date: string; name: string }): string | null {
+export interface HolidayInput {
+  id?: string;
+  countryCode: string;
+  date: string;
+  name: string;
+  description?: string;
+  holidayType?: HolidayType;
+  regions?: string[];
+  legalEntity?: string;
+}
+
+const lower = (list: string[] | undefined) => new Set((list ?? []).map((r) => r.trim().toLowerCase()).filter(Boolean));
+
+function validate(all: Holiday[], input: HolidayInput): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) return "Choose a date.";
   const name = input.name.trim();
   if (name.length < 2) return "Enter the holiday name.";
   if (name.length > 200) return "Keep the name under 200 characters.";
-  if (all.some((h) => h.id !== input.id && (h.countryCode ?? "IN") === input.countryCode && h.date === input.date)) {
-    return "There is already a holiday on that date.";
+  const type = input.holidayType ?? "national";
+  const regions = lower(input.regions);
+  if (type === "regional" && !regions.size) return "A regional holiday needs at least one state or location.";
+  if (type === "national" && (regions.size || input.legalEntity?.trim())) {
+    return "A national holiday applies to the whole country; choose regional or company instead.";
   }
-  return null;
+  const clash = all.some((h) => {
+    if (h.id === input.id || (h.countryCode ?? "IN") !== input.countryCode || h.date !== input.date) return false;
+    if ((h.legalEntity ?? "") !== (input.legalEntity?.trim() ?? "")) return false;
+    if ((holidayKind(h) === "optional") !== (type === "optional")) return false; // an optional pick and a day off can share a date
+    const theirs = lower(holidayRegions(h));
+    return !regions.size || !theirs.size || [...regions].some((r) => theirs.has(r));
+  });
+  return clash ? "There is already a holiday on that date for these people." : null;
 }
 
 /** Add or edit a holiday. Returns an error message or null. */
-export async function saveHoliday(
-  replace: Replace,
-  current: Holiday[],
-  actor: Actor,
-  input: { id?: string; countryCode: string; date: string; name: string; description?: string },
-): Promise<string | null> {
+export async function saveHoliday(replace: Replace, current: Holiday[], actor: Actor, input: HolidayInput): Promise<string | null> {
   if (!canEditHolidays(actor.role)) return "Only HR or an administrator can change holidays.";
   const error = validate(current, input);
   if (error) return error;
   const name = input.name.trim();
   const year = Number(input.date.slice(0, 4));
+  const holidayType = input.holidayType ?? "national";
+  const regions = holidayType === "national" ? [] : [...new Set((input.regions ?? []).map((r) => r.trim()).filter(Boolean))];
+  const legalEntity = holidayType === "national" ? "" : (input.legalEntity ?? "").trim();
   if (API_ENABLED) {
     try {
       const description = input.description?.trim() || null;
-      if (input.id) await leaveAdminApi.updateHoliday(input.id, { date: input.date, name, description });
-      else await leaveAdminApi.createHoliday({ country_code: input.countryCode, date: input.date, name, calendar: null, description });
+      const typed = { holiday_type: holidayType, regions: regions.length ? regions : null, legal_entity: legalEntity || null };
+      if (input.id) await leaveAdminApi.updateHoliday(input.id, { date: input.date, name, description, ...typed });
+      else await leaveAdminApi.createHoliday({ country_code: input.countryCode, date: input.date, name, calendar: null, description, ...typed });
     } catch (e) {
       return e instanceof Error ? e.message : "Could not save the holiday.";
     }
@@ -85,6 +121,9 @@ export async function saveHoliday(
     date: input.date,
     name,
     countryCode: input.countryCode as CountryCode,
+    holidayType,
+    ...(regions.length ? { regions } : {}),
+    ...(legalEntity ? { legalEntity } : {}),
     ...(input.description?.trim() ? { description: input.description.trim() } : {}),
   };
   replace((all) => [...all.filter((h) => h.id !== id), row].sort((a, b) => a.date.localeCompare(b.date)));
@@ -100,6 +139,8 @@ export async function saveHoliday(
         { field: "Country", before: before ? (before.countryCode ?? "IN") : "", after: input.countryCode },
         { field: "Date", before: before?.date ?? "", after: input.date },
         { field: "Name", before: before?.name ?? "", after: name },
+        { field: "Type", before: before ? holidayKind(before) : "", after: holidayType },
+        { field: "Applies to", before: before ? holidayRegions(before).join(", ") : "", after: regions.join(", ") },
       ],
     },
   ]);

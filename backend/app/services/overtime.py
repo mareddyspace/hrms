@@ -95,7 +95,7 @@ def _span_minutes(start: str, end: str) -> int:
 def day_check(db: Session, emp: Employee, day: date) -> dict[str, Any]:
     """What the request form shows when a date is picked: attendance, the shift, the day type, overtime already asked
     for that date, and warnings. eligible mirrors the date checks create() makes."""
-    from app.models import Holiday, LeaveRequest
+    from app.models import LeaveRequest
     from app.services.attendance import shift_for
 
     today = today_for(emp)
@@ -113,8 +113,9 @@ def day_check(db: Session, emp: Employee, day: date) -> dict[str, Any]:
             shift_minutes = _span_minutes(start, end) - int(st.break_minutes or 0)
     except Exception:  # noqa: BLE001 (roster tables missing on an old database)
         pass
-    holiday = db.scalar(select(Holiday.name).where(Holiday.country_code == emp.country_code, Holiday.date == day,
-                                                   Holiday.active.is_(True)).limit(1))
+    from app.services.holiday_rules import rows_for_employee
+
+    holiday = next((h.name for h in rows_for_employee(db, emp, day, day)), None)  # the person's own days off
     on_leave = db.scalar(select(LeaveRequest.id).where(LeaveRequest.employee_id == emp.id, LeaveRequest.status == "approved",
                                                        LeaveRequest.from_date <= day, LeaveRequest.to_date >= day).limit(1))
     day_type = "holiday" if holiday else "leave" if on_leave else "weekend" if day.weekday() >= 5 else "working"

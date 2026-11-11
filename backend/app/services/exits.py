@@ -249,6 +249,32 @@ def _exit_finished(db: Session, instance: ApprovalInstance) -> None:
         notify(db, recipient_id=emp.manager_id, title=f"{what} approved for {emp.full_name}", body=body, href="/team/exits")
     if case.raised_by not in (emp.id, emp.manager_id):
         notify(db, recipient_id=case.raised_by, title=f"{what} approved for {emp.full_name}", body=body, href="/people/exits")
+    _tell_clearance_owners(db, emp, case, what, lwd)
+
+
+def _tell_clearance_owners(db: Session, emp: Employee, case: ExitCase, what: str, lwd: date) -> None:
+    """IT (assets and access), finance (dues) and HR (settlement) each get their part of the clearance list."""
+    from app.models import Asset
+    from app.services.experience import it_ids
+
+    tags = [f"{a.name} ({a.tag})" for a in db.scalars(select(Asset).where(Asset.employee_id == emp.id, Asset.status == "assigned"))]
+    told = {emp.id, emp.manager_id, case.raised_by}
+    it_body = (f"Collect {', '.join(tags)} and remove access by {lwd.isoformat()}." if tags
+               else f"Remove email, VPN and app access by {lwd.isoformat()}; no assets are on record.")
+    for rid in it_ids(db, emp.country_code):
+        if rid not in told:
+            notify(db, recipient_id=rid, title=f"Exit clearance · {emp.full_name}", body=it_body, href="/people/exits")
+            told.add(rid)
+    for rid in engine.resolve_group(db, "finance", emp):
+        if rid not in told:
+            notify(db, recipient_id=rid, title=f"Exit clearance · {emp.full_name}",
+                   body=f"Settle advances, expenses and loans before {lwd.isoformat()}.", href="/people/exits")
+            told.add(rid)
+    for rid in engine.resolve_group(db, "hr", emp):
+        if rid not in told:
+            notify(db, recipient_id=rid, title=f"{what} approved for {emp.full_name}",
+                   body=f"Last working day {lwd.isoformat()}. Plan the exit interview and final settlement.", href="/people/exits")
+            told.add(rid)
 
 
 def complete_case(db: Session, case: ExitCase, actor_id: str | None = None) -> None:
@@ -275,6 +301,7 @@ def complete_case(db: Session, case: ExitCase, actor_id: str | None = None) -> N
         _close_and_add_assignment(db, emp, (emp.last_working_day or today_for(emp)) + timedelta(days=1))
     except Exception:  # noqa: BLE001  (history row is best effort)
         pass
+    _revoke_software(db, emp, actor_id)
     account = db.scalar(select(Account).where(Account.employee_id == emp.id))
     if account is not None and account.active:
         account.active = False
@@ -294,6 +321,20 @@ def complete_case(db: Session, case: ExitCase, actor_id: str | None = None) -> N
                    body=f"Still open: {open_items}.", href="/people/exits")
     record_audit(db, actor_id=actor_id, action="employee_updated", entity="employee", entity_id=emp.id, subject_id=emp.id,
                  before=emp_before, after={"employment_status": "Exited", "exit_case_id": case.id})
+
+
+def _revoke_software(db: Session, emp: Employee, actor_id: str | None) -> int:
+    """A leaver's active software licences end with the exit (seats go back to the pool)."""
+    from app.models import SoftwareRequest
+
+    today = today_for(emp)
+    count = 0
+    for row in db.scalars(select(SoftwareRequest).where(SoftwareRequest.employee_id == emp.id, SoftwareRequest.status == "Active")):
+        row.status, row.ended_on, row.ended_by = "Revoked", today, "Exit completed"
+        record_audit(db, actor_id=actor_id, action="software_revoked", entity="software_requests", entity_id=row.id,
+                     subject_id=emp.id, after={"status": "Revoked", "reason": "exit completed"})
+        count += 1
+    return count
 
 
 def complete_due_exits(db: Session, today: date | None = None) -> list[str]:

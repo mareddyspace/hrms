@@ -222,7 +222,7 @@ def test_document_verification_categories_and_expiry_reminders(client, pairs, hr
     who = account_for(emp_id)
     rules = client.get(f"{API}/documents/rules", headers=who).json()
     labels = {c["name"]: c["label"] for c in rules["category_config"]}
-    assert labels["Identity"] == "Identity proofs" and labels["Payroll"] == "Salary documents"
+    assert labels["Identity"] == "Identity proofs" and labels["Payroll"] == "Payroll & tax"
     up = client.post(f"{API}/documents", headers=who | {"Content-Type": "image/png"}, content=PNG,
                      params={"category": "Education", "title": "Degree", "filename": "degree.png", "description": "B.Tech"})
     assert up.status_code == 201, up.text

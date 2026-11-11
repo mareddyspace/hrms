@@ -22,7 +22,12 @@ import { API_ENABLED, apiRun, createApiMirror, errorText, subscribeAll } from ".
 import { getPerson } from "../../data/peopleLocal.ts";
 import { nameOf } from "../../api/syncShared.ts";
 import {
+  apiAddAvailability,
   apiAssignShift,
+  apiBulkAssign,
+  apiCopyWeek,
+  apiRemoveAvailability,
+  apiUnpublishWeek,
   apiCancelSwap,
   apiDecideSwap,
   apiGrantCompOff,
@@ -43,6 +48,10 @@ const ROUTE = "/workforce/shifts";
 
 export const MIN_REST_HOURS = 11;
 export const MAX_DAYS_PER_WEEK = 6;
+/** Paid hours (shift length less its break) a person may be rostered in one week (same as the API). */
+export const MAX_WEEK_HOURS = 48;
+/** Roster colours a shift type can use (same list as the API's SHIFT_COLORS). */
+export const SHIFT_COLORS = ["amber", "green", "blue", "violet", "teal", "rose", "slate"] as const;
 export const COMP_OFF_VALID_DAYS = 90;
 
 export interface ShiftDef {
@@ -57,6 +66,29 @@ export interface ShiftDef {
   breakMinutes?: number;
   /** Where the shift is worked. */
   location?: string;
+  /** Roster colour (one of SHIFT_COLORS); a stable colour is picked when not set. */
+  color?: string;
+  /** Country the shift is for (2-letter code); any country when not set. */
+  countryCode?: string;
+}
+
+/** An employee's availability: unavailable on a date or every weekday, or a preferred shift. Warns, never blocks. */
+export interface Availability {
+  id: string;
+  personId: string;
+  kind: "unavailable" | "preferred";
+  date?: string;
+  /** 0 = Sunday … 6 = Saturday */
+  weekday?: number;
+  shiftId?: string;
+  note?: string;
+}
+
+/** Something the manager should know about a rostered day (not a rule break). */
+export interface RosterWarning {
+  personId: string;
+  date: string;
+  message: string;
 }
 
 export interface ShiftAssignment {
@@ -124,6 +156,9 @@ export interface ShiftState {
   coverage: CoverageRule[];
   /** Coverage alerts already sent (manager|date|shift|leave), so each goes out once. */
   coverageAlerts: string[];
+  availability: Availability[];
+  /** Backend mode: published shifts on my team roster(s) with names. */
+  teamCalendar?: (ShiftAssignment & { name: string })[];
 }
 
 /** Calendar facts the rules need from the portal store. */
@@ -234,6 +269,7 @@ function defaults(): ShiftState {
     ],
     coverage: [],
     coverageAlerts: [],
+    availability: [{ id: "av-seed-priya-fri", personId: "emp-priya", kind: "unavailable", weekday: 5, note: "Evening class" }],
   };
 }
 
@@ -266,7 +302,7 @@ const mirror = createApiMirror<ApiShiftData | null>(
 let composed: { api: ApiShiftData | null; local: ShiftState; out: ShiftState } | null = null;
 
 function composeState(api: ApiShiftData | null, local: ShiftState): ShiftState {
-  const empty = { shifts: [], assignments: [], weeks: [], swaps: [], coverage: [] };
+  const empty = { shifts: [], assignments: [], weeks: [], swaps: [], coverage: [], availability: [], teamCalendar: [] };
   if (!api) return { ...empty, credits: local.credits, coverageAlerts: local.coverageAlerts, apiRosters: {} };
   const rows = new Map<string, ShiftAssignment>();
   const weeks = new Map<string, RosterWeek>();
@@ -290,6 +326,8 @@ function composeState(api: ApiShiftData | null, local: ShiftState): ShiftState {
     credits: api.compOff ? [...api.compOff.credits, ...api.compOff.teamCredits] : local.credits,
     coverageAlerts: local.coverageAlerts,
     apiRosters: api.rosters,
+    availability: api.availability,
+    teamCalendar: api.teamCalendar,
   };
 }
 
@@ -414,6 +452,11 @@ function ruleError(
     return `One shift per day: ${who} is already on ${shiftById(sameDay.shiftId, state)?.name ?? "a shift"} on ${fmt(date)}.`;
   }
 
+  const country = getPerson(personId)?.countryCode;
+  if (shift.countryCode && country && country.toUpperCase() !== shift.countryCode.toUpperCase()) {
+    return `${shift.name} is for people working in ${shift.countryCode.toUpperCase()}.`;
+  }
+
   const leave = leaveOn(personId, date, ctx.leaves);
   if (leave) return `Leave rule: ${who} is on approved ${LEAVE_NAMES[leave.code] ?? leave.code} leave on ${fmt(date)}.`;
 
@@ -435,12 +478,77 @@ function ruleError(
   }
 
   const monday = weekStartOf(date);
-  const daysThisWeek = new Set(others.filter((a) => weekStartOf(a.date) === monday).map((a) => a.date));
+  const sameWeek = others.filter((a) => weekStartOf(a.date) === monday);
+  const daysThisWeek = new Set(sameWeek.map((a) => a.date));
   daysThisWeek.add(date);
   if (daysThisWeek.size > MAX_DAYS_PER_WEEK) {
     return `Weekly limit: ${who} would work ${daysThisWeek.size} days in the week of ${fmt(monday)} (max ${MAX_DAYS_PER_WEEK}).`;
   }
+  const weekHours = sameWeek.reduce((sum, a) => sum + paidHours(shiftById(a.shiftId, state)), paidHours(shift));
+  if (weekHours > MAX_WEEK_HOURS) {
+    return `Weekly hours: ${who} would have ${Math.round(weekHours * 100) / 100} paid hours in the week of ${fmt(monday)} (max ${MAX_WEEK_HOURS}).`;
+  }
   return null;
+}
+
+/** Paid hours of a shift: its length (overnight runs into the next day) less the unpaid break. */
+export function paidHours(shift: ShiftDef | undefined): number {
+  if (!shift) return 0;
+  const span = (toMinutes(shift.end) - toMinutes(shift.start) + 1440) % 1440 || 1440;
+  return Math.max(0, Math.round(((span - (shift.breakMinutes ?? 60)) / 60) * 100) / 100);
+}
+
+export function isOvernight(shift: ShiftDef | undefined): boolean {
+  return !!shift && toMinutes(shift.end) <= toMinutes(shift.start);
+}
+
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+export type WeeklyOffCheck = (personId: string, date: string) => boolean;
+
+/** Availability entries that apply on this date (that date, or that weekday every week). */
+export function availabilityOn(personId: string, date: string, state: ShiftState = getShiftState()): Availability[] {
+  const weekday = parseISODate(date).getDay();
+  return (state.availability ?? []).filter((a) => a.personId === personId && (a.date === date || (a.date === undefined && a.weekday === weekday)));
+}
+
+/** Reasons to think twice about this shift on this day (same as the API's assign_warnings): unavailable, prefers
+ * another shift, weekly off, public holiday. */
+export function assignWarnings(state: ShiftState, ctx: RosterContext, personId: string, date: string, shiftId: string, weeklyOff?: WeeklyOffCheck): string[] {
+  const who = personName(personId);
+  const out: string[] = [];
+  for (const a of availabilityOn(personId, date, state)) {
+    const when = a.date ? "that day" : `every ${DAY_NAMES[a.weekday ?? 0]}`;
+    if (a.kind === "unavailable") out.push(`${who} marked themselves unavailable ${when}${a.note ? ` (${a.note})` : ""}.`);
+    else if (a.shiftId && a.shiftId !== shiftId) out.push(`${who} prefers ${shiftById(a.shiftId, state)?.name ?? "another shift"} ${when}.`);
+  }
+  if (weeklyOff?.(personId, date)) out.push(`${DAY_NAMES[parseISODate(date).getDay()]} is ${who}'s weekly off.`);
+  const holiday = holidayOn(date, holidaysForPerson(ctx.holidays, personId));
+  if (holiday) out.push(`${fmt(date)} is a public holiday for ${who} (${holiday.name}).`);
+  return out;
+}
+
+/** Warnings for every upcoming rostered day of a manager's rows in these dates (backend mode: as the API sent them). */
+export function rosterWarnings(state: ShiftState, ctx: RosterContext, managerId: string, dates: string[], weeklyOff?: WeeklyOffCheck): RosterWarning[] {
+  const today = todayISO();
+  if (API_ENABLED) {
+    const set = new Set(dates);
+    const seen = new Set<string>();
+    const out: RosterWarning[] = [];
+    for (const [key, r] of Object.entries(state.apiRosters ?? {})) {
+      if (!key.startsWith(`${managerId}|`)) continue;
+      for (const w of r.warnings) {
+        const id = `${w.personId}|${w.date}|${w.message}`;
+        if (set.has(w.date) && !seen.has(id)) {
+          seen.add(id);
+          out.push(w);
+        }
+      }
+    }
+    return out;
+  }
+  return state.assignments
+    .filter((a) => a.managerId === managerId && dates.includes(a.date) && a.date > today)
+    .flatMap((a) => assignWarnings(state, ctx, a.personId, a.date, a.shiftId, weeklyOff).map((message) => ({ personId: a.personId, date: a.date, message })));
 }
 
 function othersFor(state: ShiftState, personId: string, excludeIds: string[]): ShiftAssignment[] {
@@ -453,7 +561,7 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export function saveShift(
   actor: WorkforceActor,
-  input: { id?: string; name: string; start: string; end: string; weekendOnly: boolean; breakMinutes?: number; location?: string },
+  input: { id?: string; name: string; start: string; end: string; weekendOnly: boolean; breakMinutes?: number; location?: string; color?: string; countryCode?: string },
 ): WorkforceResult | Promise<WorkforceResult> {
   if (!isHrRole(actor.role)) return "Only HR can manage shift types.";
   const name = input.name.trim();
@@ -467,12 +575,16 @@ export function saveShift(
   if (!Number.isFinite(breakMinutes) || breakMinutes < 0 || breakMinutes > 240) return "The break must be 0 to 240 minutes.";
   if (breakMinutes >= length) return "The break can't be as long as the shift.";
   const location = (input.location ?? "").trim().slice(0, 100);
+  const color = input.color && (SHIFT_COLORS as readonly string[]).includes(input.color) ? input.color : undefined;
+  if (input.color && !color) return "Pick one of the roster colours.";
+  const countryCode = (input.countryCode ?? "").trim().toUpperCase() || undefined;
+  if (countryCode && !/^[A-Z]{2}$/.test(countryCode)) return "Country must be a 2-letter code.";
   if (API_ENABLED) {
     const s = getShiftState();
     if (s.shifts.some((x) => x.id !== input.id && x.name.toLowerCase() === name.toLowerCase())) return `A shift called "${name}" already exists.`;
     const existing = input.id ? s.shifts.find((x) => x.id === input.id) : undefined;
     if (input.id && !existing) return "That shift no longer exists.";
-    return apiRun(() => apiSaveShiftType({ ...input, name, breakMinutes, location, active: existing?.active ?? true }), mirror);
+    return apiRun(() => apiSaveShiftType({ ...input, name, breakMinutes, location, color, countryCode, active: existing?.active ?? true }), mirror);
   }
   return store.mutate((s) => {
     if (s.shifts.some((x) => x.id !== input.id && x.name.toLowerCase() === name.toLowerCase())) return `A shift called "${name}" already exists.`;
@@ -481,12 +593,15 @@ export function saveShift(
       if (!existing) return "That shift no longer exists.";
       const today = todayISO();
       const upcoming = s.assignments.filter((a) => a.shiftId === input.id && a.date >= today);
-      if (upcoming.length && (existing.start !== input.start || existing.end !== input.end || existing.weekendOnly !== input.weekendOnly)) {
+      if (upcoming.length && (existing.start !== input.start || existing.end !== input.end || existing.weekendOnly !== input.weekendOnly || (existing.breakMinutes ?? 60) !== breakMinutes)) {
         return `${existing.name} is on ${upcoming.length} upcoming roster ${upcoming.length === 1 ? "day" : "days"} — clear those before changing its hours.`;
       }
-      Object.assign(existing, { name, start: input.start, end: input.end, weekendOnly: input.weekendOnly, breakMinutes, location });
+      if (upcoming.length && countryCode && countryCode !== (existing.countryCode ?? "")) {
+        return `${existing.name} is on ${upcoming.length} upcoming roster ${upcoming.length === 1 ? "day" : "days"} — clear those before changing its country.`;
+      }
+      Object.assign(existing, { name, start: input.start, end: input.end, weekendOnly: input.weekendOnly, breakMinutes, location, color, countryCode });
     } else {
-      s.shifts.push({ id: newId("sh"), name, start: input.start, end: input.end, weekendOnly: input.weekendOnly, active: true, breakMinutes, location });
+      s.shifts.push({ id: newId("sh"), name, start: input.start, end: input.end, weekendOnly: input.weekendOnly, active: true, breakMinutes, location, color, countryCode });
     }
     return null;
   });
@@ -616,6 +731,178 @@ export function publishWeek(actor: WorkforceActor, ctx: RosterContext, weekStart
     }
     return null;
   });
+}
+
+export interface BulkResult {
+  applied: number;
+  skipped: RosterWarning[];
+  warnings: RosterWarning[];
+}
+
+async function apiBulk(run: () => Promise<BulkResult>): Promise<BulkResult | string> {
+  let out: BulkResult | null = null;
+  const error = await apiRun(async () => {
+    out = await run();
+  }, mirror);
+  return error ?? out ?? "That didn't work. Try again.";
+}
+
+/** One shift (or clear, shiftId null) for several people on several days. Each cell is checked on its own; broken
+ * rules are skipped with their reason. */
+export async function bulkAssign(
+  actor: WorkforceActor,
+  ctx: RosterContext,
+  personIds: string[],
+  dates: string[],
+  shiftId: string | null,
+  weeklyOff?: WeeklyOffCheck,
+): Promise<BulkResult | string> {
+  if (!personIds.length) return "Pick at least one person.";
+  if (!dates.length) return "Pick at least one day.";
+  if (API_ENABLED) return apiBulk(() => apiBulkAssign(personIds, dates, shiftId));
+  const result: BulkResult = { applied: 0, skipped: [], warnings: [] };
+  for (const personId of personIds) {
+    for (const date of [...dates].sort()) {
+      const error = await assignShift(actor, ctx, personId, date, shiftId);
+      if (error) result.skipped.push({ personId, date, message: error });
+      else {
+        result.applied += 1;
+        if (shiftId) for (const message of assignWarnings(getShiftState(), ctx, personId, date, shiftId, weeklyOff)) result.warnings.push({ personId, date, message });
+      }
+    }
+  }
+  return result;
+}
+
+/** Copy a week's pattern into `weeks` weeks starting at toWeek (repeat pattern). Only empty upcoming days are filled. */
+export async function copyWeek(
+  actor: WorkforceActor,
+  ctx: RosterContext,
+  fromWeek: string,
+  toWeek: string,
+  weeks = 1,
+  weeklyOff?: WeeklyOffCheck,
+): Promise<BulkResult | string> {
+  if (weekStartOf(fromWeek) !== fromWeek || weekStartOf(toWeek) !== toWeek) return "Pick a week starting on Monday.";
+  if (fromWeek === toWeek) return "Pick a different week to copy into.";
+  if (weeks < 1 || weeks > 8) return "Repeat for 1 to 8 weeks.";
+  if (API_ENABLED) return apiBulk(() => apiCopyWeek(fromWeek, toWeek, weeks));
+  const days = weekDates(fromWeek);
+  const source = getShiftState().assignments.filter((a) => a.managerId === actor.id && a.personId !== actor.id && days.includes(a.date));
+  if (!source.length) return "That week has no shifts to copy.";
+  const result: BulkResult = { applied: 0, skipped: [], warnings: [] };
+  const offset = daysBetween(fromWeek, toWeek);
+  const today = todayISO();
+  for (let n = 0; n < weeks; n += 1) {
+    for (const row of [...source].sort((a, b) => a.date.localeCompare(b.date) || a.personId.localeCompare(b.personId))) {
+      const date = addDaysISO(row.date, offset + 7 * n);
+      if (date <= today || getShiftState().assignments.some((a) => a.personId === row.personId && a.date === date)) continue;
+      const error = await assignShift(actor, ctx, row.personId, date, row.shiftId);
+      if (error) result.skipped.push({ personId: row.personId, date, message: error });
+      else {
+        result.applied += 1;
+        for (const message of assignWarnings(getShiftState(), ctx, row.personId, date, row.shiftId, weeklyOff)) result.warnings.push({ personId: row.personId, date, message });
+      }
+    }
+  }
+  return result;
+}
+
+/** Take an upcoming published week back to draft with a reason; open swaps that week are cancelled, the team told. */
+export function unpublishWeek(actor: WorkforceActor, weekStart: string, reason: string): WorkforceResult | Promise<WorkforceResult> {
+  const why = reason.trim();
+  if (why.length < 3) return "Add a reason for the team.";
+  if (weekStartOf(weekStart) !== weekStart) return "Pick a week starting on Monday.";
+  if (weekStart <= todayISO()) return "This week has started. Change single days instead.";
+  if (API_ENABLED) return apiChange(async () => mergeRoster(await apiUnpublishWeek(weekStart, why, shiftNames)));
+  return store.mutate((s) => {
+    const week = rosterWeek(actor.id, weekStart, s);
+    if (week?.status !== "published") return "This week isn't published.";
+    const dates = weekDates(weekStart);
+    const people = new Set(s.assignments.filter((a) => a.managerId === actor.id && dates.includes(a.date)).map((a) => a.personId));
+    for (const swap of s.swaps) {
+      if (dates.includes(swap.date) && people.has(swap.requesterId) && (swap.status === "awaiting_teammate" || swap.status === "awaiting_manager")) {
+        Object.assign(swap, { status: "cancelled", decidedByName: actor.fullName, decidedOn: todayISO(), decisionNote: "Roster taken back to draft." });
+      }
+    }
+    s.weeks = [...s.weeks.filter((w) => !(w.managerId === actor.id && w.weekStart === weekStart)), { managerId: actor.id, weekStart, status: "draft" }];
+    for (const personId of people) notify(personId, "Roster being changed", `Your shifts for the week of ${fmt(weekStart)} were taken back to draft: ${why}`, ROUTE);
+    audit(actor, "Roster week", `${actor.id}:${weekStart}`, "Updated", [
+      { field: "Status", before: "Published", after: "Draft" },
+      { field: "Reason", before: "", after: why },
+    ]);
+    return null;
+  });
+}
+
+// ---------- availability ----------
+
+export const MAX_AVAILABILITY = 60;
+
+export function addAvailability(
+  actor: WorkforceActor,
+  input: { kind: "unavailable" | "preferred"; date?: string; weekday?: number; shiftId?: string; note?: string },
+): WorkforceResult | Promise<WorkforceResult> {
+  const date = input.date || undefined;
+  const weekday = input.weekday !== undefined && !Number.isNaN(input.weekday) ? input.weekday : undefined;
+  if ((date === undefined) === (weekday === undefined)) return "Pick a date or a weekday.";
+  if (date !== undefined) {
+    if (!isISODate(date)) return "Pick a valid date.";
+    if (date <= todayISO()) return "Pick an upcoming date.";
+    if (date > addDaysISO(todayISO(), 365)) return "Pick a date within the next year.";
+  }
+  const note = (input.note ?? "").trim().slice(0, 300);
+  if (input.kind === "preferred") {
+    const shift = input.shiftId ? shiftById(input.shiftId) : undefined;
+    if (!shift || !shift.active) return "Pick the shift you prefer.";
+  }
+  const mine = (getShiftState().availability ?? []).filter((a) => a.personId === actor.id);
+  if (mine.length >= MAX_AVAILABILITY) return `You can keep up to ${MAX_AVAILABILITY} entries. Remove old ones first.`;
+  if (mine.some((a) => (date !== undefined ? a.date === date : a.date === undefined && a.weekday === weekday))) return "You already have an entry for that day.";
+  const clean = {
+    kind: input.kind,
+    ...(date !== undefined ? { date } : { weekday }),
+    ...(input.kind === "preferred" && input.shiftId ? { shiftId: input.shiftId } : {}),
+    ...(note ? { note } : {}),
+  };
+  if (API_ENABLED) return apiRun(() => apiAddAvailability(clean), mirror);
+  return store.mutate((s) => {
+    s.availability = [...(s.availability ?? []), { id: newId("av"), personId: actor.id, ...clean }];
+    if (input.kind === "unavailable") {
+      const today = todayISO();
+      const clash = s.assignments.filter(
+        (a) => a.personId === actor.id && a.date > today && (date !== undefined ? a.date === date : parseISODate(a.date).getDay() === weekday),
+      );
+      const when = date !== undefined ? `on ${fmt(date)}` : `every ${DAY_NAMES[weekday ?? 0]}`;
+      for (const managerId of new Set(clash.map((a) => a.managerId))) {
+        notify(managerId, "Availability change", `${actor.fullName} is unavailable ${when} but is on your roster then.`, ROUTE);
+      }
+    }
+    return null;
+  });
+}
+
+export function removeAvailability(actor: WorkforceActor, id: string): WorkforceResult | Promise<WorkforceResult> {
+  const entry = (getShiftState().availability ?? []).find((a) => a.id === id);
+  if (!entry || entry.personId !== actor.id) return "That entry wasn't found.";
+  if (API_ENABLED) return apiRun(() => apiRemoveAvailability(id), mirror);
+  return store.mutate((s) => {
+    s.availability = (s.availability ?? []).filter((a) => a.id !== id);
+    return null;
+  });
+}
+
+/** Published shifts on my team roster(s) in these dates, with names (backend mode: as the API sent them). */
+export function teamCalendarRows(actor: WorkforceActor, dates: string[], state: ShiftState = getShiftState()): (ShiftAssignment & { name: string })[] {
+  const set = new Set(dates);
+  if (API_ENABLED) return (state.teamCalendar ?? []).filter((r) => set.has(r.date));
+  const managers = new Set<string>([actor.id]);
+  const mgr = getPerson(actor.id)?.managerId;
+  if (mgr) managers.add(mgr);
+  for (const a of state.assignments) if (a.personId === actor.id) managers.add(a.managerId);
+  return state.assignments
+    .filter((a) => set.has(a.date) && managers.has(a.managerId) && isPublished(state, a))
+    .map((a) => ({ ...a, name: personName(a.personId) }));
 }
 
 /** Published shifts for one person, oldest first. */

@@ -222,6 +222,14 @@ def run_carry_forward(db: Session, to_year: int | None = None, today: date | Non
                 LeaveRequest.status == "approved", LeaveRequest.from_date >= date(from_year, 1, 1),
                 LeaveRequest.from_date <= year_end).group_by(LeaveRequest.employee_id, LeaveRequest.leave_code))
     }
+    # Approved encashments are days taken out of the balance too, so they can't be carried as well.
+    from app.models import EncashmentRequest
+
+    for emp_id, code, days in db.execute(
+            select(EncashmentRequest.employee_id, EncashmentRequest.leave_code, func.sum(EncashmentRequest.days)).where(
+                EncashmentRequest.status == "Approved", EncashmentRequest.year == from_year)
+            .group_by(EncashmentRequest.employee_id, EncashmentRequest.leave_code)):
+        used[(emp_id, code)] = used.get((emp_id, code), 0.0) + float(days or 0)
     done = {(e, c) for e, c in db.execute(select(LeaveCarryForward.employee_id, LeaveCarryForward.leave_code).where(
         LeaveCarryForward.to_year == to_year))}
     created = skipped = 0

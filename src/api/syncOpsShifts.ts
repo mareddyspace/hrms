@@ -4,12 +4,14 @@
  */
 import { addDaysISO, todayISO } from "../model.ts";
 import { ApiError, api, apiSessionMe } from "./client.ts";
-import { apiPut } from "./syncShared.ts";
+import { apiDelete, apiPut } from "./syncShared.ts";
 import type {
+  Availability,
   CompOffCredit,
   CoverageRule,
   CoverageSlot,
   CoverageStatus,
+  RosterWarning,
   RosterWeek,
   ShiftAssignment,
   ShiftDef,
@@ -28,6 +30,30 @@ interface ShiftTypeOut {
   active: boolean;
   break_minutes?: number;
   location?: string | null;
+  color?: string | null;
+  country_code?: string | null;
+}
+
+interface AvailabilityOut {
+  id: string;
+  employee_id: string;
+  kind: string;
+  work_date: string | null;
+  weekday: number | null;
+  shift_id: string | null;
+  note: string | null;
+}
+
+interface WarningOut {
+  employee_id: string;
+  date: string;
+  message: string;
+}
+
+interface BulkOut {
+  applied: number;
+  skipped: WarningOut[];
+  warnings: WarningOut[];
 }
 
 interface RosterShiftOut {
@@ -57,6 +83,7 @@ interface RosterWeekOut {
   shifts: RosterShiftOut[];
   coverage: CoverageSlotOut[];
   gaps: CoverageSlotOut[];
+  warnings?: WarningOut[];
 }
 
 interface ShiftSwapOut {
@@ -148,6 +175,8 @@ export interface ApiRosterWeek {
   rows: ShiftAssignment[];
   coverage: CoverageSlot[];
   gaps: CoverageSlot[];
+  /** Availability / weekly-off / holiday warnings for rostered days (not rule breaks). */
+  warnings: RosterWarning[];
 }
 
 /** What the shift store keeps from the API. */
@@ -161,6 +190,10 @@ export interface ApiShiftData {
   swaps: ShiftSwap[];
   coverage: CoverageRule[];
   compOff: ApiCompOff | null;
+  /** My availability entries and (managers) my team's. */
+  availability: Availability[];
+  /** Published shifts on my team roster(s), last week to five weeks ahead. */
+  teamCalendar: (ShiftAssignment & { name: string })[];
 }
 
 export const rosterKey = (managerId: string, weekStart: string) => `${managerId}|${weekStart}`;
@@ -174,6 +207,20 @@ const toShift = (s: ShiftTypeOut): ShiftDef => ({
   active: s.active,
   breakMinutes: s.break_minutes ?? 60,
   location: s.location ?? "",
+  color: s.color ?? undefined,
+  countryCode: s.country_code ?? undefined,
+});
+
+const toWarning = (w: WarningOut): RosterWarning => ({ personId: w.employee_id, date: w.date, message: w.message });
+
+const toAvailability = (a: AvailabilityOut): Availability => ({
+  id: a.id,
+  personId: a.employee_id,
+  kind: a.kind === "preferred" ? "preferred" : "unavailable",
+  ...(a.work_date ? { date: a.work_date } : {}),
+  ...(a.weekday !== null && a.weekday !== undefined ? { weekday: a.weekday } : {}),
+  ...(a.shift_id ? { shiftId: a.shift_id } : {}),
+  ...(a.note ? { note: a.note } : {}),
 });
 
 const toRow = (r: RosterShiftOut): ShiftAssignment => ({
@@ -204,6 +251,7 @@ function toRoster(w: RosterWeekOut, names: (id: string) => string): ApiRosterWee
     rows: w.shifts.map(toRow),
     coverage: w.coverage.map(toSlot),
     gaps: w.gaps.map(toSlot),
+    warnings: (w.warnings ?? []).map(toWarning),
   };
 }
 
@@ -242,7 +290,7 @@ export async function loadRosterWeek(managerId: string, weekStart: string, names
 export async function loadApiShifts(accountId: string, names: (id: string) => string, extraWeeks: string[] = []): Promise<ApiShiftData> {
   const me = (await apiSessionMe()).employee_id ?? accountId;
   const weeks = [...new Set([...defaultWeeks(), ...extraWeeks])];
-  const [types, mine, swapsMine, swapsToDecide, coverage, rosters, compOff] = await Promise.all([
+  const [types, mine, swapsMine, swapsToDecide, coverage, rosters, compOff, availMine, availTeam, calendar] = await Promise.all([
     api.get<ShiftTypeOut[]>("/shifts/types"),
     api.get<RosterShiftOut[]>("/shifts/mine", { from_date: addDaysISO(todayISO(), -30) }),
     api.get<ShiftSwapOut[]>("/shifts/swaps", { view: "mine" }),
@@ -251,6 +299,14 @@ export async function loadApiShifts(accountId: string, names: (id: string) => st
     Promise.all(weeks.map((w) => loadRosterWeek(me, w, names).catch(() => null))),
     // A server without comp-off credits (404) still shows rosters and swaps.
     api.get<CompOffOut>("/shifts/comp-off").catch(() => null),
+    api.get<AvailabilityOut[]>("/shifts/availability").catch(() => [] as AvailabilityOut[]),
+    api.get<AvailabilityOut[]>("/shifts/availability", { employee_id: "team" }).catch(() => [] as AvailabilityOut[]),
+    api
+      .get<{ employee_id: string; full_name: string; date: string; shift_id: string }[]>("/shifts/team-calendar", {
+        from_date: weeks[0],
+        to_date: addDaysISO(weeks[weeks.length - 1], 6),
+      })
+      .catch(() => []),
   ]);
   const swaps = new Map<string, ShiftSwap>();
   for (const s of [...swapsMine, ...swapsToDecide]) swaps.set(s.id, toSwap(s, names));
@@ -264,6 +320,8 @@ export async function loadApiShifts(accountId: string, names: (id: string) => st
     swaps: [...swaps.values()].sort((a, b) => b.requestedOn.localeCompare(a.requestedOn)),
     coverage: coverage.map((c) => ({ scope: c.scope, shiftId: c.shift_id, weekday: c.weekday, min: c.minimum })),
     compOff: compOff ? toCompOff(compOff) : null,
+    availability: [...new Map([...availMine, ...availTeam].map((a) => [a.id, toAvailability(a)])).values()],
+    teamCalendar: calendar.map((r) => ({ id: `tc-${r.employee_id}-${r.date}`, personId: r.employee_id, date: r.date, shiftId: r.shift_id, managerId: "", name: r.full_name })),
   };
 }
 
@@ -280,7 +338,18 @@ async function withGapMessage<T>(run: () => Promise<T>, fallback: string): Promi
   }
 }
 
-export const apiSaveShiftType = (input: { id?: string; name: string; start: string; end: string; weekendOnly: boolean; active: boolean; breakMinutes?: number; location?: string }) =>
+export const apiSaveShiftType = (input: {
+  id?: string;
+  name: string;
+  start: string;
+  end: string;
+  weekendOnly: boolean;
+  active: boolean;
+  breakMinutes?: number;
+  location?: string;
+  color?: string;
+  countryCode?: string;
+}) =>
   api.post<ShiftTypeOut>("/shifts/types", {
     id: input.id ?? null,
     name: input.name.trim(),
@@ -290,7 +359,41 @@ export const apiSaveShiftType = (input: { id?: string; name: string; start: stri
     active: input.active,
     break_minutes: input.breakMinutes ?? 60,
     location: input.location?.trim() || null,
+    color: input.color || null,
+    country_code: input.countryCode?.trim().toUpperCase() || null,
   });
+
+export interface ApiBulkResult {
+  applied: number;
+  skipped: RosterWarning[];
+  warnings: RosterWarning[];
+}
+
+const toBulk = (o: BulkOut): ApiBulkResult => ({ applied: o.applied, skipped: o.skipped.map(toWarning), warnings: o.warnings.map(toWarning) });
+
+/** One shift (or clear, shiftId null) for several people on several days; broken rules come back per cell. */
+export async function apiBulkAssign(personIds: string[], dates: string[], shiftId: string | null): Promise<ApiBulkResult> {
+  return toBulk(await api.post<BulkOut>("/shifts/roster/bulk", { employee_ids: personIds, dates, shift_id: shiftId }));
+}
+
+/** Copy a week's pattern into the next `weeks` weeks from toWeek (only empty upcoming days are filled). */
+export async function apiCopyWeek(fromWeek: string, toWeek: string, weeks: number): Promise<ApiBulkResult> {
+  return toBulk(await api.post<BulkOut>("/shifts/roster/copy-week", { from_week: fromWeek, to_week: toWeek, weeks }));
+}
+
+export async function apiUnpublishWeek(weekStart: string, reason: string, names: (id: string) => string) {
+  return toRoster(await api.post<RosterWeekOut>("/shifts/roster/unpublish", { week_start: weekStart, reason: reason.trim() }), names);
+}
+
+export const apiAddAvailability = (input: { kind: "unavailable" | "preferred"; date?: string; weekday?: number; shiftId?: string; note?: string }) =>
+  api.post("/shifts/availability", {
+    kind: input.kind,
+    work_date: input.date ?? null,
+    weekday: input.weekday ?? null,
+    shift_id: input.shiftId ?? null,
+    note: input.note?.trim() || null,
+  });
+export const apiRemoveAvailability = (id: string) => apiDelete(`/shifts/availability/${enc(id)}`);
 
 export async function apiAssignShift(personId: string, date: string, shiftId: string | null, names: (id: string) => string) {
   return toRoster(await api.post<RosterWeekOut>("/shifts/roster/assign", { employee_id: personId, work_date: date, shift_id: shiftId }), names);

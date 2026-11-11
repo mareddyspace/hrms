@@ -28,7 +28,9 @@ import { useTaskAutoMode } from "../data/taskAutoMode.ts";
 import { useTaskAutoReminders } from "../data/taskAutoReminders.ts";
 import { useProjects } from "../data/projectStore.ts";
 import { useProjectContext } from "./projectContext.ts";
-import { Avatar, Drawer, PriorityChip, WorkSwitch, dayGap, dueText } from "./workParts.tsx";
+import { Avatar, Drawer, FileList, PriorityChip, WorkSwitch, dayGap, dueText } from "./workParts.tsx";
+import { API_ENABLED } from "../api/client.ts";
+import { openWorkFile, removeTaskFile, taskFilePath, uploadTaskFile } from "../api/syncTasks.ts";
 
 type View = "mine" | "byme" | "team" | "following" | "insights";
 type StatusSet = "active" | "scheduled" | "done" | "all";
@@ -761,6 +763,8 @@ function TaskDrawer({
     taskAction,
     editTask,
     toggleTaskSubtask,
+    addTaskSubtask,
+    removeTaskSubtask,
     addTaskComment,
     reassignTask,
     addTaskPerson,
@@ -789,6 +793,8 @@ function TaskDrawer({
   const [depends, setDepends] = useState("");
   const [pctDraft, setPctDraft] = useState(Math.max(pct, 10));
   const [comment, setComment] = useState("");
+  const [mentions, setMentions] = useState<string[]>([]);
+  const [newCheck, setNewCheck] = useState("");
   const [addPerson, setAddPerson] = useState("");
   const [edit, setEdit] = useState({ subject: t.subject, notes: t.notes });
 
@@ -817,6 +823,8 @@ function TaskDrawer({
   ].sort((a, b) => b.at.localeCompare(a.at));
 
   const statusName = taskStatusLabel(t);
+  const canChecklist = (isOwn || isCreator || managesOwner) && t.status !== "done";
+  const mentionPool = TASK_TEAM.filter((p) => p.id !== me && !mentions.includes(p.id));
   // Handing a task over or adding people stays within your own team (HR: anyone), as the store and server allow.
   const owners = assignable.filter((x) => x.group === "Your team" || x.group === "Everyone");
 
@@ -1052,6 +1060,22 @@ function TaskDrawer({
           </dd>
         </div>
         <div className="wk-fact">
+          <dt>Start</dt>
+          <dd>
+            {canEdit ? (
+              <input
+                type="date"
+                value={t.startDate ?? ""}
+                max={t.due || undefined}
+                aria-label="Start date"
+                onChange={(e) => result(editTask(t.id, { startDate: e.target.value }), "Start date changed.")}
+              />
+            ) : (
+              <span>{t.startDate ? formatShortDate(t.startDate) : "—"}</span>
+            )}
+          </dd>
+        </div>
+        <div className="wk-fact">
           <dt>Priority</dt>
           <dd>
             {canEdit ? (
@@ -1117,19 +1141,21 @@ function TaskDrawer({
         )}
       </section>
 
-      {(t.subtasks?.length ?? 0) > 0 && (
+      {((t.subtasks?.length ?? 0) > 0 || canChecklist) && (
         <section className="wk-sec">
           <h3>
             Checklist
             <span className="wk-count">
-              {t.subtasks!.filter((s) => s.done).length}/{t.subtasks!.length}
+              {(t.subtasks ?? []).filter((s) => s.done).length}/{t.subtasks?.length ?? 0}
             </span>
           </h3>
-          <div className="wk-bar" aria-hidden="true">
-            <i style={{ width: `${(t.subtasks!.filter((s) => s.done).length / t.subtasks!.length) * 100}%` }} />
-          </div>
+          {(t.subtasks?.length ?? 0) > 0 && (
+            <div className="wk-bar" aria-hidden="true">
+              <i style={{ width: `${((t.subtasks ?? []).filter((s) => s.done).length / (t.subtasks?.length || 1)) * 100}%` }} />
+            </div>
+          )}
           <ul className="wk-check">
-            {t.subtasks!.map((s) => (
+            {(t.subtasks ?? []).map((s) => (
               <li key={s.id} className={s.done ? "done" : undefined}>
                 <input
                   type="checkbox"
@@ -1141,12 +1167,53 @@ function TaskDrawer({
                 <span className="wk-check-title">{s.title}</span>
                 <span />
                 <span />
-                <span />
+                {canChecklist ? (
+                  <button type="button" className="wk-x" aria-label={`Remove ${s.title}`} onClick={() => result(removeTaskSubtask(t.id, s.id), "Checklist item removed.")}>
+                    ×
+                  </button>
+                ) : (
+                  <span />
+                )}
               </li>
             ))}
           </ul>
+          {canChecklist && (
+            <form
+              className="wk-inline"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!result(addTaskSubtask(t.id, newCheck), "Checklist item added.")) setNewCheck("");
+              }}
+            >
+              <input value={newCheck} maxLength={160} onChange={(e) => setNewCheck(e.target.value)} placeholder="Add a checklist item" aria-label="New checklist item" />
+              <button type="submit" className="btn-ghost btn-tiny" disabled={!newCheck.trim()}>
+                Add
+              </button>
+            </form>
+          )}
         </section>
       )}
+
+      <section className="wk-sec">
+        <h3>
+          Attachments <span className="wk-count">{t.attachments?.length ?? 0}</span>
+        </h3>
+        <FileList
+          files={(t.attachments ?? []).map((a) => ({ id: a.id, name: a.name, size: a.size, at: a.at, by: a.by ? taskPersonById(a.by)?.fullName : undefined }))}
+          canAdd={canComment && API_ENABLED}
+          offlineNote={API_ENABLED ? undefined : "Files can be attached when TimeZ is connected to the server."}
+          canRemove={(f) => {
+            const a = (t.attachments ?? []).find((x) => x.id === f.id);
+            return !!a && (a.by === me || isOwn || isCreator || managesOwner);
+          }}
+          onAdd={async (file) => result(await uploadTaskFile(t.id, file), "File attached.")}
+          onOpen={async (f) => {
+            const error = await openWorkFile(taskFilePath(t.id, f.id));
+            if (error) notify(error, "err");
+          }}
+          onRemove={async (f) => result(await removeTaskFile(t.id, f.id), "File removed.")}
+        />
+      </section>
 
       <section className="wk-sec">
         <h3>People</h3>
@@ -1214,13 +1281,43 @@ function TaskDrawer({
           <div className="wk-compose">
             <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Write a comment" aria-label="Comment" rows={2} />
             <div className="wk-compose-actions">
+              {mentions.map((id) => (
+                <span key={id} className="wk-mention">
+                  @{taskPersonById(id)?.fullName ?? id}
+                  <button type="button" aria-label="Remove mention" onClick={() => setMentions(mentions.filter((x) => x !== id))}>
+                    ×
+                  </button>
+                </span>
+              ))}
+              <select
+                value=""
+                aria-label="Mention someone"
+                className="wk-mention-pick"
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (!id) return;
+                  setMentions([...mentions, id]);
+                  const name = taskPersonById(id)?.fullName ?? id;
+                  if (!comment.includes(`@${name}`)) setComment(`${comment}${comment && !comment.endsWith(" ") ? " " : ""}@${name} `);
+                }}
+              >
+                <option value="">@ Mention</option>
+                {mentionPool.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.fullName}
+                  </option>
+                ))}
+              </select>
               <ActionButton
                 className="btn btn-tiny"
                 disabled={!comment.trim()}
                 onAction={() => {
-                  const error = addTaskComment(t.id, comment);
-                  if (!error) setComment("");
-                  return result(error, "Comment posted.");
+                  const error = addTaskComment(t.id, comment, mentions);
+                  if (!error) {
+                    setComment("");
+                    setMentions([]);
+                  }
+                  return result(error, mentions.length ? "Comment posted. Mentioned people were notified." : "Comment posted.");
                 }}
               >
                 Comment
@@ -1282,6 +1379,8 @@ function NewTaskDialog({
     client: "",
     notes: "",
     due: toISO(new Date(Date.now() + 2 * 86_400_000)),
+    startDate: "",
+    checklist: "",
     estimatedHours: 4,
     peopleIds: [] as string[],
     ccIds: [] as string[],
@@ -1298,6 +1397,7 @@ function NewTaskDialog({
     e.preventDefault();
     const result = createTask({
       ...d,
+      checklist: d.checklist.split("\n"),
       client: d.client.trim() || "Internal",
       links: d.link.url.trim() ? [d.link] : [],
       allowedOwnerIds: assignable.map((x) => x.person.id),
@@ -1349,8 +1449,12 @@ function NewTaskDialog({
               </select>
             </label>
             <label>
+              Start date
+              <input type="date" min={today} max={d.due || undefined} value={d.startDate} onChange={(e) => setD({ ...d, startDate: e.target.value })} />
+            </label>
+            <label>
               Due date
-              <input type="date" min={today} value={d.due} onChange={(e) => setD({ ...d, due: e.target.value })} />
+              <input type="date" min={d.startDate || today} value={d.due} onChange={(e) => setD({ ...d, due: e.target.value })} />
             </label>
             <label>
               Priority
@@ -1408,6 +1512,10 @@ function NewTaskDialog({
             <label className="wide">
               Description
               <textarea rows={3} value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} />
+            </label>
+            <label className="wide">
+              Checklist (one item per line)
+              <textarea rows={3} value={d.checklist} onChange={(e) => setD({ ...d, checklist: e.target.value })} placeholder={"Draft\nReview\nShare"} />
             </label>
             <label>
               Link title

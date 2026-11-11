@@ -5,6 +5,7 @@ import { applyInternally as applyToPipeline, getTalentState, isPostingOpen } fro
 import type { Candidate, PipelineStage, Requisition } from "../../data/talentData.ts";
 import { API_ENABLED } from "../../api/client.ts";
 import { myApplicationsMirror } from "../../api/syncTalent.ts";
+import { jobsApi, myReferralsMirror } from "../../api/syncExperience.ts";
 import { pushPersonTaskAlert } from "../../data/collabLocal.ts";
 import {
   addDays,
@@ -35,6 +36,9 @@ export interface InternalApplication {
   status: Stage;
   submittedOn: string;
   updatedOn: string;
+  /* Backend mode only. */
+  timeline?: { stage: string; at: string | null; text: string }[];
+  canWithdraw?: boolean;
 }
 
 export interface Referral {
@@ -87,8 +91,58 @@ try {
 }
 const store = createLocalStore<JobBoardState>("kastech.jobboard.v3", defaults, normalize);
 
-export const subscribeJobBoard = store.subscribe;
-export const getJobBoardState = store.getState;
+let apiCache: { mine: unknown; talent: unknown; state: JobBoardState } | null = null;
+
+/**
+ * Backend mode: referrals are candidates with source "Referral" in the job's pipeline — mine (from /my-referrals)
+ * plus, for recruiting / HR, every referral candidate they can see. Applications come from myInternalApplications.
+ */
+function apiJobBoardState(): JobBoardState {
+  const mine = myReferralsMirror.get();
+  const talent = getTalentState();
+  if (apiCache && apiCache.mine === mine && apiCache.talent === talent) return apiCache.state;
+  const byId = new Map<string, Referral>();
+  for (const c of talent.candidates) {
+    if (c.source !== "Referral") continue;
+    const by = /^Referred by (.+?) \(([^)]+)\)/.exec(c.coverNote ?? "");
+    const applied = (c.history ?? []).find((h) => h.stage === "Applied")?.enteredOn.slice(0, 10) ?? todayISO();
+    byId.set(c.id, {
+      id: c.id, postingId: c.requisitionId, referrerId: "", referrerName: by?.[1] ?? "Employee", name: c.name, email: c.email ?? "",
+      phone: c.phone ?? "", relationship: by?.[2] ?? "Other", linkedIn: "", note: c.coverNote ?? "", status: BOARD_STAGE[c.stage] ?? "Submitted",
+      submittedOn: applied, updatedOn: (c.history ?? []).at(-1)?.enteredOn.slice(0, 10) ?? applied,
+    });
+  }
+  for (const r of mine) {
+    byId.set(r.id, {
+      id: r.id, postingId: r.requisition_id, referrerId: myReferrerId, referrerName: "You", name: r.name, email: r.email, phone: "",
+      relationship: byId.get(r.id)?.relationship ?? "Other", linkedIn: "", note: "", status: BOARD_STAGE[r.stage as PipelineStage] ?? "Submitted",
+      submittedOn: r.referred_on, updatedOn: r.updated_on,
+    });
+  }
+  apiCache = { mine, talent, state: { applications: [], referrals: [...byId.values()] } };
+  return apiCache.state;
+}
+
+/** Who "mine" is in backend mode (set by the page from the signed-in persona). */
+let myReferrerId = "";
+export function setJobBoardViewer(id: string) {
+  if (myReferrerId !== id) {
+    myReferrerId = id;
+    apiCache = null;
+  }
+}
+
+export const subscribeJobBoard = API_ENABLED
+  ? (listener: () => void) => {
+      const a = store.subscribe(listener);
+      const b = myReferralsMirror.subscribe(listener);
+      return () => {
+        a();
+        b();
+      };
+    }
+  : store.subscribe;
+export const getJobBoardState: () => JobBoardState = API_ENABLED ? apiJobBoardState : store.getState;
 export const resetJobBoard = store.reset;
 
 /* ───────────── Postings ───────────── */
@@ -125,7 +179,8 @@ export function myInternalApplications(actorId: string): InternalApplication[] {
   if (API_ENABLED) {
     return myApplicationsMirror.get().map((a) => ({
       id: a.id, postingId: a.requisition_id, employeeId: actorId, employeeName: "", note: a.cover_note ?? "",
-      status: BOARD_STAGE[a.stage as PipelineStage] ?? "Submitted", submittedOn: a.applied_on, updatedOn: a.applied_on,
+      status: BOARD_STAGE[a.stage as PipelineStage] ?? "Submitted", submittedOn: a.applied_on, updatedOn: a.updated_on ?? a.applied_on,
+      timeline: a.timeline, canWithdraw: a.can_withdraw,
     }));
   }
   return getTalentState().candidates.filter((c) => c.employeeId === actorId).map(fromCandidate);
@@ -223,7 +278,12 @@ export type ReferralInput = {
   note: string;
 };
 
-export function submitReferral(actor: PlusActor, input: ReferralInput): PlusResult {
+/** Backend mode: take back my internal application (before an offer). */
+export function withdrawMyApplication(id: string): Promise<string | null> {
+  return jobsApi.withdraw(id, () => myApplicationsMirror.reload());
+}
+
+export function submitReferral(actor: PlusActor, input: ReferralInput): PlusResult | Promise<PlusResult> {
   const req = postingById(input.postingId);
   if (!req) return "Choose a posting.";
   if (!isOpenPosting(req)) return "This posting isn't open.";
@@ -241,6 +301,7 @@ export function submitReferral(actor: PlusActor, input: ReferralInput): PlusResu
   if (!(RELATIONSHIPS as readonly string[]).includes(input.relationship)) return "Choose how you know the candidate.";
   if (linkedIn && !validLinkedIn(linkedIn)) return "LinkedIn must be an https://linkedin.com link.";
   if (input.note.trim().length > 500) return "Keep the note under 500 characters.";
+  if (API_ENABLED) return jobsApi.refer(req.id, input);
   const result = store.mutate((s) => {
     if (s.referrals.some((r) => r.postingId === req.id && r.email.toLowerCase() === email))
       return "This candidate has already been referred for this posting.";

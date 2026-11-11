@@ -52,18 +52,52 @@ class DocExpiryIn(BaseModel):
     expiry_date: date | None
 
 
+FileKind = Literal["pdf", "image", "docx"]
+
+
 class DocCategoryOut(BaseModel):
     name: str
     label: str
     verification: bool
     employee_upload: bool
+    manager_visible: bool = False
+    requires_expiry: bool = False
+    required: bool = False
+    types: list[str] = []
+    max_mb: int = 10
 
 
 class DocCategoryIn(BaseModel):
+    """Fields left out (None) keep their current value."""
+
     name: str = Field(max_length=32)
     label: str = Field(min_length=1, max_length=60)
     verification: bool
     employee_upload: bool
+    manager_visible: bool | None = None
+    requires_expiry: bool | None = None
+    required: bool | None = None
+    types: list[FileKind] | None = Field(default=None, min_length=1, max_length=3)
+    max_mb: int | None = Field(default=None, ge=1, le=10)
+
+
+class DocDeleteIn(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+class DocFolderOut(BaseModel):
+    """One employee's folder in the HR / manager view."""
+
+    employee_id: str
+    employee_name: str
+    employee_code: str
+    department: str
+    documents: int
+    pending: int
+    rejected: int
+    expiring: int  # within 30 days
+    expired: int
+    missing: list[str]  # labels of required categories with no document
 
 
 class DocVerifyIn(BaseModel):
@@ -94,6 +128,7 @@ class LetterTemplateOut(_DocORM):
     id: str
     letter_type: str
     country_code: str | None
+    legal_entity: str | None = None
     title: str
     to_whom: bool
     paragraphs: list[str]
@@ -106,11 +141,30 @@ class LetterTemplateIn(BaseModel):
     title: str = Field(min_length=3, max_length=200)
     to_whom: bool
     paragraphs: list[str] = Field(min_length=1, max_length=12)
+    active: bool | None = None  # None keeps it; an inactive template is skipped (the next one applies)
 
 
 class LetterTemplateNewIn(LetterTemplateIn):
+    """A country version (country_code) or a legal entity's version (legal_entity) of a letter type."""
+
     letter_type: LetterTypeName
-    country_code: str = Field(pattern=r"^[A-Z]{2}$")
+    country_code: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
+    legal_entity: str | None = Field(default=None, min_length=2, max_length=200)
+
+
+class LetterTemplatePreviewIn(BaseModel):
+    """Unsaved wording rendered with one employee's data (default: yourself)."""
+
+    letter_type: LetterTypeName
+    title: str = Field(min_length=3, max_length=200)
+    to_whom: bool = False
+    paragraphs: list[str] = Field(min_length=1, max_length=12)
+    employee_id: str | None = Field(default=None, max_length=64)
+
+
+class LetterPlaceholderOut(BaseModel):
+    name: str
+    description: str
 
 
 class LetterRequestIn(BaseModel):

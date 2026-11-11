@@ -5,39 +5,52 @@ import { formatShortDate, formatStamp, todayISO } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { TASK_TEAM, taskTeamFor } from "../data/taskTeam.ts";
 import {
-  SLA_HOURS,
+  PRIORITY_FACTOR,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TICKET_TYPES,
   addTicketTask,
   assignTicket,
   canPlanTicket,
+  canRateTicket,
   canTakeTicket,
   canViewTicket,
   commentOnTicket,
   createTicket,
   isOpenTicket,
+  isTicketAgent,
   nextStatuses,
   personName,
+  rateTicket,
   refreshTickets,
+  removeTicketFile,
   removeTicketTask,
+  saveTicketCategory,
   setTicketDue,
   setTicketPriority,
   setTicketStatus,
   setTicketSubOwner,
+  slaState,
+  ticketFilePath,
+  ticketSla,
   ticketTarget,
   ticketsLoadError,
   ticketsLoaded,
   toggleTicketTask,
   toggleWatch,
+  uploadTicketFile,
+  useTicketCategories,
   useTickets,
   type Ticket,
   type TicketActor,
+  type TicketCategoryInfo,
   type TicketPriority,
   type TicketStatus,
   type TicketType,
 } from "../data/ticketStore.ts";
-import { Avatar, Drawer, PriorityChip, WorkSwitch, dayGap, dueText } from "./workParts.tsx";
+import { Avatar, Drawer, FileList, PriorityChip, WorkSwitch, dayGap, dueText } from "./workParts.tsx";
+import { API_ENABLED } from "../api/client.ts";
+import { openWorkFile } from "../api/syncTasks.ts";
 
 type View = "assigned" | "mine" | "watching" | "team" | "all";
 type Layout = "list" | "board";
@@ -60,6 +73,21 @@ const STATUS_WORD: Record<TicketStatus, string> = {
   Closed: "Closed",
 };
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
+const SLA_ADMINS = ["hr", "hr_admin", "hrbp", "admin", "super_admin", "it_admin"];
+
+/** 6 -> "6h", 36 -> "1.5d". */
+function hoursText(h: number): string {
+  return h < 24 ? `${Math.round(h * 10) / 10}h` : `${Math.round((h / 24) * 10) / 10}d`;
+}
+
+/** "in 3h", "2h late", "on time" for a target timestamp. */
+function targetText(iso: string, doneAt?: string): { text: string; late: boolean } {
+  const end = Date.parse(iso);
+  const at = doneAt ? Date.parse(doneAt) : Date.now();
+  const hours = (end - at) / 3_600_000;
+  if (doneAt) return { text: hours >= 0 ? "met" : `missed by ${hoursText(-hours)}`, late: hours < 0 };
+  return hours >= 0 ? { text: `in ${hoursText(hours)}`, late: false } : { text: `${hoursText(-hours)} late`, late: true };
+}
 
 /** The button label for moving a ticket to a status (from where it is now). */
 function moveLabel(t: Ticket, s: TicketStatus, actorId: string): string {
@@ -75,10 +103,13 @@ function targetChip(t: Ticket, today: string) {
   if (!isOpenTicket(t)) return <span className="wk-chip met">{t.status}</span>;
   const cls = target.state === "late" ? "late" : target.state === "soon" ? "soon" : "";
   return (
-    <span className={`wk-chip ${cls}`} title={target.source === "sla" ? `${t.priority} priority target` : "Deadline"}>
-      {target.source === "sla" ? "SLA " : ""}
-      {dueText(target.date, today, formatShortDate)}
-    </span>
+    <>
+      <span className={`wk-chip ${cls}`} title={target.source === "sla" ? `${t.type} · ${t.priority} priority target` : "Deadline"}>
+        {target.source === "sla" ? "SLA " : ""}
+        {dueText(target.date, today, formatShortDate)}
+      </span>
+      {t.escalatedAt && <span className="wk-chip late">Escalated</span>}
+    </>
   );
 }
 
@@ -102,6 +133,7 @@ export function TicketsPage() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("target");
   const [createOpen, setCreateOpen] = useState(false);
+  const [slaOpen, setSlaOpen] = useState(false);
   const [dragOver, setDragOver] = useState("");
   const [resolveHint, setResolveHint] = useState<TicketStatus | "">("");
 
@@ -152,7 +184,7 @@ export function TicketsPage() {
     Open: openRows.filter((t) => t.status === "Open").length,
     "In progress": openRows.filter((t) => t.status === "In progress").length,
     Waiting: openRows.filter((t) => t.status === "Waiting").length,
-    late: openRows.filter((t) => ticketTarget(t).state === "late").length,
+    late: openRows.filter((t) => ticketTarget(t).state === "late" || slaState(t) === "breached").length,
     unassigned: openRows.filter((t) => !t.assigneeId).length,
     Resolved: viewRows.filter((t) => t.status === "Resolved").length,
   };
@@ -164,7 +196,7 @@ export function TicketsPage() {
         if (status === "active" && t.status === "Closed") return false;
         if (status !== "active" && status !== "all" && t.status !== status) return false;
       }
-      if (focus === "late" && ticketTarget(t).state !== "late") return false;
+      if (focus === "late" && ticketTarget(t).state !== "late" && slaState(t) !== "breached") return false;
       if (focus === "unassigned" && (t.assigneeId || !isOpenTicket(t))) return false;
       if (focus && focus !== "late" && focus !== "unassigned" && t.status !== focus) return false;
       if (type && t.type !== type) return false;
@@ -228,9 +260,16 @@ export function TicketsPage() {
     <Page
       title="Tickets"
       action={
-        <button className="btn" type="button" onClick={() => setCreateOpen(true)}>
-          Raise ticket
-        </button>
+        <>
+          {SLA_ADMINS.includes(employee.role) && (
+            <button className="btn-ghost" type="button" onClick={() => setSlaOpen(true)}>
+              Service targets
+            </button>
+          )}
+          <button className="btn" type="button" onClick={() => setCreateOpen(true)}>
+            Raise ticket
+          </button>
+        </>
       }
     >
       <WorkSwitch />
@@ -467,6 +506,8 @@ export function TicketsPage() {
         />
       )}
 
+      {slaOpen && <CategoriesDialog onClose={() => setSlaOpen(false)} />}
+
       {createOpen && (
         <CreateTicketDialog
           actor={actor}
@@ -506,7 +547,18 @@ function TicketDrawer({
   const [assignee, setAssignee] = useState("");
   const [watcher, setWatcher] = useState("");
   const [comment, setComment] = useState("");
+  const [internal, setInternal] = useState(false);
+  const [fileInternal, setFileInternal] = useState(false);
+  const [stars, setStars] = useState(t.satisfaction ?? 0);
+  const [rateNote, setRateNote] = useState(t.satisfactionNote ?? "");
   const [task, setTask] = useState({ title: "", ownerId: "", due: "" });
+  const categories = useTicketCategories();
+  const category = categories.find((c) => c.name === t.type);
+  const agent = isTicketAgent(t, actor);
+  const canRate = canRateTicket(t, actor);
+  const sla = ticketSla(t);
+  const respond = targetText(sla.respondBy, t.firstResponseAt);
+  const resolve = targetText(sla.resolveBy, open0(t) ? undefined : t.resolvedAt ?? t.updatedAt);
   const canPlan = canPlanTicket(t, actor);
   const canTake = canTakeTicket(t, actor);
   const moves = nextStatuses(t, actor);
@@ -530,7 +582,8 @@ function TicketDrawer({
   };
 
   async function move(s: TicketStatus) {
-    if ((s === "Resolved" && !note.trim()) || (s === "Closed" && t.status === "Open" && pending !== "Closed")) {
+    const reopening = s === "In progress" && t.status === "Resolved";
+    if ((s === "Resolved" && !note.trim()) || (reopening && !note.trim()) || (s === "Closed" && t.status === "Open" && pending !== "Closed")) {
       setPending(s);
       return "";
     }
@@ -623,13 +676,19 @@ function TicketDrawer({
       {pending && (
         <div className="wk-inline-form">
           <label className="field">
-            {pending === "Resolved" ? "What was done?" : pending === "Closed" ? "Why withdraw it? (optional)" : "Note"}
+            {pending === "Resolved"
+              ? "Resolution note (the requester sees it)"
+              : pending === "Closed"
+                ? "Why withdraw it? (optional)"
+                : pending === "In progress" && t.status === "Resolved"
+                  ? "What is still wrong?"
+                  : "Note"}
             <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} autoFocus />
           </label>
           <div className="wk-compose-actions">
             <ActionButton
               className="btn btn-tiny"
-              disabled={pending === "Resolved" && !note.trim()}
+              disabled={(pending === "Resolved" || (pending === "In progress" && t.status === "Resolved")) && !note.trim()}
               onAction={async () => {
                 const error = await setTicketStatus(t.id, pending, actor, note);
                 if (!error) {
@@ -648,15 +707,56 @@ function TicketDrawer({
         </div>
       )}
 
+      {t.resolutionNote && (t.status === "Resolved" || t.status === "Closed") && (
+        <div className="wk-resolution">
+          <span>Resolution</span>
+          <p>{t.resolutionNote}</p>
+        </div>
+      )}
       {t.status === "Resolved" && t.requesterId === actor.id && (
         <div className="wk-next">
           <span>Your call</span>
           Close it if it's fixed, or reopen it.
         </div>
       )}
+      {(canRate || t.satisfaction) && (
+        <div className="wk-rate">
+          <span>{canRate ? "How was this handled?" : "Rating"}</span>
+          <div className="wk-stars" role="radiogroup" aria-label="Rating">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button
+                key={n}
+                type="button"
+                role="radio"
+                aria-checked={stars === n}
+                aria-label={`${n} star${n > 1 ? "s" : ""}`}
+                className={n <= (canRate ? stars : t.satisfaction ?? 0) ? "on" : undefined}
+                disabled={!canRate}
+                onClick={() => setStars(n)}
+              >
+                ★
+              </button>
+            ))}
+          </div>
+          {canRate ? (
+            <span className="wk-inline">
+              <input value={rateNote} maxLength={1000} onChange={(e) => setRateNote(e.target.value)} placeholder="Comment (optional)" aria-label="Rating comment" />
+              <ActionButton
+                className="btn btn-tiny"
+                disabled={!stars || (stars === t.satisfaction && rateNote === (t.satisfactionNote ?? ""))}
+                onAction={async () => result(await rateTicket(t.id, stars, rateNote, actor), "Thanks for the rating.")}
+              >
+                {t.satisfaction ? "Update" : "Rate"}
+              </ActionButton>
+            </span>
+          ) : (
+            t.satisfactionNote && <em>{t.satisfactionNote}</em>
+          )}
+        </div>
+      )}
       {open && target.state === "late" && (
         <div className="wk-next late">
-          <span>{target.source === "sla" ? "Past the response target" : "Past the deadline"}</span>
+          <span>{target.source === "sla" ? "Past the resolve target" : "Past the deadline"}</span>
           {-dayGap(today, target.date)} day(s) late
         </div>
       )}
@@ -710,7 +810,8 @@ function TicketDrawer({
               >
                 {TICKET_PRIORITIES.map((p) => (
                   <option key={p} value={p}>
-                    {cap(p)} · {SLA_HOURS[p] < 24 ? `${SLA_HOURS[p]}h` : `${SLA_HOURS[p] / 24}d`} target
+                    {cap(p)}
+                    {category ? ` · resolve in ${hoursText(category.resolveHours * PRIORITY_FACTOR[p])}` : ""}
                   </option>
                 ))}
               </select>
@@ -737,9 +838,33 @@ function TicketDrawer({
           </dd>
         </div>
         <div className="wk-fact">
-          <dt>{target.source === "sla" ? "Response target" : "Target"}</dt>
-          <dd>{formatShortDate(target.date)}</dd>
+          <dt>Respond by</dt>
+          <dd>
+            {formatStamp(sla.respondBy)}
+            <span className={`wk-chip${respond.late ? " late" : t.firstResponseAt ? " met" : ""}`}>{t.firstResponseAt ? respond.text : open ? respond.text : "—"}</span>
+          </dd>
         </div>
+        <div className="wk-fact">
+          <dt>Resolve by</dt>
+          <dd>
+            {formatStamp(sla.resolveBy)}
+            <span className={`wk-chip${resolve.late ? " late" : !open ? " met" : ""}`}>{resolve.text}</span>
+          </dd>
+        </div>
+        {t.escalatedAt && (
+          <div className="wk-fact">
+            <dt>Escalated</dt>
+            <dd>{formatStamp(t.escalatedAt)}</dd>
+          </div>
+        )}
+        {(t.reopenCount ?? 0) > 0 && (
+          <div className="wk-fact">
+            <dt>Reopened</dt>
+            <dd>
+              {t.reopenCount} time{t.reopenCount === 1 ? "" : "s"}
+            </dd>
+          </div>
+        )}
         <div className="wk-fact">
           <dt>Raised</dt>
           <dd>{formatStamp(t.createdAt)}</dd>
@@ -876,6 +1001,35 @@ function TicketDrawer({
 
       <section className="wk-sec">
         <h3>
+          Attachments <span className="wk-count">{t.files?.length ?? 0}</span>
+        </h3>
+        <FileList
+          files={(t.files ?? []).map((f) => ({ id: f.id, name: f.name, size: f.size, at: f.at, by: personName(f.byId), internal: f.internal }))}
+          canAdd={API_ENABLED}
+          offlineNote={API_ENABLED ? undefined : "Files can be attached when TimeZ is connected to the server."}
+          canRemove={(f) => {
+            const file = (t.files ?? []).find((x) => x.id === f.id);
+            return !!file && (file.byId === actor.id || canPlan);
+          }}
+          onAdd={async (file) => result(await uploadTicketFile(t.id, file, agent && fileInternal), "File attached.")}
+          onOpen={async (f) => {
+            const error = await openWorkFile(ticketFilePath(t.id, f.id));
+            if (error) notify(error, "err");
+          }}
+          onRemove={async (f) => result(await removeTicketFile(t.id, f.id), "File removed.")}
+          extra={
+            agent ? (
+              <label className="wk-check-inline">
+                <input type="checkbox" checked={fileInternal} onChange={(e) => setFileInternal(e.target.checked)} />
+                Internal
+              </label>
+            ) : undefined
+          }
+        />
+      </section>
+
+      <section className="wk-sec">
+        <h3>
           Watchers <span className="wk-count">{t.watcherIds.length}</span>
         </h3>
         <div className="wk-people">
@@ -922,18 +1076,31 @@ function TicketDrawer({
           Conversation <span className="wk-count">{t.activity.filter((e) => e.kind === "comment").length}</span>
         </h3>
         <div className="wk-compose">
-          <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Write an update or a question" aria-label="Comment" />
+          <textarea
+            rows={2}
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder={internal ? "Internal note for the people working this ticket" : "Write a reply or a question"}
+            aria-label="Comment"
+            className={internal ? "internal" : undefined}
+          />
           <div className="wk-compose-actions">
+            {agent && (
+              <label className="wk-check-inline">
+                <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
+                Internal note
+              </label>
+            )}
             <ActionButton
               className="btn btn-tiny"
               disabled={!comment.trim()}
               onAction={async () => {
-                const error = await commentOnTicket(t.id, comment, actor);
+                const error = await commentOnTicket(t.id, comment, actor, agent && internal);
                 if (!error) setComment("");
-                return result(error, "Comment posted.");
+                return result(error, internal ? "Internal note added." : "Reply posted.");
               }}
             >
-              Comment
+              {internal ? "Add note" : "Reply"}
             </ActionButton>
           </div>
         </div>
@@ -942,9 +1109,10 @@ function TicketDrawer({
             e.kind === "comment" ? (
               <li key={e.id}>
                 <Avatar name={personName(e.byId)} />
-                <div className="wk-bubble">
+                <div className={e.internal ? "wk-bubble internal" : "wk-bubble"}>
                   <header>
                     <b>{personName(e.byId)}</b>
+                    {e.internal && <span className="wk-chip">Internal</span>}
                     <time>{formatStamp(e.at)}</time>
                   </header>
                   <p>{e.text}</p>
@@ -989,8 +1157,12 @@ function CreateTicketDialog({
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const routed = d.type === "IT support" || d.type === "Access request" ? "IT desk" : d.type === "HR query" ? "HR" : null;
-  const sla = SLA_HOURS[d.priority];
+  const categories = useTicketCategories();
+  const cat = categories.find((c) => c.name === d.type);
+  const routed = cat?.queueOwnerId
+    ? cat.queueOwnerName ?? personName(cat.queueOwnerId)
+    : d.type === "IT support" || d.type === "Access request" ? "IT desk" : d.type === "HR query" ? "HR" : null;
+  const factor = PRIORITY_FACTOR[d.priority];
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -1052,7 +1224,7 @@ function CreateTicketDialog({
               {team.length > 0 ? "Assign to" : "Goes to"}
               {team.length > 0 ? (
                 <select value={d.assigneeId} onChange={(e) => setD({ ...d, assigneeId: e.target.value })}>
-                  <option value="">{routed ? `The ${routed}` : "Leave unassigned"}</option>
+                  <option value="">{routed ? `Queue: ${routed}` : "Leave unassigned"}</option>
                   {team.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.fullName}
@@ -1060,7 +1232,7 @@ function CreateTicketDialog({
                   ))}
                 </select>
               ) : (
-                <input value={routed ? `The ${routed}` : "Your manager assigns it"} readOnly />
+                <input value={routed ? `Queue: ${routed}` : "Your manager assigns it"} readOnly />
               )}
             </label>
             <label className="wide">
@@ -1068,7 +1240,9 @@ function CreateTicketDialog({
               <textarea rows={4} value={d.description} onChange={(e) => setD({ ...d, description: e.target.value })} placeholder="Steps, screenshots links, who is affected" />
             </label>
             <p className="wk-hint wide">
-              Response target: {sla < 24 ? `${sla} hours` : `${sla / 24} days`}
+              {cat
+                ? `First response within ${hoursText(cat.responseHours * factor)} · resolved within ${hoursText(cat.resolveHours * factor)}`
+                : ""}
               {d.due ? ` · deadline ${formatShortDate(d.due)}` : ""}
             </p>
           </div>
@@ -1079,6 +1253,92 @@ function CreateTicketDialog({
             </button>
             <button className="btn" type="submit" disabled={busy || !d.title.trim()}>
               {busy ? "Raising…" : "Raise"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+
+const open0 = (t: Ticket) => isOpenTicket(t);
+
+/** HR / admin: response and resolve targets per category (for medium priority) and who picks up its queue. */
+function CategoriesDialog({ onClose }: { onClose: () => void }) {
+  const categories = useTicketCategories();
+  const [rows, setRows] = useState<TicketCategoryInfo[]>(categories);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setRows(categories), [categories]);
+  const set = (name: string, change: Partial<TicketCategoryInfo>) => setRows(rows.map((r) => (r.name === name ? { ...r, ...change } : r)));
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    for (const r of rows) {
+      const before = categories.find((c) => c.name === r.name);
+      if (before && before.responseHours === r.responseHours && before.resolveHours === r.resolveHours && (before.queueOwnerId ?? "") === (r.queueOwnerId ?? "")) continue;
+      const err = await saveTicketCategory(r);
+      if (err) {
+        setError(`${r.name}: ${err}`);
+        setBusy(false);
+        return;
+      }
+    }
+    setBusy(false);
+    notify("Service targets saved.");
+    onClose();
+  }
+
+  return (
+    <div className="modal-root" role="presentation">
+      <button className="modal-scrim" type="button" aria-label="Close" onClick={onClose} />
+      <div className="modal-card wk-modal" role="dialog" aria-modal="true" aria-labelledby="sla-title">
+        <h2 id="sla-title">Service targets</h2>
+        <form onSubmit={save}>
+          <table className="wk-sla-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Respond (h)</th>
+                <th>Resolve (h)</th>
+                <th>Queue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.name}>
+                  <td>{r.name}</td>
+                  <td>
+                    <input type="number" min={1} max={2000} value={r.responseHours} aria-label={`${r.name} response hours`} onChange={(e) => set(r.name, { responseHours: Number(e.target.value) })} />
+                  </td>
+                  <td>
+                    <input type="number" min={1} max={5000} value={r.resolveHours} aria-label={`${r.name} resolve hours`} onChange={(e) => set(r.name, { resolveHours: Number(e.target.value) })} />
+                  </td>
+                  <td>
+                    <select value={r.queueOwnerId ?? ""} aria-label={`${r.name} queue`} onChange={(e) => set(r.name, { queueOwnerId: e.target.value || undefined })}>
+                      <option value="">Manager assigns</option>
+                      {TASK_TEAM.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.fullName}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="wk-hint">Hours are for medium priority: urgent ×0.25, high ×0.5, low ×2. Tickets past the resolve target are escalated to the owner's manager.</p>
+          {error && <Banner message={{ tone: "err", text: error }} />}
+          <div className="form-actions">
+            <button className="btn-ghost" type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="btn" type="submit" disabled={busy}>
+              {busy ? "Saving…" : "Save"}
             </button>
           </div>
         </form>

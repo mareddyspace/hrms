@@ -103,6 +103,46 @@ export async function authorizedFetch(path: string, init: RequestInit = {}): Pro
   return res;
 }
 
+/**
+ * Uploads a file as the raw request body with progress (0–100) — XMLHttpRequest, since fetch has no upload progress.
+ * Same auth and errors as authorizedFetch (one session refresh on 401). Resolves with the parsed JSON response.
+ */
+export async function uploadWithProgress(path: string, file: File, contentType: string, onProgress?: (percent: number) => void): Promise<unknown> {
+  const send = () =>
+    new Promise<{ status: number; text: string }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${API_URL}/api/v1${path}`);
+      xhr.setRequestHeader("Authorization", `Bearer ${accessToken() ?? ""}`);
+      xhr.setRequestHeader("Content-Type", contentType);
+      xhr.setRequestHeader("Accept", "application/json");
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(Math.min(99, Math.round((e.loaded / e.total) * 100)));
+      };
+      xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
+      xhr.onerror = () => reject(new ApiError(0, "The upload didn't reach the server. Check the connection and try again."));
+      xhr.send(file);
+    });
+  let res = await send();
+  if (res.status === 401) {
+    await apiRequest("/auth/me").catch(() => undefined);
+    res = await send();
+  }
+  invalidateApiCache();
+  let body: unknown = null;
+  try {
+    body = res.text ? JSON.parse(res.text) : null;
+  } catch {
+    /* not JSON */
+  }
+  if (res.status < 200 || res.status >= 300) {
+    const detail = (body as { detail?: unknown } | null)?.detail;
+    if (typeof detail === "string" && detail.trim()) throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, res.status === 413 ? "The file is too large." : res.status >= 500 ? "Something went wrong on the server. Try again." : "That didn't work. Try again.");
+  }
+  onProgress?.(100);
+  return body;
+}
+
 const EXT_TYPES: Record<string, string> = {
   pdf: "application/pdf",
   png: "image/png",

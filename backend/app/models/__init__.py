@@ -56,7 +56,7 @@ from app.models.desk import DeskTicket, DeskTicketComment, DeskTicketFile  # noq
 from app.models.engagement import (  # noqa: E402
     EngagementParticipant, EngagementResponse, EngagementSurvey, Kudos, KudosLike, RewardItem, RewardRedemption,
 )
-from app.models.shifts import CoverageMinimum, RosterShift, RosterWeek, ShiftSwap, ShiftType  # noqa: E402
+from app.models.shifts import CoverageMinimum, RosterShift, RosterWeek, ShiftAvailability, ShiftSwap, ShiftType  # noqa: E402
 from app.models.platform import (  # noqa: E402
     AccountDataScope, AiSetting, EmailChannelSwitch, EmailOutboxItem, IntegrationConnector, IntegrationQuarantine,
     IntegrationRun, PageAccessOverride, PlatformSetting, ReminderLog,
@@ -67,7 +67,7 @@ __all__ += [
     "EmailChannelSwitch", "EmailOutboxItem", "EngagementParticipant", "EngagementResponse", "EngagementSurvey",
     "HrCase", "HrCaseFile", "HrCaseNote", "IntegrationConnector", "IntegrationQuarantine", "IntegrationRun", "Kudos",
     "KudosLike", "PageAccessOverride", "PlatformSetting", "ReminderLog", "RewardItem", "RewardRedemption",
-    "RosterShift", "RosterWeek", "ShiftSwap", "ShiftType",
+    "RosterShift", "RosterWeek", "ShiftAvailability", "ShiftSwap", "ShiftType",
 ]
 
 # Compensation, benefits, documents & letters (migration 0005)
@@ -128,9 +128,9 @@ from app.models.policies import HrPolicy, HrPolicyVersion  # noqa: E402
 __all__ += ["HrPolicy", "HrPolicyVersion"]
 
 # Work tickets shared between people: owner, sub-owner, deadline, tasks, activity (migration 0020)
-from app.models.tickets import Ticket, TicketEvent, TicketTask  # noqa: E402
+from app.models.tickets import Ticket, TicketCategory, TicketEvent, TicketTask, WorkAttachment  # noqa: E402
 
-__all__ += ["Ticket", "TicketEvent", "TicketTask"]
+__all__ += ["Ticket", "TicketCategory", "TicketEvent", "TicketTask", "WorkAttachment"]
 
 # Shared chat, mail, tasks, announcements and calendar events (migration 0022)
 from app.models.sharing import (  # noqa: E402
@@ -171,3 +171,15 @@ __all__ += ["DeskFaqVote", "MailDraft"]
 from app.models.request_extras import RequestAttachment, RequestComment  # noqa: E402
 
 __all__ += ["RequestAttachment", "RequestComment"]
+
+# Saved reports (server-side report builder) and contract extension requests (migration 0038)
+from app.models.insights import ContractExtension, SavedReport  # noqa: E402
+
+__all__ += ["ContractExtension", "SavedReport"]
+
+# Employee experience: assets and asset requests, immigration documents, privacy consents / requests / retention (migration 0037)
+from app.models.experience import (  # noqa: E402
+    Asset, AssetRequest, ImmigrationDocument, PrivacyConsent, PrivacyRequest, RetentionRule,
+)
+
+__all__ += ["Asset", "AssetRequest", "ImmigrationDocument", "PrivacyConsent", "PrivacyRequest", "RetentionRule"]

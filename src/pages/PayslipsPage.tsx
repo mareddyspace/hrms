@@ -973,7 +973,7 @@ export function PayslipsPage() {
       <Banner
         message={{
           tone: "info",
-          text: `${finalCount} of ${payslipViews.length} months are FINAL (from a locked payroll run); the rest are ESTIMATED by TimeZ and may change when payroll locks the month. Only you can see your pay.`,
+          text: `${finalCount} of ${payslipViews.length} months are FINAL (from a locked payroll run); the rest are ESTIMATED by TimeZ and may change when payroll locks the month. Only you and HR / payroll can see your pay. Your payslips are also on your profile (Payslips tab).`,
         }}
       />
       <Tabs

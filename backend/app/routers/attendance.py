@@ -84,7 +84,7 @@ def check_in(body: CheckInIn, request: Request, db: DbSession, user: CurrentUser
     )
     if existing is not None:
         raise HTTPException(409, "You have already checked in today." if existing.check_out is None else "You have already checked out today.")
-    session = rules.new_session(emp, work_date, moment, body.work_mode, body.source)
+    session = rules.new_session(emp, work_date, moment, body.work_mode, body.source, db)
     session.note = (body.note or "").strip() or None
     rules.apply_flags(session)
     db.add(session)
@@ -352,7 +352,7 @@ def decide_correction(
         if session is None:
             if item.requested_check_in is None:
                 raise HTTPException(409, "There is no attendance for that day and the request has no check-in time.")
-            session = rules.new_session(emp, item.work_date, item.requested_check_in, "office", "web")
+            session = rules.new_session(emp, item.work_date, item.requested_check_in, "office", "web", db)
             db.add(session)
         elif item.requested_check_in is not None:
             session.check_in = item.requested_check_in

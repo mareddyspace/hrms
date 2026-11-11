@@ -1,4 +1,6 @@
 import { listPeople } from "../../data/peopleLocal.ts";
+import { API_ENABLED, subscribeAll } from "../../api/syncOps.ts";
+import { immigrationApi, immigrationMirror, type ApiDocument, type HistoryEntry } from "../../api/syncExperience.ts";
 import { todayISO } from "../../model.ts";
 import {
   createLocalStore,
@@ -57,6 +59,16 @@ export type IdDocument = {
   verifiedOn?: string;
   updatedOn: string;
   updatedById: string;
+  /* Backend mode only: what the server says this viewer may see and do. */
+  personName?: string;
+  numberMasked?: boolean;
+  verifiedByName?: string;
+  history?: HistoryEntry[];
+  canEdit?: boolean;
+  canVerifyIt?: boolean;
+  canRemoveIt?: boolean;
+  /** Listed because the viewer manages the holder (masked number, status only). */
+  team?: boolean;
 };
 
 type ImmigrationState = { documents: IdDocument[] };
@@ -166,8 +178,61 @@ function defaults(): ImmigrationState {
 
 const store = createLocalStore<ImmigrationState>("kastech.immigration.v1", defaults);
 
-export const subscribeImmigration = store.subscribe;
-export const getImmigrationState = store.getState;
+const VERIFICATION: Record<ApiDocument["verification"], Verification> = {
+  pending: "Pending verification",
+  verified: "Verified",
+  rejected: "Rejected",
+};
+
+function fromApi(d: ApiDocument, team: boolean): IdDocument {
+  return {
+    id: d.id,
+    personId: d.employee_id,
+    type: d.doc_type as DocType,
+    number: d.number,
+    issuingCountry: d.issuing_country,
+    issueDate: d.issue_date,
+    expiryDate: d.expiry_date,
+    sponsor: d.sponsor ?? undefined,
+    renewalInProgress: d.renewal_in_progress,
+    recordedExpired: d.days_left < 0,
+    verification: VERIFICATION[d.verification],
+    verificationNote: d.verification_note ?? undefined,
+    verifiedOn: d.verified_on ?? undefined,
+    verifiedByName: d.verified_by_name ?? undefined,
+    updatedOn: d.updated_on,
+    updatedById: "",
+    personName: d.employee_name,
+    numberMasked: d.number_masked,
+    history: d.history,
+    canEdit: d.can_edit,
+    canVerifyIt: d.can_verify,
+    canRemoveIt: d.can_remove,
+    team,
+  };
+}
+
+let apiCache: { source: unknown; state: ImmigrationState } | null = null;
+
+/** Backend mode: my documents, my team's (masked) and everyone in HR scope, once each. */
+function apiState(): ImmigrationState {
+  const source = immigrationMirror.get();
+  if (apiCache?.source === source) return apiCache.state;
+  const byId = new Map<string, IdDocument>();
+  for (const d of source.all) byId.set(d.id, fromApi(d, false));
+  for (const d of source.mine) byId.set(d.id, fromApi(d, false));
+  for (const d of source.team) if (!byId.has(d.id)) byId.set(d.id, fromApi(d, true));
+  apiCache = { source, state: { documents: [...byId.values()] } };
+  return apiCache.state;
+}
+
+/** Backend mode: the viewer manages people (shows the Team tab). */
+export function immigrationHasTeam(): boolean {
+  return API_ENABLED && immigrationMirror.get().meta.has_team;
+}
+
+export const subscribeImmigration = API_ENABLED ? subscribeAll(store.subscribe, immigrationMirror.subscribe) : store.subscribe;
+export const getImmigrationState: () => ImmigrationState = API_ENABLED ? apiState : store.getState;
 export const resetImmigration = store.reset;
 export const IMMIGRATION_KEY = store.key;
 
@@ -188,12 +253,19 @@ export function docStatus(doc: IdDocument, today = todayISO()): DocStatus {
 /* ───────────── Permissions ───────────── */
 
 export function canSeeDocument(actor: ComplianceActor, doc: IdDocument): boolean {
+  if (doc.canEdit !== undefined) return doc.canEdit;
   return doc.personId === actor.id || isHr(actor.role);
 }
 
 /** Full document numbers: masked by default; only HR and the document holder can press Show. */
 export function canSeeFullNumber(actor: ComplianceActor, doc: IdDocument): boolean {
+  if (doc.numberMasked !== undefined) return !doc.numberMasked;
   return canSeeDocument(actor, doc);
+}
+
+export function canRemoveDocument(actor: ComplianceActor, doc: IdDocument): boolean {
+  if (doc.canRemoveIt !== undefined) return doc.canRemoveIt;
+  return (doc.personId === actor.id && doc.verification !== "Verified") || (isHr(actor.role) && doc.personId !== actor.id);
 }
 
 export function maskNumber(number: string): string {
@@ -202,6 +274,7 @@ export function maskNumber(number: string): string {
 }
 
 export function canVerify(actor: ComplianceActor, doc: IdDocument): boolean {
+  if (doc.canVerifyIt !== undefined) return doc.canVerifyIt;
   return isHr(actor.role) && doc.personId !== actor.id;
 }
 
@@ -249,7 +322,8 @@ function validate(input: DocInput, existing: IdDocument[], editingId?: string): 
   return null;
 }
 
-export function addDocument(actor: ComplianceActor, input: DocInput): ComplianceResult {
+export function addDocument(actor: ComplianceActor, input: DocInput): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return immigrationApi.add(input);
   return store.guarded((s) => {
     if (input.personId !== actor.id && !isHr(actor.role)) return "You can only add your own documents.";
     const error = validate(input, s.documents);
@@ -277,7 +351,8 @@ export function addDocument(actor: ComplianceActor, input: DocInput): Compliance
   });
 }
 
-export function updateDocument(actor: ComplianceActor, id: string, input: DocInput): ComplianceResult {
+export function updateDocument(actor: ComplianceActor, id: string, input: DocInput): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return immigrationApi.update(id, input);
   return store.guarded((s) => {
     const row = s.documents.find((d) => d.id === id);
     if (!row) return "Document not found.";
@@ -308,7 +383,8 @@ export function updateDocument(actor: ComplianceActor, id: string, input: DocInp
   });
 }
 
-export function setRenewalInProgress(actor: ComplianceActor, id: string, value: boolean): ComplianceResult {
+export function setRenewalInProgress(actor: ComplianceActor, id: string, value: boolean): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return immigrationApi.renewal(id, value);
   return store.guarded((s) => {
     const row = s.documents.find((d) => d.id === id);
     if (!row) return "Document not found.";
@@ -320,7 +396,8 @@ export function setRenewalInProgress(actor: ComplianceActor, id: string, value: 
   });
 }
 
-export function verifyDocument(actor: ComplianceActor, id: string, decision: "Verified" | "Rejected", note = ""): ComplianceResult {
+export function verifyDocument(actor: ComplianceActor, id: string, decision: "Verified" | "Rejected", note = ""): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return immigrationApi.verify(id, decision === "Verified", note);
   return store.guarded((s) => {
     const row = s.documents.find((d) => d.id === id);
     if (!row) return "Document not found.";
@@ -335,7 +412,8 @@ export function verifyDocument(actor: ComplianceActor, id: string, decision: "Ve
   });
 }
 
-export function removeDocument(actor: ComplianceActor, id: string): ComplianceResult {
+export function removeDocument(actor: ComplianceActor, id: string): ComplianceResult | Promise<ComplianceResult> {
+  if (API_ENABLED) return immigrationApi.remove(id);
   return store.guarded((s) => {
     const row = s.documents.find((d) => d.id === id);
     if (!row) return "Document not found.";

@@ -15,6 +15,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
@@ -395,10 +396,20 @@ def apply_internally(posting_id: str, body: InternalApplyIn, request: Request, d
     record_audit(db, actor_id=user.id, action="candidate_applied", entity="candidate", entity_id=cand.id,
                  subject_id=req.hiring_manager_id, after=_cand_snapshot(cand) | {"requisition_id": req.id, "posting_id": post.id},
                  ip=client_ip(request))
-    if req.recruiter_id:
-        notify(db, recipient_id=req.recruiter_id, title=f"Internal application: {emp.full_name}",
+    hiring_side = [req.recruiter_id] if req.recruiter_id else []
+    if req.hiring_manager_id and req.hiring_manager_id not in hiring_side:
+        hiring_side.append(req.hiring_manager_id)
+    if not hiring_side:  # nobody runs the role yet: the HR team hears about it
+        from app.services.approvals import _accounts_with_roles
+        from app.services.scope import HR_ROLES
+
+        hiring_side = _accounts_with_roles(db, set(HR_ROLES), req.country_code)
+    for rid in hiring_side:
+        notify(db, recipient_id=rid, title=f"Internal application: {emp.full_name}",
                body=f"{post.title} ({req.id}).", href=f"/recruiting/candidates/{cand.id}")
-    if emp.manager_id and emp.manager_id not in (req.recruiter_id, emp.id):
+    notify(db, recipient_id=emp.id, title=f"Application sent: {post.title}",
+           body="Follow it under Internal jobs → My applications.", href="/internal-jobs")
+    if emp.manager_id and emp.manager_id not in (*hiring_side, emp.id):
         notify(db, recipient_id=emp.manager_id, title="Internal application",
                body=f"{emp.full_name} applied for {post.title}.", href="/internal-jobs")
     db.commit()
@@ -414,9 +425,116 @@ def my_applications(db: DbSession, user: CurrentUserDep) -> list[dict]:
     for c in db.scalars(select(Candidate).where(Candidate.employee_id == user.employee_id).order_by(Candidate.applied_on.desc())):
         req = db.get(Requisition, c.requisition_id)
         post = db.get(JobPosting, c.posting_id) if c.posting_id else None
+        # Applicant-safe timeline: each stage with its date and the plain-words text (never the recruiter's notes).
+        stages = db.scalars(select(CandidateStage).where(CandidateStage.candidate_id == c.id).order_by(CandidateStage.entered_at, CandidateStage.id)).all()
+        timeline = [{"stage": st.stage, "at": st.entered_at.isoformat() if st.entered_at else None,
+                     "text": APPLICANT_TEXT.get(st.stage, "Application received." if st.stage == "Applied" else "")}
+                    for st in stages]
         out.append({"id": c.id, "requisition_id": c.requisition_id, "posting_id": c.posting_id,
                     "title": post.title if post else (req.title if req else c.requisition_id), "applied_on": c.applied_on.isoformat(),
-                    "stage": c.stage, "cover_note": c.cover_note})
+                    "stage": c.stage, "cover_note": c.cover_note, "timeline": timeline,
+                    "updated_on": (timeline[-1]["at"] or "")[:10] if timeline else c.applied_on.isoformat(),
+                    "can_withdraw": c.stage not in rules.CLOSED_STAGES and c.stage != "Offer"})
+    return out
+
+
+@router.post("/my-applications/{cand_id}/withdraw", response_model=dict)
+def withdraw_my_application(cand_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> dict:
+    """The applicant takes an internal application back (before an offer). Recruiter and hiring manager are told."""
+    cand = db.get(Candidate, cand_id)
+    if cand is None or not user.employee_id or cand.employee_id != user.employee_id:
+        raise NOT_FOUND
+    if cand.stage in rules.CLOSED_STAGES:
+        raise HTTPException(409, f"This application is already {cand.stage.lower()}.")
+    if cand.stage == "Offer":
+        raise HTTPException(409, "An offer is being prepared; tell the recruiter if you want to step back.")
+    req = db.get(Requisition, cand.requisition_id)
+    before = _cand_snapshot(cand)
+    rules.add_stage(db, cand, "Withdrawn", user.employee_id, "Withdrawn by the applicant")
+    db.flush()
+    record_audit(db, actor_id=user.id, action="candidate_withdrew", entity="candidate", entity_id=cand.id,
+                 subject_id=req.hiring_manager_id if req else None, before=before, after=_cand_snapshot(cand),
+                 ip=client_ip(request))
+    for rid in {req.recruiter_id, req.hiring_manager_id} - {None, user.employee_id} if req else set():
+        notify(db, recipient_id=rid, title=f"Internal application withdrawn: {cand.name}",
+               body=f"{cand.name} withdrew from {req.title}.", href=f"/recruiting/candidates/{cand.id}")
+    db.commit()
+    return {"id": cand.id, "stage": cand.stage}
+
+
+# ---------- referrals (an employee refers someone for an open internal job) ----------
+REFERRAL_RELATIONSHIPS = ("Former colleague", "Classmate", "Friend", "Professional network", "Family", "Other")
+
+
+class ReferralIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    email: str = Field(min_length=3, max_length=255)
+    phone: str | None = Field(default=None, max_length=30)
+    relationship: str = Field(max_length=40)
+    linkedin: str | None = Field(default=None, max_length=300)
+    note: str | None = Field(default=None, max_length=500)
+
+
+@router.post("/requisitions/{req_id}/refer", response_model=dict, status_code=status.HTTP_201_CREATED)
+def refer_candidate(req_id: str, body: ReferralIn, request: Request, db: DbSession, user: CurrentUserDep) -> dict:
+    """The referral lands in the job's pipeline at Applied (source Referral, created_by = the referrer); the recruiter
+    (or the hiring manager / HR) is told, and the referrer follows it under My activity."""
+    emp = me(user)
+    req = db.get(Requisition, req_id)
+    post = db.scalar(select(JobPosting).where(JobPosting.requisition_id == req_id, JobPosting.status == "open")) if req else None
+    if req is None or post is None or not rules.posting_is_open(post, req):
+        raise HTTPException(404, "This job is not open for referrals.")
+    email = body.email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(422, "Enter a valid email address.")
+    if email == (emp.email or "").lower():
+        raise HTTPException(422, "You can't refer yourself.")
+    phone = (body.phone or "").strip()
+    if phone and not re.fullmatch(r"\+?[0-9 ()-]{7,20}", phone):
+        raise HTTPException(422, "Enter a valid phone number or leave it blank.")
+    if body.relationship not in REFERRAL_RELATIONSHIPS:
+        raise HTTPException(422, "Choose how you know the candidate.")
+    linkedin = (body.linkedin or "").strip()
+    if linkedin and not re.match(r"^https://([a-z]{2,3}\.)?linkedin\.com/", linkedin):
+        raise HTTPException(422, "LinkedIn must be an https://linkedin.com link.")
+    if db.scalar(select(Candidate.id).where(Candidate.requisition_id == req.id, func.lower(Candidate.email) == email)):
+        raise HTTPException(409, "This candidate is already in this job's pipeline.")
+    note = " · ".join(x for x in (f"Referred by {emp.full_name} ({body.relationship})", linkedin, (body.note or "").strip()) if x)
+    cand = Candidate(id=f"cand-{uuid.uuid4().hex[:10]}", requisition_id=req.id, posting_id=post.id, name=body.name.strip(),
+                     email=email, phone=phone or None, source="Referral", experience_years=0, skills=[], cover_note=note,
+                     applied_on=date.today(), stage="Applied", created_by=emp.id)
+    db.add(cand)
+    db.flush()
+    rules.add_stage(db, cand, "Applied", emp.id, f"Referred by {emp.full_name}")
+    record_audit(db, actor_id=user.id, action="candidate_referred", entity="candidate", entity_id=cand.id,
+                 subject_id=req.hiring_manager_id, after=_cand_snapshot(cand) | {"referred_by": emp.id}, ip=client_ip(request))
+    recipients = [r for r in (req.recruiter_id, req.hiring_manager_id) if r and r != emp.id]
+    if not recipients:
+        from app.services.approvals import _accounts_with_roles
+        from app.services.scope import HR_ROLES
+
+        recipients = _accounts_with_roles(db, set(HR_ROLES), req.country_code)
+    for rid in dict.fromkeys(recipients):
+        notify(db, recipient_id=rid, title=f"New referral: {cand.name}", body=f"{emp.full_name} referred them for {post.title}.",
+               href=f"/recruiting/candidates/{cand.id}")
+    db.commit()
+    return {"id": cand.id, "stage": cand.stage}
+
+
+@router.get("/my-referrals", response_model=list[dict])
+def my_referrals(db: DbSession, user: CurrentUserDep) -> list[dict]:
+    """People I referred and where they are (stage only; never the recruiters' notes)."""
+    if not user.employee_id:
+        return []
+    out = []
+    for c in db.scalars(select(Candidate).where(Candidate.source == "Referral", Candidate.created_by == user.employee_id)
+                        .order_by(Candidate.applied_on.desc())):
+        req = db.get(Requisition, c.requisition_id)
+        last = db.scalar(select(CandidateStage.entered_at).where(CandidateStage.candidate_id == c.id)
+                         .order_by(CandidateStage.entered_at.desc()).limit(1))
+        out.append({"id": c.id, "requisition_id": c.requisition_id, "title": req.title if req else c.requisition_id,
+                    "name": c.name, "email": c.email, "stage": c.stage, "referred_on": c.applied_on.isoformat(),
+                    "updated_on": last.date().isoformat() if last else c.applied_on.isoformat()})
     return out
 
 
@@ -511,7 +629,9 @@ def tell_applicant(db: DbSession, cand: Candidate, req: Requisition, text: str) 
 
 APPLICANT_TEXT = {"Screening": "Recruiting is reviewing your application.", "Shortlisted": "You are shortlisted.",
                   "Interview": "You are invited to interview.", "Offer": "An offer is being prepared.",
-                  "Rejected": "The team decided not to move forward this time.", "Hired": "Welcome to your new role."}
+                  "Assessment": "You are invited to an assessment.", "Final Review": "Your application is in final review.",
+                  "Rejected": "The team decided not to move forward this time.", "Hired": "Welcome to your new role.",
+                  "Withdrawn": "The application was withdrawn."}
 
 
 @router.post("/candidates/{cand_id}/stage", response_model=CandidateOut)

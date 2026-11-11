@@ -34,6 +34,8 @@ import {
   type SavedReport,
 } from "./reportStore.ts";
 import { downloadCsv, downloadXlsx, fileSlug, hasOrgWideReports, isHrOrAdmin, isInternalEmail, reportingLineIds, type DataToolsActor } from "./shared.ts";
+import { API_ENABLED } from "../../api/client.ts";
+import { ServerReportBuilder } from "../leadership/ServerReportBuilder.tsx";
 import "./datatools.css";
 
 type Message = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
@@ -83,6 +85,17 @@ export function ReportBuilderPage() {
     return (
       <Page title="Report builder">
         <EmptyState title="No access" />
+      </Page>
+    );
+  }
+
+  // Backend mode: reports run on the server from live records (scoped and permission-checked there), saved reports
+  // are kept in the database and CSV exports are audited. The browser-only builder below is the demo (local) mode.
+  if (API_ENABLED) {
+    return (
+      <Page title="Report builder">
+        {!fullAccess && <p className="note info">Reports include only people in your reporting line.</p>}
+        <ServerReportBuilder />
       </Page>
     );
   }

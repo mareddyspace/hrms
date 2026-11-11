@@ -5,6 +5,8 @@ import { ActionButton, notify, Banner, Card, DataTable, Dialog, EmptyState, Fiel
 import { formatShortDate } from "../../model.ts";
 import { candidateHref, getTalentState, subscribeTalent, talentAction } from "../../data/talentLocal.ts";
 import { myApplicationsMirror } from "../../api/syncTalent.ts";
+import { myReferralsMirror } from "../../api/syncExperience.ts";
+import "../../styles/experience.css";
 import type { Requisition } from "../../data/talentData.ts";
 import { isHr } from "./shared.ts";
 import { useActor } from "./useActor.ts";
@@ -24,6 +26,8 @@ import {
   nextStages,
   postingById,
   submitReferral,
+  setJobBoardViewer,
+  withdrawMyApplication,
   subscribeJobBoard,
   type Referral,
   type Stage,
@@ -188,8 +192,8 @@ function ReferDialog({ req, onClose }: { req: Requisition; onClose: (message?: s
   const [form, setForm] = useState({ name: "", email: "", phone: "", relationship: "", linkedIn: "", note: "" });
   const [msg, setMsg] = useState<Msg>(null);
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  function submit() {
-    const error = submitReferral(actor, { postingId: req.id, ...form });
+  async function submit() {
+    const error = await submitReferral(actor, { postingId: req.id, ...form });
     if (error) setMsg({ tone: "err", text: error });
     else onClose(`Referral for ${form.name.trim()} submitted.`);
     return error;
@@ -257,11 +261,16 @@ function BonusCell({ referral }: { referral: Referral }) {
 
 function MyActivity() {
   const actor = useActor();
+  setJobBoardViewer(actor.id);
   const state = useSyncExternalStore(subscribeJobBoard, getJobBoardState);
   useSyncExternalStore(subscribeTalent, getTalentState);
   useSyncExternalStore(myApplicationsMirror.subscribe, myApplicationsMirror.get);
+  const [msg, setMsg] = useState<Msg>(null);
+  const [opened, setOpened] = useState<string | null>(null);
   useEffect(() => {
-    if (API_ENABLED) void myApplicationsMirror.reload(); // stages move in the recruiter's pipeline
+    if (!API_ENABLED) return;
+    void myApplicationsMirror.reload(); // stages move in the recruiter's pipeline
+    void myReferralsMirror.reload();
   }, []);
   const apps = myInternalApplications(actor.id);
   const refs = state.referrals.filter((r) => r.referrerId === actor.id);
@@ -274,23 +283,68 @@ function MyActivity() {
         <MetricCard label="Referrals" value={refs.length} />
         <MetricCard label="Referrals hired" value={hired} />
       </MetricGrid>
+      <Banner message={msg} />
       <Card title="My applications">
         <DataTable
-          headers={["Role", "Applied", "Status"]}
-          rows={apps.map((a) => [postingTitle(a.postingId), formatShortDate(a.submittedOn), <StageBadge key="s" stage={a.status} />])}
+          headers={API_ENABLED ? ["Role", "Applied", "Last update", "Status", ""] : ["Role", "Applied", "Status"]}
+          rows={apps.flatMap((a) => {
+            const row = [postingTitle(a.postingId), formatShortDate(a.submittedOn)];
+            if (!API_ENABLED) return [[...row, <StageBadge key="s" stage={a.status} />]];
+            const main = [
+              ...row,
+              formatShortDate(a.updatedOn),
+              <StageBadge key="s" stage={a.status} />,
+              <span key="a" className="row-gap">
+                {a.timeline && a.timeline.length > 0 && (
+                  <button type="button" className="btn btn-ghost btn-tiny" onClick={() => setOpened(opened === a.id ? null : a.id)}>
+                    {opened === a.id ? "Hide progress" : "Progress"}
+                  </button>
+                )}
+                {a.canWithdraw && (
+                  <ActionButton
+                    className="btn btn-ghost btn-tiny"
+                    busyLabel="Withdrawing…"
+                    doneLabel="Withdrawn"
+                    onAction={async () => {
+                      if (!window.confirm(`Withdraw your application for ${postingTitle(a.postingId)}? The recruiter will be told.`)) return false;
+                      const error = await withdrawMyApplication(a.id);
+                      setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: "Application withdrawn." });
+                      return error;
+                    }}
+                  >
+                    Withdraw
+                  </ActionButton>
+                )}
+              </span>,
+            ];
+            if (opened !== a.id || !a.timeline) return [main];
+            const steps = (
+              <ol key="t" className="xp-timeline">
+                {a.timeline.map((t, i) => (
+                  <li key={`${t.stage}-${i}`} className={i === a.timeline!.length - 1 ? "current" : undefined}>
+                    <span className="xp-dot" aria-hidden />
+                    <div>
+                      <strong>{t.stage}</strong>
+                      {t.at && <span className="muted"> · {formatShortDate(t.at.slice(0, 10))}</span>}
+                      {t.text && <p className="xp-note">{t.text}</p>}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            );
+            return [main, [steps, "", "", "", ""]];
+          })}
           empty={<EmptyState title="No applications" description="Apply from Open roles." />}
         />
       </Card>
       <Card title="My referrals">
         <DataTable
-          headers={["Candidate", "Role", "Referred", "Status", "Referral bonus"]}
-          rows={refs.map((r) => [
-            r.name,
-            postingTitle(r.postingId),
-            formatShortDate(r.submittedOn),
-            <StageBadge key="s" stage={r.status} />,
-            <BonusCell key="b" referral={r} />,
-          ])}
+          headers={API_ENABLED ? ["Candidate", "Role", "Referred", "Last update", "Status"] : ["Candidate", "Role", "Referred", "Status", "Referral bonus"]}
+          rows={refs.map((r) =>
+            API_ENABLED
+              ? [r.name, postingTitle(r.postingId), formatShortDate(r.submittedOn), formatShortDate(r.updatedOn), <StageBadge key="s" stage={r.status} />]
+              : [r.name, postingTitle(r.postingId), formatShortDate(r.submittedOn), <StageBadge key="s" stage={r.status} />, <BonusCell key="b" referral={r} />],
+          )}
           empty={<EmptyState title="No referrals" description="Refer from Open roles." />}
         />
       </Card>
@@ -364,9 +418,22 @@ function Review() {
       </Card>
       <Card title="Referrals">
         <DataTable
-          headers={["Candidate", "Role", "Referred by", "Contact", "Status", "Bonus", "Update"]}
+          headers={API_ENABLED ? ["Candidate", "Role", "Referred by", "Contact", "Status", ""] : ["Candidate", "Role", "Referred by", "Contact", "Status", "Bonus", "Update"]}
           rows={state.referrals.map((r) => {
             const bonus = bonusStatus(r);
+            if (API_ENABLED) {
+              // Referrals are candidates in the job's pipeline: recruiting moves them there.
+              return [
+                r.name,
+                postingTitle(r.postingId),
+                `${r.referrerName} (${r.relationship.toLowerCase()})`,
+                r.email,
+                <StageBadge key="s" stage={r.status} />,
+                <Link key="m" className="quiet-link" to={candidateHref(r.id)}>
+                  Open in pipeline
+                </Link>,
+              ];
+            }
             return [
               <span key="n">
                 {r.name}

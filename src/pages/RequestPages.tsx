@@ -4,13 +4,20 @@ import { Banner, Card, Field, Page, StatusPill, SubmitButton, useAction } from "
 import { usePortal } from "../store.tsx";
 import { formatShortDate } from "../model.ts";
 import { ASSET_SUGGESTIONS, TEMPLATE_BLANKS_ERROR, hasOwnTemplate, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
+import { API_ENABLED } from "../api/client.ts";
+import { AssetsHub } from "../features/experience/AssetsHub.tsx";
 
 // Cash advance, leave encashment and software have guided pages of their own (src/features/payrequests).
 export { CashAdvancePage as CashPage } from "../features/payrequests/CashAdvancePage.tsx";
 export { EncashmentPage } from "../features/payrequests/EncashmentPage.tsx";
 export { SoftwareCataloguePage as SoftwarePage } from "../features/payrequests/SoftwarePage.tsx";
 
+/** Backend mode: assets live on the server (inventory, requests, manager and IT steps); see AssetsHub. */
 export function AssetsPage() {
+  return API_ENABLED ? <AssetsHub /> : <LocalAssetsPage />;
+}
+
+function LocalAssetsPage() {
   const { state, employee, addAssetRequest, hasApprover } = usePortal();
   const [item, setItem] = useState("");
   const { value: reason, setValue: setReason, ref: reasonRef, fill: fillReason, reset: resetReason } = useTemplatedText<HTMLInputElement>();

@@ -1,0 +1,232 @@
+/* Layout & responsive fixes shared by every role and module.
+   Loaded once from src/main.tsx after styles.css. Works through the shared building blocks
+   (Dialog, Dropdown, DataTable, Field, Page) and common class names, so feature pages need no changes. */
+
+/* ---------- Page width: nothing is wider than the screen ---------- */
+@media screen { .main { overflow-x: hidden; } }
+.main > *, .stack > *, .card, .form-grid > *, .form-grid-2 > * { min-width: 0; }
+.main img, .main video, .main canvas, .main iframe { max-width: 100%; }
+.main svg:not([width]) { max-width: 100%; }
+pre { max-width: 100%; overflow-x: auto; }
+
+/* ---------- Page header and card header: title and actions wrap instead of overflowing ---------- */
+.page-head, .card-head { flex-wrap: wrap; row-gap: 10px; }
+.page-head > :first-child { min-width: 0; flex: 1 1 240px; }
+.page-head > div:not(:first-child) {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.page-head h1, .card-head .card-title { overflow-wrap: anywhere; }
+.card-head > * { min-width: 0; }
+
+/* ---------- Forms ---------- */
+.field { min-width: 0; }
+.field > input,
+.field > select,
+.field > textarea {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+/* Native date / time pickers have a wide built-in minimum width: let them shrink to their cell. */
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"],
+input[type="month"],
+input[type="week"] {
+  min-width: 0;
+  max-width: 100%;
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator { cursor: pointer; margin-left: 4px; }
+select { max-width: 100%; text-overflow: ellipsis; }
+.filter-bar > input,
+.filter-bar > select { min-width: 0; max-width: 100%; }
+.form-grid, .form-grid-2 { gap: 12px; }
+.form-actions { justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.form-actions > .note:first-child, .form-actions > .muted:first-child { margin: 0 auto 0 0; }
+@media (max-width: 600px) {
+  .form-grid, .form-grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .field.wide { grid-column: auto; }
+  .filter-bar > input, .filter-bar > select { flex: 1 1 140px; }
+}
+
+/* ---------- Dialog (src/components/ui.tsx): header and buttons stay in view, the body scrolls ---------- */
+.dialog-root { padding: 16px; z-index: 80; }
+.dialog-root .dialog-panel {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
+  padding: 0;
+}
+.dialog-panel:focus { outline: none; }
+.dialog-panel > .dialog-title {
+  flex: none;
+  margin: 0;
+  padding: 16px 52px 10px 18px;
+  overflow-wrap: anywhere;
+}
+.dialog-panel > .dialog-close { z-index: 3; }
+.dialog-panel > .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 2px 18px 18px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.dialog-actions > .note, .dialog-actions > .err, .dialog-actions > p { margin: 0 auto 0 0; }
+/* Buttons passed through Dialog's `actions` prop: a footer pinned under the scrolling body. */
+.dialog-panel > .dialog-actions {
+  flex: none;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 0 0 var(--radius-lg, 10px) var(--radius-lg, 10px);
+}
+/* Forms that end with their own .dialog-actions row inside the body: the row sticks to the bottom. */
+.dialog-body .dialog-actions {
+  position: sticky;
+  bottom: -18px;
+  z-index: 2;
+  margin: 14px -18px 0;
+  padding: 12px 18px;
+  background: var(--card);
+  border-top: 1px solid var(--line);
+}
+.dialog-body .dialog-actions:last-child,
+.dialog-body > :last-child > .dialog-actions:last-child,
+.dialog-body > :last-child > :last-child > .dialog-actions:last-child { margin-bottom: -18px; }
+
+/* Older modal cards (sign-in welcome, password policy, new task / ticket, new chat) */
+.modal-root { padding: 16px; }
+.modal-card {
+  max-width: 100%;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.modal-card .form-actions { flex-wrap: wrap; }
+
+/* Side drawer */
+.drawer-panel { max-width: 100vw; overscroll-behavior: contain; }
+
+@media (max-width: 599.98px) {
+  /* Phones: dialogs become a sheet attached to the bottom edge that can grow to the full screen height. */
+  .dialog-root, .modal-root { padding: 0; place-items: end stretch; align-items: end; }
+  .dialog-root .dialog-panel,
+  .dialog-root .dialog-panel.wide {
+    width: 100%;
+    max-height: 100dvh;
+    border-radius: 14px 14px 0 0;
+    border-bottom: 0;
+  }
+  .modal-root .modal-card {
+    width: 100%;
+    max-height: 100dvh;
+    border-radius: 14px 14px 0 0;
+  }
+  .dialog-panel > .dialog-actions {
+    border-radius: 0;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .dialog-panel > .dialog-title { padding: 14px 48px 8px 16px; }
+  .dialog-panel > .dialog-body { padding: 2px 16px 18px; }
+  .dialog-body .dialog-actions { margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
+  .dialog-actions > button, .dialog-actions > .btn, .dialog-actions > a.btn,
+  .modal-card .form-actions > button { flex: 1 1 auto; justify-content: center; }
+}
+
+/* ---------- Menus and popups: never outside the screen ---------- */
+.dropdown-menu {
+  z-index: 60;
+  max-width: calc(100vw - 16px);
+  max-height: min(70dvh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.dropdown-menu.flip-up { top: auto; bottom: calc(100% + 6px); }
+.dropdown-item { white-space: normal; overflow-wrap: anywhere; }
+.gsearch-list {
+  min-width: min(320px, calc(100vw - 32px));
+  max-width: calc(100vw - 16px);
+  max-height: min(70dvh, 460px, calc(100dvh - 120px));
+  overscroll-behavior: contain;
+}
+.notes-panel { max-width: calc(100vw - 16px); }
+.copilot-fab-panel { max-height: min(560px, calc(100dvh - 100px)); }
+
+/* ---------- Tables ---------- */
+.data-table-wrap,
+.table-scroll,
+.doc-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.data-table th, table.data th { white-space: nowrap; }
+.data-table td, table.data td { vertical-align: middle; }
+.data-table td.clip {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Buttons and badges in a cell stay on one line; several buttons sit side by side. */
+.data-table td .btn, .data-table td button, .data-table td .status-badge,
+table.data td .btn, table.data td button, table.data td .status-badge { white-space: nowrap; }
+.data-table td:last-child:has(> button + button, > .btn + .btn),
+table.data td:last-child:has(> button + button, > .btn + .btn) { white-space: nowrap; }
+.data-table td:last-child > button + button, .data-table td:last-child > .btn + .btn,
+table.data td:last-child > button + button, table.data td:last-child > .btn + .btn { margin-left: 6px; }
+
+@media (max-width: 768px) {
+  /* Wide tables scroll sideways inside their box; the first column (the name) stays visible. */
+  .data-table-wrap .data-table th:first-child,
+  .data-table-wrap .data-table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--card);
+    box-shadow: 1px 0 0 var(--line);
+  }
+  .data-table-wrap .data-table th:first-child { background: var(--table-head, var(--card)); }
+  /* Tables placed straight in a card or section (no scroll wrapper) scroll inside themselves. */
+  .card > table.data, .stack > table.data, section > table.data {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+/* ---------- Approve / decline rows (Approvals centre, leave, shifts, recognition, …) ---------- */
+.approval-actions input,
+.approval-actions textarea {
+  border: 1px solid var(--chip-border, var(--line));
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: var(--input-bg, var(--card));
+  font: inherit;
+  font-size: 13.5px;
+}
+.approval-actions > button, .approval-actions > .btn { flex: none; white-space: nowrap; }
+@media (max-width: 600px) {
+  /* Note on its own line, the decision buttons side by side underneath. */
+  .approval-actions > input, .approval-actions > textarea { flex: 1 1 100%; }
+  .approval-actions > button, .approval-actions > .btn { flex: 1 1 0; justify-content: center; }
+}

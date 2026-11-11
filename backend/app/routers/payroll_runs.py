@@ -12,6 +12,8 @@ POST /payroll/runs/{id}/send-back            review -> draft {note}
 GET  /payroll/runs/{id}/register.csv | bank.csv   exports: register for those who see lines; bank file for HR /
                                              payroll only, locked runs only
 PUT  /payroll/bank-details/{employee_id}     HR fixes missing bank details
+GET  /payroll/people/{employee_id}/slips     a person's payslips from locked runs (their own; HR / payroll for people
+GET  /payroll/people/{employee_id}/slips/{run_id}/pdf   in scope; 404 for anyone else) - the profile's Payslips tab
 """
 
 from __future__ import annotations
@@ -385,22 +387,17 @@ def put_bank(employee_id: str, body: BankIn, request: Request, db: DbSession, us
     return {"employee_id": employee_id, "bank_ok": True, "bank_masked": rules._mask(body.account_number)}
 
 
-@router.get("/my-slips", response_model=list[MySlipOut])
-def my_slips(db: DbSession, user: CurrentUserDep) -> list[MySlipOut]:
-    """My payslips from locked runs (other months are worked out by the portal)."""
-    emp = me(user)
+def _slips_of(db: DbSession, employee_id: str) -> list[MySlipOut]:
     rows = db.execute(select(PayrollRunLine, PayrollRun).join(PayrollRun, PayrollRun.id == PayrollRunLine.run_id)
-                      .where(PayrollRunLine.employee_id == emp.id, PayrollRun.status == "locked")
+                      .where(PayrollRunLine.employee_id == employee_id, PayrollRun.status == "locked")
                       .order_by(PayrollRun.month.desc())).all()
     return [MySlipOut(run_id=run.id, month=run.month, slip=line.slip, gross=line.gross, net=line.net) for line, run in rows]
 
 
-@router.get("/my-slips/{run_id}/pdf")
-def my_slip_pdf(run_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> Response:
-    """The official PDF of my payslip from a locked run (only ever my own; amounts are never logged)."""
+def _slip_pdf(db: DbSession, user: CurrentUser, emp: Employee, run_id: str, request: Request) -> Response:
+    """The official PDF of one person's payslip from a locked run (amounts are never logged)."""
     from app.services.payslip_pdf import payslip_pdf
 
-    emp = me(user)
     run = db.get(PayrollRun, run_id)
     line = db.scalar(select(PayrollRunLine).where(PayrollRunLine.run_id == run_id, PayrollRunLine.employee_id == emp.id)) if run else None
     if run is None or line is None or run.status != "locked":
@@ -414,3 +411,38 @@ def my_slip_pdf(run_id: str, request: Request, db: DbSession, user: CurrentUserD
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "private, no-store",
                              "X-Content-Type-Options": "nosniff"})
+
+
+def _slip_owner(db: DbSession, user: CurrentUser, employee_id: str) -> Employee:
+    """The person whose payslips are asked for: myself, or (HR / payroll) someone in my data scope and payroll
+    countries. Everyone else - managers included - gets 404, so pay never leaks and existence isn't confirmed."""
+    if employee_id == user.employee_id:
+        return me(user)
+    emp = db.get(Employee, employee_id)
+    if (emp is None or _role(user) not in rules.PAYROLL_ROLES or not rules.can_see_lines(db, user)
+            or not user.scope.can_see(emp) or not rules.country_ok(user.scope, _role(user), emp.country_code)):
+        raise NOT_FOUND
+    return emp
+
+
+@router.get("/my-slips", response_model=list[MySlipOut])
+def my_slips(db: DbSession, user: CurrentUserDep) -> list[MySlipOut]:
+    """My payslips from locked runs (other months are worked out by the portal)."""
+    return _slips_of(db, me(user).id)
+
+
+@router.get("/my-slips/{run_id}/pdf")
+def my_slip_pdf(run_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> Response:
+    """The official PDF of my payslip from a locked run (only ever my own; amounts are never logged)."""
+    return _slip_pdf(db, user, me(user), run_id, request)
+
+
+@router.get("/people/{employee_id}/slips", response_model=list[MySlipOut])
+def person_slips(employee_id: str, db: DbSession, user: CurrentUserDep) -> list[MySlipOut]:
+    """A person's payslips from locked runs, for the Payslips tab on their profile."""
+    return _slips_of(db, _slip_owner(db, user, employee_id).id)
+
+
+@router.get("/people/{employee_id}/slips/{run_id}/pdf")
+def person_slip_pdf(employee_id: str, run_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> Response:
+    return _slip_pdf(db, user, _slip_owner(db, user, employee_id), run_id, request)

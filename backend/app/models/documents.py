@@ -31,6 +31,9 @@ class EmployeeDocument(TimestampMixin, Base):
     verification_note: Mapped[str | None] = mapped_column(Text)
     verified_by: Mapped[str | None] = mapped_column(String(64))
     verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Migration 0036: soft delete. The row and its files stay (audit trail); a deleted document shows nowhere.
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    deleted_by: Mapped[str | None] = mapped_column(String(64))
 
 
 class DocumentVersion(Base):
@@ -50,7 +53,7 @@ class DocumentVersion(Base):
 
 
 class LetterTemplate(TimestampMixin, Base):
-    """Wording for one letter type; country_code NULL = the default used where no country version exists.
+    """Wording for one letter type: per legal entity, else per country, else the default (both NULL).
 
     paragraphs hold {placeholders} (see app/services/letters.py PLACEHOLDERS) and <b>bold</b> markup.
     """
@@ -61,6 +64,8 @@ class LetterTemplate(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     letter_type: Mapped[str] = mapped_column(String(32), index=True)
     country_code: Mapped[str | None] = mapped_column(String(2))
+    # Migration 0036: a legal entity's own wording (country_code NULL); wins over the country and default versions.
+    legal_entity: Mapped[str | None] = mapped_column(String(200))
     title: Mapped[str] = mapped_column(String(200))
     to_whom: Mapped[bool] = mapped_column(Boolean, default=False)
     paragraphs: Mapped[list[str]] = mapped_column(JSON)

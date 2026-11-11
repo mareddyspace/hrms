@@ -1,0 +1,182 @@
+/* Manager views: team overview, drill-in, timesheet review, approvals hub. Uses the shared tokens (styles.css,
+   styles/time.css). */
+
+.mgr-links {
+  display: inline-flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.9em;
+}
+
+.mgr-hours {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 88px;
+  white-space: nowrap;
+}
+
+.mgr-meter {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--tz-grey-bg, var(--soft));
+  overflow: hidden;
+}
+
+.mgr-meter i {
+  display: block;
+  height: 100%;
+  background: var(--tz-amber, var(--accent));
+}
+
+.mgr-meter.full i {
+  background: var(--tz-green, var(--accent));
+}
+
+.mgr-flag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.78em;
+  line-height: 1.5;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.mgr-flag.warn {
+  color: var(--tz-amber, #b45309);
+  background: var(--tz-amber-bg, transparent);
+  border-color: var(--tz-amber-line, var(--line));
+}
+
+.mgr-flag.danger {
+  color: var(--tz-red, #b91c1c);
+  background: var(--tz-red-bg, transparent);
+  border-color: var(--tz-red-line, var(--line));
+}
+
+.mgr-work {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  max-width: 180px;
+}
+
+.mgr-drill {
+  display: grid;
+  gap: 12px;
+}
+
+.mgr-drill-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.mgr-drill-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.mgr-drill-stats .muted {
+  font-size: 0.8em;
+}
+
+.mgr-days td {
+  vertical-align: middle;
+}
+
+.mgr-days tr.mgr-off td {
+  color: var(--muted);
+}
+
+/* Decision dialog */
+.mgr-decision {
+  display: grid;
+  gap: 10px;
+}
+
+.mgr-decision-summary {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft, var(--card));
+}
+
+.btn.mgr-btn-danger {
+  background: var(--tz-red, #b91c1c);
+  border-color: var(--tz-red, #b91c1c);
+  color: #fff;
+}
+
+/* Filters and bulk bar (approvals hub, team timesheets) */
+.mgr-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.mgr-filters select,
+.mgr-filters input[type="search"] {
+  min-width: 140px;
+  max-width: 100%;
+}
+
+.mgr-filters label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.mgr-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft, var(--card));
+}
+
+.mgr-bulk .grow {
+  flex: 1;
+}
+
+.approval-item.mgr-selectable {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+}
+
+.approval-item.mgr-selectable > input[type="checkbox"] {
+  margin-top: 3px;
+}
+
+.approval-item.mgr-selectable > .mgr-item-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .mgr-hours {
+    min-width: 70px;
+  }
+
+  .mgr-filters select,
+  .mgr-filters input[type="search"] {
+    flex: 1 1 100%;
+  }
+}

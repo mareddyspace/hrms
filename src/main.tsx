@@ -6,6 +6,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { LocaleProvider } from "./locale/LocaleContext.tsx";
 import { PortalProvider } from "./store.tsx";
 import "./styles.css";
+import "./styles/layout-fixes.css";
 
 // A new hosted build replaces sample data saved by an older version, so the site matches the code.
 // Personal settings, notes and the signed-in session are kept.

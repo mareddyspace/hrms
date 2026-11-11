@@ -1,4 +1,5 @@
 import { maskAddress as maskAddressValue, maskEmail as maskEmailValue, maskPhone } from "./utils/mask.ts";
+import { appliesAt, type Place } from "./data/holidayRules.ts";
 
 export type LeaveCode = "comp_off" | "pto" | "wfh" | "emergency_wfh" | "sick" | "casual" | "unpaid" | "bereavement" | "optional";
 export type RequestStatus = "pending" | "approved" | "rejected" | "withdrawn";
@@ -287,31 +288,53 @@ export interface Holiday {
   /** Region (holiday calendar) for a regional holiday; empty = the whole country. */
   region?: string;
   description?: string;
+  /** national | regional | company | optional (src/data/holidayRules.ts); unset on older saved data. */
+  holidayType?: HolidayType;
+  /** States / cities it applies to; empty = the whole country. */
+  regions?: string[];
+  legalEntity?: string;
 }
+
+export type HolidayType = "national" | "regional" | "company" | "optional";
 
 let personCountry: (employeeId: string) => CountryCode | undefined = () => undefined;
 let personExtraHolidays: (employeeId: string) => Holiday[] = () => [];
+let personPlace: (employeeId: string) => Place = () => ({});
 
-/** Wires up who works where, and personal extra days off (optional holidays they picked). */
+/** Wires up who works where (country, office, legal entity), and personal extra days off. */
 export function setHolidayContext(
   countryOf: (employeeId: string) => CountryCode | undefined,
   extra: (employeeId: string) => Holiday[],
+  placeOf?: (employeeId: string) => Place,
 ): void {
   personCountry = countryOf;
   personExtraHolidays = extra;
+  if (placeOf) personPlace = placeOf;
 }
 
-/** The holidays that apply to one person: their country's list plus optional holidays they picked. */
+/** Office and legal entity of a person (for regional / entity holidays). */
+export function placeOfPerson(employeeId: string): Place {
+  return personPlace(employeeId);
+}
+
+/** The person's days off: national and company holidays of their country, their office's state holidays and their
+ * legal entity's (optional holidays are picked as leave, so they are not included). */
 export function holidaysForPerson(holidays: Holiday[], employeeId: string): Holiday[] {
   const country = personCountry(employeeId) ?? "IN";
+  const place = personPlace(employeeId);
   const byDate = new Map<string, Holiday>();
-  for (const h of holidays) if ((h.countryCode ?? "IN") === country) byDate.set(h.date, h);
+  for (const h of holidays) if ((h.countryCode ?? "IN") === country && appliesAt(h, place)) byDate.set(h.date, h);
   for (const h of personExtraHolidays(employeeId)) if (!byDate.has(h.date)) byDate.set(h.date, h);
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
-/** Holidays for everyone in one country (no personal picks). */
+/** Days off for everyone in one country: national and company holidays (no state-only or optional ones). */
 export function holidaysForCountry(holidays: Holiday[], country: CountryCode | undefined): Holiday[] {
+  return allHolidaysForCountry(holidays, country).filter((h) => appliesAt(h, {}));
+}
+
+/** Every holiday listed for one country: all offices and types, optional ones included (holiday admin, calendars). */
+export function allHolidaysForCountry(holidays: Holiday[], country: CountryCode | undefined): Holiday[] {
   return holidays.filter((h) => (h.countryCode ?? "IN") === (country ?? "IN")).sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -484,6 +507,11 @@ export interface TaskAttachment {
   id: string;
   name: string;
   at: string;
+  /** Backend mode: stored on the server (/tasks/{id}/attachments). */
+  size?: number;
+  contentType?: string;
+  /** Employee id of whoever attached it. */
+  by?: string;
 }
 
 export interface TaskComment {
@@ -491,6 +519,8 @@ export interface TaskComment {
   author: string;
   text: string;
   at: string;
+  /** Employee ids @mentioned in the comment (they are notified and can open the task). */
+  mentions?: string[];
 }
 
 export interface TaskActivity {
@@ -546,6 +576,8 @@ export interface Task {
   score: number;
   lastActivityAt: string;
   due: string;
+  /** When work is planned to start (optional; on or before the due date). */
+  startDate?: string;
   /** Extra people on the task (not the primary owner). Managers can add/remove. */
   peopleIds?: string[];
   /** 0–100 completion. Derived when omitted. */

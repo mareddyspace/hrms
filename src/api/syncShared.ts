@@ -69,7 +69,7 @@ async function authorizedFetch(path: string, init: RequestInit): Promise<Respons
 }
 
 export async function uploadRaw<T>(path: string, file: Blob, contentType: string, filename: string): Promise<T> {
-  const res = await authorizedFetch(`${path}?filename=${encodeURIComponent(filename)}`, {
+  const res = await authorizedFetch(`${path}${path.includes("?") ? "&" : "?"}filename=${encodeURIComponent(filename)}`, {
     method: "POST",
     headers: { "Content-Type": contentType, Accept: "application/json" },
     body: file,

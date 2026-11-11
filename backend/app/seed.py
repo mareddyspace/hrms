@@ -297,6 +297,9 @@ def run(reset_passwords: bool = False, *, only_if_free: bool = False) -> dict[st
         stats["holidays"] = seed_holidays(db)
         stats["optional_holidays_added"] = _seed_optional_holidays(db)  # optional holiday list (0017)
         db.flush()
+        from app.services.holiday_rules import classify_seeded  # holiday type / regions, fill-blank only (0032)
+
+        stats.update(classify_seeded(db))
         stats["leave_requests_added"] = seed_leave_requests(db)
         stats["projects"] = seed_projects(db)
         stats.update(seed_org_and_workflows(db))
@@ -325,6 +328,13 @@ def run(reset_passwords: bool = False, *, only_if_free: bool = False) -> dict[st
         for module in (seed_admin_data, seed_time_activity, seed_talent_activity, seed_hr_activity, seed_shift_roster, seed_pay_claims, seed_reimbursements, seed_comms, seed_fill_gaps, seed_hr_period, seed_repairs):
             stats.update(module.seed(db))
             db.flush()
+        from app import seed_experience  # assets, immigration documents, privacy centre (0037), insert-only
+
+        stats.update(seed_experience.seed(db))
+        from app import seed_contracts  # contractors' contract end dates, fill-blank only (0038)
+
+        stats.update(seed_contracts.seed(db))
+        stats["next_year_holidays_typed"] = classify_seeded(db)["holidays_typed"]  # rows added by seed_admin_data
         db.commit()
         del cache
     return stats

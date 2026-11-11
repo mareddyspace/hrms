@@ -6,7 +6,8 @@
 - left = quota - used (approved); pending is shown separately; a new request must fit in left - pending.
 - Eligibility (gender, service, employment type, probation, max per request, notice): app/services/leave_rules.py.
   Types for the other gender are hidden; other ineligible types stay in balances with eligible = False.
-- Holidays: the country's common ones (calendar NULL) plus those of the person's holiday_calendar.
+- Holidays: national + company days of the country, the state holidays of the person's office and their legal
+  entity's (app/services/holiday_rules.py); optional holidays are picked as leave, never skipped automatically.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Country, Employee, Holiday, LeavePolicy, LeaveRequest, LeaveType
+from app.models import Country, Employee, LeavePolicy, LeaveRequest, LeaveType
 from app.services import leave_rules as eligibility
 
 WEEKLY_OFF = {5, 6}  # Python weekday(): Saturday, Sunday - the default when a country sets no working week
@@ -40,18 +41,20 @@ def today_for(employee: Employee) -> date:
         return datetime.now(ZoneInfo("UTC")).date()
 
 
-def holiday_dates(db: Session, country_code: str, start: date, end: date, calendar: str | None = None) -> set[date]:
-    """Active holidays in the country: common ones (no calendar) plus those of `calendar` when given."""
-    in_calendar = Holiday.calendar.is_(None) if not calendar else or_(Holiday.calendar.is_(None), Holiday.calendar == calendar)
-    rows = db.scalars(
-        select(Holiday.date).where(Holiday.country_code == country_code, Holiday.date >= start, Holiday.date <= end,
-                                   Holiday.active.is_(True), in_calendar)
-    )
-    return set(rows)
+def holiday_dates(db: Session, country_code: str, start: date, end: date, calendar: str | None = None, *,
+                  location: str | None = None, legal_entity: str | None = None) -> set[date]:
+    """Days off in the country: national and company holidays (plus `calendar`'s), and regional ones for
+    `location` / `legal_entity` when given. Optional holidays are never days off (app/services/holiday_rules.py)."""
+    from app.services.holiday_rules import rows_for
+
+    return {h.date for h in rows_for(db, country_code, start, end, calendar=calendar, location=location,
+                                     legal_entity=legal_entity)}
 
 
 def holiday_dates_for(db: Session, employee: Employee, start: date, end: date) -> set[date]:
-    return holiday_dates(db, employee.country_code, start, end, employee.holiday_calendar)
+    """The person's days off: their country's, their office's state and their legal entity's holidays."""
+    return holiday_dates(db, employee.country_code, start, end, employee.holiday_calendar,
+                         location=employee.location, legal_entity=employee.legal_entity)
 
 
 def weekly_off_for(db: Session, country_code: str | None) -> set[int]:
@@ -107,6 +110,14 @@ def policies_for(db: Session, country_code: str, on: date) -> list[tuple[LeavePo
     return [(p, t) for p, t in db.execute(stmt).all()]
 
 
+DEFAULT_ENCASHABLE = ("pto",)  # privilege leave, when a policy doesn't say
+
+
+def is_encashable(policy: LeavePolicy) -> bool:
+    flag = getattr(policy, "encashable", None)
+    return bool(flag) if flag is not None else policy.leave_code in DEFAULT_ENCASHABLE
+
+
 @dataclass
 class BalanceRow:
     code: str
@@ -120,6 +131,7 @@ class BalanceRow:
     accrual: str
     eligible: bool = True
     not_eligible_reason: str | None = None
+    encashable: bool = False
 
 
 def _used_and_pending(db: Session, employee_id: str, code: str, year: int) -> tuple[float, float]:
@@ -155,6 +167,8 @@ def balances(db: Session, employee: Employee, year: int | None = None) -> list[B
             saved = eligibility.saved_carry(db, employee.id, policy.leave_code, year)  # year-end job, when it has run
             if saved is not None:
                 carried = saved
+            elif employee.joining_date and employee.joining_date > date(year - 1, 12, 31):
+                carried = 0.0  # joined this year: nothing to carry (same rule as the year-end job)
             else:
                 last_used, _ = _used_and_pending(db, employee.id, policy.leave_code, year - 1)
                 carried = min(float(policy.carry_forward_max), max(0.0, quota - last_used))
@@ -183,6 +197,7 @@ def balances(db: Session, employee: Employee, year: int | None = None) -> list[B
                 accrual=policy.accrual,
                 eligible=reason is None,
                 not_eligible_reason=reason,
+                encashable=is_encashable(policy),
             )
         )
     return rows

@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import type { ButtonHTMLAttributes, ReactNode, RefObject } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { COMPANY_NAME } from "../brand.ts";
 import type { LeaveRow, Project } from "../model.ts";
@@ -129,6 +129,11 @@ export function MetricGrid({ children }: { children: ReactNode }) {
 
 const NUMERIC_TEXT = /^[-+−]?(?:[A-Z]{2,3}\s|[^\d\sA-Za-z]{1,3}\s?)?[\d,]+(?:\.\d+)?\s?%?$/;
 
+/** Long plain-text cells are cut to one line with an ellipsis; the full text shows on hover. */
+function isLongText(cell: ReactNode): boolean {
+  return typeof cell === "string" && cell.length > 48;
+}
+
 function isNumericCell(cell: ReactNode): boolean {
   if (typeof cell === "number") return true;
   return typeof cell === "string" && NUMERIC_TEXT.test(cell.trim());
@@ -165,7 +170,13 @@ export function DataTable({
           {rows.map((row, index) => (
             <tr key={index}>
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex} className={numericCols[cellIndex] ? "num" : undefined}>{cell}</td>
+                <td
+                  key={cellIndex}
+                  className={numericCols[cellIndex] ? "num" : isLongText(cell) ? "clip" : undefined}
+                  title={isLongText(cell) ? (cell as string) : undefined}
+                >
+                  {cell}
+                </td>
               ))}
             </tr>
           ))}
@@ -251,6 +262,54 @@ export function Tabs({
   );
 }
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusableIn(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (el) => el.offsetParent !== null || el === document.activeElement,
+  );
+}
+
+/**
+ * Keeps an absolutely positioned popup (menu, popover, suggestion list) inside the viewport:
+ * it opens upwards when there is more room above, gets a max-height that fits (the popup scrolls),
+ * and is nudged left/right so it never runs off the screen edge.
+ */
+export function useKeepInViewport(ref: RefObject<HTMLElement | null>, active: boolean, margin = 8) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!active || !el) return;
+    const place = () => {
+      el.classList.remove("flip-up");
+      el.style.removeProperty("translate");
+      el.style.removeProperty("max-height");
+      const vw = document.documentElement.clientWidth;
+      const vh = window.innerHeight;
+      let rect = el.getBoundingClientRect();
+      if (rect.bottom > vh - margin) {
+        const anchor = (el.offsetParent as HTMLElement | null)?.getBoundingClientRect();
+        const below = vh - margin - rect.top;
+        const above = anchor ? anchor.top - margin - 6 : 0;
+        if (above > below && above >= 120) {
+          el.classList.add("flip-up");
+          el.style.maxHeight = `${Math.floor(above)}px`;
+        } else {
+          el.style.maxHeight = `${Math.max(120, Math.floor(below))}px`;
+        }
+      }
+      rect = el.getBoundingClientRect();
+      let dx = 0;
+      if (rect.right > vw - margin) dx = vw - margin - rect.right;
+      if (rect.left + dx < margin) dx = margin - rect.left;
+      if (dx) el.style.translate = `${Math.round(dx)}px 0`;
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [ref, active, margin]);
+}
+
 export function Dialog({
   open,
   title,
@@ -269,23 +328,62 @@ export function Dialog({
 }) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   useEffect(() => {
     if (!open) return;
+    const panel = panelRef.current;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // Focus moves into the dialog (unless a field inside already took it), without popping a phone keyboard.
+    if (panel && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
+    // The page behind stays put while the dialog is open.
+    const body = document.body;
+    const prevOverflow = body.style.overflow;
+    body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeRef.current();
+      if (event.key === "Escape") {
+        closeRef.current();
+        return;
+      }
+      // Tab and Shift+Tab cycle through the dialog's own controls only.
+      const root = panelRef.current;
+      if (event.key !== "Tab" || !root) return;
+      const items = focusableIn(root);
+      if (!items.length) return;
+      const firstItem = items[0];
+      const lastItem = items[items.length - 1];
+      const current = document.activeElement;
+      if (event.shiftKey && (current === firstItem || !root.contains(current))) {
+        event.preventDefault();
+        lastItem.focus();
+      } else if (!event.shiftKey && (current === lastItem || !root.contains(current))) {
+        event.preventDefault();
+        firstItem.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      body.style.overflow = prevOverflow;
+      if (previous && previous.isConnected) previous.focus({ preventScroll: true });
+    };
   }, [open]);
   if (!open) return null;
   return (
     <div className="dialog-root" role="presentation">
-      <button className="dialog-scrim" type="button" aria-label="Close dialog" onClick={onClose} />
-      <div className={`dialog-panel${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <button className="dialog-scrim" type="button" aria-label="Close dialog" tabIndex={-1} onClick={onClose} />
+      <div
+        ref={panelRef}
+        className={`dialog-panel${wide ? " wide" : ""}${actions ? " has-actions" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+      >
         <button className="dialog-close" type="button" aria-label="Close" onClick={onClose}>
           ×
         </button>
-        <h2 id="dialog-title">{title}</h2>
+        <h2 id={titleId} className="dialog-title">{title}</h2>
         <div className="dialog-body">{children}</div>
         {actions && <div className="dialog-actions">{actions}</div>}
       </div>
@@ -330,14 +428,23 @@ export function Dropdown({
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
+  useKeepInViewport(menuRef, open);
 
   useEffect(() => {
     function onDoc(event: MouseEvent) {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
   }, []);
 
   return (
@@ -353,7 +460,7 @@ export function Dropdown({
         {label}
       </button>
       {open && (
-        <div className="dropdown-menu" role="menu" id={menuId}>
+        <div className="dropdown-menu" role="menu" id={menuId} ref={menuRef}>
           {items.map((item) =>
             item.to ? (
               <Link key={item.id} to={item.to} className="dropdown-item" role="menuitem" onClick={() => setOpen(false)}>

@@ -2,13 +2,13 @@ import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { API_ENABLED, api } from "../api/client.ts";
 import { Card, Page } from "../components/ui.tsx";
-import { findDemoById, managementChain } from "../demoAccounts.ts";
+import { managementChain } from "../demoAccounts.ts";
 import {
   TIMEZ_COUNTRIES,
   formatShortDate,
-  holidaysForCountry,
-  holidaysForPerson,
+  allHolidaysForCountry,
   mondayOf,
+  placeOfPerson,
   monthLabel,
   parseISODate,
   toISO,
@@ -22,6 +22,7 @@ import {
 import { usePortal } from "../store.tsx";
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import { isTerminated, listPeople, managerChainIds, subscribePeople } from "../data/peopleLocal.ts";
+import { appliesAt } from "../data/holidayRules.ts";
 import "./TeamLeaveCalendar.css";
 
 /** One colour per leave type (bars use it as fill, pending requests as a dashed outline). */
@@ -50,6 +51,8 @@ interface RosterPerson {
   country: CountryCode;
   managerId?: string;
   managerName?: string;
+  location?: string;
+  legalEntity?: string;
 }
 
 interface DayInfo {
@@ -86,6 +89,8 @@ export function TeamLeaveCalendarPage() {
         country: (p.countryCode || "IN") as CountryCode,
         managerId: p.managerId || undefined,
         managerName: p.managerName || undefined,
+        location: p.location || undefined,
+        legalEntity: p.legalEntity || undefined,
       }));
     const known = new Set(list.map((p) => p.id));
     for (const a of demoAccounts) {
@@ -97,6 +102,8 @@ export function TeamLeaveCalendarPage() {
         country: (a.countryCode ?? "IN") as CountryCode,
         managerId: manager?.id,
         managerName: manager?.fullName,
+        location: a.location,
+        legalEntity: a.legalEntity,
       });
     }
     return list.sort((a, b) => a.name.localeCompare(b.name));
@@ -175,11 +182,9 @@ export function TeamLeaveCalendarPage() {
       (r) => visibleIds.has(r.employeeId) && (r.status === "approved" || r.status === "pending"),
     );
     for (const person of visible) {
-      // Directory people outside India aren't known to the holiday context, so use their country's list.
-      const holidays: Holiday[] =
-        findDemoById(person.id) || person.country === "IN"
-          ? holidaysForPerson(state.holidays, person.id)
-          : holidaysForCountry(state.holidays, person.country);
+      // Each person's own days off: their country's national and company holidays plus their office's state holidays.
+      const place = person.location ? { location: person.location, legalEntity: person.legalEntity } : placeOfPerson(person.id);
+      const holidays: Holiday[] = allHolidaysForCountry(state.holidays, person.country).filter((h) => appliesAt(h, place));
       const holidayByDate = new Map(holidays.map((h) => [h.date, h.name]));
       const offs = scheduleForEmployee({ countryCode: person.country }).weeklyOffDays;
       const mine = leaves.filter((r) => r.employeeId === person.id && (r.status === "approved" || seesDetail(person.id)));

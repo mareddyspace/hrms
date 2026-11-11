@@ -18,6 +18,7 @@ WeekDay = Literal["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 class LeaveBalanceRuleOut(LeaveBalanceOut):
     eligible: bool = True
     not_eligible_reason: str | None = None
+    encashable: bool = False
 
 
 class LeaveBalancesRuleOut(BaseModel):
@@ -65,6 +66,7 @@ class LeavePolicyAdminIn(LeaveRuleFields):
     accrual: Accrual = "annual"
     effective_from: dt.date
     effective_to: dt.date | None = None
+    encashable: bool | None = None
 
 
 class LeavePolicyAdminUpdate(BaseModel):
@@ -81,6 +83,7 @@ class LeavePolicyAdminUpdate(BaseModel):
     max_per_request: float | None = Field(default=None, gt=0, le=365)
     min_notice_days: int | None = Field(default=None, ge=0, le=365)
     active: bool | None = None
+    encashable: bool | None = None
 
 
 class LeavePolicyAdminOut(BaseModel):
@@ -102,6 +105,10 @@ class LeavePolicyAdminOut(BaseModel):
     max_per_request: float | None
     min_notice_days: int | None
     active: bool
+    encashable: bool | None = None
+
+
+HolidayType = Literal["national", "regional", "company", "optional"]
 
 
 class HolidayAdminIn(BaseModel):
@@ -110,6 +117,9 @@ class HolidayAdminIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     calendar: str | None = Field(default=None, max_length=100)
     description: str | None = Field(default=None, max_length=1000)
+    holiday_type: HolidayType = "national"
+    regions: list[str] | None = Field(default=None, max_length=30)
+    legal_entity: str | None = Field(default=None, max_length=200)
 
 
 class HolidayAdminUpdate(BaseModel):
@@ -118,6 +128,9 @@ class HolidayAdminUpdate(BaseModel):
     calendar: str | None = Field(default=None, max_length=100)
     description: str | None = Field(default=None, max_length=1000)
     active: bool | None = None
+    holiday_type: HolidayType | None = None
+    regions: list[str] | None = Field(default=None, max_length=30)
+    legal_entity: str | None = Field(default=None, max_length=200)
 
 
 class HolidayAdminOut(BaseModel):
@@ -130,12 +143,25 @@ class HolidayAdminOut(BaseModel):
     calendar: str | None
     active: bool
     description: str | None = None
+    holiday_type: str | None = None
+    regions: list[str] | None = None
+    legal_entity: str | None = None
 
 
 class HolidayCalendarOut(BaseModel):
     country_code: str
     calendar: str
     employees: int
+
+
+class HolidayLocationOut(BaseModel):
+    country_code: str
+    location: str
+    region: str | None
+    legal_entity: str | None
+    employees: int
+    days_off: int
+    by_type: dict[str, int]
 
 
 class CarryForwardRunOut(BaseModel):

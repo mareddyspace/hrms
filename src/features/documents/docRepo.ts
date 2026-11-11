@@ -1,10 +1,12 @@
 /**
- * Document repository for "Documents & letters": categories (with labels HR can change), upload with description and
- * expiry, versions, HR verification, expiry and preview. Backend mode: /documents (backend/app/routers/documents.py).
+ * Document repository for "Documents & letters": categories with per-category rules HR can change (label, verification,
+ * employee upload, manager visibility, required expiry, required for everyone, file kinds and size), upload with
+ * progress, versions, HR verification, expiry, preview, delete and employee folders.
+ * Backend mode: /documents (backend/app/routers/documents.py).
  * Local mode: this browser (metadata in localStorage, files in the receipt store), with the same rules.
  */
 import { API_ENABLED, api, apiRequest } from "../../api/client.ts";
-import { attempt, authorizedFetch, fileType } from "../../api/syncRewardsShared.ts";
+import { attempt, authorizedFetch, fileType, uploadWithProgress } from "../../api/syncRewardsShared.ts";
 import { errorText } from "../../api/syncShared.ts";
 import { downloadDocument } from "../../api/syncRewards.ts";
 import { loadReceipt, saveReceipt } from "../../data/receiptStore.ts";
@@ -16,12 +18,29 @@ import { getRewardState } from "../../data/rewardLocal.ts";
 
 export type Verification = "pending" | "verified" | "rejected" | null;
 
+export type FileKind = "pdf" | "image" | "docx";
+
 export interface CategoryConfig {
   name: string;
   label: string;
   verification: boolean;
   employeeUpload: boolean;
+  /** Managers (anyone above the employee in the line) may see documents in this category. */
+  managerVisible: boolean;
+  /** An expiry date is required on upload and can't be removed. */
+  requiresExpiry: boolean;
+  /** Every employee should have one (shown as missing in the employee folders). */
+  required: boolean;
+  types: FileKind[];
+  maxMb: number;
 }
+
+export const FILE_KIND_TYPES: Record<FileKind, string[]> = {
+  pdf: ["application/pdf"],
+  image: ["image/png", "image/jpeg", "image/gif", "image/webp"],
+  docx: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+};
+export const FILE_KIND_LABELS: Record<FileKind, string> = { pdf: "PDF", image: "Image", docx: "Word (.docx)" };
 
 export interface RepoVersion {
   id: string;
@@ -60,23 +79,67 @@ export interface RepoRules {
   contentTypes: string[];
 }
 
+const ALL_KINDS: FileKind[] = ["pdf", "image", "docx"];
+const cat = (name: string, label: string, verification: boolean, employeeUpload: boolean, extra: Partial<CategoryConfig> = {}): CategoryConfig => ({
+  name,
+  label,
+  verification,
+  employeeUpload,
+  managerVisible: false,
+  requiresExpiry: false,
+  required: false,
+  types: ALL_KINDS,
+  maxMb: 10,
+  ...extra,
+});
+
 /** Defaults; the backend's configuration wins in backend mode (app/services/documents.py DEFAULT_CATEGORY_CONFIG). */
 export const DEFAULT_CATEGORIES: CategoryConfig[] = [
-  { name: "Personal", label: "Personal", verification: false, employeeUpload: true },
-  { name: "Identity", label: "Identity proofs", verification: true, employeeUpload: true },
-  { name: "Education", label: "Education certificates", verification: true, employeeUpload: true },
-  { name: "Employment", label: "Employment", verification: true, employeeUpload: true },
-  { name: "Contracts", label: "Contracts", verification: false, employeeUpload: false },
-  { name: "Certifications", label: "Certifications", verification: true, employeeUpload: true },
-  { name: "Compliance", label: "Compliance", verification: false, employeeUpload: true },
-  { name: "Medical", label: "Medical", verification: false, employeeUpload: true },
-  { name: "Payroll", label: "Salary documents", verification: false, employeeUpload: false },
-  { name: "Policies", label: "Company policies", verification: false, employeeUpload: false },
-  { name: "Letters", label: "Letters", verification: false, employeeUpload: false },
-  { name: "Other", label: "Other", verification: false, employeeUpload: true },
+  cat("Personal", "Personal", false, true),
+  cat("Identity", "Identity proofs", true, true, { required: true }),
+  cat("Immigration", "Visas & work permits", true, true, { requiresExpiry: true }),
+  cat("Education", "Education", true, true, { managerVisible: true }),
+  cat("Employment", "Employment", true, true, { managerVisible: true }),
+  cat("Contracts", "Contracts", false, false),
+  cat("Certifications", "Certificates", true, true, { managerVisible: true }),
+  cat("Compliance", "Compliance", false, true, { managerVisible: true }),
+  cat("Medical", "Medical", false, true),
+  cat("Payroll", "Payroll & tax", false, false),
+  cat("Policies", "Company policies", false, false),
+  cat("Letters", "Letters", false, false, { types: ["pdf"] }),
+  cat("Other", "Other", false, true),
 ];
 
-const HR_ROLES = ["hr", "hr_admin", "hrbp"];
+interface CategoryOut {
+  name: string;
+  label: string;
+  verification: boolean;
+  employee_upload: boolean;
+  manager_visible?: boolean;
+  requires_expiry?: boolean;
+  required?: boolean;
+  types?: string[];
+  max_mb?: number;
+}
+
+function categoryFromApi(c: CategoryOut): CategoryConfig {
+  const base = DEFAULT_CATEGORIES.find((d) => d.name === c.name);
+  const types = (c.types ?? []).filter((t): t is FileKind => t in FILE_KIND_TYPES);
+  return {
+    name: c.name,
+    label: c.label,
+    verification: c.verification,
+    employeeUpload: c.employee_upload,
+    managerVisible: c.manager_visible ?? base?.managerVisible ?? false,
+    requiresExpiry: c.requires_expiry ?? base?.requiresExpiry ?? false,
+    required: c.required ?? base?.required ?? false,
+    types: types.length ? types : (base?.types ?? ALL_KINDS),
+    maxMb: c.max_mb ?? base?.maxMb ?? 10,
+  };
+}
+
+// Same as the backend's HR_ACCESS_ROLES: the HR team plus administrators (app/services/scope.py).
+const HR_ROLES = ["hr", "hr_admin", "hrbp", "admin", "super_admin"];
 export const isDocHr = (role: string) => HR_ROLES.includes(role);
 export const canConfigure = (role: string) => isDocHr(role) || role === "admin" || role === "super_admin";
 
@@ -157,13 +220,24 @@ const LOCAL_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/gif", 
 
 export async function loadRules(): Promise<RepoRules> {
   if (API_ENABLED) {
-    const r = await api.get<{ categories: string[]; max_bytes: number; content_types: string[]; category_config?: { name: string; label: string; verification: boolean; employee_upload: boolean }[] }>("/documents/rules");
+    const r = await api.get<{ categories: string[]; max_bytes: number; content_types: string[]; category_config?: CategoryOut[] }>("/documents/rules");
     const config = r.category_config?.length
-      ? r.category_config.map((c) => ({ name: c.name, label: c.label, verification: c.verification, employeeUpload: c.employee_upload }))
-      : r.categories.map((name) => DEFAULT_CATEGORIES.find((c) => c.name === name) ?? { name, label: name, verification: false, employeeUpload: true });
+      ? r.category_config.map(categoryFromApi)
+      : r.categories.map((name) => DEFAULT_CATEGORIES.find((c) => c.name === name) ?? cat(name, name, false, true));
     return { categories: config, maxBytes: r.max_bytes, contentTypes: r.content_types };
   }
-  return { categories: local.get().categories ?? DEFAULT_CATEGORIES, maxBytes: 1.5 * 1024 * 1024, contentTypes: LOCAL_TYPES };
+  // Local mode: saved rows from before the per-category rules get the defaults for the new fields.
+  const saved = local.get().categories;
+  const categories = DEFAULT_CATEGORIES.map((d) => ({ ...d, ...(saved?.find((c) => c.name === d.name) ?? {}) }));
+  return { categories, maxBytes: 1.5 * 1024 * 1024, contentTypes: LOCAL_TYPES };
+}
+
+/** The file kinds and size a category accepts, as shown next to the file picker. */
+export function categoryAccepts(rules: RepoRules, category?: CategoryConfig): { accept: string; text: string; maxBytes: number } {
+  const kinds = (category?.types ?? ALL_KINDS).filter((k) => FILE_KIND_TYPES[k].some((t) => rules.contentTypes.includes(t)));
+  const types = kinds.flatMap((k) => FILE_KIND_TYPES[k]).filter((t) => rules.contentTypes.includes(t));
+  const maxBytes = Math.min(rules.maxBytes, (category?.maxMb ?? 10) * 1024 * 1024);
+  return { accept: types.join(","), text: kinds.map((k) => FILE_KIND_LABELS[k]).join(", "), maxBytes };
 }
 
 export async function loadDocs(employeeId: string, actorId: string): Promise<RepoDoc[]> {
@@ -251,21 +325,25 @@ export interface UploadInput {
   employeeId?: string;
 }
 
-export function fileProblem(file: File, rules: RepoRules): string | null {
+export function fileProblem(file: File, rules: RepoRules, categoryName?: string): string | null {
+  const category = categoryName ? rules.categories.find((c) => c.name === categoryName) : undefined;
+  const { accept, text, maxBytes } = categoryAccepts(rules, category);
   if (file.size === 0) return "The file is empty.";
-  if (file.size > rules.maxBytes) return `The file is larger than ${(rules.maxBytes / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} MB.`;
+  if (file.size > maxBytes) return `The file is larger than ${(maxBytes / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} MB${category && maxBytes < rules.maxBytes ? `, the limit for ${category.label.toLowerCase()}` : ""}.`;
   if (!rules.contentTypes.includes(fileType(file))) return API_ENABLED ? "Upload a PDF, Word (.docx) or image file." : "Upload a PDF or image file.";
+  if (category && !accept.split(",").includes(fileType(file))) return `${category.label} accepts ${text} files only.`;
   return null;
 }
 
 type Actor = { id: string; fullName: string; role: string };
 
-export async function uploadDoc(actor: Actor, file: File, input: UploadInput, rules: RepoRules): Promise<string | null> {
-  const problem = fileProblem(file, rules);
+export async function uploadDoc(actor: Actor, file: File, input: UploadInput, rules: RepoRules, onProgress?: (percent: number) => void): Promise<string | null> {
+  const problem = fileProblem(file, rules, input.category);
   if (problem) return problem;
   if (!input.title.trim()) return "Give the document a name.";
   const cat = rules.categories.find((c) => c.name === input.category);
   if (!cat || cat.name === "Letters") return "Choose a category.";
+  if (cat.requiresExpiry && !input.expiryDate) return `Enter the expiry date: ${cat.label.toLowerCase()} need one.`;
   const owner = input.employeeId ?? actor.id;
   const hr = isDocHr(actor.role);
   if (!hr && owner !== actor.id) return "Only the employee or HR can add documents.";
@@ -275,7 +353,7 @@ export async function uploadDoc(actor: Actor, file: File, input: UploadInput, ru
     if (input.employeeId && input.employeeId !== actor.id) q.set("employee_id", input.employeeId);
     if (input.expiryDate) q.set("expiry_date", input.expiryDate);
     if (input.description.trim()) q.set("description", input.description.trim());
-    return attempt(() => authorizedFetch(`/documents?${q.toString()}`, { method: "POST", headers: { "Content-Type": fileType(file), Accept: "application/json" }, body: file }));
+    return attempt(() => uploadWithProgress(`/documents?${q.toString()}`, file, fileType(file), onProgress));
   }
   try {
     const saved = await saveReceipt(file);
@@ -304,14 +382,14 @@ export async function uploadDoc(actor: Actor, file: File, input: UploadInput, ru
   }
 }
 
-export async function uploadVersion(actor: Actor, doc: RepoDoc, file: File, rules: RepoRules, expiryDate?: string): Promise<string | null> {
-  const problem = fileProblem(file, rules);
+export async function uploadVersion(actor: Actor, doc: RepoDoc, file: File, rules: RepoRules, expiryDate?: string, onProgress?: (percent: number) => void): Promise<string | null> {
+  const problem = fileProblem(file, rules, doc.category);
   if (problem) return problem;
   if (doc.category === "Letters") return "Letters get new versions only when HR regenerates them.";
   if (API_ENABLED) {
     const q = new URLSearchParams({ filename: file.name });
     if (expiryDate) q.set("expiry_date", expiryDate);
-    return attempt(() => authorizedFetch(`/documents/${enc(doc.id)}/versions?${q.toString()}`, { method: "POST", headers: { "Content-Type": fileType(file), Accept: "application/json" }, body: file }));
+    return attempt(() => uploadWithProgress(`/documents/${enc(doc.id)}/versions?${q.toString()}`, file, fileType(file), onProgress));
   }
   if (doc.id.startsWith("legacy-")) return LEGACY_READ_ONLY;
   const hr = isDocHr(actor.role);
@@ -343,7 +421,8 @@ export async function uploadVersion(actor: Actor, doc: RepoDoc, file: File, rule
   }
 }
 
-export async function setExpiry(actor: Actor, doc: RepoDoc, expiry: string | null): Promise<string | null> {
+export async function setExpiry(actor: Actor, doc: RepoDoc, expiry: string | null, rules?: RepoRules): Promise<string | null> {
+  if (!expiry && rules?.categories.find((c) => c.name === doc.category)?.requiresExpiry) return "Documents in this category need an expiry date.";
   if (API_ENABLED) return attempt(() => apiRequest(`/documents/${enc(doc.id)}`, { method: "PATCH", body: { expiry_date: expiry || null } }));
   if (doc.id.startsWith("legacy-")) return LEGACY_READ_ONLY;
   if (doc.employeeId !== actor.id && !isDocHr(actor.role)) return "Only the employee or HR can change the expiry.";
@@ -367,15 +446,98 @@ export async function verifyDoc(actor: Actor, doc: RepoDoc, decision: "verify" |
 export async function saveCategories(actor: Actor, categories: CategoryConfig[]): Promise<string | null> {
   if (!canConfigure(actor.role)) return "Only HR or an administrator can change document categories.";
   if (categories.some((c) => !c.label.trim())) return "Every category needs a name.";
+  if (categories.some((c) => !c.types.length)) return "Allow at least one file type in every category.";
+  if (categories.some((c) => !Number.isInteger(c.maxMb) || c.maxMb < 1 || c.maxMb > 10)) return "Maximum size is 1 to 10 MB.";
   if (API_ENABLED) {
     return attempt(() =>
       apiRequest("/documents/categories", {
         method: "PUT",
-        body: categories.map((c) => ({ name: c.name, label: c.label.trim(), verification: c.verification, employee_upload: c.employeeUpload })),
+        body: categories.map((c) => ({
+          name: c.name,
+          label: c.label.trim(),
+          verification: c.verification,
+          employee_upload: c.employeeUpload,
+          manager_visible: c.managerVisible,
+          requires_expiry: c.requiresExpiry,
+          required: c.name === "Letters" ? false : c.required,
+          types: c.types,
+          max_mb: c.maxMb,
+        })),
       }),
     );
   }
   return local.set({ ...local.get(), categories: categories.map((c) => ({ ...c, label: c.label.trim(), employeeUpload: c.name === "Letters" ? false : c.employeeUpload })) });
+}
+
+/** Who may delete: HR always (with a reason), the employee only their own unverified upload in an employee category. */
+export function deleteBlocker(actor: Actor, doc: RepoDoc, rules: RepoRules): string | null {
+  if (doc.category === "Letters" || doc.letterRequestId) return "Issued letters stay on record and can't be deleted.";
+  if (doc.id.startsWith("legacy-")) return LEGACY_READ_ONLY;
+  if (isDocHr(actor.role)) return null;
+  if (doc.employeeId !== actor.id) return "Only the employee or HR can delete documents.";
+  if (!rules.categories.find((c) => c.name === doc.category)?.employeeUpload) return "HR manages documents in this category.";
+  if (doc.uploadedBy && doc.uploadedBy !== actor.fullName) return "HR added this document; ask HR to remove it.";
+  if (doc.verification === "verified") return "HR has verified this document; ask HR to remove it, or upload a new version.";
+  return null;
+}
+
+export async function deleteDoc(actor: Actor, doc: RepoDoc, rules: RepoRules, reason: string): Promise<string | null> {
+  if (doc.employeeId !== actor.id && !reason.trim()) return "Say why it is removed; the employee is told.";
+  if (API_ENABLED) return attempt(() => apiRequest(`/documents/${enc(doc.id)}`, { method: "DELETE", body: { reason: reason.trim() } }));
+  const blocker = deleteBlocker(actor, doc, rules);
+  if (blocker) return blocker;
+  const error = local.set({ ...local.get(), docs: local.get().docs.filter((d) => d.id !== doc.id) });
+  if (!error && doc.employeeId !== actor.id) notifyLocal(doc.employeeId, `${doc.title} was removed`, reason.trim(), "/documents");
+  return error;
+}
+
+/* ───────────── Employee folders ───────────── */
+
+export interface DocFolder {
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  department: string;
+  documents: number;
+  pending: number;
+  rejected: number;
+  expiring: number;
+  expired: number;
+  missing: string[];
+}
+
+/** One folder per person the actor may see documents for (HR: scope, managers: reports, everyone else: themselves). */
+export async function loadFolders(actor: Actor, rules: RepoRules, people: { id: string; fullName: string; employeeCode: string; department?: string; managerId?: string }[], q = ""): Promise<DocFolder[]> {
+  if (API_ENABLED) {
+    const rows = await api.get<{ employee_id: string; employee_name: string; employee_code: string; department: string; documents: number; pending: number; rejected: number; expiring: number; expired: number; missing: string[] }[]>(
+      "/documents/folders",
+      q.trim() ? { q: q.trim() } : undefined,
+    );
+    return rows.map((r) => ({ employeeId: r.employee_id, employeeName: r.employee_name, employeeCode: r.employee_code, department: r.department, documents: r.documents, pending: r.pending, rejected: r.rejected, expiring: r.expiring, expired: r.expired, missing: r.missing }));
+  }
+  const hr = isDocHr(actor.role);
+  const docs = local.get().docs;
+  const needle = q.trim().toLowerCase();
+  return people
+    .filter((p) => (hr || p.id === actor.id || p.managerId === actor.id) && (!needle || `${p.fullName} ${p.employeeCode} ${p.department ?? ""}`.toLowerCase().includes(needle)))
+    .map((p) => {
+      const full = hr || p.id === actor.id;
+      const mine = docs.filter((d) => d.employeeId === p.id && (full || rules.categories.find((c) => c.name === d.category)?.managerVisible));
+      const days = mine.map((d) => daysTo(d.expiryDate)).filter((n): n is number => n !== undefined);
+      return {
+        employeeId: p.id,
+        employeeName: p.fullName,
+        employeeCode: p.employeeCode,
+        department: p.department ?? "",
+        documents: mine.length,
+        pending: mine.filter((d) => d.verification === "pending").length,
+        rejected: mine.filter((d) => d.verification === "rejected").length,
+        expiring: days.filter((n) => n >= 0 && n <= 30).length,
+        expired: days.filter((n) => n < 0).length,
+        missing: rules.categories.filter((c) => c.required && (full || c.managerVisible) && !mine.some((d) => d.category === c.name)).map((c) => c.label),
+      };
+    })
+    .sort((a, b) => a.employeeName.localeCompare(b.employeeName));
 }
 
 /** Downloads (or opens for preview) one version. */
@@ -402,7 +564,7 @@ export async function previewUrl(doc: RepoDoc, version: RepoVersion): Promise<{ 
   try {
     let blob: Blob;
     if (API_ENABLED) {
-      const res = await authorizedFetch(`/documents/${enc(doc.id)}/download?version=${version.version}`);
+      const res = await authorizedFetch(`/documents/${enc(doc.id)}/download?version=${version.version}&inline=true`);
       blob = await res.blob();
     } else {
       const dataUrl = await loadReceipt(version.id);

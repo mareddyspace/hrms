@@ -41,6 +41,7 @@ import {
   type DelegationScope,
 } from "../data/delegations.ts";
 import { DelegationSettings } from "./DelegationSettings.tsx";
+import { DecisionDialog, type DecisionKind } from "../features/manager/DecisionDialog.tsx";
 import { currentStepOf, isWaitingOn, stepText, waitingApproverIds } from "../data/expenseFlow.ts";
 import { decideTravel, getTravelRequests, subscribeTravel, withdrawTravel } from "../data/travelStore.ts";
 import { cashViews, cashWaitingOn, decideCash, getCashSnapshot, subscribeCash, withdrawCash } from "../features/payrequests/cashStore.ts";
@@ -642,15 +643,56 @@ export function ApprovalsCenterPage() {
     linkedTab === "mine" || linkedTab === "delegate" ? linkedTab : "waiting",
   );
   const canDelegate = useMemo(() => hasReports(employee.id), [employee.id, people]);
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  // Filters (a link like /approvals?person=emp-x opens on that person), selection and the decision dialog.
+  const [kindFilter, setKindFilter] = useState("");
+  const [personFilter, setPersonFilter] = useState(searchParams.get("person") ?? "");
+  const [query, setQuery] = useState("");
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [dialog, setDialog] = useState<{ items: RequestItem[]; decision: DecisionKind } | null>(null);
+  const kinds = useMemo(() => [...new Set(waiting.map((w) => w.kind))].sort(), [waiting]);
+  const requesters = useMemo(
+    () => [...new Set(waiting.map((w) => w.employeeId))].sort((a, b) => nameOf(a).localeCompare(nameOf(b))),
+    // nameOf is stable for a given people list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [waiting],
+  );
+  const needle = query.trim().toLowerCase();
+  const filtered = waiting.filter(
+    (w) =>
+      (!kindFilter || w.kind === kindFilter) &&
+      (!personFilter || w.employeeId === personFilter) &&
+      (!overdueOnly || ageOf(w) > SLA_DAYS) &&
+      (!needle || `${nameOf(w.employeeId)} ${w.kind} ${w.title} ${w.detail ?? ""}`.toLowerCase().includes(needle)),
+  );
+  const selectedItems = filtered.filter((w) => selected.has(w.key));
+
+  /** Decide one or more requests with the same comment; returns the errors (null when all went through). */
+  async function decideMany(items: RequestItem[], decision: DecisionKind, note: string): Promise<string | null> {
+    const failed: string[] = [];
+    let done = 0;
+    for (const item of items) {
+      const hold = holdOf(item);
+      const text = hold.delegatedFrom ? onBehalfNote(hold.delegatedFrom, note || undefined) : note || undefined;
+      const error = item.decide ? await item.decide(decision === "approve" ? "approved" : "rejected", text) : "This request can't be decided here.";
+      if (error) failed.push(`${nameOf(item.employeeId)} · ${item.kind}: ${error}`);
+      else done += 1;
+    }
+    setSelected(new Set());
+    if (done) {
+      const text = `${done} ${done === 1 ? "request" : "requests"} ${decision === "approve" ? "approved" : items.every((i) => i.declineLabel === "Send back") ? "sent back" : "declined"}.`;
+      setMessage({ tone: failed.length ? "err" : "ok", text: failed.length ? `${text} ${failed.join(" ")}` : text });
+      if (!failed.length) notify(text);
+    }
+    return failed.length && !done ? failed.join(" ") : null;
+  }
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const myDelegation = activeDelegationFor(employee.id, today);
 
-  async function run(action: () => string | null | Promise<string | null>, success: string, key?: string) {
+  async function run(action: () => string | null | Promise<string | null>, success: string) {
     const error = await action();
     setMessage(error ? { tone: "err", text: error } : { tone: "ok", text: success });
     if (error) return error;
-    if (key) setNotes((prev) => ({ ...prev, [key]: "" }));
     notify(success);
     return null;
   }
@@ -681,72 +723,141 @@ export function ApprovalsCenterPage() {
           {waiting.length === 0 ? (
             <EmptyState title="Nothing waiting on you" />
           ) : (
-            <ul className="approval-list">
-              {waiting.map((item) => {
-                const hold = holdOf(item);
-                const noteFor = (raw?: string) => (hold.delegatedFrom ? onBehalfNote(hold.delegatedFrom, raw) : raw);
-                return (
-                <li key={item.key} className="approval-item">
-                  <div className="row-between">
-                    <strong>{nameOf(item.employeeId)}</strong>
-                    <span>
-                      {hold.delegatedFrom && <span className="pill">Delegated from {personLabel(hold.delegatedFrom)}</span>}
-                      {hold.escalated && <span className="pill pill-mandatory">Escalated</span>}
-                      <span className="pill">{item.kind}</span>
-                    </span>
-                  </div>
-                  <span>{item.title}</span>
-                  {item.detail && <span className="muted">{item.detail}</span>}
-                  {item.raisedOn && (
-                    <span className="muted">
-                      Raised {formatShortDate(item.raisedOn)} · {ageOf(item) === 0 ? "waiting since today" : `waiting ${plural(ageOf(item), "day")}`}
-                      {ageOf(item) > SLA_DAYS && <span className="pill pill-mandatory"> Overdue</span>}
-                    </span>
-                  )}
-                  <div className="approval-actions">
-                    {item.kind !== "Timesheet" && (
-                      <input
-                        value={notes[item.key] ?? ""}
-                        onChange={(e) => setNotes((prev) => ({ ...prev, [item.key]: e.target.value }))}
-                        placeholder="Note (optional)"
-                        aria-label={`Note for ${nameOf(item.employeeId)}`}
-                      />
-                    )}
-                    <ActionButton
-                      className="btn btn-tiny"
-                      doneLabel={item.approveLabel === "Verify" ? "Verified" : item.approveLabel === "Accept" ? "Accepted" : item.approveLabel ? "Done" : "Approved"}
-                      onAction={() =>
-                        run(
-                          () => item.decide!("approved", noteFor(notes[item.key])),
-                          API_ENABLED
-                            ? `${item.kind}: approval recorded for ${nameOf(item.employeeId)}.`
-                            : `${item.kind} approved for ${nameOf(item.employeeId)}.`,
-                          item.key,
-                        )
-                      }
-                    >
-                      {item.approveLabel ?? "Approve"}
-                    </ActionButton>
-                    <ActionButton
-                      className="btn-ghost btn-tiny"
-                      doneLabel={item.declineLabel === "Send back" ? "Sent back" : item.declineLabel ? "Done" : "Declined"}
-                      onAction={() =>
-                        run(
-                          () => item.decide!("rejected", noteFor(notes[item.key])),
-                          item.declineLabel === "Send back"
-                            ? `${item.kind} sent back to ${nameOf(item.employeeId)}.`
-                            : `${item.kind} declined for ${nameOf(item.employeeId)}.`,
-                          item.key,
-                        )
-                      }
-                    >
-                      {item.declineLabel ?? "Decline"}
-                    </ActionButton>
-                  </div>
-                </li>
-                );
-              })}
-            </ul>
+            <>
+              <div className="mgr-filters">
+                <select aria-label="Type" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>
+                  <option value="">All types</option>
+                  {kinds.map((k) => (
+                    <option key={k} value={k}>
+                      {k} ({waiting.filter((w) => w.kind === k).length})
+                    </option>
+                  ))}
+                </select>
+                <select aria-label="Person" value={personFilter} onChange={(e) => setPersonFilter(e.target.value)}>
+                  <option value="">Everyone</option>
+                  {requesters.map((id) => (
+                    <option key={id} value={id}>
+                      {nameOf(id)}
+                    </option>
+                  ))}
+                </select>
+                <input type="search" aria-label="Search" placeholder="Search" value={query} onChange={(e) => setQuery(e.target.value)} />
+                <label>
+                  <input type="checkbox" checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)} />
+                  Overdue
+                </label>
+                {(kindFilter || personFilter || query || overdueOnly) && (
+                  <button
+                    type="button"
+                    className="btn-ghost btn-tiny"
+                    onClick={() => {
+                      setKindFilter("");
+                      setPersonFilter("");
+                      setQuery("");
+                      setOverdueOnly(false);
+                    }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {selectedItems.length > 0 && (
+                <div className="mgr-bulk">
+                  <strong className="grow">{selectedItems.length} selected</strong>
+                  <button type="button" className="btn btn-tiny" onClick={() => setDialog({ items: selectedItems, decision: "approve" })}>
+                    Approve {selectedItems.length}
+                  </button>
+                  <button type="button" className="btn-ghost btn-tiny" onClick={() => setSelected(new Set())}>
+                    Clear selection
+                  </button>
+                </div>
+              )}
+              {filtered.length === 0 ? (
+                <p className="muted">Nothing matches these filters.</p>
+              ) : (
+                <ul className="approval-list">
+                  <li className="approval-item mgr-selectable">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all shown"
+                      checked={filtered.every((i) => selected.has(i.key))}
+                      onChange={(e) => setSelected(e.target.checked ? new Set(filtered.map((i) => i.key)) : new Set())}
+                    />
+                    <span className="muted">Select all shown ({filtered.length})</span>
+                  </li>
+                  {filtered.map((item) => {
+                    const hold = holdOf(item);
+                    return (
+                      <li key={item.key} className="approval-item mgr-selectable">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${item.kind} from ${nameOf(item.employeeId)}`}
+                          checked={selected.has(item.key)}
+                          onChange={(e) =>
+                            setSelected((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(item.key);
+                              else next.delete(item.key);
+                              return next;
+                            })
+                          }
+                        />
+                        <div className="mgr-item-body">
+                          <div className="row-between">
+                            <strong>{nameOf(item.employeeId)}</strong>
+                            <span>
+                              {hold.delegatedFrom && <span className="pill">Delegated from {personLabel(hold.delegatedFrom)}</span>}
+                              {hold.escalated && <span className="pill pill-mandatory">Escalated</span>}
+                              <span className="pill">{item.kind}</span>
+                            </span>
+                          </div>
+                          <span>{item.title}</span>
+                          {item.detail && <span className="muted">{item.detail}</span>}
+                          {item.raisedOn && (
+                            <span className="muted">
+                              Raised {formatShortDate(item.raisedOn)} · {ageOf(item) === 0 ? "waiting since today" : `waiting ${plural(ageOf(item), "day")}`}
+                              {ageOf(item) > SLA_DAYS && <span className="pill pill-mandatory"> Overdue</span>}
+                            </span>
+                          )}
+                          <div className="approval-actions">
+                            <button type="button" className="btn btn-tiny" onClick={() => setDialog({ items: [item], decision: "approve" })}>
+                              {item.approveLabel ?? "Approve"}
+                            </button>
+                            <button type="button" className="btn-ghost btn-tiny" onClick={() => setDialog({ items: [item], decision: "reject" })}>
+                              {item.declineLabel ?? "Decline"}
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
+          )}
+          {dialog && (
+            <DecisionDialog
+              decision={dialog.decision}
+              count={dialog.items.length}
+              rejectLabel={dialog.items[0]?.declineLabel ?? "Decline"}
+              title={
+                dialog.items.length === 1
+                  ? `${dialog.items[0].kind} · ${nameOf(dialog.items[0].employeeId)}`
+                  : `${dialog.decision === "approve" ? "Approve" : "Decline"} ${dialog.items.length} requests`
+              }
+              summary={
+                <ul className="todo">
+                  {dialog.items.slice(0, 8).map((i) => (
+                    <li key={i.key}>
+                      <strong>{nameOf(i.employeeId)}</strong> · {i.kind} · {i.title}
+                    </li>
+                  ))}
+                  {dialog.items.length > 8 && <li className="muted">and {dialog.items.length - 8} more</li>}
+                </ul>
+              }
+              onConfirm={(note) => decideMany(dialog.items, dialog.decision, note)}
+              onClose={() => setDialog(null)}
+            />
           )}
         </Card>
       )}

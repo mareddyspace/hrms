@@ -608,3 +608,24 @@ setOvertimeClosedMonthCheck((employeeId, month) => {
   const entity = person.legalEntity || legalEntityFor(person.countryCode as CountryCode);
   return local.get().runs.some((r) => r.month === month && r.countryCode === person.countryCode && r.legalEntity === entity && r.status !== "draft");
 });
+
+/**
+ * One person's payslips from locked runs (the Payslips tab on their profile). Backend mode asks the server, which
+ * only answers for the person themself or HR / payroll with the person in scope (404 otherwise -> empty list).
+ */
+export async function personLockedSlips(employeeId: string): Promise<{ month: string; runId: string; slip: GeneratedPayslip }[]> {
+  if (API_ENABLED) {
+    const rows = await api.get<{ run_id: string; month: string; slip: GeneratedPayslip | null }[]>(
+      `/payroll/people/${encodeURIComponent(employeeId)}/slips`,
+    );
+    return rows.filter((r) => r.slip).map((r) => ({ month: r.month, runId: r.run_id, slip: { ...(r.slip as GeneratedPayslip), runId: r.run_id } }));
+  }
+  return local
+    .get()
+    .runs.filter((r) => r.status === "locked")
+    .flatMap((r) => {
+      const line = r.lines.find((l) => l.employeeId === employeeId);
+      return line?.slip ? [{ month: r.month, runId: r.id, slip: { ...line.slip, runId: r.id } }] : [];
+    })
+    .sort((a, b) => b.month.localeCompare(a.month));
+}

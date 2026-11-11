@@ -1,0 +1,110 @@
+/* Leave & holidays: holiday types, filters, legend, office summary, leave month calendar, policy editor */
+:root {
+  --lh-national: #fde2e2;
+  --lh-national-line: #f87171;
+  --lh-company: #e0e7ff;
+  --lh-company-line: #818cf8;
+  --lh-regional: #dcfce7;
+  --lh-regional-line: #4ade80;
+  --lh-optional: #fef9c3;
+  --lh-optional-line: #facc15;
+  --lh-leave: #dbeafe;
+  --lh-leave-line: #60a5fa;
+  --lh-pending: #fff7ed;
+  --lh-pending-line: #fb923c;
+}
+html[data-theme="night"] {
+  --lh-national: #4c1d1d;
+  --lh-national-line: #f87171;
+  --lh-company: #262a5c;
+  --lh-company-line: #818cf8;
+  --lh-regional: #123a24;
+  --lh-regional-line: #4ade80;
+  --lh-optional: #3f3a12;
+  --lh-optional-line: #facc15;
+  --lh-leave: #172e52;
+  --lh-leave-line: #60a5fa;
+  --lh-pending: #3d2610;
+  --lh-pending-line: #fb923c;
+}
+
+/* filters */
+.lh-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; margin-bottom: 14px; }
+.lh-filter { display: grid; gap: 3px; font-size: 0.8rem; color: var(--muted); }
+.lh-filter select { min-width: 140px; max-width: 100%; }
+.lh-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.lh-chip { font: inherit; font-size: 0.82rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.lh-chip.is-on { color: var(--text, inherit); font-weight: 600; }
+.lh-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lh-chip-national.is-on, .lh-chip-holiday.is-on { background: var(--lh-national); border-color: var(--lh-national-line); }
+.lh-chip-company.is-on { background: var(--lh-company); border-color: var(--lh-company-line); }
+.lh-chip-regional.is-on { background: var(--lh-regional); border-color: var(--lh-regional-line); }
+.lh-chip-optional.is-on { background: var(--lh-optional); border-color: var(--lh-optional-line); }
+.lh-chip-leave.is-on { background: var(--lh-leave); border-color: var(--lh-leave-line); }
+.lh-chip-pending.is-on { background: var(--lh-pending); border-color: var(--lh-pending-line); }
+
+/* type colours: tags, dots, swatches, calendar days, list rows */
+.lh-tag { display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 0 6px; border-radius: 4px; border: 1px solid transparent; }
+.lh-tag.lh-national, .lh-swatch.lh-national, .day.lh-national { background: var(--lh-national); border-color: var(--lh-national-line); }
+.lh-tag.lh-company, .lh-swatch.lh-company, .day.lh-company { background: var(--lh-company); border-color: var(--lh-company-line); }
+.lh-tag.lh-regional, .lh-swatch.lh-regional, .day.lh-regional { background: var(--lh-regional); border-color: var(--lh-regional-line); }
+.lh-tag.lh-optional, .lh-swatch.lh-optional { background: var(--lh-optional); border-color: var(--lh-optional-line); }
+.lh-swatch.lh-leave { background: var(--lh-leave); border-color: var(--lh-leave-line); }
+.lh-swatch.lh-pending { background: var(--lh-pending); border-color: var(--lh-pending-line); border-style: dashed; }
+.lh-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); vertical-align: -1px; }
+.pc-hol-row.lh-row-national .pc-hol-date { background: var(--lh-national); }
+.pc-hol-row.lh-row-company .pc-hol-date { background: var(--lh-company); }
+.pc-hol-row.lh-row-regional .pc-hol-date { background: var(--lh-regional); }
+.pc-hol-row.lh-row-optional .pc-hol-date { background: var(--lh-optional); }
+.lh-stat-split > span:last-child { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 0.85rem; }
+.lh-dot::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; background: var(--line); }
+.lh-dot.lh-national::before { background: var(--lh-national-line); }
+.lh-dot.lh-company::before { background: var(--lh-company-line); }
+.lh-dot.lh-regional::before { background: var(--lh-regional-line); }
+.lh-dot.lh-optional::before { background: var(--lh-optional-line); }
+.lh-legend { gap: 6px 14px; }
+.lh-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.lh-legend-item .hol-swatch { margin-left: 0; }
+
+/* office summary (HR) */
+.lh-offices { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.lh-office { width: 100%; display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; column-gap: 8px; text-align: left; font: inherit; color: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, transparent); cursor: pointer; }
+.lh-office .muted { grid-column: 1; font-size: 0.8rem; }
+.lh-office-count { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 1.3rem; font-weight: 700; }
+.lh-office.is-on, .lh-office:hover { border-color: var(--accent); }
+.lh-region-pick { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.lh-region-pick input[type="text"], .lh-region-pick > input:not([type]) { flex: 1 1 200px; min-width: 0; }
+
+/* leave month calendar (Leave page) */
+.lh-month-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 10px; }
+.lh-month-nav { display: inline-flex; align-items: center; gap: 6px; }
+.lh-month-nav strong { min-width: 9em; text-align: center; }
+.lh-month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.lh-month-dow { font-size: 0.75rem; color: var(--muted); text-align: center; padding: 2px 0; }
+.lh-cell { min-height: 84px; display: flex; flex-direction: column; gap: 2px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel, transparent); overflow: hidden; }
+.lh-cell.is-off { background: var(--cal-weekend, #f3f4f6); }
+.lh-cell.is-today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.lh-cell.is-blank { border: 0; background: transparent; }
+.lh-cell-day { font-size: 0.78rem; font-weight: 600; }
+.lh-ev { display: block; font-size: 0.72rem; line-height: 1.25; padding: 1px 4px; border-radius: 4px; border-left: 3px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lh-ev.lh-national { background: var(--lh-national); border-left-color: var(--lh-national-line); }
+.lh-ev.lh-company { background: var(--lh-company); border-left-color: var(--lh-company-line); }
+.lh-ev.lh-regional { background: var(--lh-regional); border-left-color: var(--lh-regional-line); }
+.lh-ev.lh-optional { background: var(--lh-optional); border-left-color: var(--lh-optional-line); }
+.lh-ev.lh-leave { background: var(--lh-leave); border-left-color: var(--lh-leave-line); }
+.lh-ev.lh-pending { background: var(--lh-pending); border-left-color: var(--lh-pending-line); }
+.lh-more { font-size: 0.7rem; color: var(--muted); }
+
+/* leave policy admin */
+.lh-policy-grid { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.lh-policy-grid th, .lh-policy-grid td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.lh-policy-grid td.num, .lh-policy-grid th.num { text-align: right; }
+.lh-policy-grid tr.is-off td { opacity: 0.55; }
+.lh-policy-scroll { overflow-x: auto; }
+
+@media (max-width: 640px) {
+  .lh-cell { min-height: 54px; padding: 2px; }
+  .lh-ev { font-size: 0.62rem; padding: 0 2px; }
+  .lh-filter select { min-width: 0; }
+  .lh-filters { gap: 8px; }
+}

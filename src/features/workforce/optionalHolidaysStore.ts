@@ -3,6 +3,7 @@
  * "optional" for that date, so it goes to the manager like any leave and counts against the "Optional holiday"
  * balance (2 a year in India, 1 in the US). The list is local in local mode and from the API in backend mode.
  */
+import { holidayKind } from "../../data/holidayRules.ts";
 import { todayISO, TIMEZ_COUNTRIES, type Holiday, type LeaveRequest } from "../../model.ts";
 import { findDemoById } from "../../demoAccounts.ts";
 import { API_ENABLED } from "../../api/client.ts";
@@ -81,6 +82,21 @@ function defaults(): OptionalHolidayState {
       { id: "oh-in-chhath", countryCode: "IN", date: "2026-11-16", name: "Chhath Puja" },
       { id: "oh-in-xmas-eve", countryCode: "IN", date: "2026-12-24", name: "Christmas Eve" },
       { id: "oh-in-nye", countryCode: "IN", date: "2026-12-31", name: "New Year's Eve" },
+      // Festivals that are optional (restricted) holidays in India rather than days off for everyone
+      // (same rows the server offers from holidays typed "optional", backend/app/services/holiday_rules.py).
+      { id: "oh-h-shivaratri", countryCode: "IN", date: "2026-02-15", name: "Maha Shivaratri" },
+      { id: "oh-h-holi", countryCode: "IN", date: "2026-03-03", name: "Holi" },
+      { id: "oh-h-eid-fitr", countryCode: "IN", date: "2026-03-21", name: "Eid-ul-Fitr" },
+      { id: "oh-h-ramnavami", countryCode: "IN", date: "2026-03-26", name: "Ram Navami" },
+      { id: "oh-h-goodfriday", countryCode: "IN", date: "2026-04-03", name: "Good Friday" },
+      { id: "oh-h-ambedkar", countryCode: "IN", date: "2026-04-14", name: "Dr. Ambedkar Jayanti" },
+      { id: "oh-h-bakrid", countryCode: "IN", date: "2026-05-27", name: "Eid-ul-Adha (Bakrid)" },
+      { id: "oh-h-buddha", countryCode: "IN", date: "2026-05-31", name: "Buddha Purnima" },
+      { id: "oh-h-muharram", countryCode: "IN", date: "2026-06-26", name: "Muharram" },
+      { id: "oh-h-janmashtami", countryCode: "IN", date: "2026-08-14", name: "Janmashtami" },
+      { id: "oh-h-govardhan", countryCode: "IN", date: "2026-11-10", name: "Govardhan Puja" },
+      { id: "oh-h-bhaidooj", countryCode: "IN", date: "2026-11-11", name: "Bhai Dooj" },
+      { id: "oh-h-gurunanak", countryCode: "IN", date: "2026-11-24", name: "Guru Nanak Jayanti" },
       { id: "oh-us-thanks", countryCode: "US", date: "2026-11-27", name: "Day after Thanksgiving" },
       { id: "oh-us-xmas-eve", countryCode: "US", date: "2026-12-24", name: "Christmas Eve" },
     ],
@@ -197,7 +213,9 @@ export async function addOptionalHoliday(
   if (API_ENABLED) {
     return apiAddOptional(input.countryCode, input.date, name, { description: input.description, region: input.region, selectBy: input.selectBy });
   }
-  const clash = companyHolidays.find((h) => h.date === input.date && (h.countryCode ?? "IN") === input.countryCode);
+  const clash = companyHolidays.find(
+    (h) => h.date === input.date && (h.countryCode ?? "IN") === input.countryCode && holidayKind(h) !== "optional",
+  );
   if (clash) return `${fmt(input.date)} is already a public holiday (${clash.name}).`;
   return store.mutate((s) => {
     if (s.holidays.some((h) => h.countryCode === input.countryCode && h.date === input.date)) {

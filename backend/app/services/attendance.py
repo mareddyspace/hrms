@@ -1,7 +1,8 @@
 """Attendance rules.
 
 - A session belongs to the date in the person's time zone at check-in; check-in/out are stored in UTC.
-- Shift hours: the person's own (employees.shift_start/shift_end), else the country default, else 09:30-18:30.
+- Shift hours: the person's shift on the published roster that day (app/services/shifts.rostered_shift), else their
+  own (employees.shift_start/shift_end), else the country default, else 09:30-18:30. An overnight shift ends next day.
 - Late: checked in after shift start. Early leave: checked out before shift end on the same local date.
 - Worked minutes = check-out - check-in - breaks. Breaks are started and ended on the session (kept as a list);
   the total is the sum of closed breaks (an open break is closed at check-out). Overtime = anything over 9 hours.
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db import utcnow
 from app.models import AttendanceSession, Employee, LeaveRequest
-from app.services.leave import WORKING_LEAVE, holiday_dates, weekly_off_for_employee
+from app.services.leave import WORKING_LEAVE, holiday_dates_for, weekly_off_for_employee
 
 DEFAULT_SHIFT = ("09:30", "18:30")
 COUNTRY_SHIFTS: dict[str, tuple[str, str]] = {
@@ -58,7 +59,16 @@ def local_today(employee: Employee) -> date:
     return now().astimezone(zone(employee)).date()
 
 
-def shift_for(employee: Employee) -> tuple[str, str]:
+def shift_for(employee: Employee, db: Session | None = None, day: date | None = None) -> tuple[str, str]:
+    if db is not None and day is not None:
+        try:
+            from app.services.shifts import rostered_shift
+
+            rostered = rostered_shift(db, employee.id, day)
+        except Exception:  # noqa: BLE001 (roster tables missing on an old database)
+            rostered = None
+        if rostered is not None:
+            return rostered.start, rostered.end
     if employee.shift_start and employee.shift_end:
         return employee.shift_start, employee.shift_end
     return COUNTRY_SHIFTS.get(employee.country_code, DEFAULT_SHIFT)
@@ -138,6 +148,8 @@ def apply_flags(session: AttendanceSession) -> None:
     tz = ZoneInfo(session.time_zone) if session.time_zone else ZoneInfo("UTC")
     start = datetime.combine(session.work_date, _hm(session.shift_start), tz)
     end = datetime.combine(session.work_date, _hm(session.shift_end), tz)
+    if end <= start:  # overnight shift: ends the next morning
+        end += timedelta(days=1)
     late = int((session.check_in - start).total_seconds() // 60)
     session.late_minutes = max(0, late)
     session.is_late = late > 0
@@ -210,8 +222,9 @@ def close_overdue(db: Session, employee_id: str | None = None, at: datetime | No
     return closed
 
 
-def new_session(employee: Employee, work_date: date, check_in: datetime, work_mode: str, source: str) -> AttendanceSession:
-    shift_start, shift_end = shift_for(employee)
+def new_session(employee: Employee, work_date: date, check_in: datetime, work_mode: str, source: str,
+                db: Session | None = None) -> AttendanceSession:
+    shift_start, shift_end = shift_for(employee, db, work_date)
     return AttendanceSession(
         id=f"att-{employee.id}-{work_date.isoformat()}"[:64],
         employee_id=employee.id,
@@ -286,7 +299,7 @@ def month_summary(db: Session, employee: Employee, year: int, month: int) -> Mon
             )
         )
     }
-    holidays = holiday_dates(db, employee.country_code, first, last, employee.holiday_calendar)
+    holidays = holiday_dates_for(db, employee, first, last)
     weekly_off = weekly_off_for_employee(db, employee)
     leave_days: dict[date, float] = {}
     for lv in db.scalars(

@@ -461,7 +461,40 @@ class TimesheetDayOut(BaseModel):
     approval: dict | None = None
     waiting_on_me: bool = False
     can_decide: bool = False
+    attendance_minutes: int | None = None  # worked minutes from attendance that day (None: no attendance)
+    hours_mismatch: bool = False  # logged hours differ from attendance by more than MISMATCH_TOLERANCE_HOURS
     entries: list[WeekEntryOut] = []
+
+
+# Logged hours vs attended hours: flagged for the reviewer when they differ by more than this.
+MISMATCH_TOLERANCE_HOURS = 1.0
+
+
+def _attendance_minutes(db: DbSession, employee_ids: set[str], start: date, end: date) -> dict[tuple[str, date], int]:
+    if not employee_ids:
+        return {}
+    from app.services import attendance as att
+
+    now = att.now()
+    out = {}
+    for s in db.scalars(select(AttendanceSession).where(AttendanceSession.employee_id.in_(employee_ids),
+                                                         AttendanceSession.work_date >= start,
+                                                         AttendanceSession.work_date <= end)):
+        if s.worked_minutes is not None:
+            out[(s.employee_id, s.work_date)] = int(s.worked_minutes)
+        elif s.check_out is None:
+            mins = int((now - s.check_in).total_seconds() // 60) - att.breaks_minutes(att.break_list(s), until=now)
+            out[(s.employee_id, s.work_date)] = max(0, min(att.MAX_WORK_MINUTES, mins))
+    return out
+
+
+def _flag_mismatch(out: "TimesheetDayOut", minutes: int | None) -> None:
+    out.attendance_minutes = minutes
+    attended = (minutes or 0) / 60
+    logged = out.total_hours
+    # only a day with something to compare: attendance, or hours logged on a working day
+    if minutes is not None or (logged > 0 and out.target_hours > 0):
+        out.hours_mismatch = abs(logged - attended) > MISMATCH_TOLERANCE_HOURS
 
 
 class TeamPersonOut(BaseModel):
@@ -498,6 +531,7 @@ def _entries_with_projects(db: DbSession, employee_ids: set[str], start: date, e
 def _day_out(
     db: DbSession, user: CurrentUser, emp: Employee, day: date, row: TimesheetDay | None,
     entries: list[WeekEntryOut] | None = None, names: dict[str, str] | None = None,
+    attended: dict[tuple[str, date], int] | None = None,
 ) -> TimesheetDayOut:
     if entries is None:
         entries = _entries_with_projects(db, {emp.id}, day, day)
@@ -506,6 +540,9 @@ def _day_out(
         employee_id=emp.id, employee_name=emp.full_name, work_date=day, target_hours=target_hours, day_kind=kind,
         total_hours=round(sum(e.hours for e in entries), 2), entries=entries,
     )
+    if attended is None:
+        attended = _attendance_minutes(db, {emp.id}, day, day)
+    _flag_mismatch(out, attended.get((emp.id, day)))
     if row is None:
         return out
     out.id, out.status, out.submitted_at = row.id, row.status, row.submitted_at
@@ -645,6 +682,7 @@ def team_days(db: DbSession, user: CurrentUserDep, week_start: date | None = Non
     deciders = {r.decided_by for r in rows.values() if r.decided_by}
     names = dict(db.execute(select(Employee.id, Employee.full_name).where(Employee.id.in_(deciders))).all()) if deciders else {}
     entries = _entries_with_projects(db, ids, start, end)
+    attended = _attendance_minutes(db, ids, start, end)
     out = []
     for emp in people:
         mine = [e for e in entries if e.employee_id == emp.id]
@@ -654,7 +692,8 @@ def team_days(db: DbSession, user: CurrentUserDep, week_start: date | None = Non
         days = []
         for i in range(7):
             day = start + timedelta(days=i)
-            days.append(_day_out(db, user, emp, day, rows.get((emp.id, day)), [e for e in mine if e.work_date == day], names))
+            days.append(_day_out(db, user, emp, day, rows.get((emp.id, day)), [e for e in mine if e.work_date == day], names,
+                                 attended))
         out.append(TeamPersonOut(
             employee_id=emp.id, employee_name=emp.full_name, employee_code=emp.employee_code or "",
             department=emp.department or "", week_total=round(sum(e.hours for e in mine), 2),
@@ -742,34 +781,90 @@ def day_detail(day_id: str, db: DbSession, user: CurrentUserDep) -> TimesheetDay
 def decide_day(day_id: str, body: DecisionIn, request: Request, db: DbSession, user: CurrentUserDep) -> TimesheetDayOut:
     """Approve, or send back ("reject", with a comment) a submitted day."""
     row, emp = _visible_day(db, user, day_id)
-    if body.decision == "reject" and not (body.note or "").strip():
+    _decide_day(db, user, row, emp, body.decision, body.note, client_ip(request))
+    db.commit()
+    return _day_out(db, user, emp, row.work_date, row)
+
+
+def _decide_day(db: DbSession, user: CurrentUser, row: TimesheetDay, emp: Employee, decision: str, note: str | None,
+                ip: str | None) -> None:
+    """The rules for one day's decision (no commit): a comment is needed to send back; the approval chain decides
+    when there is one (manager or their delegate; nobody decides their own day); else HR in scope / the line."""
+    if emp.id == user.employee_id:
+        raise HTTPException(403, "You can't decide your own timesheet.")
+    if decision == "reject" and not (note or "").strip():
         raise HTTPException(422, "Add a comment saying what to change.")
     instance = chain.pending_instance(db, chain.TIMESHEET, row.id)
     if instance is not None and row.status == "submitted":
         # through the approval chain; the day is updated when the last step is decided (_timesheet_finished)
-        chain.decide(db, user, instance, emp, body.decision, body.note, client_ip(request))
-        db.commit()
-        return _day_out(db, user, emp, row.work_date, row)
+        chain.decide(db, user, instance, emp, decision, note, ip)
+        return
     if not can_decide(db, user, emp, "timesheet"):
         raise HTTPException(403, "You can't decide this timesheet.")
     if row.status != "submitted":
         raise HTTPException(409, f"This day is {row.status}.")
     before = _day_snapshot(row)
-    row.status = "approved" if body.decision == "approve" else "rejected"
+    row.status = "approved" if decision == "approve" else "rejected"
     row.decided_by = user.employee_id
     row.decided_at = utcnow()
-    row.decision_note = (body.note or "").strip() or None
+    row.decision_note = (note or "").strip() or None
     record_audit(
         db, actor_id=user.id, action=f"timesheet_day_{row.status}", entity="timesheet_day", entity_id=row.id,
-        subject_id=emp.id, before=before, after=_day_snapshot(row), ip=client_ip(request),
+        subject_id=emp.id, before=before, after=_day_snapshot(row), ip=ip,
     )
     decider = user.employee.full_name if user.employee else user.id
     verb = "approved" if row.status == "approved" else "sent back"
     notify(db, recipient_id=emp.id, title=f"Timesheet {verb}",
            body=f"{decider} {verb} your timesheet for {row.work_date}." + (f" Note: {row.decision_note}" if row.decision_note else ""),
            href=f"/timesheets/days/{row.id}")
-    db.commit()
-    return _day_out(db, user, emp, row.work_date, row)
+
+
+class BulkDayDecisionIn(BaseModel):
+    ids: list[str]
+    decision: str
+    note: str | None = None
+
+
+class BulkFailureOut(BaseModel):
+    id: str
+    error: str
+
+
+class BulkDayDecisionOut(BaseModel):
+    decided: list[TimesheetDayOut] = []
+    failed: list[BulkFailureOut] = []
+
+
+@router.post("/days/bulk-decision", response_model=BulkDayDecisionOut)
+def bulk_decide_days(body: BulkDayDecisionIn, request: Request, db: DbSession, user: CurrentUserDep) -> BulkDayDecisionOut:
+    """Approve (or send back, with one comment for all) several submitted days. Each day follows the single-day
+    rules and is saved on its own: one that can't be decided is listed in `failed` and doesn't stop the others."""
+    if body.decision not in ("approve", "reject"):
+        raise HTTPException(422, "Decision must be approve or reject.")
+    ids = list(dict.fromkeys(i for i in body.ids if i))
+    if not ids or len(ids) > 200:
+        raise HTTPException(422, "Choose between 1 and 200 days.")
+    if body.decision == "reject" and not (body.note or "").strip():
+        raise HTTPException(422, "Add a comment saying what to change.")
+    ip = client_ip(request)
+    out = BulkDayDecisionOut()
+    for day_id in ids:
+        try:
+            row, emp = _visible_day(db, user, day_id)
+            _decide_day(db, user, row, emp, body.decision, body.note, ip)
+            db.commit()
+            out.decided.append(_day_out(db, user, emp, row.work_date, row))
+        except HTTPException as exc:
+            db.rollback()
+            out.failed.append(BulkFailureOut(id=day_id, error=str(exc.detail)))
+    if out.decided:
+        record_audit(db, actor_id=user.id, action="timesheet_days_bulk_decision", entity="timesheet_day",
+                     entity_id=out.decided[0].id or "", before=None,
+                     after={"decision": body.decision, "ids": [d.id for d in out.decided],
+                            "failed": [f.id for f in out.failed], "note": (body.note or "").strip() or None},
+                     ip=ip)
+        db.commit()
+    return out
 
 
 def _row(key: str, name: str, total: float, billable: float) -> UtilizationRow:

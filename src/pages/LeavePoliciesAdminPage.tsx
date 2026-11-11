@@ -10,8 +10,10 @@ import {
   type LeaveTypeAdmin,
 } from "../api/syncLeaveAdmin.ts";
 import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, FilterBar, LoadingState, Page, StatusBadge, Tabs, notify } from "../components/ui.tsx";
-import { formatShortDate, holidaysForCountry, localPolicy, TIMEZ_COUNTRIES, type CountryCode } from "../model.ts";
+import { allHolidaysForCountry, formatShortDate, localPolicy, TIMEZ_COUNTRIES, type CountryCode, type HolidayType } from "../model.ts";
 import { usePortal } from "../store.tsx";
+import { HOLIDAY_TYPES, HOLIDAY_TYPE_LABEL, OFFICES, appliesText, holidayKind, regionsOf } from "../data/holidayRules.ts";
+import "../styles/leave-holidays.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -30,6 +32,27 @@ function rulesText(p: LeavePolicyAdmin): string {
 }
 
 const numOrNull = (v: string) => (v.trim() === "" ? null : Number(v));
+const encashableOf = (p: LeavePolicyAdmin) => p.encashable ?? p.leave_code === "pto";
+const accrualText = (p: LeavePolicyAdmin) => (p.accrual === "monthly" ? `Monthly (${Math.floor((p.quota / 12) * 2) / 2}/month)` : "Yearly");
+
+/** Same limits as the server (backend/app/routers/leave_admin.py and schemas): a message, or null when fine. */
+export function policyProblem(f: { name: string; quota: string; carry: string; service: string; max: string; notice: string }): string | null {
+  const quota = Number(f.quota);
+  const carry = Number(f.carry || 0);
+  if (!f.name.trim()) return "Enter a name.";
+  if (f.quota.trim() === "" || Number.isNaN(quota) || quota < 0 || quota > 365) return "Days a year must be between 0 and 365.";
+  if (quota * 2 !== Math.round(quota * 2)) return "Use whole or half days a year.";
+  if (Number.isNaN(carry) || carry < 0) return "Carry forward can't be negative.";
+  if (carry > quota) return "Carry-forward can't be more than the yearly quota.";
+  const whole = (v: string, label: string, max: number) => {
+    if (v.trim() === "") return null;
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 0 && n <= max ? null : `${label} must be a whole number from 0 to ${max}.`;
+  };
+  const max = numOrNull(f.max);
+  if (max != null && (Number.isNaN(max) || max <= 0 || max > 365)) return "Max days per request must be more than 0.";
+  return whole(f.service, "Min service", 600) ?? whole(f.notice, "Notice", 365);
+}
 
 function PolicyDialog({ policy, onClose, onSaved }: { policy: LeavePolicyAdmin; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({
@@ -43,6 +66,7 @@ function PolicyDialog({ policy, onClose, onSaved }: { policy: LeavePolicyAdmin; 
     probation: policy.not_in_probation,
     max: policy.max_per_request == null ? "" : String(policy.max_per_request),
     notice: policy.min_notice_days == null ? "" : String(policy.min_notice_days),
+    encashable: encashableOf(policy),
   });
   const [msg, setMsg] = useState<Msg>(null);
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
@@ -59,9 +83,11 @@ function PolicyDialog({ policy, onClose, onSaved }: { policy: LeavePolicyAdmin; 
       not_in_probation: form.probation,
       max_per_request: numOrNull(form.max),
       min_notice_days: numOrNull(form.notice),
+      encashable: form.encashable,
     };
-    if (!body.name || Number.isNaN(body.quota)) {
-      setMsg({ tone: "err", text: "Enter a name and days a year." });
+    const problem = policyProblem(form);
+    if (problem) {
+      setMsg({ tone: "err", text: problem });
       return false;
     }
     try {
@@ -124,6 +150,10 @@ function PolicyDialog({ policy, onClose, onSaved }: { policy: LeavePolicyAdmin; 
           <input type="checkbox" checked={form.probation} onChange={(e) => set("probation", e.target.checked)} />
           <span>Not during probation</span>
         </label>
+        <label className="perm-item">
+          <input type="checkbox" checked={form.encashable} onChange={(e) => set("encashable", e.target.checked)} />
+          <span>Can be encashed</span>
+        </label>
       </div>
     </Dialog>
   );
@@ -145,15 +175,29 @@ function HolidayDialog({
   const [date, setDate] = useState(holiday?.date ?? "");
   const [name, setName] = useState(holiday?.name ?? "");
   const [calendar, setCalendar] = useState(holiday?.calendar ?? "");
+  const [type, setType] = useState<HolidayType>((holiday?.holiday_type as HolidayType) ?? "national");
+  const [regions, setRegions] = useState<string[]>(holiday?.regions ?? []);
+  const [entity, setEntity] = useState(holiday?.legal_entity ?? "");
   const [msg, setMsg] = useState<Msg>(null);
+  const choices = [...new Set([...regionsOf(country), ...(OFFICES[country] ?? []), ...regions])];
+  const scoped = type !== "national";
   const save = async () => {
     if (!date || !name.trim()) {
       setMsg({ tone: "err", text: "Enter a date and a name." });
       return false;
     }
+    if (type === "regional" && !regions.length) {
+      setMsg({ tone: "err", text: "A regional holiday needs at least one state or location." });
+      return false;
+    }
+    const typed = {
+      holiday_type: type,
+      regions: scoped && regions.length ? regions : null,
+      legal_entity: scoped && entity.trim() ? entity.trim() : null,
+    };
     try {
-      if (holiday) await leaveAdminApi.updateHoliday(holiday.id, { date, name: name.trim(), calendar: calendar || null });
-      else await leaveAdminApi.createHoliday({ country_code: country, date, name: name.trim(), calendar: calendar || null });
+      if (holiday) await leaveAdminApi.updateHoliday(holiday.id, { date, name: name.trim(), calendar: calendar || null, ...typed });
+      else await leaveAdminApi.createHoliday({ country_code: country, date, name: name.trim(), calendar: calendar || null, ...typed });
     } catch (e) {
       setMsg({ tone: "err", text: errText(e) });
       return false;
@@ -177,15 +221,42 @@ function HolidayDialog({
       <div className="form-grid-2">
         <Field label="Date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
         <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label="Type">
+          <select value={type} onChange={(e) => setType(e.target.value as HolidayType)}>
+            {HOLIDAY_TYPES.map((t) => (
+              <option key={t} value={t}>{HOLIDAY_TYPE_LABEL[t]}</option>
+            ))}
+          </select>
+        </Field>
         <Field label="Holiday calendar">
           <select value={calendar} onChange={(e) => setCalendar(e.target.value)}>
-            <option value="">Whole country</option>
+            <option value="">Every calendar</option>
             {calendars.map((c) => (
               <option key={c.calendar} value={c.calendar}>{c.calendar}</option>
             ))}
           </select>
         </Field>
+        {scoped && (
+          <Field label="Legal entity"><input value={entity} onChange={(e) => setEntity(e.target.value)} placeholder="Every entity" /></Field>
+        )}
       </div>
+      {scoped && (
+        <>
+          <p className="note">States / offices{type === "regional" ? "" : " (none ticked = whole country)"}</p>
+          <div className="lh-region-pick">
+            {choices.map((r) => (
+              <label key={r} className="perm-item">
+                <input
+                  type="checkbox"
+                  checked={regions.includes(r)}
+                  onChange={(e) => setRegions(e.target.checked ? [...regions, r] : regions.filter((x) => x !== r))}
+                />
+                <span>{r}</span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
     </Dialog>
   );
 }
@@ -198,7 +269,10 @@ function ServerLeaveAdmin({ country, tab }: { country: CountryCode; tab: string 
   const [calendars, setCalendars] = useState<HolidayCalendar[]>([]);
   const [editing, setEditing] = useState<LeavePolicyAdmin | null>(null);
   const [holidayDialog, setHolidayDialog] = useState<{ holiday: HolidayAdmin | null } | null>(null);
+  const [holidayType, setHolidayType] = useState<HolidayType | "all">("all");
   const [msg, setMsg] = useState<Msg>(null);
+  const kindOf = (h: HolidayAdmin) => (h.holiday_type ?? "national") as HolidayType;
+  const shownHolidays = holidays.filter((h) => holidayType === "all" || kindOf(h) === holidayType);
 
   const load = useCallback(async () => {
     try {
@@ -268,11 +342,13 @@ function ServerLeaveAdmin({ country, tab }: { country: CountryCode; tab: string 
           }
         >
           <DataTable
-            headers={["Leave", "Days a year", "Carry forward", "Who can take it", "Status", ""]}
+            headers={["Leave", "Days a year", "Accrual", "Carry forward", "Encashable", "Who can take it", "Status", ""]}
             rows={policies.map((p) => [
               p.name,
               p.quota,
-              p.carry_forward_max,
+              accrualText(p),
+              p.carry_forward_max ? `Up to ${p.carry_forward_max}` : "None",
+              encashableOf(p) ? "Yes" : "No",
               rulesText(p),
               <StatusBadge key="s" status={p.active ? "Active" : "Inactive"} tone={p.active ? "ok" : "neutral"} literal />,
               <span key="a">
@@ -298,15 +374,27 @@ function ServerLeaveAdmin({ country, tab }: { country: CountryCode; tab: string 
           title={`Holidays ${year} · ${country}`}
           action={<button className="btn btn-tiny" type="button" onClick={() => setHolidayDialog({ holiday: null })}>Add holiday</button>}
         >
-          <p className="note">
-            Calendars in use: {calendars.map((c) => `${c.calendar} (${c.employees})`).join(", ") || "none"}
-          </p>
+          <div className="lh-filters">
+            <label className="lh-filter">
+              <span>Type</span>
+              <select value={holidayType} onChange={(e) => setHolidayType(e.target.value as HolidayType | "all")}>
+                <option value="all">All types ({holidays.length})</option>
+                {HOLIDAY_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {HOLIDAY_TYPE_LABEL[t]} ({holidays.filter((h) => kindOf(h) === t).length})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="note">Calendars in use: {calendars.map((c) => `${c.calendar} (${c.employees})`).join(", ") || "none"}</span>
+          </div>
           <DataTable
-            headers={["Date", "Name", "Calendar", "Status", ""]}
-            rows={holidays.map((h) => [
+            headers={["Date", "Name", "Type", "Applies to", "Status", ""]}
+            rows={shownHolidays.map((h) => [
               formatShortDate(h.date),
               h.name,
-              h.calendar ?? "Whole country",
+              <span key="t" className={`lh-tag lh-${kindOf(h)}`}>{HOLIDAY_TYPE_LABEL[kindOf(h)]}</span>,
+              [h.regions?.length ? h.regions.join(", ") : "Whole country", h.legal_entity, h.calendar].filter(Boolean).join(" · "),
               <StatusBadge key="s" status={h.active ? "Active" : "Inactive"} tone={h.active ? "ok" : "neutral"} literal />,
               <span key="a">
                 <button className="btn-ghost btn-tiny" type="button" onClick={() => setHolidayDialog({ holiday: h })}>Edit</button>
@@ -378,7 +466,15 @@ function LocalLeaveReference({ country, tab }: { country: CountryCode; tab: stri
   if (tab === "holidays") {
     return (
       <Card title={`Holidays · ${country}`}>
-        <DataTable headers={["Date", "Name"]} rows={holidaysForCountry(state.holidays, country).map((h) => [formatShortDate(h.date), h.name])} />
+        <DataTable
+          headers={["Date", "Name", "Type", "Applies to"]}
+          rows={allHolidaysForCountry(state.holidays, country).map((h) => [
+            formatShortDate(h.date),
+            h.name,
+            <span key="t" className={`lh-tag lh-${holidayKind(h)}`}>{HOLIDAY_TYPE_LABEL[holidayKind(h)]}</span>,
+            appliesText(h),
+          ])}
+        />
       </Card>
     );
   }
@@ -386,11 +482,11 @@ function LocalLeaveReference({ country, tab }: { country: CountryCode; tab: stri
     <Card title={`Leave policies · ${country}`}>
       <p className="note">Editing needs the server. This is the demo copy.</p>
       <DataTable
-        headers={["Leave", "Days a year", "Carry forward"]}
+        headers={["Leave", "Days a year", "Accrual", "Carry forward", "Encashable"]}
         rows={state.leavePolicies
           .map((p) => localPolicy(p, country))
           .filter((p) => p.quota > 0)
-          .map((p) => [p.name, p.quota, p.carryForwardMax ?? 0])}
+          .map((p) => [p.name, p.quota, p.accrual === "monthly" ? "Monthly" : "Yearly", p.carryForwardMax ?? 0, p.code === "pto" ? "Yes" : "No"])}
       />
     </Card>
   );

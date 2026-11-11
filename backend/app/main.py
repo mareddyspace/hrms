@@ -286,3 +286,14 @@ async def _lifespan_migrate(app_: FastAPI):  # type: ignore[no-untyped-def]
 
 
 app.router.lifespan_context = _lifespan_migrate
+
+# ---------- leadership insights: director dashboard, contractors, server-side report builder (migration 0038) ----------
+from app.routers import insights as _insights  # noqa: E402
+
+app.include_router(_insights.router, prefix=API_PREFIX)
+
+# ---------- employee experience: assets, immigration / ID documents, privacy centre (migration 0037) ----------
+from app.routers import experience as _experience  # noqa: E402
+
+for _router in _experience.routers:
+    app.include_router(_router, prefix=API_PREFIX)

@@ -13,14 +13,18 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db import utcnow
 from app.deps import CurrentUser, CurrentUserDep, DbSession, client_ip
-from app.models import CompOffCredit, CoverageMinimum, Employee, RosterShift, RosterWeek, ShiftSwap, ShiftType
+from app.models import (
+    CompOffCredit, CoverageMinimum, Employee, RosterShift, RosterWeek, ShiftAvailability, ShiftSwap, ShiftType,
+)
 from app.schemas.engagement_shifts import (
-    CoverageMinimumIn, CoverageMinimumOut, CoverageSlotOut, RosterAssignIn, RosterPublishIn, RosterShiftOut, RosterWeekOut,
-    ShiftSwapDecisionIn, ShiftSwapIn, ShiftSwapOut, ShiftSwapRespondIn, ShiftTypeIn, ShiftTypeOut,
+    AvailabilityIn, AvailabilityOut, CoverageMinimumIn, CoverageMinimumOut, CoverageSlotOut, RosterAssignIn, RosterBulkIn,
+    RosterBulkOut, RosterCopyIn, RosterPublishIn, RosterShiftOut, RosterSkipOut, RosterUnpublishIn, RosterWarningOut,
+    RosterWeekOut, ShiftSwapDecisionIn, ShiftSwapIn, ShiftSwapOut, ShiftSwapRespondIn, ShiftTypeIn, ShiftTypeOut,
+    TeamCalendarRowOut,
 )
 from app.services import shifts as rules
 from app.services.activity import notify, record_audit
@@ -53,11 +57,15 @@ def list_types(db: DbSession, user: CurrentUserDep) -> list[ShiftType]:
 
 @router.post("/types", response_model=ShiftTypeOut, status_code=status.HTTP_201_CREATED)
 def save_type(body: ShiftTypeIn, request: Request, db: DbSession, user: CurrentUserDep) -> ShiftType:
-    """Create (no id or a new id) or update a shift type. HR only."""
+    """Create (no id or a new id) or update a shift type. HR only. Hours can't change while it is on upcoming roster
+    days (people were told those times); it can't be turned off while it is."""
     if not _is_hr(user):
         raise HTTPException(403, "Only HR can manage shift types.")
-    if body.start == body.end:
-        raise HTTPException(422, "Start and end can't be the same.")
+    color = (body.color or "").strip().lower() or None
+    country = (body.country_code or "").strip().upper() or None
+    error = rules.shift_type_error(body.start, body.end, body.break_minutes, color, country)
+    if error:
+        raise HTTPException(422, error)
     row = db.get(ShiftType, body.id) if body.id else None
     clash = db.scalar(select(ShiftType).where(ShiftType.name == body.name.strip()))
     if clash is not None and (row is None or clash.id != row.id):
@@ -67,13 +75,26 @@ def save_type(body: ShiftTypeIn, request: Request, db: DbSession, user: CurrentU
         row = ShiftType(id=body.id or f"sh-{secrets.token_hex(4)}")
         db.add(row)
     else:
-        before = {"name": row.name, "start": row.start, "end": row.end, "active": row.active}
+        before = {"name": row.name, "start": row.start, "end": row.end, "break_minutes": row.break_minutes,
+                  "active": row.active, "color": row.color, "country_code": row.country_code}
+        upcoming = db.scalar(select(func.count()).select_from(RosterShift).where(
+            RosterShift.shift_id == row.id, RosterShift.work_date > _today(user))) or 0
+        changed_hours = (row.start, row.end, row.weekend_only, row.break_minutes) != (
+            body.start, body.end, body.weekend_only, body.break_minutes)
+        if upcoming and changed_hours:
+            raise HTTPException(409, f"{row.name} is on {upcoming} upcoming roster day(s). Clear those before changing its hours.")
+        if upcoming and row.active and not body.active:
+            raise HTTPException(409, f"{row.name} is on {upcoming} upcoming roster day(s). Clear those first.")
+        if upcoming and country and country != (row.country_code or "").upper():
+            raise HTTPException(409, f"{row.name} is on {upcoming} upcoming roster day(s). Clear those before changing its country.")
     row.name, row.start, row.end = body.name.strip(), body.start, body.end
     row.weekend_only, row.active = body.weekend_only, body.active
     row.break_minutes, row.location = body.break_minutes, (body.location or "").strip() or None
+    row.color, row.country_code = color, country
     db.flush()
     record_audit(db, actor_id=user.id, action="shift_type_saved", entity="shift_type", entity_id=row.id, before=before,
-                 after={"name": row.name, "start": row.start, "end": row.end, "active": row.active}, ip=client_ip(request))
+                 after={"name": row.name, "start": row.start, "end": row.end, "break_minutes": row.break_minutes,
+                        "active": row.active, "color": row.color, "country_code": row.country_code}, ip=client_ip(request))
     db.commit()
     return row
 
@@ -90,7 +111,19 @@ def _week_out(db: DbSession, manager_id: str, week_start: date, today: date) -> 
         shifts=[RosterShiftOut.model_validate(s) for s in shifts],
         coverage=[_slot(s) for s in rules.week_coverage(db, manager_id, week_start)],
         gaps=[_slot(s) for s in rules.coverage_gaps(db, manager_id, week_start, today)],
+        warnings=_warnings(db, shifts, today),
     )
+
+
+def _warnings(db: DbSession, rows: list[RosterShift], today: date) -> list[RosterWarningOut]:
+    out = []
+    for r in rows:
+        shift = db.get(ShiftType, r.shift_id)
+        if shift is None or r.work_date <= today:
+            continue
+        out += [RosterWarningOut(employee_id=r.employee_id, date=r.work_date, message=m)
+                for m in rules.assign_warnings(db, r.employee_id, r.work_date, shift)]
+    return out
 
 
 def _monday(d: date) -> date:
@@ -108,53 +141,116 @@ def get_roster(db: DbSession, user: CurrentUserDep, week_start: date,
     return _week_out(db, mid, _monday(week_start), _today(user))
 
 
-@router.post("/roster/assign", response_model=RosterWeekOut)
-def assign(body: RosterAssignIn, request: Request, db: DbSession, user: CurrentUserDep) -> RosterWeekOut:
-    manager = me(user)
-    if body.employee_id == manager.id:
-        raise HTTPException(422, "You can't roster yourself.")
-    if body.employee_id not in rules.team_ids(db, manager.id):
-        raise HTTPException(403, "That person isn't in your team.")
-    joiner = rules.starts_after(db, body.employee_id, body.work_date) if body.shift_id is not None else None
+def _apply(db: DbSession, user: CurrentUser, manager: Employee, emp_id: str, d: date, shift_id: str | None,
+           request: Request) -> tuple[int, str] | None:
+    """Put one shift on (or clear) one person-day on the manager's roster. Returns (status, broken rule) or None."""
+    if emp_id == manager.id:
+        return 422, "You can't roster yourself."
+    if emp_id not in rules.team_ids(db, manager.id):
+        return 403, "That person isn't in your team."
+    joiner = rules.starts_after(db, emp_id, d) if shift_id is not None else None
     if joiner is not None:
-        raise HTTPException(422, f"{joiner.full_name} starts on {joiner.joining_date}.")
-    if body.work_date <= _today(user):
-        raise HTTPException(422, "Past days and today are locked.")
-    existing = db.scalar(select(RosterShift).where(RosterShift.employee_id == body.employee_id, RosterShift.work_date == body.work_date))
+        return 422, f"{joiner.full_name} starts on {joiner.joining_date}."
+    if d <= _today(user):
+        return 422, "Past days and today are locked."
+    existing = _row(db, emp_id, d)
     if existing is not None and existing.manager_id != manager.id:
-        raise HTTPException(409, "That person is on another manager's roster that day.")
-    ws = rules.week_start_of(body.work_date)
+        return 409, "That person is on another manager's roster that day."
+    ws = rules.week_start_of(d)
     week = rules.roster_week(db, manager.id, ws)
     published = week is not None and week.status == "published"
-    if body.shift_id is None:
-        if existing is not None:
-            db.delete(existing)
-            if published:
-                notify(db, recipient_id=body.employee_id, title="Shift removed",
-                       body=f"Your shift on {body.work_date} was removed from the roster.", href=ROUTE)
+    before = existing.shift_id if existing else None
+    if shift_id is None:
+        if existing is None:
+            return None
+        db.delete(existing)
+        if published:
+            notify(db, recipient_id=emp_id, title="Shift removed", body=f"Your shift on {d} was removed from the roster.", href=ROUTE)
     else:
-        shift = db.get(ShiftType, body.shift_id)
+        shift = db.get(ShiftType, shift_id)
         if shift is None:
-            raise HTTPException(422, "That shift no longer exists.")
+            return 422, "That shift no longer exists."
         if not shift.active:
-            raise HTTPException(422, f"{shift.name} is no longer in use.")
-        error = rules.rule_error(db, body.employee_id, body.work_date, shift, {existing.id} if existing else set())
+            return 422, f"{shift.name} is no longer in use."
+        if existing is not None and existing.shift_id == shift_id:
+            return None
+        error = rules.rule_error(db, emp_id, d, shift, {existing.id} if existing else set())
         if error:
-            raise HTTPException(409, error)
+            return 409, error
         if existing is not None:
             existing.shift_id = shift.id
         else:
-            db.add(RosterShift(id=f"rs-{secrets.token_hex(6)}", employee_id=body.employee_id, work_date=body.work_date,
-                               shift_id=shift.id, manager_id=manager.id))
+            db.add(RosterShift(id=f"rs-{secrets.token_hex(6)}", employee_id=emp_id, work_date=d, shift_id=shift.id,
+                               manager_id=manager.id))
         if week is None:
             db.add(RosterWeek(manager_id=manager.id, week_start=ws, status="draft"))
         if published:
-            notify(db, recipient_id=body.employee_id, title="Shift changed",
-                   body=f"You're now on {shift.name} ({shift.start}-{shift.end}) on {body.work_date}.", href=ROUTE)
-    record_audit(db, actor_id=user.id, action="roster_assigned", entity="roster_shift", entity_id=f"{body.employee_id}:{body.work_date}",
-                 subject_id=body.employee_id, after={"shift_id": body.shift_id}, ip=client_ip(request))
+            notify(db, recipient_id=emp_id, title="Shift changed",
+                   body=f"You're now on {shift.name} ({shift.start}-{shift.end}) on {d}.", href=ROUTE)
+    db.flush()
+    record_audit(db, actor_id=user.id, action="roster_assigned", entity="roster_shift", entity_id=f"{emp_id}:{d}",
+                 subject_id=emp_id, before={"shift_id": before}, after={"shift_id": shift_id}, ip=client_ip(request))
+    return None
+
+
+@router.post("/roster/assign", response_model=RosterWeekOut)
+def assign(body: RosterAssignIn, request: Request, db: DbSession, user: CurrentUserDep) -> RosterWeekOut:
+    manager = me(user)
+    error = _apply(db, user, manager, body.employee_id, body.work_date, body.shift_id, request)
+    if error:
+        db.rollback()
+        raise HTTPException(*error)
     db.commit()
-    return _week_out(db, manager.id, ws, _today(user))
+    return _week_out(db, manager.id, rules.week_start_of(body.work_date), _today(user))
+
+
+def _bulk(db: DbSession, user: CurrentUser, manager: Employee, cells: list[tuple[str, date, str | None]],
+          request: Request) -> RosterBulkOut:
+    applied, skipped, warnings = 0, [], []
+    for emp_id, d, shift_id in cells:
+        error = _apply(db, user, manager, emp_id, d, shift_id, request)
+        if error:
+            skipped.append(RosterSkipOut(employee_id=emp_id, date=d, message=error[1]))
+            continue
+        applied += 1
+        shift = db.get(ShiftType, shift_id) if shift_id else None
+        if shift is not None:
+            warnings += [RosterWarningOut(employee_id=emp_id, date=d, message=m)
+                         for m in rules.assign_warnings(db, emp_id, d, shift)]
+    db.commit()
+    return RosterBulkOut(applied=applied, skipped=skipped, warnings=warnings)
+
+
+@router.post("/roster/bulk", response_model=RosterBulkOut)
+def bulk_assign(body: RosterBulkIn, request: Request, db: DbSession, user: CurrentUserDep) -> RosterBulkOut:
+    """One shift (or clear) for several people on several days; each cell is checked on its own and skipped with its
+    reason when a rule is broken."""
+    manager = me(user)
+    cells = [(e, d, body.shift_id) for e in dict.fromkeys(body.employee_ids) for d in sorted(set(body.dates))]
+    return _bulk(db, user, manager, cells, request)
+
+
+@router.post("/roster/copy-week", response_model=RosterBulkOut)
+def copy_week(body: RosterCopyIn, request: Request, db: DbSession, user: CurrentUserDep) -> RosterBulkOut:
+    """Copy a week's pattern into the following week(s) (repeat pattern). Only empty upcoming days are filled;
+    days that already have a shift are kept."""
+    manager = me(user)
+    src, dst = _monday(body.from_week), _monday(body.to_week)
+    if dst == src:
+        raise HTTPException(422, "Pick a different week to copy into.")
+    days = rules.week_dates(src)
+    rows = list(db.scalars(select(RosterShift).where(RosterShift.manager_id == manager.id, RosterShift.work_date >= days[0],
+                                                     RosterShift.work_date <= days[-1])))
+    if not rows:
+        raise HTTPException(409, "That week has no shifts to copy.")
+    cells = []
+    for n in range(body.weeks):
+        offset = (dst - src).days + 7 * n
+        for r in sorted(rows, key=lambda x: (x.work_date, x.employee_id)):
+            d = r.work_date + timedelta(days=offset)
+            if d > _today(user) and _row(db, r.employee_id, d) is None:
+                cells.append((r.employee_id, d, r.shift_id))
+    return _bulk(db, user, manager, cells, request)
 
 
 @router.post("/roster/publish", response_model=RosterWeekOut)
@@ -197,11 +293,153 @@ def publish(body: RosterPublishIn, request: Request, db: DbSession, user: Curren
     return _week_out(db, manager.id, ws, today)
 
 
+@router.post("/roster/unpublish", response_model=RosterWeekOut)
+def unpublish(body: RosterUnpublishIn, request: Request, db: DbSession, user: CurrentUserDep) -> RosterWeekOut:
+    """Take an upcoming published week back to draft (with a reason). Open swaps in that week are cancelled and the
+    team is told. A week that has started can't be unpublished: change single days instead."""
+    manager = me(user)
+    ws = _monday(body.week_start)
+    today = _today(user)
+    week = rules.roster_week(db, manager.id, ws)
+    if week is None or week.status != "published":
+        raise HTTPException(409, "This week isn't published.")
+    if ws <= today:
+        raise HTTPException(409, "This week has started. Change single days instead.")
+    days = rules.week_dates(ws)
+    rows = list(db.scalars(select(RosterShift).where(RosterShift.manager_id == manager.id, RosterShift.work_date >= days[0],
+                                                     RosterShift.work_date <= days[-1])))
+    people = sorted({r.employee_id for r in rows})
+    reason = body.reason.strip()
+    for swap in db.scalars(select(ShiftSwap).where(ShiftSwap.work_date >= days[0], ShiftSwap.work_date <= days[-1],
+                                                   ShiftSwap.status.in_(("awaiting_teammate", "awaiting_manager")),
+                                                   ShiftSwap.requester_id.in_(people))):
+        swap.status, swap.decided_by, swap.decided_at = "cancelled", manager.id, utcnow()
+        swap.decision_note = "Roster taken back to draft."
+    week.status, week.published_at, week.published_by, week.published_with_gaps = "draft", None, None, False
+    for pid in people:
+        notify(db, recipient_id=pid, title="Roster being changed",
+               body=f"Your shifts for the week of {ws} were taken back to draft: {reason}", href=ROUTE)
+    record_audit(db, actor_id=user.id, action="roster_unpublished", entity="roster_week", entity_id=f"{manager.id}:{ws}",
+                 before={"status": "published"}, after={"status": "draft", "reason": reason}, ip=client_ip(request))
+    db.commit()
+    return _week_out(db, manager.id, ws, today)
+
+
 @router.get("/mine", response_model=list[RosterShiftOut])
-def my_shifts(db: DbSession, user: CurrentUserDep, from_date: date | None = None) -> list[RosterShiftOut]:
+def my_shifts(db: DbSession, user: CurrentUserDep, from_date: date | None = None,
+              to_date: date | None = None) -> list[RosterShiftOut]:
     rows = db.scalars(select(RosterShift).where(RosterShift.employee_id == (user.employee_id or ""),
-                                                RosterShift.work_date >= (from_date or date.min)).order_by(RosterShift.work_date))
+                                                RosterShift.work_date >= (from_date or date.min),
+                                                RosterShift.work_date <= (to_date or date.max)).order_by(RosterShift.work_date))
     return [RosterShiftOut.model_validate(r) for r in rows if rules.is_published(db, r)]
+
+
+@router.get("/team-calendar", response_model=list[TeamCalendarRowOut])
+def team_calendar(db: DbSession, user: CurrentUserDep, from_date: date, to_date: date) -> list[TeamCalendarRowOut]:
+    """Published shifts on my team roster(s): my manager's roster, any roster I'm on, and my own when I manage one.
+    Only names and shift ids (no leave or other personal details)."""
+    if to_date < from_date or (to_date - from_date).days > 62:
+        raise HTTPException(422, "Pick up to two months.")
+    emp_id = user.employee_id or ""
+    managers = {emp_id} if rules.team_ids(db, emp_id) else set()
+    if user.employee is not None and user.employee.manager_id:
+        managers.add(user.employee.manager_id)
+    managers |= set(db.scalars(select(RosterShift.manager_id).where(
+        RosterShift.employee_id == emp_id, RosterShift.work_date >= from_date, RosterShift.work_date <= to_date)))
+    if not managers:
+        return []
+    rows = db.scalars(select(RosterShift).where(RosterShift.manager_id.in_(managers), RosterShift.work_date >= from_date,
+                                                RosterShift.work_date <= to_date).order_by(RosterShift.work_date))
+    names: dict[str, str] = {}
+    out = []
+    for r in rows:
+        if not rules.is_published(db, r):
+            continue
+        if r.employee_id not in names:
+            names[r.employee_id] = _name(db, r.employee_id)
+        out.append(TeamCalendarRowOut(employee_id=r.employee_id, full_name=names[r.employee_id], date=r.work_date,
+                                      shift_id=r.shift_id))
+    return out
+
+
+# ---------- availability (migration 0034) ----------
+MAX_AVAILABILITY = 60
+
+
+@router.get("/availability", response_model=list[AvailabilityOut])
+def list_availability(db: DbSession, user: CurrentUserDep,
+                      employee_id: Annotated[str | None, Query(max_length=64)] = None) -> list[ShiftAvailability]:
+    """My upcoming availability entries; a manager may read a team member's, or the whole team's with employee_id=team."""
+    emp_id = user.employee_id or ""
+    if employee_id == "team":
+        ids = rules.team_ids(db, emp_id)
+    elif employee_id and employee_id != emp_id:
+        person = db.get(Employee, employee_id)
+        if person is None or not (person.manager_id == emp_id or can_decide(db, user, person)):
+            raise NOT_FOUND
+        ids = [employee_id]
+    else:
+        ids = [emp_id]
+    if not ids:
+        return []
+    today = _today(user)
+    rows = db.scalars(select(ShiftAvailability).where(ShiftAvailability.employee_id.in_(ids))
+                      .order_by(ShiftAvailability.employee_id, ShiftAvailability.created_at))
+    return [r for r in rows if r.work_date is None or r.work_date > today]
+
+
+@router.post("/availability", response_model=AvailabilityOut, status_code=status.HTTP_201_CREATED)
+def add_availability(body: AvailabilityIn, request: Request, db: DbSession, user: CurrentUserDep) -> ShiftAvailability:
+    """Mark a day (or a weekday every week) unavailable, or a preferred shift. The roster warns my manager when they
+    assign against it; if I'm already rostered on that day, my manager is told."""
+    emp = me(user)
+    if (body.work_date is None) == (body.weekday is None):
+        raise HTTPException(422, "Pick a date or a weekday.")
+    today = _today(user)
+    if body.work_date is not None and body.work_date <= today:
+        raise HTTPException(422, "Pick an upcoming date.")
+    if body.work_date is not None and body.work_date > today + timedelta(days=365):
+        raise HTTPException(422, "Pick a date within the next year.")
+    shift_id = None
+    if body.kind == "preferred":
+        shift = db.get(ShiftType, body.shift_id or "")
+        if shift is None or not shift.active:
+            raise HTTPException(422, "Pick the shift you prefer.")
+        shift_id = shift.id
+    mine = list(db.scalars(select(ShiftAvailability).where(ShiftAvailability.employee_id == emp.id)))
+    if len(mine) >= MAX_AVAILABILITY:
+        raise HTTPException(409, f"You can keep up to {MAX_AVAILABILITY} entries. Remove old ones first.")
+    if any(m.work_date == body.work_date and m.weekday == body.weekday for m in mine):
+        raise HTTPException(409, "You already have an entry for that day.")
+    row = ShiftAvailability(id=f"av-{secrets.token_hex(6)}", employee_id=emp.id, kind=body.kind, work_date=body.work_date,
+                            weekday=body.weekday, shift_id=shift_id, note=(body.note or "").strip() or None)
+    db.add(row)
+    db.flush()
+    if body.kind == "unavailable":
+        rostered = [r for r in db.scalars(select(RosterShift).where(RosterShift.employee_id == emp.id,
+                                                                    RosterShift.work_date > today))
+                    if (r.work_date == body.work_date if body.work_date else rules.portal_weekday(r.work_date) == body.weekday)]
+        for mid in sorted({r.manager_id for r in rostered}):
+            when = f"on {body.work_date.isoformat()}" if body.work_date else f"every {rules.DAY_NAMES[body.weekday or 0]}"
+            notify(db, recipient_id=mid, title="Availability change",
+                   body=f"{emp.full_name} is unavailable {when} but is on your roster then.", href=ROUTE)
+    record_audit(db, actor_id=user.id, action="shift_availability_added", entity="shift_availability", entity_id=row.id,
+                 subject_id=emp.id, after={"kind": row.kind, "date": row.work_date, "weekday": row.weekday,
+                                           "shift_id": row.shift_id}, ip=client_ip(request))
+    db.commit()
+    return row
+
+
+@router.delete("/availability/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_availability(entry_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> None:
+    row = db.get(ShiftAvailability, entry_id)
+    if row is None or row.employee_id != user.employee_id:
+        raise NOT_FOUND
+    record_audit(db, actor_id=user.id, action="shift_availability_removed", entity="shift_availability", entity_id=row.id,
+                 subject_id=row.employee_id, before={"kind": row.kind, "date": row.work_date, "weekday": row.weekday},
+                 ip=client_ip(request))
+    db.delete(row)
+    db.commit()
 
 
 # ---------- swaps ----------
@@ -291,7 +529,7 @@ def request_swap(body: ShiftSwapIn, request: Request, db: DbSession, user: Curre
 
 
 @router.post("/swaps/{swap_id}/respond", response_model=ShiftSwapOut)
-def respond_swap(swap_id: str, body: ShiftSwapRespondIn, db: DbSession, user: CurrentUserDep) -> ShiftSwap:
+def respond_swap(swap_id: str, body: ShiftSwapRespondIn, request: Request, db: DbSession, user: CurrentUserDep) -> ShiftSwap:
     swap = db.get(ShiftSwap, swap_id)
     if swap is None or user.employee_id not in (swap.requester_id, swap.teammate_id):
         raise NOT_FOUND
@@ -310,18 +548,25 @@ def respond_swap(swap_id: str, body: ShiftSwapRespondIn, db: DbSession, user: Cu
         if row is not None and row.manager_id != user.employee_id:
             notify(db, recipient_id=row.manager_id, title="Shift swap request",
                    body=f"A shift swap on {swap.work_date} is waiting for your approval.", href=ROUTE)
+    record_audit(db, actor_id=user.id, action="shift_swap_accepted" if body.accept else "shift_swap_declined",
+                 entity="shift_swap", entity_id=swap.id, subject_id=swap.requester_id, after={"status": swap.status},
+                 ip=client_ip(request))
     db.commit()
     return swap
 
 
 @router.post("/swaps/{swap_id}/cancel", response_model=ShiftSwapOut)
-def cancel_swap(swap_id: str, db: DbSession, user: CurrentUserDep) -> ShiftSwap:
+def cancel_swap(swap_id: str, request: Request, db: DbSession, user: CurrentUserDep) -> ShiftSwap:
     swap = db.get(ShiftSwap, swap_id)
     if swap is None or swap.requester_id != user.employee_id:
         raise NOT_FOUND
     if swap.status not in ("awaiting_teammate", "awaiting_manager"):
         raise HTTPException(409, "This request is already closed.")
     swap.status, swap.decided_at = "cancelled", utcnow()
+    notify(db, recipient_id=swap.teammate_id, title="Swap cancelled", body=f"The swap request for {swap.work_date} was cancelled.",
+           href=ROUTE)
+    record_audit(db, actor_id=user.id, action="shift_swap_cancelled", entity="shift_swap", entity_id=swap.id,
+                 subject_id=swap.requester_id, after={"status": "cancelled"}, ip=client_ip(request))
     db.commit()
     return swap
 
@@ -370,7 +615,7 @@ def decide_swap(swap_id: str, body: ShiftSwapDecisionIn, request: Request, db: D
         notify(db, recipient_id=pid, title=f"Shift swap {swap.status}", body=f"The swap on {swap.work_date} was {swap.status}.",
                href=ROUTE)
     record_audit(db, actor_id=user.id, action=f"shift_swap_{swap.status}", entity="shift_swap", entity_id=swap.id,
-                 subject_id=swap.requester_id, after={"status": swap.status}, ip=client_ip(request))
+                 subject_id=swap.requester_id, after={"status": swap.status, "note": note or None}, ip=client_ip(request))
     db.commit()
     return swap
 

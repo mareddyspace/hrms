@@ -6,6 +6,8 @@
 import { useSyncExternalStore } from "react";
 import { API_ENABLED, ApiError, api, apiRequest } from "../api/client.ts";
 import { createApiMirror, errorText } from "../api/syncOps.ts";
+import { apiDelete, apiPut, uploadRaw } from "../api/syncShared.ts";
+import { checkWorkFile } from "../api/syncTasks.ts";
 import { DEMO_ACCOUNTS, managementChain } from "../demoAccounts.ts";
 import { pushPersonTaskAlert } from "./collabLocal.ts";
 import { taskPersonById } from "./taskTeam.ts";
@@ -23,7 +25,20 @@ export interface TicketEvent {
   byId: string;
   kind: "created" | "assigned" | "status" | "comment" | "watcher" | "task";
   text: string;
+  /** Internal note: only the people working the ticket see it. */
+  internal?: boolean;
 }
+
+export interface TicketFile {
+  id: string;
+  name: string;
+  size: number;
+  byId: string;
+  internal: boolean;
+  at: string;
+}
+
+export type SlaState = "ok" | "soon" | "breached" | "met";
 
 export interface Ticket {
   id: string;
@@ -48,6 +63,20 @@ export interface Ticket {
   serverCanPlan?: boolean;
   serverNextStatuses?: TicketStatus[];
   serverCanTake?: boolean;
+  /** Service targets (set from the category when raised) and the outcome. */
+  responseDueAt?: string;
+  resolveDueAt?: string;
+  firstResponseAt?: string;
+  resolvedAt?: string;
+  resolutionNote?: string;
+  satisfaction?: number;
+  satisfactionNote?: string;
+  escalatedAt?: string;
+  reopenCount?: number;
+  serverSla?: SlaState;
+  serverIsAgent?: boolean;
+  serverCanRate?: boolean;
+  files?: TicketFile[];
 }
 
 export interface TicketTask {
@@ -325,13 +354,26 @@ interface TicketOut {
   watcher_ids: string[];
   due: string | null;
   tasks: { id: string; title: string; owner_id: string | null; due: string | null; done: boolean }[];
-  activity: { id: string; at: string; by_id: string; kind: TicketEvent["kind"]; text: string }[];
+  activity: { id: string; at: string; by_id: string; kind: TicketEvent["kind"]; text: string; internal?: boolean }[];
   created_at: string;
   updated_at: string;
   names: Record<string, string>;
   can_plan: boolean;
   next_statuses: TicketStatus[];
   can_take?: boolean;
+  response_due_at?: string | null;
+  resolve_due_at?: string | null;
+  first_response_at?: string | null;
+  resolved_at?: string | null;
+  resolution_note?: string | null;
+  satisfaction?: number | null;
+  satisfaction_note?: string | null;
+  escalated_at?: string | null;
+  reopen_count?: number;
+  sla_state?: SlaState;
+  is_agent?: boolean;
+  can_rate?: boolean;
+  attachments?: { id: string; file_name: string; size_bytes: number; uploaded_by: string; internal: boolean; created_at: string }[];
 }
 
 /** Names the server sent for people the portal directory may not list. */
@@ -354,12 +396,25 @@ function fromApi(t: TicketOut): Ticket {
     watcherIds: t.watcher_ids,
     due: t.due ?? undefined,
     tasks: t.tasks.map((k) => ({ id: k.id, title: k.title, ownerId: k.owner_id ?? undefined, due: k.due ?? undefined, done: k.done })),
-    activity: t.activity.map((e) => ({ id: e.id, at: e.at, byId: e.by_id, kind: e.kind, text: e.text })),
+    activity: t.activity.map((e) => ({ id: e.id, at: e.at, byId: e.by_id, kind: e.kind, text: e.text, internal: e.internal ?? false })),
     createdAt: t.created_at,
     updatedAt: t.updated_at,
     serverCanPlan: t.can_plan,
     serverNextStatuses: t.next_statuses,
     serverCanTake: t.can_take ?? false,
+    responseDueAt: t.response_due_at ?? undefined,
+    resolveDueAt: t.resolve_due_at ?? undefined,
+    firstResponseAt: t.first_response_at ?? undefined,
+    resolvedAt: t.resolved_at ?? undefined,
+    resolutionNote: t.resolution_note ?? undefined,
+    satisfaction: t.satisfaction ?? undefined,
+    satisfactionNote: t.satisfaction_note ?? undefined,
+    escalatedAt: t.escalated_at ?? undefined,
+    reopenCount: t.reopen_count ?? 0,
+    serverSla: t.sla_state,
+    serverIsAgent: t.is_agent,
+    serverCanRate: t.can_rate,
+    files: (t.attachments ?? []).map((a) => ({ id: a.id, name: a.file_name, size: a.size_bytes, byId: a.uploaded_by, internal: a.internal, at: a.created_at })),
   };
 }
 
@@ -488,12 +543,113 @@ export function canTakeTicket(t: Ticket, actor: TicketActor): boolean {
   return managesPerson(actor.id, t.requesterId) || managesPerson(actor.id, t.assigneeId);
 }
 
-/** Response target by priority, counted from when the ticket was raised (used when no deadline is set). */
-export const SLA_HOURS: Record<TicketPriority, number> = { urgent: 8, high: 24, medium: 72, low: 120 };
+/** Category service targets for a medium-priority ticket (hours). Backend mode: stored and edited on the server
+ * (/tickets/categories); these are the same defaults, used in local mode. */
+export interface TicketCategoryInfo {
+  name: TicketType;
+  responseHours: number;
+  resolveHours: number;
+  queueOwnerId?: string;
+  queueOwnerName?: string;
+  active: boolean;
+}
+export const DEFAULT_CATEGORIES: TicketCategoryInfo[] = [
+  { name: "IT support", responseHours: 4, resolveHours: 24, queueOwnerId: ALEX, active: true },
+  { name: "Access request", responseHours: 4, resolveHours: 24, queueOwnerId: ALEX, active: true },
+  { name: "HR query", responseHours: 8, resolveHours: 72, queueOwnerId: FARHAN, active: true },
+  { name: "Bug", responseHours: 8, resolveHours: 72, active: true },
+  { name: "Client issue", responseHours: 2, resolveHours: 24, active: true },
+];
+/** Urgent is due four times sooner than medium; low gets twice as long (same as the server). */
+export const PRIORITY_FACTOR: Record<TicketPriority, number> = { urgent: 0.25, high: 0.5, medium: 1, low: 2 };
 
-/** The date a ticket should be done by (its deadline, or the priority's SLA) and how it stands today. */
+let categoryCache: TicketCategoryInfo[] = DEFAULT_CATEGORIES;
+const categoryListeners = new Set<() => void>();
+let categoriesRequested = false;
+
+async function loadCategories(): Promise<void> {
+  try {
+    const rows = await api.get<{ name: TicketType; response_hours: number; resolve_hours: number; queue_owner_id: string | null; queue_owner_name: string | null; active: boolean }[]>("/tickets/categories");
+    categoryCache = rows.map((r) => ({
+      name: r.name,
+      responseHours: r.response_hours,
+      resolveHours: r.resolve_hours,
+      queueOwnerId: r.queue_owner_id ?? undefined,
+      queueOwnerName: r.queue_owner_name ?? undefined,
+      active: r.active,
+    }));
+    categoryListeners.forEach((fn) => fn());
+  } catch {
+    /* keep the defaults */
+  }
+}
+
+export function useTicketCategories(): TicketCategoryInfo[] {
+  if (API_ENABLED && !categoriesRequested) {
+    categoriesRequested = true;
+    void loadCategories();
+  }
+  return useSyncExternalStore(
+    (fn) => {
+      categoryListeners.add(fn);
+      return () => categoryListeners.delete(fn);
+    },
+    () => categoryCache,
+    () => categoryCache,
+  );
+}
+
+/** HR / admin: change a category's targets and queue (backend mode). */
+export async function saveTicketCategory(c: TicketCategoryInfo): Promise<string | null> {
+  if (c.resolveHours < c.responseHours) return "The resolve target can't be shorter than the response target.";
+  if (!API_ENABLED) {
+    categoryCache = categoryCache.map((x) => (x.name === c.name ? c : x));
+    categoryListeners.forEach((fn) => fn());
+    return null;
+  }
+  try {
+    await apiPut(`/tickets/categories/${encodeURIComponent(c.name)}`, {
+      response_hours: c.responseHours,
+      resolve_hours: c.resolveHours,
+      queue_owner_id: c.queueOwnerId || null,
+      active: c.active,
+    });
+    await loadCategories();
+    return null;
+  } catch (e) {
+    return errorText(e);
+  }
+}
+
+function categoryOf(type: TicketType): TicketCategoryInfo {
+  return categoryCache.find((c) => c.name === type) ?? DEFAULT_CATEGORIES.find((c) => c.name === type) ?? DEFAULT_CATEGORIES[3];
+}
+
+/** Respond-by and resolve-by for a ticket: the stored targets, else worked out from its category and priority. */
+export function ticketSla(t: Ticket): { respondBy: string; resolveBy: string } {
+  if (t.responseDueAt && t.resolveDueAt) return { respondBy: t.responseDueAt, resolveBy: t.resolveDueAt };
+  const c = categoryOf(t.type);
+  const f = PRIORITY_FACTOR[t.priority];
+  const start = Date.parse(t.createdAt);
+  return {
+    respondBy: new Date(start + c.responseHours * f * 3_600_000).toISOString(),
+    resolveBy: new Date(start + c.resolveHours * f * 3_600_000).toISOString(),
+  };
+}
+
+/** ok | soon (last quarter of the window) | breached | met (closed in time). */
+export function slaState(t: Ticket, now = new Date()): SlaState {
+  if (t.serverSla) return t.serverSla;
+  const { resolveBy } = ticketSla(t);
+  const end = Date.parse(resolveBy);
+  if (!isOpenTicket(t)) return Date.parse(t.resolvedAt ?? t.updatedAt) <= end ? "met" : "breached";
+  if (now.getTime() > end) return "breached";
+  return end - now.getTime() <= (end - Date.parse(t.createdAt)) / 4 ? "soon" : "ok";
+}
+
+/** The date a ticket should be done by (its deadline, or the category target) and how it stands today. */
 export function ticketTarget(t: Ticket, now = new Date()): { date: string; source: "deadline" | "sla"; state: "met" | "ok" | "soon" | "late" } {
-  const date = t.due ?? new Date(Date.parse(t.createdAt) + SLA_HOURS[t.priority] * 3_600_000).toISOString().slice(0, 10);
+  const date = t.due ?? ticketSla(t).resolveBy.slice(0, 10);
   const source = t.due ? "deadline" : "sla";
   if (!isOpenTicket(t)) return { date, source, state: "met" };
   const today = now.toISOString().slice(0, 10);
@@ -549,7 +705,7 @@ export async function createTicket(
       return { ok: false, error: errorText(e) };
     }
   }
-  if (!assigneeId) assigneeId = QUEUE_OWNER[input.type];
+  if (!assigneeId) assigneeId = categoryOf(input.type).queueOwnerId ?? QUEUE_OWNER[input.type];
   const list = getTickets();
   const id = nextId(list);
   const at = stamp();
@@ -617,12 +773,18 @@ export async function setTicketStatus(id: string, status: TicketStatus, actor: T
   if (!t) return "Ticket not found.";
   if (!nextStatuses(t, actor).includes(status)) return "You can't make that change.";
   if (status === "Resolved" && !note.trim()) return "Add a short resolution note.";
+  const reopening = t.status === "Resolved" && status === "In progress";
+  if (reopening && !note.trim()) return "Say what is still wrong so the owner can pick it up.";
   if (API_ENABLED) return send(`/${enc(id)}/status`, "POST", { status, note: note.trim() });
   const at = stamp();
   patch(id, (x) => ({
     ...x,
     status,
     updatedAt: at,
+    ...(status === "Resolved" ? { resolvedAt: at, resolutionNote: note.trim() } : {}),
+    ...(reopening ? { resolvedAt: undefined, resolutionNote: undefined, satisfaction: undefined, reopenCount: (x.reopenCount ?? 0) + 1 } : {}),
+    ...(status === "Closed" && !x.resolvedAt ? { resolvedAt: at } : {}),
+    ...(!x.firstResponseAt && actor.id !== x.requesterId ? { firstResponseAt: at } : {}),
     activity: [
       ...x.activity,
       ev(evId(), at, actor.id, "status", `${x.status} → ${status}`),
@@ -642,16 +804,84 @@ export async function setTicketStatus(id: string, status: TicketStatus, actor: T
   return null;
 }
 
-export async function commentOnTicket(id: string, text: string, actor: TicketActor): Promise<string | null> {
+export async function commentOnTicket(id: string, text: string, actor: TicketActor, internal = false): Promise<string | null> {
   const t = getTickets().find((x) => x.id === id);
   if (!t) return "Ticket not found.";
   if (!canViewTicket(t, actor)) return "You can't comment on this ticket.";
   if (!text.trim()) return "Write a comment first.";
-  if (API_ENABLED) return send(`/${enc(id)}/comments`, "POST", { text: text.trim() });
+  if (internal && !isTicketAgent(t, actor)) return "Only the people working the ticket can add internal notes.";
+  if (API_ENABLED) return send(`/${enc(id)}/comments`, "POST", { text: text.trim(), internal });
   const at = stamp();
-  patch(id, (x) => ({ ...x, updatedAt: at, activity: [...x.activity, ev(evId(), at, actor.id, "comment", text.trim())] }));
+  patch(id, (x) => ({
+    ...x,
+    updatedAt: at,
+    ...(!internal && !x.firstResponseAt && actor.id !== x.requesterId ? { firstResponseAt: at } : {}),
+    activity: [...x.activity, { ...ev(evId(), at, actor.id, "comment", text.trim()), internal }],
+  }));
   return null;
 }
+
+/** Works the ticket (not just the requester): sees and writes internal notes. */
+export function isTicketAgent(t: Ticket, actor: TicketActor): boolean {
+  if (t.serverIsAgent !== undefined) return t.serverIsAgent;
+  if (actor.id === t.requesterId && actor.id !== t.assigneeId) return false;
+  if (actor.id === t.assigneeId || actor.id === t.subOwnerId || !!t.tasks?.some((k) => k.ownerId === actor.id)) return true;
+  if (isAdmin(actor.role) && IT_TYPES.includes(t.type)) return true;
+  if (HR_ROLES.includes(actor.role) && t.type === "HR query") return true;
+  return managesPerson(actor.id, t.assigneeId);
+}
+
+export function canRateTicket(t: Ticket, actor: TicketActor): boolean {
+  if (t.serverCanRate !== undefined) return t.serverCanRate;
+  return actor.id === t.requesterId && actor.id !== t.assigneeId && (t.status === "Resolved" || t.status === "Closed");
+}
+
+/** The requester rates how the ticket was handled (1-5) once it is resolved. */
+export async function rateTicket(id: string, score: number, note: string, actor: TicketActor): Promise<string | null> {
+  const t = getTickets().find((x) => x.id === id);
+  if (!t) return "Ticket not found.";
+  if (!canRateTicket(t, actor)) return "Only the person who raised the ticket can rate it, once it is resolved.";
+  if (!(score >= 1 && score <= 5)) return "Pick 1 to 5 stars.";
+  if (API_ENABLED) return send(`/${enc(id)}/rating`, "POST", { score, note: note.trim() });
+  const at = stamp();
+  patch(id, (x) => ({
+    ...x,
+    satisfaction: score,
+    satisfactionNote: note.trim() || undefined,
+    updatedAt: at,
+    activity: [...x.activity, ev(evId(), at, actor.id, "comment", `Rated ${score}/5${note.trim() ? `: ${note.trim()}` : "."}`)],
+  }));
+  return null;
+}
+
+const OFFLINE_FILES = "Files can be attached when TimeZ is connected to the server.";
+
+export async function uploadTicketFile(id: string, file: File, internal: boolean): Promise<string | null> {
+  if (!API_ENABLED) return OFFLINE_FILES;
+  const bad = checkWorkFile(file);
+  if (bad) return bad;
+  try {
+    const out = await uploadRaw<TicketOut>(`/tickets/${enc(id)}/attachments${internal ? "?internal=true" : ""}`, file, file.type, file.name);
+    const row = fromApi(out);
+    mirror.set(mirror.get().map((t) => (t.id === row.id ? row : t)));
+    return null;
+  } catch (e) {
+    return errorText(e);
+  }
+}
+
+export async function removeTicketFile(id: string, fileId: string): Promise<string | null> {
+  if (!API_ENABLED) return OFFLINE_FILES;
+  try {
+    const row = fromApi(await apiDelete<TicketOut>(`/tickets/${enc(id)}/attachments/${enc(fileId)}`));
+    mirror.set(mirror.get().map((t) => (t.id === row.id ? row : t)));
+    return null;
+  } catch (e) {
+    return errorText(e);
+  }
+}
+
+export const ticketFilePath = (id: string, fileId: string) => `/tickets/${enc(id)}/attachments/${enc(fileId)}/file`;
 
 export async function toggleWatch(id: string, personId: string, actor: TicketActor): Promise<string | null> {
   const t = getTickets().find((x) => x.id === id);

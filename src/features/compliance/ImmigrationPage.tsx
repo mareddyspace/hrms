@@ -7,11 +7,13 @@ import {
   ISSUING_COUNTRIES,
   addDocument,
   canSeeDocument,
+  canRemoveDocument,
   canSeeFullNumber,
   canVerify,
   daysToExpiry,
   docStatus,
   getImmigrationState,
+  immigrationHasTeam,
   needsSponsor,
   removeDocument,
   setRenewalInProgress,
@@ -27,7 +29,11 @@ import { isHr, type ComplianceActor } from "./shared.ts";
 import { PersonPicker, toneFor } from "./ComplianceUi.tsx";
 import { useComplianceActor } from "./useActor.ts";
 import { MaskedValue } from "../../components/MaskedValue.tsx";
+import { HistoryTimeline } from "../experience/HistoryTimeline.tsx";
 import "./compliance.css";
+import "../../styles/experience.css";
+
+type Result = string | null | Promise<string | null>;
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -53,14 +59,19 @@ export function ImmigrationPage() {
 
   const mine = state.documents.filter((d) => d.personId === actor.id);
   const pending = state.documents.filter((d) => d.verification === "Pending verification" && canVerify(actor, d));
+  const teamDocs = state.documents.filter((d) => d.team);
+  const hasTeam = immigrationHasTeam();
 
   const tabs = [{ id: "mine", label: "My documents" }];
+  if (hasTeam && !hr) tabs.push({ id: "team", label: `My team (${teamDocs.length})` });
   if (hr) {
     tabs.push({ id: "all", label: "All employees" });
     tabs.push({ id: "verify", label: `Verification queue (${pending.length})` });
   }
 
-  function report(error: string | null, ok: string) {
+  /** Shows the outcome of a change (local stores answer at once, the server asynchronously). */
+  async function report(result: Result, ok: string): Promise<string | null> {
+    const error = await result;
     setMsg(error ? { tone: "err", text: error } : { tone: "ok", text: ok });
     return error;
   }
@@ -127,6 +138,8 @@ export function ImmigrationPage() {
 
       {tab === "verify" && hr && <VerificationQueue docs={pending} actor={actor} onResult={report} />}
 
+      {tab === "team" && hasTeam && <TeamDocuments docs={teamDocs} />}
+
       {editing && (
         <DocDialog
           key={editing.id ?? "new"}
@@ -135,8 +148,8 @@ export function ImmigrationPage() {
           editingId={editing.id}
           actorId={actor.id}
           onClose={() => setEditing(null)}
-          onSave={(input) => {
-            const error = editing.id ? updateDocument(actor, editing.id, input) : addDocument(actor, input);
+          onSave={async (input) => {
+            const error = await (editing.id ? updateDocument(actor, editing.id, input) : addDocument(actor, input));
             if (error) return error;
             const verified = hr && input.personId !== actor.id;
             setMsg({ tone: "ok", text: verified ? "Document saved and verified." : "Document saved — waiting for HR verification." });
@@ -160,11 +173,11 @@ function DocItem({
   doc: IdDocument;
   actor: ComplianceActor;
   onEdit: () => void;
-  onRenewal: (value: boolean) => string | null;
-  onRemove: () => string | null;
+  onRenewal: (value: boolean) => Promise<string | null>;
+  onRemove: () => Promise<string | null>;
 }) {
   const status = docStatus(doc);
-  const canRemove = doc.verification !== "Verified";
+  const canRemove = canRemoveDocument(actor, doc);
   return (
     <li className="cmp-item">
       <div className="cmp-item-head">
@@ -185,6 +198,13 @@ function DocItem({
         {doc.sponsor && <span>Sponsor: {doc.sponsor}</span>}
       </div>
       {doc.verification === "Rejected" && doc.verificationNote && <p className="note err">Returned by HR: {doc.verificationNote}</p>}
+      {doc.verification === "Verified" && doc.verifiedByName && (
+        <p className="muted xp-small">
+          Verified by {doc.verifiedByName}
+          {doc.verifiedOn ? ` on ${formatShortDate(doc.verifiedOn)}` : ""}
+        </p>
+      )}
+      {doc.history && doc.history.length > 0 && <HistoryTimeline entries={doc.history} compact />}
       <div className="cmp-actions">
         <button className="btn-ghost btn-tiny" type="button" onClick={onEdit}>
           Update
@@ -226,7 +246,7 @@ function AllDocuments({
   actor: ComplianceActor;
   onEdit: (doc: IdDocument) => void;
   onAdd: () => void;
-  onRenewal: (doc: IdDocument, value: boolean) => string | null;
+  onRenewal: (doc: IdDocument, value: boolean) => Promise<string | null>;
 }) {
   const [query, setQuery] = useState("");
   const [country, setCountry] = useState("all");
@@ -254,10 +274,11 @@ function AllDocuments({
   }, [visible, today]);
 
   const rows = visible
+    .filter((d) => !d.team)
     .map((d) => ({ d, person: getPerson(d.personId), s: docStatus(d, today), days: daysToExpiry(d, today) }))
     .filter(({ d, person, s, days }) => {
       const q = query.trim().toLowerCase();
-      if (q && !`${person?.fullName ?? ""} ${person?.employeeCode ?? ""}`.toLowerCase().includes(q)) return false;
+      if (q && !`${person?.fullName ?? d.personName ?? ""} ${person?.employeeCode ?? ""}`.toLowerCase().includes(q)) return false;
       if (country !== "all" && person?.countryCode !== country) return false;
       if (status !== "all" && s !== status) return false;
       if (type !== "all" && d.type !== type) return false;
@@ -330,7 +351,7 @@ function AllDocuments({
             empty={<EmptyState title="No matching documents" />}
             rows={rows.map(({ d, person, s }) => [
               <span key="p">
-                {person?.fullName ?? "Unknown"}
+                {person?.fullName ?? d.personName ?? "Unknown"}
                 <br />
                 <small className="muted">{person?.employeeCode}</small>
               </span>,
@@ -372,7 +393,52 @@ function AllDocuments({
   );
 }
 
-function VerificationQueue({ docs, actor, onResult }: { docs: IdDocument[]; actor: ComplianceActor; onResult: (error: string | null, ok: string) => void }) {
+function TeamDocuments({ docs }: { docs: IdDocument[] }) {
+  const today = todayISO();
+  const rows = [...docs].sort((a, b) => daysToExpiry(a, today) - daysToExpiry(b, today));
+  const attention = rows.filter((d) => ["Expired", "Expiring"].includes(docStatus(d, today))).length;
+  return (
+    <Card title="My team's documents">
+      <div className="stack">
+        <p className="muted">
+          Status and expiry only — numbers stay with the holder and HR.{" "}
+          {attention > 0 && <strong>{plural(attention, "document")} need attention.</strong>}
+        </p>
+        <DataTable
+          headers={["Employee", "Document", "Number", "Expiry", "Status", "Verification"]}
+          empty={<EmptyState title="No documents on record for your team" />}
+          rows={rows.map((d) => {
+            const s = docStatus(d, today);
+            return [
+              d.personName ?? getPerson(d.personId)?.fullName ?? "Unknown",
+              `${d.type} · ${d.issuingCountry}`,
+              <span key="n" className="cmp-code">
+                {d.number}
+              </span>,
+              <span key="e">
+                {formatShortDate(d.expiryDate)}
+                <br />
+                <small className="muted">{expiryHint(d)}</small>
+              </span>,
+              <StatusBadge key="s" status={s} tone={toneFor(s)} literal />,
+              <StatusBadge key="v" status={d.verification} tone={toneFor(d.verification)} literal />,
+            ];
+          })}
+        />
+      </div>
+    </Card>
+  );
+}
+
+function VerificationQueue({
+  docs,
+  actor,
+  onResult,
+}: {
+  docs: IdDocument[];
+  actor: ComplianceActor;
+  onResult: (result: Result, ok: string) => Promise<string | null>;
+}) {
   const [returning, setReturning] = useState<IdDocument | null>(null);
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
@@ -393,7 +459,7 @@ function VerificationQueue({ docs, actor, onResult }: { docs: IdDocument[]; acto
             <li key={d.id} className="approval-item">
               <div className="row-between">
                 <strong>
-                  {person?.fullName ?? "Unknown"} · {d.type}
+                  {person?.fullName ?? d.personName ?? "Unknown"} · {d.type}
                 </strong>
                 <StatusBadge status={docStatus(d)} tone={toneFor(docStatus(d))} literal />
               </div>
@@ -407,11 +473,7 @@ function VerificationQueue({ docs, actor, onResult }: { docs: IdDocument[]; acto
                   busyLabel="Verifying…"
                   doneLabel="Verified"
                   success={`${d.type} for ${person?.fullName ?? "the employee"} verified.`}
-                  onAction={() => {
-                    const error = verifyDocument(actor, d.id, "Verified");
-                    onResult(error, "Document verified.");
-                    return error;
-                  }}
+                  onAction={() => onResult(verifyDocument(actor, d.id, "Verified"), "Document verified.")}
                 >
                   Verify
                 </ActionButton>
@@ -445,9 +507,9 @@ function VerificationQueue({ docs, actor, onResult }: { docs: IdDocument[]; acto
               busyLabel="Returning…"
               doneLabel="Returned"
               success="Document returned to the employee."
-              onAction={() => {
+              onAction={async () => {
                 if (!returning) return false;
-                const err = verifyDocument(actor, returning.id, "Rejected", reason);
+                const err = await verifyDocument(actor, returning.id, "Rejected", reason);
                 if (err) {
                   setError(err);
                   return false;
@@ -486,7 +548,7 @@ function DocDialog({
   editingId?: string;
   actorId: string;
   onClose: () => void;
-  onSave: (input: DocInput) => string | null;
+  onSave: (input: DocInput) => Promise<string | null>;
 }) {
   const [form, setForm] = useState<DocInput>(initial);
   const [error, setError] = useState("");
@@ -506,7 +568,7 @@ function DocDialog({
           </button>
           <ActionButton
             className="btn"
-            onAction={() => {
+            onAction={async () => {
               if (forOther && !form.personId) {
                 setError("Choose the employee.");
                 return false;
@@ -515,7 +577,7 @@ function DocDialog({
                 setError("Use My documents for your own records.");
                 return false;
               }
-              const err = onSave(form);
+              const err = await onSave(form);
               if (err) setError(err);
               return err;
             }}

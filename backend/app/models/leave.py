@@ -45,6 +45,8 @@ class LeavePolicy(TimestampMixin, Base):
     max_per_request: Mapped[float | None] = mapped_column(Numeric(6, 1, asdecimal=False))
     min_notice_days: Mapped[int | None] = mapped_column(Integer)
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    # migration 0032: may be paid out (leave encashment). NULL = the default (privilege leave "pto" only).
+    encashable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 
 class Holiday(TimestampMixin, Base):
@@ -59,6 +61,11 @@ class Holiday(TimestampMixin, Base):
     calendar: Mapped[str | None] = mapped_column(String(100))
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     description: Mapped[str | None] = mapped_column(Text)  # migration 0024
+    # migration 0032 (app/services/holiday_rules.py): national | regional | company | optional (NULL = national);
+    # regions: states / cities it applies to (NULL = whole country); legal_entity NULL = every entity.
+    holiday_type: Mapped[str | None] = mapped_column(String(16))
+    regions: Mapped[list[Any] | None] = mapped_column(JSON)
+    legal_entity: Mapped[str | None] = mapped_column(String(200))
 
 
 class OptionalHoliday(TimestampMixin, Base):

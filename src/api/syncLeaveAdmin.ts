@@ -35,6 +35,8 @@ export interface LeavePolicyAdmin {
   max_per_request: number | null;
   min_notice_days: number | null;
   active: boolean;
+  /** May be paid out; null = default (privilege leave only). */
+  encashable?: boolean | null;
 }
 
 export type LeavePolicyEdit = Partial<Omit<LeavePolicyAdmin, "id" | "leave_code" | "country_code">>;
@@ -48,6 +50,20 @@ export interface HolidayAdmin {
   calendar: string | null;
   active: boolean;
   description?: string | null;
+  holiday_type?: "national" | "regional" | "company" | "optional" | null;
+  regions?: string[] | null;
+  legal_entity?: string | null;
+}
+
+/** One office: its state, head count and days off in the year (GET /admin/leave/holiday-locations). */
+export interface HolidayLocation {
+  country_code: string;
+  location: string;
+  region: string | null;
+  legal_entity: string | null;
+  employees: number;
+  days_off: number;
+  by_type: Record<string, number>;
 }
 
 export interface HolidayCalendar {
@@ -84,8 +100,17 @@ export const leaveAdminApi = {
   deactivatePolicy: (id: string) => apiDelete<LeavePolicyAdmin>(`${L}/policies/${enc(id)}`),
   holidays: (country: string, year: number) => api.get<HolidayAdmin[]>(`${L}/holidays`, { country, year }),
   calendars: (country: string) => api.get<HolidayCalendar[]>(`${L}/calendars`, { country }),
-  createHoliday: (body: { country_code: string; date: string; name: string; calendar: string | null; description?: string | null }) =>
-    api.post<HolidayAdmin>(`${L}/holidays`, body),
+  holidayLocations: (country: string, year: number) => api.get<HolidayLocation[]>(`${L}/holiday-locations`, { country, year }),
+  createHoliday: (body: {
+    country_code: string;
+    date: string;
+    name: string;
+    calendar: string | null;
+    description?: string | null;
+    holiday_type?: string;
+    regions?: string[] | null;
+    legal_entity?: string | null;
+  }) => api.post<HolidayAdmin>(`${L}/holidays`, body),
   updateHoliday: (id: string, body: Partial<Omit<HolidayAdmin, "id" | "country_code">>) =>
     apiPut<HolidayAdmin>(`${L}/holidays/${enc(id)}`, body),
   deactivateHoliday: (id: string) => apiDelete<HolidayAdmin>(`${L}/holidays/${enc(id)}`),

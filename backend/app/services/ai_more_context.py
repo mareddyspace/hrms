@@ -33,7 +33,6 @@ from app.models import (
     DeskTicket,
     Employee,
     ExpenseClaim,
-    Holiday,
     LeaveRequest,
     OrgUnit,
     PayrollRun,
@@ -202,19 +201,16 @@ def payslips_block(db: Session, me: Employee) -> str:
 
 
 def holidays_block(db: Session, me: Employee, today: date) -> str:
-    cal = Holiday.calendar.is_(None) if not me.holiday_calendar else or_(Holiday.calendar.is_(None), Holiday.calendar == me.holiday_calendar)
-    rows = db.execute(
-        select(Holiday.date, Holiday.name).where(Holiday.country_code == me.country_code, Holiday.active.is_(True), cal,
-                                                 Holiday.date >= today, Holiday.date <= today + timedelta(days=370))
-        .order_by(Holiday.date).limit(8)
-    ).all()
-    year_count = db.scalar(select(func.count()).select_from(Holiday).where(
-        Holiday.country_code == me.country_code, Holiday.active.is_(True), cal,
-        Holiday.date >= date(today.year, 1, 1), Holiday.date <= date(today.year, 12, 31))) or 0
-    head = f"YOUR HOLIDAYS ({me.country_code}{', ' + me.holiday_calendar if me.holiday_calendar else ''}; {year_count} in {today.year})"
+    """The person's own days off (country, office state, legal entity), same list as the Holidays page."""
+    from app.services.holiday_rules import region_of, rows_for_employee
+
+    rows = rows_for_employee(db, me, today, today + timedelta(days=370))[:8]
+    year_count = len(rows_for_employee(db, me, date(today.year, 1, 1), date(today.year, 12, 31)))
+    place = ", ".join(x for x in (me.location, region_of(me.location)) if x)
+    head = f"YOUR HOLIDAYS ({me.country_code}{', ' + place if place else ''}; {year_count} days off in {today.year}; optional holidays are picked as leave)"
     if not rows:
         return head + "\n- No upcoming holidays on the calendar"
-    return head + "\n" + "\n".join(f"- {d.isoformat()} ({d.strftime('%A')}): {n}" for d, n in rows)
+    return head + "\n" + "\n".join(f"- {h.date.isoformat()} ({h.date.strftime('%A')}): {h.name}" for h in rows)
 
 
 def tax_block(db: Session, me: Employee) -> str | None:

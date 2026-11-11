@@ -1,0 +1,49 @@
+/* Projects: detail tabs, milestone progress, team table, hours report. Uses the tokens from styles.css. */
+
+.project-milestones li .pj-ms-progress {
+  grid-column: 2 / -1;
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+}
+.project-milestones li .pj-ms-progress .progress { margin: 0; }
+.project-milestones li.late .pj-ms-progress span { color: var(--muted); }
+
+.pj-person { display: inline-flex; align-items: center; gap: 8px; }
+.pj-person .link-btn { text-align: left; }
+.pj-team-table td, .pj-hours-table td { vertical-align: middle; }
+.pj-over { color: var(--danger); font-weight: 600; }
+.pj-foot { margin: 10px 0 0; font-size: 13px; }
+
+.pj-prio {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  text-transform: capitalize;
+  color: var(--muted);
+}
+.pj-prio::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: currentColor; }
+.pj-prio.urgent { color: var(--danger); font-weight: 600; }
+.pj-prio.high { color: var(--warn); }
+.pj-prio.medium { color: var(--info, var(--accent)); }
+
+.pj-report-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.pj-report-head > :first-child { flex: 1 1 520px; min-width: 0; }
+.pj-hours-table { margin-top: 12px; }
+
+@media (max-width: 640px) {
+  .pj-report-head { flex-direction: column; }
+  .pj-report-head > :first-child { flex-basis: auto; width: 100%; }
+}
+
+/* The burn-down legend names the lines; a sum of "hours left" values means nothing, so it is hidden. */
+.pj-burn .chart-legend-value { display: none; }

@@ -819,6 +819,10 @@ export interface MyApplicationOut {
   applied_on: string;
   stage: string;
   cover_note: string | null;
+  /** Applicant-safe stage history (stage, when, plain-words text). */
+  timeline?: { stage: string; at: string | null; text: string }[];
+  updated_on?: string;
+  can_withdraw?: boolean;
 }
 
 /** My internal applications (stage from the job's pipeline). */

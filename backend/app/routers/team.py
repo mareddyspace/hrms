@@ -144,3 +144,88 @@ def remind_approver(body: RemindIn, request: Request, db: DbSession, user: Curre
                  ip=client_ip(request))
     db.commit()
     return RemindOut(sent_to=approver.id, approver_name=approver.full_name)
+
+
+# ---------- team summary (manager view) ----------
+class TeamDayOut(BaseModel):
+    date: str
+    kind: str | None = None
+    leave_code: str | None = None
+    check_in: datetime | None = None
+    check_out: datetime | None = None
+    work_mode: str | None = None
+    worked_minutes: int = 0
+    target_minutes: int = 0
+    late_minutes: int = 0
+    overtime_minutes: int = 0
+    timesheet_hours: float = 0
+    timesheet_status: str = "draft"
+
+
+class TeamSummaryOut(BaseModel):
+    employee_id: str
+    full_name: str
+    designation: str = ""
+    department: str = ""
+    direct: bool
+    date: str
+    status: str
+    check_in: datetime | None = None
+    check_out: datetime | None = None
+    work_mode: str | None = None
+    leave_code: str | None = None
+    today_minutes: int = 0
+    today_target_minutes: int = 0
+    week_minutes: int = 0
+    week_target_minutes: int = 0
+    month_minutes: int = 0
+    month_target_minutes: int = 0
+    late_days_month: int = 0
+    overtime_minutes_month: int = 0
+    approved_overtime_hours_month: float = 0
+    timesheet_submitted: int = 0
+    timesheet_missing_days: int = 0
+    pending_approvals: int = 0
+    open_tasks: int = 0
+    overdue_tasks: int = 0
+    open_tickets: int = 0
+    overdue_tickets: int = 0
+    days: list[TeamDayOut] = []
+
+
+def _summary_out(p) -> TeamSummaryOut:
+    from app.services.team_summary import as_dict
+
+    data = as_dict(p)
+    data["date"] = p.date.isoformat()
+    data["days"] = [{**d, "date": d["date"].isoformat()} for d in data["days"]]
+    return TeamSummaryOut(**data)
+
+
+@router.get("/summary", response_model=list[TeamSummaryOut])
+def team_summary(db: DbSession, user: CurrentUserDep, view: str = "all") -> list[TeamSummaryOut]:
+    """Everyone below the caller in the reporting line (view=direct: direct reports only): today's status, worked
+    hours today / this week / this month against the shift target, late days, overtime, timesheet gaps, approvals
+    waiting on the caller, open and overdue tasks and tickets. Others get an empty list."""
+    from app.services.team_summary import summarize
+
+    if not user.employee_id or not user.scope.reports:
+        return []
+    stmt = select(Employee).where(Employee.id.in_(user.scope.reports), Employee.employment_status != "Terminated")
+    if view == "direct":
+        stmt = stmt.where(Employee.manager_id == user.employee_id)
+    people = list(db.scalars(stmt.order_by(Employee.full_name).limit(TEAM_LIMIT)))
+    return [_summary_out(p) for p in summarize(db, user.employee_id, people)]
+
+
+@router.get("/{employee_id}/summary", response_model=TeamSummaryOut)
+def person_summary(employee_id: str, db: DbSession, user: CurrentUserDep) -> TeamSummaryOut:
+    """One person in the caller's reporting line (or HR's scope), with each day of the month so far."""
+    from app.services.team_summary import summarize
+
+    emp = db.get(Employee, employee_id)
+    allowed = emp is not None and user.employee_id is not None and emp.id != user.employee_id and (
+        emp.id in user.scope.reports or (user.scope.is_hr and user.scope.can_see(emp)))
+    if not allowed:
+        raise HTTPException(404, "Not found.")
+    return _summary_out(summarize(db, user.employee_id, [emp], with_days=True)[0])

@@ -31,6 +31,17 @@ class Ticket(TimestampMixin, Base):
     sub_owner_id: Mapped[str | None] = mapped_column(String(64))
     watcher_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     due: Mapped[date | None] = mapped_column(Date)
+    # Migration 0033: service targets set from the category when raised, the resolution, the requester's rating
+    # and escalation once the resolve target passes.
+    response_due_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    resolve_due_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    first_response_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    resolution_note: Mapped[str | None] = mapped_column(Text)
+    satisfaction: Mapped[int | None] = mapped_column(Integer)  # 1..5
+    satisfaction_note: Mapped[str | None] = mapped_column(Text)
+    escalated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    reopen_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     tasks: Mapped[list[TicketTask]] = relationship(
         back_populates="ticket", cascade="all, delete-orphan", order_by="TicketTask.position"
@@ -65,5 +76,36 @@ class TicketEvent(Base):
     by_id: Mapped[str] = mapped_column(String(64))
     kind: Mapped[str] = mapped_column(String(16))  # created | assigned | status | comment | watcher | task
     text: Mapped[str] = mapped_column(Text)
+    # Migration 0033: an internal note is seen by the people working the ticket, never by the requester.
+    internal: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     ticket: Mapped[Ticket] = relationship(back_populates="events")
+
+
+class TicketCategory(TimestampMixin, Base):
+    """A ticket type with its service targets (hours for a medium-priority ticket) and its queue. Migration 0033."""
+
+    __tablename__ = "ticket_categories"
+
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    response_hours: Mapped[int] = mapped_column(Integer)
+    resolve_hours: Mapped[int] = mapped_column(Integer)
+    queue_owner_id: Mapped[str | None] = mapped_column(String(64))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+
+
+class WorkAttachment(TimestampMixin, Base):
+    """A file attached to a task or a ticket, stored with app/services/storage.py. Migration 0033."""
+
+    __tablename__ = "work_attachments"
+    __table_args__ = (Index("ix_work_attachment_entity", "entity_type", "entity_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(16))  # task | ticket
+    entity_id: Mapped[str] = mapped_column(String(64))
+    file_name: Mapped[str] = mapped_column(String(200))
+    content_type: Mapped[str] = mapped_column(String(100))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    storage_path: Mapped[str] = mapped_column(String(300))
+    uploaded_by: Mapped[str] = mapped_column(String(64))
+    internal: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")

@@ -37,6 +37,7 @@ class ProjectTask(TimestampMixin, Base):
     due_date: Mapped[date | None] = mapped_column(Date)
     estimate_hours: Mapped[float] = mapped_column(Numeric(7, 2, asdecimal=False), default=0)
     status: Mapped[str] = mapped_column(String(16), default="todo")  # todo | in_progress | in_review | done
+    priority: Mapped[str | None] = mapped_column(String(16))  # migration 0033: low | medium | high | urgent
 
 
 class ProjectPost(TimestampMixin, Base):

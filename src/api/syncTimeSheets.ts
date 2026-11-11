@@ -107,6 +107,10 @@ export interface TimesheetDayOut {
   approval?: ApprovalProgressOut | null;
   waiting_on_me: boolean;
   can_decide: boolean;
+  /** Worked minutes from attendance that day (null: no attendance). */
+  attendance_minutes?: number | null;
+  /** Logged hours differ from attendance by more than the tolerance (1 h). */
+  hours_mismatch?: boolean;
   entries: WeekEntryOut[];
 }
 
@@ -305,6 +309,19 @@ export function apiDecideDay(dayId: string, decision: "approve" | "reject", note
     () => api.post<TimesheetDayOut>(`/timesheets/days/${encodeURIComponent(dayId)}/decision`, { decision, note: note?.trim() || null }),
     timeMirror,
   );
+}
+
+/** Approve, or send back with one comment, several submitted days in one call. Each day is decided on its own. */
+export async function apiBulkDecideDays(
+  ids: string[],
+  decision: "approve" | "reject",
+  note?: string,
+): Promise<{ decided: TimesheetDayOut[]; failed: { id: string; error: string }[] } | string> {
+  let out: { decided: TimesheetDayOut[]; failed: { id: string; error: string }[] } | undefined;
+  const error = await mutate(async () => {
+    out = await api.post<{ decided: TimesheetDayOut[]; failed: { id: string; error: string }[] }>("/timesheets/days/bulk-decision", { ids, decision, note: note?.trim() || null });
+  }, timeMirror);
+  return error ?? out ?? "Could not save the decisions.";
 }
 
 /** Manager (HR for someone with no manager): open a missed past day so the person can log and submit it. */

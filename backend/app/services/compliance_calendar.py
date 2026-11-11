@@ -153,7 +153,8 @@ def items(db: Session, today: date, days: int = 90, people: ColumnElement[bool] 
 
     if want("visa") or want("document"):
         stmt = (select(EmployeeDocument, Employee).join(Employee, Employee.id == EmployeeDocument.employee_id)
-                .where(allowed, Employee.employment_status.not_in(LEFT), EmployeeDocument.expiry_date.is_not(None),
+                .where(allowed, Employee.employment_status.not_in(LEFT), EmployeeDocument.deleted_at.is_(None),
+                       EmployeeDocument.expiry_date.is_not(None),
                        EmployeeDocument.expiry_date >= today, EmployeeDocument.expiry_date <= end))
         if country:
             stmt = stmt.where(Employee.country_code == country)
@@ -163,6 +164,22 @@ def items(db: Session, today: date, days: int = 90, people: ColumnElement[bool] 
                 out.append(Item(id=f"doc:{doc.id}", kind=k, title=f"{doc.title} expires", date=doc.expiry_date,
                                 country_code=emp.country_code, days_left=(doc.expiry_date - today).days,
                                 href=f"/people/{emp.id}", employee_id=emp.id, employee_name=emp.full_name))
+        # Structured immigration / ID records (Visas and permits page, migration 0037). A passport or national ID
+        # counts as a document; visas, permits and residence IDs as "visa".
+        from app.models import ImmigrationDocument
+
+        imm = (select(ImmigrationDocument, Employee).join(Employee, Employee.id == ImmigrationDocument.employee_id)
+               .where(allowed, Employee.employment_status.not_in(LEFT), ImmigrationDocument.expiry_date >= today,
+                      ImmigrationDocument.expiry_date <= end))
+        if country:
+            imm = imm.where(Employee.country_code == country)
+        for rec, emp in db.execute(imm):
+            k = "document" if rec.doc_type in ("Passport", "National ID") else "visa"
+            if want(k):
+                title = f"{rec.doc_type} expires" + (" (renewal in progress)" if rec.renewal_in_progress else "")
+                out.append(Item(id=f"imm:{rec.id}", kind=k, title=title, date=rec.expiry_date,
+                                country_code=emp.country_code, days_left=(rec.expiry_date - today).days,
+                                href="/me/immigration", employee_id=emp.id, employee_name=emp.full_name))
 
     if want("probation"):
         months = {c.code: c.probation_months for c in db.scalars(select(Country))}

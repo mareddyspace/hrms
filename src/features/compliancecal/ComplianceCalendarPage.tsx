@@ -14,6 +14,8 @@ import {
   type Frequency,
 } from "./complianceStore.ts";
 import "../celebrations/celebrations.css";
+import { API_ENABLED } from "../../api/client.ts";
+import { ContractorsCard } from "../leadership/LeadershipDashboard.tsx";
 
 const COUNTRIES = ["IN", "GB", "US", "AU", "CA", "AE", "SA", "DE"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -193,11 +195,14 @@ export function ComplianceCalendarPage() {
         tabs={[
           { id: "calendar", label: "Calendar" },
           { id: "dates", label: "Statutory dates" },
+          ...(API_ENABLED ? [{ id: "contractors", label: "Contractors" }] : []),
         ]}
         value={tab}
         onChange={setTab}
       />
-      {tab === "dates" ? (
+      {tab === "contractors" ? (
+        <ContractorsCard title="Contractors and contract ends" />
+      ) : tab === "dates" ? (
         <DueDatesCard />
       ) : (
         <>

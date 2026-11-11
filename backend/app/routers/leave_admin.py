@@ -21,6 +21,7 @@ from app.schemas.leave_rules import (
     HolidayAdminOut,
     HolidayAdminUpdate,
     HolidayCalendarOut,
+    HolidayLocationOut,
     LeavePolicyAdminIn,
     LeavePolicyAdminOut,
     LeavePolicyAdminUpdate,
@@ -28,7 +29,7 @@ from app.schemas.leave_rules import (
     LeaveTypeAdminOut,
     LeaveTypeAdminUpdate,
 )
-from app.services import leave_rules
+from app.services import holiday_rules, leave_rules
 from app.services.activity import record_audit
 from app.services.scope import HR_ACCESS_ROLES
 
@@ -66,8 +67,8 @@ def _snap(row: Any, fields: tuple[str, ...]) -> dict[str, Any]:
 TYPE_FIELDS = ("name", "half_day_allowed", "active")
 POLICY_FIELDS = ("leave_code", "country_code", "name", "quota", "carry_forward_max", "accrual", "effective_from",
                  "effective_to", "gender", "min_service_months", "employment_types", "not_in_probation",
-                 "max_per_request", "min_notice_days", "active")
-HOLIDAY_FIELDS = ("country_code", "date", "name", "calendar", "active")
+                 "max_per_request", "min_notice_days", "active", "encashable")
+HOLIDAY_FIELDS = ("country_code", "date", "name", "calendar", "active", "holiday_type", "regions", "legal_entity")
 COUNTRY_FIELDS = leave_rules.COUNTRY_CONFIG_FIELDS
 
 
@@ -141,6 +142,8 @@ def _check_policy(row: LeavePolicy) -> None:
         raise HTTPException(422, "The end date is before the start date.")
     if row.carry_forward_max and row.carry_forward_max > row.quota:
         raise HTTPException(422, "Carry-forward can't be more than the yearly quota.")
+    if row.accrual not in ("annual", "monthly"):
+        raise HTTPException(422, "Choose yearly or monthly accrual.")
 
 
 def _clean_types(types: list[str] | None) -> list[str] | None:
@@ -215,7 +218,10 @@ def deactivate_policy(policy_id: str, request: Request, db: DbSession, user: Cur
 # ---------- holidays ----------
 @router.get("/holidays", response_model=list[HolidayAdminOut])
 def list_holidays(db: DbSession, user: CurrentUserDep, country: CountryQ = None,
-                  year: Annotated[int | None, Query(ge=2000, le=2100)] = None, calendar: str | None = None) -> list[Holiday]:
+                  year: Annotated[int | None, Query(ge=2000, le=2100)] = None, calendar: str | None = None,
+                  holiday_type: Annotated[str | None, Query(pattern="^(national|regional|company|optional)$")] = None,
+                  location: Annotated[str | None, Query(max_length=200)] = None) -> list[Holiday]:
+    """location: only the holidays that apply to that office (whole-country ones plus its state's)."""
     _hr_or_admin(user)
     stmt = select(Holiday)
     if country:
@@ -224,7 +230,36 @@ def list_holidays(db: DbSession, user: CurrentUserDep, country: CountryQ = None,
         stmt = stmt.where(Holiday.date >= date(year, 1, 1), Holiday.date <= date(year, 12, 31))
     if calendar:
         stmt = stmt.where(Holiday.calendar == calendar)
-    return list(db.scalars(stmt.order_by(Holiday.country_code, Holiday.date)))
+    rows = list(db.scalars(stmt.order_by(Holiday.country_code, Holiday.date)))
+    if holiday_type:
+        rows = [h for h in rows if holiday_rules.kind(h) == holiday_type]
+    if location:
+        rows = [h for h in rows if not h.regions or holiday_rules.applies(
+            h, calendar=h.calendar, location=location, legal_entity=h.legal_entity, include_optional=True)]
+    return rows
+
+
+@router.get("/holiday-locations", response_model=list[HolidayLocationOut])
+def holiday_locations(db: DbSession, user: CurrentUserDep, country: CountryQ = None,
+                      year: Annotated[int | None, Query(ge=2000, le=2100)] = None) -> list[HolidayLocationOut]:
+    """Each office (work location) with its state, head count and how many days off it gets in the year."""
+    _hr_or_admin(user)
+    year = year or date.today().year
+    stmt = (select(Employee.country_code, Employee.location, Employee.legal_entity, func.count())
+            .where(Employee.employment_status != "Terminated")
+            .group_by(Employee.country_code, Employee.location, Employee.legal_entity)
+            .order_by(Employee.country_code, Employee.location))
+    if country:
+        stmt = stmt.where(Employee.country_code == country)
+    out = []
+    for cc, location, entity, n in db.execute(stmt):
+        rows = holiday_rules.rows_for(db, cc, date(year, 1, 1), date(year, 12, 31), location=location,
+                                      legal_entity=entity, include_optional=True)
+        out.append(HolidayLocationOut(
+            country_code=cc, location=location or "", region=holiday_rules.region_of(location), legal_entity=entity,
+            employees=n, days_off=sum(1 for h in rows if holiday_rules.kind(h) != "optional"),
+            by_type={t: sum(1 for h in rows if holiday_rules.kind(h) == t) for t in holiday_rules.TYPES}))
+    return out
 
 
 @router.get("/calendars", response_model=list[HolidayCalendarOut])
@@ -240,12 +275,32 @@ def list_calendars(db: DbSession, user: CurrentUserDep, country: CountryQ = None
     return [HolidayCalendarOut(country_code=c, calendar=cal, employees=n) for c, cal, n in db.execute(stmt)]
 
 
+def _check_holiday(row: Holiday) -> None:
+    kind = holiday_rules.kind(row)
+    if kind not in holiday_rules.TYPES:
+        raise HTTPException(422, "Choose national, regional, company or optional.")
+    row.regions = holiday_rules.clean_regions(row.regions)
+    row.legal_entity = (row.legal_entity or "").strip() or None
+    if kind == "regional" and not row.regions:
+        raise HTTPException(422, "A regional holiday needs at least one state or location.")
+    if kind == "national" and (row.regions or row.legal_entity):
+        raise HTTPException(422, "A national holiday applies to the whole country; choose regional or company instead.")
+
+
 def _holiday_clash(db: DbSession, row: Holiday) -> None:
-    stmt = select(Holiday.id).where(Holiday.country_code == row.country_code, Holiday.date == row.date,
-                                    Holiday.id != row.id)
+    """The same date twice for the same people. Holidays for different states on one day are fine."""
+    stmt = select(Holiday).where(Holiday.country_code == row.country_code, Holiday.date == row.date,
+                                 Holiday.id != row.id, Holiday.active.is_(True))
     stmt = stmt.where(Holiday.calendar.is_(None) if row.calendar is None else Holiday.calendar == row.calendar)
-    if db.scalar(stmt):
-        raise HTTPException(409, "There is already a holiday on that date for this calendar.")
+    mine = {r.lower() for r in (row.regions or [])}
+    for other in db.scalars(stmt):
+        if (other.legal_entity or None) != (row.legal_entity or None):
+            continue
+        if (holiday_rules.kind(other) == "optional") != (holiday_rules.kind(row) == "optional"):
+            continue  # an optional pick and a day off on the same date don't clash
+        theirs = {r.lower() for r in (other.regions or [])}
+        if not mine or not theirs or mine & theirs:
+            raise HTTPException(409, "There is already a holiday on that date for these people.")
 
 
 @router.post("/holidays", response_model=HolidayAdminOut, status_code=status.HTTP_201_CREATED)
@@ -255,11 +310,15 @@ def create_holiday(body: HolidayAdminIn, request: Request, db: DbSession, user: 
     _country(db, body.country_code)
     row = Holiday(id=f"h-{body.country_code.lower()}-{uuid.uuid4().hex[:10]}", country_code=body.country_code,
                   date=body.date, name=body.name.strip(), calendar=(body.calendar or "").strip() or None, active=True,
-                  description=(body.description or "").strip() or None)
+                  description=(body.description or "").strip() or None, holiday_type=body.holiday_type,
+                  regions=body.regions, legal_entity=body.legal_entity)
+    _check_holiday(row)
     _holiday_clash(db, row)
     db.add(row)
     db.flush()
     _audit(db, user, request, "holiday_created", "holiday", row.id, None, _snap(row, HOLIDAY_FIELDS))
+    if row.holiday_type == "optional":
+        holiday_rules.offer_as_optional(db, row)
     db.commit()
     return row
 
@@ -277,11 +336,17 @@ def _update_holiday(db: DbSession, user: CurrentUser, request: Request, holiday_
         changes["calendar"] = (changes["calendar"] or "").strip() or None
     for k, v in changes.items():
         setattr(row, k, v.strip() if isinstance(v, str) else v)
-    _holiday_clash(db, row)
+    if row.holiday_type is None and (row.regions or row.legal_entity):
+        row.holiday_type = "regional" if row.regions else "company"
+    _check_holiday(row)
+    if row.active:
+        _holiday_clash(db, row)
     after = _snap(row, HOLIDAY_FIELDS)
     if after != before:
         action = "holiday_deactivated" if before["active"] and not row.active else "holiday_updated"
         _audit(db, user, request, action, "holiday", holiday_id, before, after)
+        if row.active and row.holiday_type == "optional":
+            holiday_rules.offer_as_optional(db, row)
     db.commit()
     return row
 
@@ -289,7 +354,7 @@ def _update_holiday(db: DbSession, user: CurrentUser, request: Request, holiday_
 @router.put("/holidays/{holiday_id}", response_model=HolidayAdminOut)
 def update_holiday(holiday_id: str, body: HolidayAdminUpdate, request: Request, db: DbSession, user: CurrentUserDep) -> Holiday:
     changes = body.model_dump(exclude_unset=True)
-    for required in ("date", "name", "active"):
+    for required in ("date", "name", "active", "holiday_type"):
         if required in changes and changes[required] is None:
             changes.pop(required)
     return _update_holiday(db, user, request, holiday_id, changes)

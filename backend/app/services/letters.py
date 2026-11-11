@@ -6,8 +6,8 @@ warning / termination letters raised by HR always get a second approver) -> issu
 new version of the employee's "Letters" document and becomes downloadable by the employee.
 Sensitive letters (salary revision, promotion, warning, termination) stay hidden from the employee until issued.
 
-Template wording lives in letter_templates (per type, optionally per country); DEFAULT_WORDING below is the seed,
-ported from letterTemplates.ts. Placeholders: see PLACEHOLDERS.
+Template wording lives in letter_templates (per type; a legal entity's version wins over a country version, which wins
+over the default); default_wording() below is the seed, ported from letterTemplates.ts. Placeholders: see PLACEHOLDERS.
 """
 
 from __future__ import annotations
@@ -104,6 +104,17 @@ PLACEHOLDERS = (
     "last_working_day", "effective_date", "end_date", "salary", "previous_salary", "salary_change", "details", "manager",
     "address", "nationality_clause", "supervision",
 )
+
+
+PLACEHOLDER_HELP = {
+    "employee": "Name in bold with the employee code", "employee_name": "Full name", "employee_code": "Employee code",
+    "role": "Job title, department", "title": "Job title", "department": "Department", "grade": "Grade",
+    "entity": "Legal entity", "joining_date": "Joining date", "last_working_day": "Last working day",
+    "effective_date": "Effective date", "end_date": "Internship end date", "salary": "Annual base salary",
+    "previous_salary": "Previous salary", "salary_change": "\"from X to Y\" (increment letters)",
+    "details": "Details entered with the request", "manager": "Line manager", "address": "Residential address",
+    "nationality_clause": "\", Indian national,\" when known", "supervision": "Internship supervision sentence",
+}
 
 
 class LetterError(ValueError):
@@ -254,10 +265,14 @@ def ensure_workflow(db: Session) -> None:
         engine.save_definition(db, "letter", LETTER_WORKFLOW, None)
 
 
-def template_for(db: Session, letter_type: str, country_code: str) -> LetterTemplate | None:
+def template_for(db: Session, letter_type: str, country_code: str, legal_entity: str | None = None) -> LetterTemplate | None:
+    """The active wording: the employee's legal entity's version, else their country's, else the default."""
     rows = list(db.scalars(select(LetterTemplate).where(LetterTemplate.letter_type == letter_type,
                                                         LetterTemplate.active.is_(True))))
-    return next((t for t in rows if t.country_code == country_code), None) or next((t for t in rows if t.country_code is None), None)
+    entity = (legal_entity or "").strip().lower()
+    return (next((t for t in rows if entity and (t.legal_entity or "").strip().lower() == entity), None)
+            or next((t for t in rows if t.country_code == country_code and not t.legal_entity), None)
+            or next((t for t in rows if t.country_code is None and not t.legal_entity), None))
 
 
 def check_template_text(paragraphs: list[str]) -> None:
@@ -364,8 +379,14 @@ def missing_message(missing: list[str]) -> str:
 def render(db: Session, letter_type: str, fields: dict[str, str]) -> tuple[str, bool, list[str]]:
     """(title, to_whom, paragraphs as reportlab markup). Values are escaped; template markup (<b>) is kept."""
     c = fields["country_code"]
-    tpl = template_for(db, letter_type, c)
+    tpl = template_for(db, letter_type, c, fields.get("legal_entity"))
     title, to_whom, paragraphs = (tpl.title, tpl.to_whom, list(tpl.paragraphs)) if tpl else default_wording(letter_type, c)
+    return title, to_whom, render_paragraphs(paragraphs, fields)
+
+
+def render_paragraphs(paragraphs: list[str], fields: dict[str, str]) -> list[str]:
+    """Fill the placeholders of some wording with one employee's fields (used by render and the template preview)."""
+    c = fields["country_code"]
     e = {k: escape(v) for k, v in fields.items()}
     d = {k: escape(letter_date(fields[k], c)) if fields[k] else "" for k in ("joining_date", "last_working_day",
                                                                              "effective_date", "end_date")}
@@ -391,7 +412,7 @@ def render(db: Session, letter_type: str, fields: dict[str, str]) -> tuple[str, 
         # The requester's own paragraph goes before the closing line ("issued at the employee's request").
         at = len(rendered) - 1 if len(rendered) > 1 and "request" in rendered[-1] else len(rendered)
         rendered.insert(at, escape(custom))
-    return title, to_whom, rendered
+    return rendered
 
 
 def reference_number(letter_type: str, country_code: str, serial: int, on: date) -> str:
@@ -585,10 +606,12 @@ def _letter_finished(db: Session, instance: ApprovalInstance) -> None:
         return
     decider = db.scalar(select(ApprovalDecision.approver_id).where(ApprovalDecision.instance_id == instance.id)
                         .order_by(ApprovalDecision.id.desc()))
+    label = LETTER_TYPES[req.letter_type]["label"]
     if instance.status == "rejected":
         req.status = "rejected"
         record_audit(db, actor_id=decider, action="letter_rejected", entity="letter_request", entity_id=req.id,
                      subject_id=req.employee_id, before={"status": "pending"}, after={"status": "rejected"})
+        # The approval engine already tells whoever raised it.
         return
     try:
         issue(db, req, decider, decider)
@@ -596,3 +619,6 @@ def _letter_finished(db: Session, instance: ApprovalInstance) -> None:
         req.status, req.issue_error = "approved", str(exc)
         record_audit(db, actor_id=decider, action="letter_approved", entity="letter_request", entity_id=req.id,
                      subject_id=req.employee_id, before={"status": "pending"}, after={"status": "approved", "error": str(exc)})
+        if decider:
+            notify(db, recipient_id=decider, title=f"{label} approved but not generated",
+                   body=f"{exc} Fix the record, then use Generate.", href="/documents")

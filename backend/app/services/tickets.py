@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Employee, Ticket, TicketEvent, TicketTask
+from app.models import Employee, Ticket, TicketCategory, TicketEvent, TicketTask
 from app.services.scope import HR_ACCESS_ROLES, manager_chain_ids
 
 TYPES = ("IT support", "HR query", "Bug", "Client issue", "Access request")
@@ -33,6 +33,135 @@ TEAMMATES: dict[str, tuple[str, str]] = {
 }
 
 
+# Service targets per category for a medium-priority ticket: (first response hours, resolve hours, queue owner).
+# Stored in ticket_categories (HR / admin edit them); these are the defaults inserted once.
+DEFAULT_CATEGORIES: dict[str, tuple[int, int, str | None]] = {
+    "IT support": (4, 24, ALEX),
+    "Access request": (4, 24, ALEX),
+    "HR query": (8, 72, FARHAN),
+    "Bug": (8, 72, None),
+    "Client issue": (2, 24, None),
+}
+SYSTEM = "system"  # by_id of events the app writes itself (escalation)
+# Urgent work is due four times sooner than medium; low gets twice as long.
+PRIORITY_FACTOR = {"urgent": 0.25, "high": 0.5, "medium": 1.0, "low": 2.0}
+
+
+def ensure_categories(db: Session) -> int:
+    """Insert the default categories that are missing (never changes an existing one)."""
+    added = 0
+    for name, (resp, resolve, owner) in DEFAULT_CATEGORIES.items():
+        if db.get(TicketCategory, name) is None:
+            db.add(TicketCategory(name=name, response_hours=resp, resolve_hours=resolve, queue_owner_id=owner, active=True))
+            added += 1
+    if added:
+        db.flush()
+    return added
+
+
+def category_hours(db: Session, ticket_type: str) -> tuple[int, int, str | None]:
+    row = db.get(TicketCategory, ticket_type)
+    if row is not None:
+        return row.response_hours, row.resolve_hours, row.queue_owner_id
+    return DEFAULT_CATEGORIES.get(ticket_type, (8, 72, None))
+
+
+def queue_owner(db: Session, ticket_type: str) -> str | None:
+    owner = category_hours(db, ticket_type)[2]
+    return owner if owner and person_exists(db, owner) else QUEUE_OWNER.get(ticket_type)
+
+
+def targets(db: Session, ticket_type: str, priority: str, start: datetime) -> tuple[datetime, datetime]:
+    """(respond by, resolve by) for a ticket of this type and priority raised at `start`."""
+    resp, resolve, _ = category_hours(db, ticket_type)
+    f = PRIORITY_FACTOR.get(priority, 1.0)
+    return start + timedelta(hours=resp * f), start + timedelta(hours=resolve * f)
+
+
+def _aware(d: datetime | None) -> datetime | None:
+    return d.replace(tzinfo=timezone.utc) if d is not None and d.tzinfo is None else d
+
+
+def effective_targets(db: Session, t: Ticket) -> tuple[datetime, datetime]:
+    """Stored targets, or (older tickets raised before targets were stored) the category's targets from creation."""
+    if t.response_due_at and t.resolve_due_at:
+        return _aware(t.response_due_at), _aware(t.resolve_due_at)  # type: ignore[return-value]
+    return targets(db, t.type, t.priority, _aware(t.created_at) or datetime.now(timezone.utc))
+
+
+def first_response(t: Ticket) -> datetime | None:
+    """When someone other than the requester first replied or moved the ticket (stored, else from its history)."""
+    if t.first_response_at:
+        return _aware(t.first_response_at)
+    for e in t.events:
+        if e.by_id not in (t.requester_id, SYSTEM) and e.kind in ("status", "comment") and not e.internal:
+            return _aware(e.at)
+    return None
+
+
+def sla_state(db: Session, t: Ticket, now: datetime | None = None) -> str:
+    """met | breached (resolved late, or open past the target) | soon (within a quarter of the window) | ok."""
+    now = now or datetime.now(timezone.utc)
+    _, resolve_by = effective_targets(db, t)
+    if not is_open(t):
+        done = _aware(t.resolved_at) or _aware(t.updated_at) or now
+        return "met" if done <= resolve_by else "breached"
+    if now > resolve_by:
+        return "breached"
+    window = resolve_by - (_aware(t.created_at) or now)
+    return "soon" if (resolve_by - now) <= window / 4 else "ok"
+
+
+def is_agent(db: Session, t: Ticket, actor_id: str, role: str) -> bool:
+    """People working the ticket (not the requester): they see and write internal notes."""
+    if actor_id == t.requester_id and actor_id != t.assignee_id:
+        return False
+    if actor_id in (t.assignee_id, t.sub_owner_id) or any(k.owner_id == actor_id for k in t.tasks):
+        return True
+    if role in ADMIN_ROLES and t.type in IT_TYPES:
+        return True
+    if role in HR_ACCESS_ROLES and t.type == "HR query":
+        return True
+    return manages(db, actor_id, t.assignee_id)
+
+
+def escalation_target(db: Session, t: Ticket) -> str | None:
+    """The owner's manager, or the queue owner when nobody owns it."""
+    above = chain(db, t.assignee_id) if t.assignee_id else []
+    return above[0] if above else queue_owner(db, t.type)
+
+
+def escalate_overdue(db: Session, now: datetime | None = None) -> list[Ticket]:
+    """Open tickets past their stored resolve target are escalated once (event + notifications)."""
+    from app.services.activity import notify
+
+    now = now or datetime.now(timezone.utc)
+    out: list[Ticket] = []
+    rows = db.scalars(select(Ticket).where(Ticket.status.in_(OPEN_STATUSES), Ticket.escalated_at.is_(None),
+                                           Ticket.resolve_due_at.is_not(None))).all()
+    for t in rows:
+        if _aware(t.resolve_due_at) > now:  # type: ignore[operator]
+            continue
+        t.escalated_at = now
+        target = escalation_target(db, t)
+        add_event(t, SYSTEM, "status",
+                  f"Resolve target missed — escalated to {person_name(db, target)}." if target else "Resolve target missed.")
+        for person in dict.fromkeys([target, t.assignee_id]):
+            if person and db.get(Employee, person) is not None:
+                notify(db, recipient_id=person, title=f"{t.id} missed its resolve target",
+                       body=f"{t.title} — {t.priority} {t.type}, owner {person_name(db, t.assignee_id)}.",
+                       href=f"/tickets?id={t.id}")
+        out.append(t)
+    if out:
+        db.flush()
+    return out
+
+
+def run_escalation(db: Session, day, send) -> int:  # type: ignore[no-untyped-def]
+    """Background job hook (app/services/jobs.py)."""
+    return len(escalate_overdue(db))
+
+
 def person_exists(db: Session, person_id: str) -> bool:
     return person_id in TEAMMATES or db.get(Employee, person_id) is not None
 
@@ -40,6 +169,8 @@ def person_exists(db: Session, person_id: str) -> bool:
 def person_name(db: Session, person_id: str | None) -> str:
     if not person_id:
         return "Unassigned"
+    if person_id == SYSTEM:
+        return "TimeZ"
     if person_id in TEAMMATES:
         return TEAMMATES[person_id][0]
     emp = db.get(Employee, person_id)
@@ -114,8 +245,8 @@ def next_id(db: Session) -> str:
     return f"TCK-{max(top, 1000) + 1}"
 
 
-def add_event(t: Ticket, by_id: str, kind: str, text: str, at: datetime | None = None) -> None:
-    t.events.append(TicketEvent(by_id=by_id, kind=kind, text=text, at=at or datetime.now(timezone.utc)))
+def add_event(t: Ticket, by_id: str, kind: str, text: str, at: datetime | None = None, internal: bool = False) -> None:
+    t.events.append(TicketEvent(by_id=by_id, kind=kind, text=text, at=at or datetime.now(timezone.utc), internal=internal))
 
 
 # ---------- sample tickets (src/data/ticketStore.ts seed) ----------
@@ -288,6 +419,7 @@ def seed_samples(db: Session) -> int:
     """Insert the sample tickets once (by id); existing tickets are never changed."""
     if db.get(Employee, BABU) is None or db.get(Employee, RAM) is None:
         return 0
+    ensure_categories(db)
     added = 0
     for s in SAMPLES:
         if db.get(Ticket, s["id"]) is not None:

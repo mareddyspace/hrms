@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import {
   Banner,
@@ -15,11 +15,14 @@ import {
   Tabs,
   useAction,
 } from "../components/ui.tsx";
-import { useTeamToday } from "../api/syncTeam.ts";
+import { loadPersonSummary, useTeamToday, type TeamSummaryOut } from "../api/syncTeam.ts";
+import { clockText, hoursText, STATUS_TEXT, STATUS_TONE, useTeamSummaryRows } from "../features/manager/teamSummary.ts";
+import { localTeamSummary } from "../data/teamSummaryLocal.ts";
+import { useTickets } from "../data/ticketStore.ts";
 import { getAttendanceState, subscribeAttendance } from "../data/attendanceLocal.ts";
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import type { PersonRecord } from "../data/peopleData.ts";
-import { personToday, TIMESHEET_TARGET } from "../data/teamOverview.ts";
+import { personToday } from "../data/teamOverview.ts";
 import { useDayRecords } from "../data/timesheetDays.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
 import { scheduleOneOnOne } from "../data/talentLocal.ts";
@@ -27,10 +30,11 @@ import { dayStatus, directReportsOf, teamBelow } from "../data/workforceStats.ts
 import { useApprovalInbox } from "./ApprovalsCenter.tsx";
 import { giveKudos, recognitionPeople, RECOGNITION_VALUES } from "../features/recognition/recognitionStore.ts";
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
-import { addDaysISO, formatShortDate, leaveNameFor, TASK_TYPES, todayISO, type TaskPriority, type TaskType } from "../model.ts";
+import { addDaysISO, formatShortDate, leaveNameFor, parseISODate, plural, TASK_TYPES, todayISO, type TaskPriority, type TaskType } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import { API_ENABLED } from "../api/client.ts";
 import "./team.css";
+import "../styles/manager.css";
 
 type QuickAction = { kind: "task" | "kudos" | "oneonone"; person: PersonRecord } | null;
 
@@ -58,6 +62,7 @@ export function MyTeamPage() {
   const apiToday = useTeamToday();
   const [view, setView] = useState("direct");
   const [quick, setQuick] = useState<QuickAction>(null);
+  const [drill, setDrill] = useState<string | null>(null);
   const today = todayISO();
 
   const { direct, everyone, joiningSoon } = useMemo(() => {
@@ -75,28 +80,27 @@ export function MyTeamPage() {
   const { waiting } = useApprovalInbox();
   const waitingBy = new Map<string, number>();
   for (const w of waiting) if (teamIds.has(w.employeeId)) waitingBy.set(w.employeeId, (waitingBy.get(w.employeeId) ?? 0) + 1);
-  const openTasksBy = new Map<string, number>();
-  for (const t of state.tasks) {
-    if ((t.status === "open" || t.status === "progress") && teamIds.has(t.employeeId)) openTasksBy.set(t.employeeId, (openTasksBy.get(t.employeeId) ?? 0) + 1);
-  }
   const leaveName = (code: string, id: string) => leaveNameFor(state.leavePolicies, code, id) ?? code;
 
-  const rows = (view === "direct" ? direct : everyone).slice(0, 200).map((person) => {
-    const day = dayStatus(state, person.id, String(person.countryCode), today);
-    const now = personToday(state, person.id, today, apiToday.rows.get(person.id));
-    const apiRow = apiToday.rows.get(person.id);
-    const status = apiRow?.leave_code ? (apiRow.leave_code.includes("wfh") ? "WFH" : "On leave") : apiRow?.holiday ? "Holiday" : day;
-    const out = status === "On leave" || status === "Holiday" || status === "Weekly off";
-    const notIn = !out && !now.checkIn;
-    return { person, status, now, out, notIn };
-  });
   const scope = view === "direct" ? direct : everyone;
-  const outToday = rows.filter((r) => r.status === "On leave" || r.status === "Holiday");
-  const notIn = rows.filter((r) => r.notIn);
-  const inToday = rows.filter((r) => r.now.checkIn).length;
+  const shown = useMemo(() => scope.slice(0, 200), [scope]);
+  const summary = useTeamSummaryRows(shown, waitingBy);
+  const byPerson = new Map(summary.rows.map((r) => [r.employee_id, r]));
+  const rows = shown.map((person) => {
+    const s = byPerson.get(person.id);
+    const now = personToday(state, person.id, today, apiToday.rows.get(person.id));
+    // Until the summary arrives, fall back to the calendar status.
+    const status = s?.status ?? (dayStatus(state, person.id, String(person.countryCode), today) === "On leave" ? "on_leave" : "not_in");
+    return { person, s, now, status };
+  });
+  const outToday = rows.filter((r) => r.status === "on_leave" || r.status === "holiday");
+  const notIn = rows.filter((r) => r.status === "not_in");
+  const inToday = rows.filter((r) => Boolean(r.s?.check_in)).length;
   const scopeIds = new Set(scope.map((p) => p.id));
   const waitingCount = waiting.filter((w) => scopeIds.has(w.employeeId)).length;
-  const openTasks = [...openTasksBy].filter(([id]) => scopeIds.has(id)).reduce((n, [, c]) => n + c, 0);
+  const sum = (key: "open_tasks" | "overdue_tasks" | "open_tickets" | "overdue_tickets" | "timesheet_submitted") =>
+    rows.reduce((n, r) => n + (r.s?.[key] ?? 0), 0);
+  const drillRow = drill ? rows.find((r) => r.person.id === drill) : undefined;
 
   const until = addDaysISO(today, 14);
   const upcoming = state.leaveRequests
@@ -141,7 +145,8 @@ export function MyTeamPage() {
         <MetricCard label="Out today" value={outToday.length} />
         <MetricCard label="Not checked in" value={notIn.length} />
         <MetricCard label="Waiting on you" value={waitingCount} />
-        <MetricCard label="Open tasks" value={openTasks} />
+        <MetricCard label="Open tasks" value={sum("open_tasks")} hint={sum("overdue_tasks") ? `${sum("overdue_tasks")} overdue` : undefined} />
+        <MetricCard label="Open tickets" value={sum("open_tickets")} hint={sum("overdue_tickets") ? `${sum("overdue_tickets")} overdue` : undefined} />
       </MetricGrid>
       </div>
 
@@ -150,7 +155,7 @@ export function MyTeamPage() {
           <ul className="team-out-list">
             {outToday.map((r) => (
               <li key={r.person.id}>
-                <Link to={`/people/${r.person.id}`}>{r.person.fullName}</Link> <StatusBadge status={r.status} tone="info" literal />
+                <Link to={`/people/${r.person.id}`}>{r.person.fullName}</Link> <StatusBadge status={STATUS_TEXT[r.status]} tone="info" literal />
               </li>
             ))}
             {notIn.map((r) => (
@@ -163,7 +168,16 @@ export function MyTeamPage() {
         </Card>
       )}
 
-      <Card title="Team today">
+      <Card
+        title="Team today"
+        action={
+          <span className="mgr-links">
+            <Link to="/timesheet?view=team">Timesheets{sum("timesheet_submitted") ? ` (${sum("timesheet_submitted")})` : ""}</Link>
+            <Link to="/tasks">Tasks</Link>
+            <Link to="/tickets">Tickets</Link>
+          </span>
+        }
+      >
         <Tabs
           tabs={[
             { id: "direct", label: `Direct (${direct.length})` },
@@ -172,50 +186,49 @@ export function MyTeamPage() {
           value={view}
           onChange={setView}
         />
-        {API_ENABLED && !apiToday.loaded && <p className="muted">Loading today…</p>}
+        {API_ENABLED && !summary.loaded && <p className="muted">Loading today…</p>}
+        {summary.error && <p className="note err">{summary.error}</p>}
         <DataTable
-          headers={["Name", "Today", "Hours", "Timesheet", "Leave left", "Tasks", ""]}
-          rows={rows.map(({ person, status, now, notIn: missing }) => {
-            // The main paid leave (privilege leave / PTO / annual leave), not whichever balance is largest (e.g. sabbatical).
-            const main =
-              now.leaveLeft.find((b) => b.code === "pto" || b.code === "annual") ??
-              [...now.leaveLeft].filter((b) => b.code !== "sabbatical").sort((a, b) => b.available - a.available)[0];
+          headers={["Name", "Today", "Hours today", "This week", "This month", "Late", "Overtime", "Timesheet", "Work", ""]}
+          rows={rows.map(({ person, s, now, status }) => {
             const waitingN = waitingBy.get(person.id) ?? 0;
+            const clock = s?.check_in ? `${clockText(s.check_in)}${s.check_out ? `–${clockText(s.check_out)}` : ""}` : "";
             return [
               <span key="n" className="team-name">
-                <Link to={`/people/${person.id}`}>{person.fullName}</Link>
+                <button type="button" className="link-btn" onClick={() => setDrill(person.id)}>
+                  <strong>{person.fullName}</strong>
+                </button>
                 <span className="muted">{person.designation}</span>
               </span>,
-              now.checkIn ? (
-                <StatusBadge key="s" status={`In ${now.checkIn}${now.checkOut ? `–${now.checkOut}` : ""}`} tone="ok" literal keepCase />
-              ) : missing ? (
-                <StatusBadge key="s" status="Not checked in" tone="warn" literal keepCase />
-              ) : (
-                <StatusBadge key="s" status={status} tone="info" literal keepCase />
-              ),
-              now.hoursWorked ? `${now.hoursWorked} h` : "—",
-              <span key="t" className="team-name">
-                <span>{`${now.timesheetHours} of ${TIMESHEET_TARGET} h`}</span>
-                <StatusBadge status={TS_LABEL[now.timesheetStatus] ?? now.timesheetStatus} tone={TS_TONE[now.timesheetStatus]} literal keepCase />
+              <span key="s" className="team-name">
+                <StatusBadge status={STATUS_TEXT[status] ?? status} tone={STATUS_TONE[status]} literal keepCase />
+                {clock && <span className="muted">{clock}</span>}
               </span>,
-              main ? (
-                <span key="l" title={now.leaveLeft.map((b) => `${b.name}: ${b.available}`).join("\n")}>
-                  {main.available} d <span className="muted">{main.name}</span>
-                </span>
-              ) : (
-                "—"
-              ),
-              openTasksBy.get(person.id) ?? 0,
+              s ? <HoursVsTarget key="h" minutes={s.today_minutes} target={s.today_target_minutes} /> : "—",
+              s ? <HoursVsTarget key="w" minutes={s.week_minutes} target={s.week_target_minutes} /> : "—",
+              s ? <HoursVsTarget key="m" minutes={s.month_minutes} target={s.month_target_minutes} /> : "—",
+              s?.late_days_month ? <span key="l" className="mgr-flag warn">{plural(s.late_days_month, "day")}</span> : "—",
+              s?.overtime_minutes_month ? hoursText(s.overtime_minutes_month) : "—",
+              <span key="t" className="team-name">
+                <StatusBadge status={TS_LABEL[now.timesheetStatus] ?? now.timesheetStatus} tone={TS_TONE[now.timesheetStatus]} literal keepCase />
+                {s?.timesheet_missing_days ? <span className="mgr-flag danger">{s.timesheet_missing_days} missing</span> : null}
+              </span>,
+              <span key="k" className="mgr-work">
+                <Link to="/tasks">{plural(s?.open_tasks ?? 0, "task")}</Link>
+                {s?.overdue_tasks ? <span className="mgr-flag danger">{s.overdue_tasks} overdue</span> : null}
+                <Link to="/tickets">{plural(s?.open_tickets ?? 0, "ticket")}</Link>
+                {s?.overdue_tickets ? <span className="mgr-flag danger">{s.overdue_tickets} overdue</span> : null}
+              </span>,
               <span key="a" className="team-actions">
+                {waitingN > 0 && (
+                  <Link className="btn btn-tiny" to={`/approvals?person=${encodeURIComponent(person.id)}`}>
+                    Review ({waitingN})
+                  </Link>
+                )}
                 {canTask(person.id) && (
                   <button type="button" className="btn-ghost btn-tiny" onClick={() => setQuick({ kind: "task", person })}>
                     Assign task
                   </button>
-                )}
-                {waitingN > 0 && (
-                  <Link className="btn-ghost btn-tiny" to={`/workflows?person=${encodeURIComponent(person.id)}`}>
-                    Approve ({waitingN})
-                  </Link>
                 )}
                 {kudosIds.has(person.id) && person.id !== employee.id && (
                   <button type="button" className="btn-ghost btn-tiny" onClick={() => setQuick({ kind: "kudos", person })}>
@@ -234,6 +247,16 @@ export function MyTeamPage() {
         />
         {scope.length > 200 && <p className="muted">Showing 200 of {scope.length}.</p>}
       </Card>
+
+      {drillRow && (
+        <PersonDrillDialog
+          person={drillRow.person}
+          row={drillRow.s}
+          leaveLeft={drillRow.now.leaveLeft}
+          pending={waitingBy.get(drillRow.person.id) ?? 0}
+          onClose={() => setDrill(null)}
+        />
+      )}
 
       <Card title="Leave in the next 14 days">
         <DataTable
@@ -258,6 +281,174 @@ export function MyTeamPage() {
         <OneOnOneDialog person={quick.person} me={{ id: employee.id, fullName: employee.fullName, role: demoProfile.role }} onClose={() => setQuick(null)} />
       )}
     </Page>
+  );
+}
+
+/** "7.5 of 9 h" with a thin bar; red when under target on a finished period. */
+function HoursVsTarget({ minutes, target }: { minutes: number; target: number }) {
+  const pct = target > 0 ? Math.min(100, Math.round((minutes / target) * 100)) : minutes > 0 ? 100 : 0;
+  return (
+    <span className="mgr-hours">
+      <span>
+        {hoursText(minutes)}
+        {target > 0 && <span className="muted"> / {hoursText(target)}</span>}
+      </span>
+      {target > 0 && (
+        <span className={`mgr-meter ${minutes >= target ? "full" : ""}`} aria-hidden>
+          <i style={{ width: `${pct}%` }} />
+        </span>
+      )}
+    </span>
+  );
+}
+
+const DAY_KIND_TEXT: Record<string, string> = { weekend: "Weekly off", holiday: "Holiday", leave: "On leave", "half-day leave": "Half-day leave" };
+
+/** One report's month: each day's attendance against the target, late, overtime and the timesheet logged. */
+function PersonDrillDialog({
+  person,
+  row,
+  leaveLeft,
+  pending,
+  onClose,
+}: {
+  person: PersonRecord;
+  row?: TeamSummaryOut;
+  leaveLeft: { code: string; name: string; available: number }[];
+  pending: number;
+  onClose: () => void;
+}) {
+  const { state, employee } = usePortal();
+  const records = useDayRecords();
+  const tickets = useTickets();
+  const att = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
+  const [apiRow, setApiRow] = useState<TeamSummaryOut | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let live = true;
+    loadPersonSummary(person.id)
+      .then((r) => live && setApiRow(r))
+      .catch((e: unknown) => live && setError(e instanceof Error ? e.message : "Could not load."));
+    return () => {
+      live = false;
+    };
+  }, [person.id]);
+  const data = useMemo(() => {
+    if (API_ENABLED) return apiRow;
+    return localTeamSummary({
+      state, people: [person], managerId: employee.id, sessions: att.sessions, records, tickets,
+      pendingBy: new Map([[person.id, pending]]), today: todayISO(), withDays: true,
+    })[0];
+  }, [apiRow, state, person, employee.id, att.sessions, records, tickets, pending]);
+  const s = data ?? row;
+  return (
+    <Dialog open wide title={person.fullName} onClose={onClose}>
+      <div className="mgr-drill">
+        {error && <p className="note err">{error}</p>}
+        {s && (
+          <div className="mgr-drill-stats">
+            <div>
+              <span className="muted">Today</span>
+              <StatusBadge status={STATUS_TEXT[s.status] ?? s.status} tone={STATUS_TONE[s.status]} literal keepCase />
+            </div>
+            <div>
+              <span className="muted">This week</span>
+              <HoursVsTarget minutes={s.week_minutes} target={s.week_target_minutes} />
+            </div>
+            <div>
+              <span className="muted">This month</span>
+              <HoursVsTarget minutes={s.month_minutes} target={s.month_target_minutes} />
+            </div>
+            <div>
+              <span className="muted">Late this month</span>
+              <strong>{plural(s.late_days_month, "day")}</strong>
+            </div>
+            <div>
+              <span className="muted">Overtime</span>
+              <strong>{hoursText(s.overtime_minutes_month)}</strong>
+              {s.approved_overtime_hours_month > 0 && <span className="muted">{s.approved_overtime_hours_month} h approved</span>}
+            </div>
+            <div>
+              <span className="muted">Waiting on you</span>
+              <strong>{pending}</strong>
+            </div>
+            <div>
+              <span className="muted">Tasks · tickets</span>
+              <strong>
+                {s.open_tasks} · {s.open_tickets}
+              </strong>
+              {s.overdue_tasks + s.overdue_tickets > 0 && <span className="mgr-flag danger">{s.overdue_tasks + s.overdue_tickets} overdue</span>}
+            </div>
+          </div>
+        )}
+        {leaveLeft.length > 0 && (
+          <p className="muted">Leave left: {leaveLeft.map((b) => `${b.name} ${b.available} d`).join(" · ")}</p>
+        )}
+        {API_ENABLED && !data && !error ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          <div className="table-scroll">
+            <table className="data mgr-days">
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Attendance</th>
+                  <th>Worked</th>
+                  <th>Late</th>
+                  <th>Overtime</th>
+                  <th>Timesheet</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...(data?.days ?? [])].reverse().map((d) => {
+                  const mismatch = (d.worked_minutes > 0 || d.timesheet_hours > 0) && Math.abs(d.timesheet_hours - d.worked_minutes / 60) > 1;
+                  return (
+                    <tr key={d.date} className={d.kind ? "mgr-off" : undefined}>
+                      <td>{parseISODate(d.date).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</td>
+                      <td>
+                        {d.check_in ? (
+                          `${clockText(d.check_in)}${d.check_out ? `–${clockText(d.check_out)}` : " · in"}${d.work_mode && d.work_mode !== "office" ? ` · ${d.work_mode}` : ""}`
+                        ) : d.kind ? (
+                          DAY_KIND_TEXT[d.kind] ?? d.kind
+                        ) : d.date < todayISO() ? (
+                          <span className="mgr-flag danger">No check-in</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td>
+                        <HoursVsTarget minutes={d.worked_minutes} target={d.target_minutes} />
+                      </td>
+                      <td>{d.late_minutes ? <span className="mgr-flag warn">{d.late_minutes} min</span> : "—"}</td>
+                      <td>{d.overtime_minutes ? hoursText(d.overtime_minutes) : "—"}</td>
+                      <td>
+                        <span className="team-name">
+                          <span>
+                            {d.timesheet_hours} h{" "}
+                            <StatusBadge status={TS_LABEL[d.timesheet_status] ?? d.timesheet_status} tone={TS_TONE[d.timesheet_status]} literal keepCase />
+                          </span>
+                          {mismatch && <span className="mgr-flag warn">Differs from attendance</span>}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="form-actions">
+          <Link className="btn-ghost btn-tiny" to={`/people/${person.id}`}>Profile</Link>
+          <Link className="btn-ghost btn-tiny" to="/timesheet?view=team">Timesheets</Link>
+          {pending > 0 && (
+            <Link className="btn btn-tiny" to={`/approvals?person=${encodeURIComponent(person.id)}`}>
+              Review ({pending})
+            </Link>
+          )}
+        </div>
+      </div>
+    </Dialog>
   );
 }
 
