@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { ActionButton, Banner, Card, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge, Tabs } from "../../components/ui.tsx";
 import { money } from "../../countryPay.ts";
 import { compareRegimes } from "../../data/payslipGenerator.ts";
 import { useTaxRegime } from "../../data/taxRegime.ts";
 import { formatShortDate, type InvestmentProof } from "../../model.ts";
-import { RegimePicker, SlipTag } from "../../pages/PayslipsPage.tsx";
+import { RegimePicker } from "../../pages/PayslipsPage.tsx";
 import { usePortal } from "../../store.tsx";
 import { PdfDoc, pdfMoney, saveFile } from "../payroll/pdfDoc.ts";
 import "../payroll/payslips.css";
@@ -453,8 +453,8 @@ function PreviewDialog({ items, cfg, actor, fy, onClose, onMessage }: { items: D
   );
 }
 
-function ItemsTable({ items, onOpen, showEmployee }: { items: Declaration[]; onOpen: (d: Declaration) => void; showEmployee?: boolean }) {
-  if (!items.length) return <EmptyState title="Nothing here" description="No declarations match these filters." />;
+function ItemsTable({ items, onOpen, showEmployee, empty }: { items: Declaration[]; onOpen: (d: Declaration) => void; showEmployee?: boolean; empty?: [string, string] }) {
+  if (!items.length) return <EmptyState title={empty?.[0] ?? "Nothing here"} description={empty?.[1] ?? "No declarations match these filters."} />;
   return (
     <div className="doc-table-wrap scroll-x">
       <table className="data">
@@ -578,9 +578,6 @@ function DeadlinesCard({ cfg, actor, onMessage }: { cfg: DeclConfig; actor: Acto
   }, [year?.opensOn, year?.deadline, year?.proofDeadline, year?.locked]);
   return (
     <Card title={`Declaration deadlines · ${cfg.countryCode}`}>
-      <p className="muted" style={{ marginTop: 0 }}>
-        Employees can add, change or submit declarations from the opening date to the deadline; the India regime choice closes with it. Locking closes the year early.
-      </p>
       <div className="form-grid">
         <Field label="Tax year">
           <select value={fy} onChange={(e) => setFy(e.target.value)}>
@@ -699,7 +696,7 @@ export function TaxDeclarationsPage() {
   const regimeTax = (r: { new: { annualTax: number }; old: { annualTax: number } }) => (isIndia ? r[regime === "old" ? "old" : "new"].annualTax : r.new.annualTax);
 
   return (
-    <Page title="Tax declarations" subtitle={`${employee.countryName ?? "India"} · ${c} · Finance verifies proofs before they lower your tax`}>
+    <Page title="Tax declarations" subtitle={`${employee.countryName ?? "India"} · ${c}`}>
       <Tabs
         tabs={[{ id: "mine", label: "My declarations" }, ...(cfg.verifier ? [{ id: "verify", label: `Verify${queue.filter((q) => q.status === "submitted").length ? ` (${queue.filter((q) => q.status === "submitted").length})` : ""}` }, { id: "deadlines", label: "Deadlines" }] : [])]}
         value={tab}
@@ -744,15 +741,16 @@ export function TaxDeclarationsPage() {
                 />
               )}
             </MetricGrid>
-            <p className="slip-legend" style={{ marginTop: 8 }}>
-              <SlipTag status="estimated" /> Projected tax is worked out from your pay and verified declarations. The figures on a <SlipTag status="final" /> payslip come from the locked payroll run. <Link to="/payslips">Payslips</Link>
-            </p>
           </Card>
           {isIndia && (
             <Card title="Tax regime">
               <RegimePicker input={payInput} showLink={false} />
             </Card>
           )}
+          <Card title="My declarations and history" action={mine.length ? <span className="muted">{mine.length} item{mine.length === 1 ? "" : "s"}</span> : undefined}>
+            {mineF.bar}
+            <ItemsTable items={mineF.shown} onOpen={openItem} empty={mine.length ? undefined : ["No declarations yet", "Items you declare show here with proofs and verification."]} />
+          </Card>
           <div className="split">
             <Card title="Declare" action={<button type="button" className="btn-ghost btn-tiny" onClick={() => setPreview(true)}>Preview & submit</button>}>
               {newRegime ? (
@@ -797,18 +795,11 @@ export function TaxDeclarationsPage() {
               </div>
             </Card>
           </div>
-          <Card title="My declarations and history">
-            {mineF.bar}
-            <ItemsTable items={mineF.shown} onOpen={openItem} />
-          </Card>
         </>
       )}
 
       {tab === "verify" && cfg.verifier && (
         <Card title="Declarations to verify">
-          <p className="muted" style={{ marginTop: 0 }}>
-            People in your scope; never your own. Open an item to see the proofs, then verify (all or part of the amount) or reject with a comment.
-          </p>
           {queueF.bar}
           <ItemsTable items={queueF.shown} onOpen={openItem} showEmployee />
         </Card>

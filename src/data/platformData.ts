@@ -1,3 +1,4 @@
+import { COPILOT_PROMPTS } from "../features/copilot/prompts.ts";
 import type { DemoAccount, NavAccessId } from "../demoAccounts.ts";
 import type { CountryCode, LeaveCode, UserRole } from "../model.ts";
 import type { Policy } from "./policyLibrary.ts";
@@ -35,50 +36,8 @@ export function copilotPersonaFromRole(role: UserRole): CopilotPersona {
   return "other";
 }
 
-export const COPILOT_SUGGESTIONS: Record<CopilotPersona, string[]> = {
-  employee: [
-    "What is my leave balance?",
-    "When is the next holiday?",
-    "My last payslip net pay",
-    "Timesheet status this week",
-  ],
-  manager: [
-    "What is waiting on my approval?",
-    "Who is on leave this week?",
-    "Summarise Babu Menon",
-    "What is my leave balance?",
-  ],
-  hr: [
-    "Give me a headcount snapshot",
-    "What is waiting on my approval?",
-    "Summarise Ram Krishnan",
-    "Who is on leave today?",
-  ],
-  recruiter: [
-    "How many open positions are there?",
-    "How many candidates are in the pipeline?",
-    "What is my leave balance?",
-    "When is the next holiday?",
-  ],
-  executive: [
-    "Give me a headcount snapshot",
-    "Headcount by country",
-    "What is waiting on my approval?",
-    "Summarise Ram Krishnan",
-  ],
-  admin: [
-    "Where do I retry an integration?",
-    "What is my leave balance?",
-    "Which holidays are coming up?",
-    "How do I apply for leave?",
-  ],
-  other: [
-    "How do I apply for leave?",
-    "Where are company policies?",
-    "Which holidays are coming up?",
-    "What can Copilot do?",
-  ],
-};
+// The longer per-role question list (Ask AI answers these from the person's own data).
+export const COPILOT_SUGGESTIONS: Record<CopilotPersona, string[]> = COPILOT_PROMPTS;
 
 export type CopilotAnswerKind = "text" | "table" | "metrics";
 

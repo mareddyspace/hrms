@@ -1,9 +1,17 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { Award, BellRing, Cake } from "lucide-react";
 import { useCelebrations, useYearCelebrations, type Celebration } from "../features/celebrations/celebrationsStore.ts";
 import { getTalentState, subscribeTalent } from "../data/talentLocal.ts";
 import { holidaysForPerson, leaveNameFor } from "../model.ts";
+import { API_ENABLED, api } from "../api/client.ts";
+import {
+  OPTIONAL_CODE,
+  countryOf,
+  getOptionalHolidayState,
+  holidaysFor as optionalHolidaysFor,
+  subscribeOptionalHolidays,
+} from "../features/workforce/optionalHolidaysStore.ts";
 import {
   Banner,
   Card,
@@ -43,6 +51,7 @@ import { updateNote, useNotes } from "../data/notesStore.ts";
 import { NoteEditor } from "../components/NotesPanel.tsx";
 import "../components/notes.css";
 import "./calendarYear.css";
+import "../styles/calendar-people.css";
 
 
 const FILTERS: Array<{ id: "all" | CalendarEventKind; label: string }> = [
@@ -168,13 +177,48 @@ export function CalendarPage() {
     [employee.shiftName, employee.shiftHours, employee.countryCode],
   );
 
+  // Only your own country's public holidays (and your region's, if you have one). Backend mode: the server's list
+  // for you (GET /leave/holidays: your country and holiday calendar); optional holidays only once you've picked them.
+  const [apiHolidays, setApiHolidays] = useState<{ year: number; rows: { date: string; name: string }[] } | null>(null);
+  useEffect(() => {
+    if (!API_ENABLED) return;
+    let live = true;
+    api
+      .get<{ date: string; name: string }[]>("/leave/holidays", { year: cursor.year })
+      .then((rows) => {
+        if (live) setApiHolidays({ year: cursor.year, rows: rows.map((h) => ({ date: h.date, name: h.name })) });
+      })
+      .catch(() => {
+        if (live) setApiHolidays(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [cursor.year, employee.id]);
+  const optionalState = useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState, getOptionalHolidayState);
   const holidaySource = useMemo(() => {
-    return holidaysForPerson(state.holidays, employee.id).map((h) => ({ date: h.date, name: h.name }));
-  }, [state.holidays, employee.id]);
+    const own =
+      API_ENABLED && apiHolidays?.year === cursor.year
+        ? apiHolidays.rows
+        : holidaysForPerson(state.holidays, employee.id)
+            .filter((h) => !h.region)
+            .map((h) => ({ date: h.date, name: h.name }));
+    // Optional holidays you picked (approved), named after the holiday.
+    const taken = new Set(own.map((h) => h.date));
+    const picks = state.leaveRequests
+      .filter((r) => r.employeeId === employee.id && r.code === OPTIONAL_CODE && r.status === "approved")
+      .flatMap((r) => {
+        const list = optionalHolidaysFor(countryOf(employee.id), Number(r.from.slice(0, 4)), optionalState);
+        const name = list.find((h) => h.date === r.from)?.name;
+        return taken.has(r.from) ? [] : [{ date: r.from, name: `${name ?? "Optional holiday"} (optional)` }];
+      });
+    return [...own, ...picks].sort((a, b) => a.date.localeCompare(b.date));
+  }, [state.holidays, state.leaveRequests, employee.id, apiHolidays, optionalState, cursor.year]);
 
   const leaveEvents = useMemo((): CalendarEvent[] => {
     return state.leaveRequests
-      .filter((r) => r.employeeId === employee.id && r.status === "approved")
+      // Picked optional holidays show as holidays (holidaySource).
+      .filter((r) => r.employeeId === employee.id && r.status === "approved" && r.code !== OPTIONAL_CODE)
       .map((r) => ({
         id: `cal-leave-req-${r.id}`,
         date: r.from,
@@ -519,7 +563,9 @@ export function CalendarPage() {
               const events = byDate.get(cell) ?? [];
               const weeklyOff = isWeeklyOffDate(cell, schedule.weeklyOffDays);
               const pills = cellPills(events.filter((e) => !isCelebration(e.kind)));
-              const birthdays = events.filter((e) => e.kind === "birthday").length;
+              const birthdayEvents = events.filter((e) => e.kind === "birthday");
+              const birthdays = birthdayEvents.length;
+              const firstBirthday = (birthdayEvents[0] as (CalendarEvent & { personName?: string }) | undefined)?.personName ?? "";
               const anniversaries = events.filter((e) => e.kind === "anniversary").length;
               const showOffLabel =
                 weeklyOff &&
@@ -548,16 +594,17 @@ export function CalendarPage() {
                         {p.text}
                       </li>
                     ))}
+                    {birthdays > 0 && (
+                      <li className="cal-mini cal-birthday-pill" aria-label={`${birthdays} birthday${birthdays === 1 ? "" : "s"}`}>
+                        <Cake size={11} aria-hidden />
+                        {birthdayEvents[0].ownerId === employee.id ? "You" : firstBirthday.split(" ")[0]}
+                        {birthdays > 1 ? ` +${birthdays - 1}` : ""}
+                      </li>
+                    )}
                     {showOffLabel && <li className="cal-mini weekly-off">Weekly off</li>}
                   </ul>
-                  {(birthdays > 0 || anniversaries > 0) && (
+                  {anniversaries > 0 && (
                     <span className="cal-cel-counts">
-                      {birthdays > 0 && (
-                        <span className="cal-cel birthday" aria-label={`${birthdays} birthday${birthdays === 1 ? "" : "s"}`}>
-                          <Cake size={11} aria-hidden />
-                          {birthdays}
-                        </span>
-                      )}
                       {anniversaries > 0 && (
                         <span className="cal-cel anniversary" aria-label={`${anniversaries} work anniversar${anniversaries === 1 ? "y" : "ies"}`}>
                           <Award size={11} aria-hidden />

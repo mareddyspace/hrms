@@ -27,6 +27,7 @@ import {
 } from "../features/payrequests/requestKit.tsx";
 import { addComment, loadOpenInfo, recordLocalEvent, subscribeThreads, threadsVersion, type ThreadContext } from "../features/payrequests/threadStore.ts";
 import { canPayOut } from "../features/payrequests/rules.ts";
+import "../styles/pay-claims.css";
 
 const STATUS_LABEL: Record<Expense["status"], string> = {
   submitted: "Pending",
@@ -363,6 +364,8 @@ function ClaimRow({ expense, who, info, onOpen }: { expense: Expense; who?: stri
   );
 }
 
+const claimsMirrorReady = () => !API_ENABLED || claimsMirror.loaded();
+
 export function ExpensesPage() {
   const portal = usePortal();
   const { state, employee, currentProjects, addExpense, hasApprover, demoAccounts } = portal;
@@ -406,6 +409,7 @@ export function ExpensesPage() {
   const [message, setMessage] = useState<{ tone: "ok" | "err" | "warn"; text: string } | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [tab, setTab] = useState("mine");
+  const [formOpen, setFormOpen] = useState(false);
   const [localInfo, setLocalInfo] = useState<Set<string>>(new Set());
 
   const mine = state.expenses.filter((expense) => expense.employeeId === employee.id);
@@ -523,13 +527,24 @@ export function ExpensesPage() {
     setDetails({});
     setReceiptFiles([]);
     setFileKey((key) => key + 1);
+    setFormOpen(false);
     return true;
   }
 
+  const showForm = formOpen || (claimsMirrorReady() && mine.length === 0);
   const approverTabs = waiting.length > 0 || toPay.length > 0 || finance || team.length > 0;
 
   return (
-    <Page title="Reimbursements">
+    <Page
+      title="Reimbursements"
+      action={
+        tab === "mine" || !approverTabs ? (
+          <button type="button" className={showForm ? "btn-ghost" : "btn"} onClick={() => setFormOpen(!showForm)} aria-expanded={showForm}>
+            {showForm ? "Close form" : "New claim"}
+          </button>
+        ) : undefined
+      }
+    >
       <SummaryTiles
         label="Claim summary"
         items={[
@@ -569,7 +584,7 @@ export function ExpensesPage() {
             extra={<CsvButton filename={`reimbursements-${tab}-${todayISO()}.csv`} headers={csvHeaders} rows={() => csvRows(teamShown)} />}
           />
           {teamShown.length === 0 ? (
-            <EmptyState title={teamSource.length ? "No claims match these filters" : "Nothing here"} />
+            <EmptyState title={teamSource.length ? "No claims match these filters" : tab === "approve" ? "Nothing waiting on you" : tab === "pay" ? "Nothing to pay" : "No claims yet"} />
           ) : (
             <div className="pr-list">
               {teamShown.map((e) => (
@@ -581,7 +596,8 @@ export function ExpensesPage() {
       )}
 
       {(tab === "mine" || !approverTabs) && (
-        <div className="split">
+        <div className="pc-stack">
+          {showForm && (
           <Card title="New claim">
             <form onSubmit={claimAction.submit(onSubmit, { toastError: true })} noValidate>
               <div className="form-grid">
@@ -661,10 +677,12 @@ export function ExpensesPage() {
                   />
                 </Field>
               </div>
-              <p className="pr-note" style={{ margin: "10px 0" }}>
-                <strong>{category}:</strong> {cat.guidance} Up to {money(maxClaim, currency)} per claim · receipt required above {money(receiptAbove, currency)} · claim within {EXPENSE_CLAIM_WINDOW_DAYS} days of the expense · in {currency}.
-                {apiRules ? ` Claims of ${money(apiRules.finance_threshold, currency)} or more also go to Finance.` : ""}
-              </p>
+              <ul className="pc-rules" aria-label="Claim rules">
+                <li>Up to {money(maxClaim, currency)} a claim</li>
+                <li>Receipt above {money(receiptAbove, currency)}</li>
+                <li>Within {EXPENSE_CLAIM_WINDOW_DAYS} days</li>
+                {apiRules && <li>Finance review from {money(apiRules.finance_threshold, currency)}</li>}
+              </ul>
               <div className="form-actions">
                 <SubmitButton action={claimAction} className="btn" disabled={busy}>
                   Submit claim
@@ -672,7 +690,8 @@ export function ExpensesPage() {
               </div>
             </form>
           </Card>
-          <Card title="My claims">
+          )}
+          <Card title="My claims" action={mine.length ? <span className="muted">{totals(mine.filter((e) => e.status !== "withdrawn"))} claimed</span> : undefined}>
             <ListFilters
               state={mineFilters.filters}
               onChange={mineFilters.set}
@@ -694,7 +713,11 @@ export function ExpensesPage() {
             {API_ENABLED && !claimsMirror.loaded() ? (
               <p className="muted">Loading…</p>
             ) : mineShown.length === 0 ? (
-              <EmptyState title={mine.length ? "No claims match these filters" : "No expenses yet"} />
+              <EmptyState
+                title={mine.length ? "No claims match these filters" : "No claims yet"}
+                description={mine.length ? "Clear the filters to see all your claims." : "Claims you submit show here with their status and payment."}
+                action={mine.length ? <button type="button" className="btn-ghost" onClick={mineFilters.reset}>Clear filters</button> : undefined}
+              />
             ) : (
               <div className="pr-list" style={{ marginTop: 10 }}>
                 {mineShown.map((e) => (

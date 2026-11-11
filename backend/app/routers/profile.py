@@ -1,7 +1,8 @@
 """Profile edits, profile correction requests and the Copilot action audit.
 
-- PATCH /people/me: the signed-in person edits their own details (preferred name, contact, address, emergency
-  contact, languages, education, experience, career goals). Personal details need a code (app/services/profile_otp.py).
+- PATCH /people/me: the signed-in person edits their own details directly (legal and preferred name, date of birth,
+  gender, nationality, contact, address, emergency contact, languages, education, experience, career goals, work
+  arrangement). Personal details need a code (app/services/profile_otp.py). Job fields stay HR-only.
 - PATCH /people/{id}: HR / admin within their data scope edit anyone else's record, HR-owned fields included.
 - Corrections: an employee asks for an HR-owned field to change; HR / admin in scope approve (the value is applied)
   or reject. The employee may withdraw an open request.
@@ -157,6 +158,8 @@ def update_own_profile(body: SelfProfileUpdateIn, request: Request, db: DbSessio
         raise HTTPException(404, "This account has no employee record.")
     emp = user.employee
     values = _normalise(body)
+    if values.get("first_name", "") is None or values.get("last_name", "") is None:
+        raise HTTPException(422, "First and last name can't be blank.")
     # Personal details need the code sent by POST /people/me/otp for exactly these values.
     changes = profile_otp.sensitive_changes(emp, values)
     if changes:
@@ -190,7 +193,7 @@ def request_profile_otp(body: ProfileOtpIn, request: Request, db: DbSession, use
 def update_profile(person_id: str, body: HrProfileUpdateIn, request: Request, db: DbSession, user: CurrentUserDep) -> PersonFullOut:
     emp = _get_visible(db, user, person_id)
     if emp.id == user.employee_id:
-        raise HTTPException(403, "Edit your own details under My profile, or raise a correction.")
+        raise HTTPException(403, "Edit your own details under My profile.")
     if not _can_manage(user, emp):
         raise HTTPException(403, "Only HR can edit this record.")
     values = _normalise(body)

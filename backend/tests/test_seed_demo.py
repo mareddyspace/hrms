@@ -12,7 +12,7 @@ def test_demo_rows_exist_once():
         assert db.get(TravelRequest, "trv-seed-babu-1") is not None
         assert db.get(Joiner, "ob-seed-neha").employee_id == "TZ0901"
         assert db.get(LifecycleAction, "lca-seed-babu-job").requested_by == "emp-ram"
-        assert db.get(ShiftSwap, "sw-seed-babu-ram").teammate_id == "emp-ram"
+        assert db.get(ShiftSwap, "sw-seed-babu-ram") is None  # swaps are between teammates (seed_shift_roster)
         assert db.get(Offer, "off-seed-lucas").status == "pending_approval"
         assert db.get(Interview, "int-seed-aisha-1").feedback_status == "submitted"
 

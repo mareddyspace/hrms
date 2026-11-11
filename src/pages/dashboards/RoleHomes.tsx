@@ -3,7 +3,7 @@ import { declarationsAsProofs } from "../../features/taxdecl/taxDeclStore.ts";
 import { countUnreadNotificationsFor } from "../../data/notificationFeed.ts";
 import { Link } from "react-router-dom";
 import { COMPANY_NAME } from "../../brand.ts";
-import { ActionButton, Card, DataTable, LeaveTable, MetricCard, MetricGrid, StatusBadge, StatusPill } from "../../components/ui.tsx";
+import { ActionButton, Card, DataTable, MetricCard, MetricGrid, StatusBadge, StatusPill } from "../../components/ui.tsx";
 import { DEMO_ACCOUNTS, accountHasNavAccess, type DemoAccount } from "../../demoAccounts.ts";
 import { COURSES, awaitingFeedback } from "../../data/talentData.ts";
 import { getTalentState, requisitionApprovers, subscribeTalent } from "../../data/talentLocal.ts";
@@ -71,7 +71,7 @@ import {
   subscribeCollab,
 } from "../../data/collabLocal.ts";
 import { notifPrefKey } from "../../data/collabData.ts";
-import { getExitState, subscribeExits } from "../../features/lifecycle/exitStore.ts";
+import { OPEN_EXIT_STATUSES, getExitState, subscribeExits } from "../../features/lifecycle/exitStore.ts";
 import { cashViews, getCashSnapshot, subscribeCash } from "../../features/payrequests/cashStore.ts";
 import { getSoftwareSnapshot, softwareViews, subscribeSoftware } from "../../features/payrequests/softwareStore.ts";
 import { useTravelRequests } from "../../data/travelStore.ts";
@@ -116,6 +116,7 @@ import { TodaySummaryCard, employeeSummary, hrSummary, managerSummary } from "..
 import { OnboardingHomeCard } from "../../features/onboarding/OnboardingAnalytics.tsx";
 import { CelebrationsHomeCard } from "../../features/celebrations/CelebrationsPage.tsx";
 import { ComplianceHomeCard } from "../../features/compliancecal/ComplianceCalendarPage.tsx";
+import "../../styles/home-leave-desk.css";
 
 /** Map dashboard shortcut labels to real routes. */
 const R = {
@@ -221,7 +222,7 @@ function MyApprovalsCard({ waiting, count, people }: { waiting: ReturnType<typeo
           <ul className="todo">
             {byKind.map(([kind, n]) => (
               <li key={kind}>
-                {kind} <StatusBadge status={String(n)} tone="warn" literal />
+                <Link to={R.approvals}>{kind}</Link> <StatusBadge status={String(n)} tone="warn" literal />
               </li>
             ))}
           </ul>
@@ -238,28 +239,59 @@ function MyApprovalsCard({ waiting, count, people }: { waiting: ReturnType<typeo
   );
 }
 
-/** Self-service strip for people whose home is mostly about others. */
-function MyDayCard() {
+/** Self-service strip: today's check-in / check-out, leave balances and the next holiday. Also on My profile. */
+export function MyDayCard({ title = "My day" }: { title?: string } = {}) {
   const { employee, leaveTable, state, demoProfile } = usePortal();
   // Attendance-exempt roles (the CEO) aren't nagged to check in.
   const exempt = isAttendanceExempt(demoProfile.role);
   const attState = useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
+  const [punchError, setPunchError] = useState<string | null>(null);
   const today = todayISO();
   const session = getCurrentSession(employee.id, attState);
   const status = dayStatus(state, employee.id, employee.countryCode ?? "IN", today);
   const next = upcomingHolidays(state.holidays, employee.countryCode, today, 1)[0];
+  const dayContext = useMemo(
+    () => attendanceContextFor(employee, state.holidays, state.leaveRequests),
+    [employee, state.holidays, state.leaveRequests],
+  );
+  const offToday = !exempt && session.phase === "not_started" ? nonWorkingReason(employee.id, today, dayContext) : null;
   // The everyday allowances first (annual / sick / casual), not the first three by name (bereavement) or by size (maternity).
   const rank = (code: string) => { const i = ["pto", "sick", "casual", "wfh"].indexOf(code); return i < 0 ? 99 : i; };
   const rows = leaveTable.filter((r) => r.code !== "unpaid" && r.quota > 0).sort((a, b) => rank(a.code) - rank(b.code)).slice(0, 3);
+
+  function punch(action: "check_in" | "end_break" | "check_out") {
+    return attendanceActionAsync(employee.id, action, dayContext).then((error) => {
+      setPunchError(error);
+      return error;
+    });
+  }
+
   return (
-    <Card title="My day">
-      <p>
-        {exempt
-          ? status === "Working" ? "Working day" : status
-          : session.phase !== "not_started" ? phaseLabel(session.phase) : status === "Working" ? "Not checked in" : status}
-        {!exempt && session.checkIn ? ` · in ${formatHm(session.checkIn)}` : ""}
-        {exempt ? "" : ` · ${employee.shiftHours}`}
-      </p>
+    <Card title={title}>
+      <div className="row-gap" style={{ alignItems: "center", flexWrap: "wrap" }}>
+        <StatusBadge
+          status={
+            exempt
+              ? status === "Working" ? "Working day" : status
+              : session.phase !== "not_started" ? phaseLabel(session.phase) : status === "Working" ? "Not checked in" : status
+          }
+          tone={session.phase === "checked_in" ? "ok" : session.phase === "on_break" ? "warn" : undefined}
+          literal
+          keepCase
+        />
+        {!exempt && (
+          <span className="muted">
+            {session.checkIn ? `In ${formatHm(session.checkIn)}` : "No check-in yet"}
+            {session.checkOut ? ` · Out ${formatHm(session.checkOut)}` : ""} · {employee.shiftHours}
+          </span>
+        )}
+      </div>
+      {offToday && <p className="note">{offToday}</p>}
+      {punchError && (
+        <p className="note err" role="alert">
+          {punchError}
+        </p>
+      )}
       <ul className="todo">
         {rows.map((r) => (
           <li key={r.code}>
@@ -268,10 +300,25 @@ function MyDayCard() {
         ))}
         <li>Next holiday: {next ? `${next.name} · ${formatShortDate(next.date)}` : "None this year"}</li>
       </ul>
-      <div className="row-gap" style={{ marginTop: 10 }}>
+      <div className="row-gap" style={{ marginTop: 10, flexWrap: "wrap" }}>
+        {!exempt && session.phase === "not_started" && !offToday && (
+          <ActionButton className="btn" success="Checked in." onAction={() => punch("check_in")}>
+            Check in
+          </ActionButton>
+        )}
+        {!exempt && session.phase === "on_break" && (
+          <ActionButton className="btn" success="Break ended." busyLabel="Ending break…" doneLabel="Back to work" onAction={() => punch("end_break")}>
+            End break
+          </ActionButton>
+        )}
+        {!exempt && session.phase === "checked_in" && (
+          <ActionButton className="btn" success="Checked out." onAction={() => punch("check_out")}>
+            Check out
+          </ActionButton>
+        )}
         {!exempt && (
-          <Link className="btn" to={R.attendance}>
-            {session.phase === "not_started" ? "Check in" : "Attendance"}
+          <Link className="btn-ghost" to={R.attendance}>
+            Attendance
           </Link>
         )}
         <Link className={exempt ? "btn" : "btn-ghost"} to={R.leave}>
@@ -333,7 +380,16 @@ function HolidaysCard({
   return (
     <Card title={`Upcoming holidays${countryName ? ` · ${countryName}` : ""}`} to={R.holidays}>
       <ul className="todo">
-        {holidays.length ? holidays.map((h) => <li key={h.id}>{h.name} · {formatShortDate(h.date)}</li>) : <li>None this year</li>}
+        {holidays.length ? (
+          holidays.map((h) => (
+            <li key={h.id}>
+              <Link to={R.holidays}>{h.name}</Link>
+              <span className="muted">{formatShortDate(h.date)}</span>
+            </li>
+          ))
+        ) : (
+          <li>None this year</li>
+        )}
       </ul>
       {children}
     </Card>
@@ -576,7 +632,9 @@ export function EmployeeHome() {
                 <p className="muted">
                   {earned.daysCounted} of {earned.totalDays} days · tax and deductions <PayAmount amount={earned.deductionTotal} currency={earned.currency} />
                 </p>
-                <Link to={R.payslips}>Payslips</Link>
+                <Link to={R.payslips} className="home-card-link">
+                  Payslips
+                </Link>
               </Card>
             ),
           },
@@ -589,11 +647,13 @@ export function EmployeeHome() {
             label: "Next payday",
             node: (
               <Card title="Next payday" to={R.payslips}>
-                <p className="home-countdown">
-                  <strong>{daysToPayday === 0 ? "Today" : `${daysToPayday} day${daysToPayday === 1 ? "" : "s"}`}</strong>
-                  <span className="muted"> · {formatShortDate(nextPayday)}</span>
-                </p>
-                <p className="muted">Paid on the last working day of the month.</p>
+                <Link to={R.payslips} className="home-block-link">
+                  <p className="home-countdown">
+                    <strong>{daysToPayday === 0 ? "Today" : `${daysToPayday} day${daysToPayday === 1 ? "" : "s"}`}</strong>
+                    <span className="muted"> · {formatShortDate(nextPayday)}</span>
+                  </p>
+                  <p className="muted">Paid on the last working day of the month.</p>
+                </Link>
               </Card>
             ),
           },
@@ -604,7 +664,7 @@ export function EmployeeHome() {
       label: "My profile",
       node: (
         <Card title="My profile" to={R.profile}>
-          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+          <Link to={R.profile} className="home-block-link" style={{ display: "flex", gap: 14, alignItems: "center" }}>
             <img src={employee.photo} alt="" width={56} height={56} className="avatar" style={{ objectFit: "cover", flexShrink: 0 }} />
             <div style={{ minWidth: 0 }}>
               <strong>{employee.fullName}</strong>
@@ -617,12 +677,15 @@ export function EmployeeHome() {
                 {employee.countryName}
               </p>
             </div>
-          </div>
+          </Link>
           <ul className="todo" style={{ marginTop: 10 }}>
             <li>Manager: {managerId && managerName ? <Link to={`/people/${managerId}`}>{managerName}</Link> : "—"}</li>
-            <li>Joined: {me?.dateOfJoining ? `${formatShortDate(me.dateOfJoining)} · ${tenureLabel(me.dateOfJoining, today)}` : "—"}</li>
+            <li>
+              Joined:{" "}
+              <Link to={R.profile}>{me?.dateOfJoining ? `${formatShortDate(me.dateOfJoining)} · ${tenureLabel(me.dateOfJoining, today)}` : "—"}</Link>
+            </li>
           </ul>
-          <Link className="btn-ghost" to={R.profile} style={{ marginTop: 8, display: "inline-flex" }}>
+          <Link className="home-card-link" to={R.profile}>
             View profile
           </Link>
         </Card>
@@ -679,8 +742,22 @@ export function EmployeeHome() {
       label: "Leave balance",
       node: (
         <Card title="Leave balance" to={R.leave}>
-          <LeaveTable rows={balanceRows} />
-          <Link className="btn-ghost" to={R.leave} style={{ marginTop: 10, display: "inline-flex" }}>
+          <ul className="todo home-balance-list">
+            {balanceRows.length ? (
+              balanceRows.map((row) => (
+                <li key={row.code}>
+                  <Link to={R.leave}>{row.name}</Link>
+                  <span className="muted">
+                    <strong>{row.available}</strong>
+                    {row.quota > 0 ? ` of ${row.quota}` : ""} left
+                  </span>
+                </li>
+              ))
+            ) : (
+              <li>No leave types set up</li>
+            )}
+          </ul>
+          <Link className="home-card-link" to={R.leave}>
             Apply for leave
           </Link>
         </Card>
@@ -699,13 +776,18 @@ export function EmployeeHome() {
               <ul className="todo">
                 {optionalAhead.map((h) => (
                   <li key={h.id}>
-                    {h.name} · {formatShortDate(h.date)} {pickedDates.has(h.date) && (
+                    <Link to={canPickOptional ? "/workforce/optional-holidays" : R.holidays}>{h.name}</Link>
+                    <span className="muted">{formatShortDate(h.date)}</span> {pickedDates.has(h.date) && (
                       <StatusBadge status={pickedDates.get(h.date) ?? ""} tone={pickedDates.get(h.date) === "Picked" ? "ok" : "warn"} literal />
                     )}
                   </li>
                 ))}
               </ul>
-              {canPickOptional && picksLeft > 0 && <Link to="/workforce/optional-holidays">Pick optional holidays</Link>}
+              {canPickOptional && picksLeft > 0 && (
+                <Link to="/workforce/optional-holidays" className="home-card-link">
+                  Pick optional holidays
+                </Link>
+              )}
             </>
           )}
         </HolidaysCard>
@@ -715,14 +797,16 @@ export function EmployeeHome() {
       id: "requests",
       label: "Pending requests",
       node: (
-        <Card title={`Pending requests · ${requests.length}`}>
+        <Card title={`Pending requests · ${requests.length}`} to="/approvals?tab=mine">
           <DataTable
             headers={["Type", "Detail", "Date"]}
             rows={requests.slice(0, 5).map((r) => [
               <Link key={r.id} to={r.to}>
                 {r.type}
               </Link>,
-              r.detail,
+              <Link key={`${r.id}-d`} to={r.to} className="home-quiet-cell">
+                {r.detail}
+              </Link>,
               r.date ? formatShortDate(r.date.slice(0, 10)) : "—",
             ])}
             empty={<p className="note">You have no open requests.</p>}
@@ -775,7 +859,7 @@ export function EmployeeHome() {
           </p>
           <p className="muted">Project: {currentProjects[0]?.name ?? "No active assignment"}</p>
           {sentBackDays > 0 && <p className="note warn">{sentBackDays} day{sentBackDays === 1 ? "" : "s"} to fix (sent back or reopened).</p>}
-          <Link to={R.timesheet} className="btn" style={{ marginTop: 10, display: "inline-flex" }}>
+          <Link to={R.timesheet} className="home-card-link">
             Open timesheet
           </Link>
         </Card>
@@ -787,15 +871,18 @@ export function EmployeeHome() {
       node: (
         <Card title={`Goals · ${cycle.name}`} to={R.performance}>
           {myGoals.length ? (
-            <>
+            <Link to={R.performance} className="home-block-link">
               <ProgressBar value={weightedProgress(myGoals)} label="Overall (weighted)" />
               {myGoals.map((g) => (
                 <ProgressBar key={g.id} value={g.progress} label={`${g.title} · ${g.weight}%`} />
               ))}
-            </>
+            </Link>
           ) : (
             <p className="note">No goals set for this cycle.</p>
           )}
+          <Link to={R.performance} className="home-card-link">
+            Open goals
+          </Link>
         </Card>
       ),
     },
@@ -806,7 +893,9 @@ export function EmployeeHome() {
         <Card title="Learning" to={R.learning}>
           {learning.total ? (
             <>
-              <ProgressBar value={learning.pct} label={`${learning.completed} of ${learning.total} completed`} />
+              <Link to={R.learning} className="home-block-link">
+                <ProgressBar value={learning.pct} label={`${learning.completed} of ${learning.total} completed`} />
+              </Link>
               <ul className="todo">
                 {openCourses.slice(0, 3).map((e) => (
                   <li key={e.id}>
@@ -900,22 +989,30 @@ export function EmployeeHome() {
         subtitle={`${employee.designation} · ${formatLongDate(today)} · ${employee.timeZone} · ${employee.countryName ?? ""}`}
       />
 
-      <TodaySummaryCard lines={summaryLines} />
+      <div className="home-summary">
+        <TodaySummaryCard lines={summaryLines} />
+      </div>
 
-      <div className="emp-quick-actions" aria-label="Quick actions">
-        <Link className="btn-ghost" to={R.leave}>
+      <nav className="emp-quick-actions home-qa" aria-label="Quick actions">
+        <Link className="btn home-qa-btn is-primary" to={R.leave}>
           Apply for leave
         </Link>
-        <Link className="btn-ghost" to={R.timesheet}>
-          Submit timesheet
+        <Link className="btn-ghost home-qa-btn" to={R.attendance}>
+          Attendance
         </Link>
-        <Link className="btn-ghost" to={R.attendance}>
+        <Link className="btn-ghost home-qa-btn" to={R.attendance}>
           Correct attendance
         </Link>
-        <Link className="btn-ghost" to={R.payslips}>
+        <Link className="btn-ghost home-qa-btn" to={R.timesheet}>
+          Submit timesheet
+        </Link>
+        <Link className="btn-ghost home-qa-btn" to={R.payslips}>
           Open payslip
         </Link>
-      </div>
+        <Link className="btn-ghost home-qa-btn" to={R.help}>
+          Raise a request
+        </Link>
+      </nav>
 
       <MetricGrid>
         <Link to={R.attendance} className="metric-card-link">
@@ -940,7 +1037,9 @@ export function EmployeeHome() {
         </Link>
       </MetricGrid>
 
-      <HomeSections userId={employee.id} sections={sections} />
+      <div className="home-emp-grid">
+        <HomeSections userId={employee.id} sections={sections} />
+      </div>
     </div>
   );
 }
@@ -1278,7 +1377,7 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
   const region = useRegionFilter();
   const country: CountryCode | "ALL" = hrbp ? ((employee.countryCode ?? "IN") as CountryCode) : region;
   const scopeName = country === "ALL" ? undefined : countryNameOf(country);
-  const [range, setRange] = useDateRange("30d");
+  const [range, setRange] = useDateRange("90d");
   const stats = useMemo(
     () => workforceStats(data.people, { country, range: range as RangeKey, today }),
     [data.people, country, range, today],
@@ -1300,7 +1399,10 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
     .map((p) => ({ p, ...getExitDetails(p) }))
     .filter((x) => x.exitDate && x.exitDate >= from && x.exitDate <= today)
     .sort((a, b) => (b.exitDate ?? "").localeCompare(a.exitDate ?? ""));
-  const openExits = exitState.cases.filter((c) => (c.status === "Submitted" || c.status === "Accepted") && inScope(c.employeeId));
+  // Every open exit: "Manager approved" (waiting for HR) is open too, not only Submitted / Accepted.
+  const openExits = exitState.cases
+    .filter((c) => OPEN_EXIT_STATUSES.includes(c.status) && inScope(c.employeeId))
+    .sort((a, b) => a.lastWorkingDay.localeCompare(b.lastWorkingDay));
   const funnel = pipelineFunnel(talent.candidates, scopeName);
 
   const lifecycle = useSyncExternalStore(subscribeLifecycleActions, getLifecycleActions, getLifecycleActions);
@@ -1480,14 +1582,23 @@ export function HrAdminHome({ hrbp = false }: { hrbp?: boolean } = {}) {
       label: "Exits",
       node: (
         <Card title={`Exits · ${leavers.length}`} to={R.exits}>
+          {/* People who left in the period, then the exits still in progress (with their last working day). */}
           <DataTable
-            headers={["Name", "Department", "Exit date", "Reason"]}
-            rows={leavers.slice(0, 5).map((x) => [x.p.fullName, x.p.department, formatShortDate(x.exitDate ?? ""), x.exitReason ?? "—"])}
-            empty={<p className="note">No exits in this period.</p>}
+            headers={["Name", "Department", "Last day", "Status"]}
+            rows={[
+              ...leavers.map((x) => [x.p.fullName, x.p.department, formatShortDate(x.exitDate ?? ""), x.exitReason ? `Left · ${x.exitReason}` : "Left"]),
+              ...openExits.map((c) => [
+                c.employeeName,
+                peopleById.get(c.employeeId)?.department ?? "—",
+                formatShortDate(c.lastWorkingDay),
+                c.status === "Accepted" ? "Serving notice" : c.status === "Manager approved" ? "Waiting for HR" : "Waiting for approval",
+              ]),
+            ].slice(0, 6)}
+            empty={<p className="note">No exits in this period and none in progress.</p>}
           />
           {openExits.length > 0 && (
             <p className="muted" style={{ marginTop: 8 }}>
-              {openExits.length} resignation{openExits.length === 1 ? "" : "s"} in progress
+              {openExits.length} exit{openExits.length === 1 ? "" : "s"} in progress
             </p>
           )}
         </Card>

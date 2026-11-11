@@ -1,8 +1,9 @@
 """Tasks shared between a manager and their reports (/tasks).
 
 The portal's task (src/model.ts Task) is stored as a JSON document. The server checks who may see and change it:
-the owner, whoever created it, extra people / cc on it, and anyone above the owner in the reporting line. Only the
-owner (own task) or a manager above them may create or hand it to someone. Changes are diffed so the other side is
+the owner, whoever created it, extra people / cc on it, and anyone above the owner in the reporting line. A task can
+be given to yourself, someone below you, or a colleague on one of your projects (not someone above you); HR and admins
+can give it to anyone. Followers (extra people / cc) may only add comments. Changes are diffed so the other side is
 notified (assigned, accepted, declined, status, comments, help, review).
 """
 
@@ -16,13 +17,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.deps import CurrentUserDep, DbSession, client_ip
-from app.models import SharedTask
+from app.models import Project, ProjectMember, SharedTask
 from app.services.activity import record_audit
+from app.services.scope import HR_ACCESS_ROLES, manager_chain_ids
 from app.services.sharing import managed_ids, person_exists, person_name, tell
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 STATUSES = {"scheduled", "open", "progress", "done"}
+ASSIGN_RULE = "You can assign tasks to yourself, people who report to you, or colleagues on your projects."
 STATUS_LABEL = {"scheduled": "Scheduled", "open": "Open", "progress": "In progress", "done": "Done"}
 
 
@@ -52,6 +55,43 @@ def _people(data: dict[str, Any]) -> list[str]:
 
 def _can_view(t: SharedTask, me: str, below: set[str]) -> bool:
     return me in {t.assignee_id, t.created_by, *(t.people_ids or [])} or t.assignee_id in below
+
+
+def project_colleagues(db, me: str) -> set[str]:  # type: ignore[no-untyped-def]
+    """People who share an active project with me (members or the project's manager)."""
+    mine = select(ProjectMember.project_id).where(ProjectMember.employee_id == me)
+    projects = db.scalars(select(Project).where(Project.active.is_(True), Project.id.in_(mine))).all()
+    ids = {p.manager_id for p in projects if p.manager_id}
+    ids |= set(db.scalars(select(ProjectMember.employee_id).where(ProjectMember.project_id.in_([p.id for p in projects]))))
+    ids.discard(me)
+    return ids
+
+
+def can_assign(db, user, me: str, below: set[str], person: str) -> bool:  # type: ignore[no-untyped-def]
+    """Who a task may be given to: yourself, anyone below you, a colleague on one of your projects (but not someone
+    above you in your reporting line), and anyone at all for HR and admins."""
+    if person == me or person in below:
+        return True
+    if getattr(getattr(user, "account", None), "role", "") in HR_ACCESS_ROLES:
+        return True
+    return person in project_colleagues(db, me) and person not in manager_chain_ids(db, me)
+
+
+# Fields a follower (collaborator or cc) changes when they only add a comment.
+_COMMENT_ONLY = {"comments", "lastActivityAt", "activity"}
+
+
+def _comment_only(old: dict[str, Any], new: dict[str, Any]) -> bool:
+    """True when the change only appends comments (and their activity entries) to the task."""
+    for key in set(old) | set(new):
+        if key not in _COMMENT_ONLY and old.get(key) != new.get(key):
+            return False
+    for key in ("comments", "activity"):
+        before = [x for x in old.get(key) or [] if isinstance(x, dict)]
+        after = [x for x in new.get(key) or [] if isinstance(x, dict)]
+        if after[: len(before)] != before:
+            return False
+    return len(new.get("comments") or []) > len(old.get("comments") or [])
 
 
 def _out(t: SharedTask) -> TaskOut:
@@ -100,8 +140,8 @@ def save_task(task_id: str, payload: TaskIn, request: Request, db: DbSession, us
     code, subject = data["code"], data["subject"]
 
     if t is None:
-        if assignee != me and assignee not in below:
-            raise HTTPException(403, "You can only assign tasks to people who report to you.")
+        if not can_assign(db, user, me, below, assignee):
+            raise HTTPException(403, ASSIGN_RULE)
         t = SharedTask(id=task_id, code=code, assignee_id=assignee, created_by=me, people_ids=_people(data),
                        status=data["status"], due=_due(data), data=data, version=1)
         db.add(t)
@@ -115,13 +155,24 @@ def save_task(task_id: str, payload: TaskIn, request: Request, db: DbSession, us
 
     if not _can_view(t, me, below):
         raise HTTPException(404, "Task not found.")
-    if me not in {t.assignee_id, t.created_by} and t.assignee_id not in below:
-        raise HTTPException(403, "People on cc can view this task but not change it.")
+    old = t.data or {}
+    editor = me in {t.assignee_id, t.created_by} or t.assignee_id in below
+    if not editor and not _comment_only(old, data):
+        raise HTTPException(403, "People following this task can comment on it but not change it.")
     if payload.base_version is not None and payload.base_version != t.version:
         raise HTTPException(409, "Someone else changed this task. Showing the latest.")
-    old = t.data or {}
-    if assignee != t.assignee_id and assignee != me and assignee not in below:
-        raise HTTPException(403, "You can only assign tasks to people who report to you.")
+    if assignee != t.assignee_id and not can_assign(db, user, me, below, assignee):
+        raise HTTPException(403, ASSIGN_RULE)
+    if not editor:
+        # A follower's comment: the owner and whoever assigned it hear about it.
+        text = str((data.get("comments") or [{}])[-1].get("text", ""))[:120]
+        for person in {t.assignee_id, t.created_by}:
+            tell(db, person, me, f"{code}: comment from {my_name}", f"{subject} — {text}", href)
+        t.data = data
+        t.version += 1
+        db.commit()
+        db.refresh(t)
+        return _out(t)
 
     # Who hears about this change: the owner when someone else acts, otherwise whoever assigned it.
     other = t.created_by if me == t.assignee_id else t.assignee_id

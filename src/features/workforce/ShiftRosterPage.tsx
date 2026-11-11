@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore, type DragEvent } fr
 import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, FilterBar, MetricCard, MetricGrid, Page, StatusBadge, SubmitButton, Tabs, notify, useAction } from "../../components/ui.tsx";
 import { usePortal } from "../../store.tsx";
 import { addDaysISO, holidaysForPerson, monthLabel, parseISODate, todayISO } from "../../model.ts";
-import { dayHead, dragShift, droppedShift, hoursFor, isNightShift, monthDates, ShiftChip, shiftColor, shiftHours } from "./rosterUi.tsx";
+import { dayHead, dragShift, droppedShift, isNightShift, monthDates, ShiftChip, shiftColor, shiftHours } from "./rosterUi.tsx";
 import { scheduleForEmployee } from "../../data/workSchedule.ts";
 import {
   apiCompOffSummary,
@@ -18,8 +18,6 @@ import {
   holidayOn,
   isCreditExpired,
   leaveOn,
-  MAX_DAYS_PER_WEEK,
-  MIN_REST_HOURS,
   publishedShiftsFor,
   publishWeek,
   requestSwap,
@@ -58,6 +56,7 @@ import { canDecideFor, fmt, isHrRole, rosterTeamFor, isWeekend, personName, shor
 import { apiSwapPartners } from "../../api/syncOpsShifts.ts";
 import "./workforce.css";
 import "./coverage.css";
+import "../../styles/pay-claims.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -162,8 +161,8 @@ function ShiftDetailDialog({ info, onClose, actor }: { info: DayInfo; onClose: (
       ) : (
         <p>{isWeeklyOff(info.date) ? "Weekly off." : "No shift on the published roster."}</p>
       )}
-      {leave && <p className="note warn">You are on approved leave this day.</p>}
-      {holiday && <p className="note">Holiday: {holiday.name}</p>}
+      {holiday && <p className="note">Public holiday: {holiday.name}. Not a working day.</p>}
+      {!holiday && leave && <p className="note warn">You are on approved leave this day.</p>}
       {swaps.length > 0 && (
         <div>
           <strong>Swap requests</strong>
@@ -200,13 +199,21 @@ function MyShifts({ actor }: { actor: WorkforceActor }) {
   const [search, setSearch] = useState("");
   const isWeeklyOff = useWeeklyOff();
   const mine = publishedShiftsFor(actor.id, data);
+  const myHolidays = holidaysForPerson(ctx.holidays, actor.id);
+  /** Why a rostered day isn't worked: a public holiday or approved leave. */
+  const offReason = (date: string): string | null => {
+    const holiday = holidayOn(date, myHolidays);
+    if (holiday) return `Holiday · ${holiday.name}`;
+    return leaveOn(actor.id, date, ctx.leaves) ? "On leave" : null;
+  };
   const upcoming = mine.filter((a) => a.date >= today);
   const recent = mine.filter((a) => a.date < today && a.date >= addDaysISO(today, -14)).reverse();
   const shown = weekDates(weekStart);
   const credits = creditsFor(actor.id, data).filter((c) => !isCreditExpired(c, today));
   const apiCompOff = apiCompOffSummary();
-  const next = upcoming[0];
-  const weekRows = mine.filter((a) => shown.includes(a.date));
+  const next = upcoming.find((a) => !offReason(a.date));
+  const nextShift = next ? shiftById(next.shiftId, data) : undefined;
+  const weekRows = mine.filter((a) => shown.includes(a.date) && !offReason(a.date));
   const weekHours = Math.round(weekRows.reduce((sum, a) => sum + netHours(shiftById(a.shiftId, data)), 0) * 100) / 100;
   const nights = weekRows.filter((a) => isNightShift(shiftById(a.shiftId, data))).length;
   const weeklyOffs = shown.filter((d) => isWeeklyOff(d) && !mine.some((a) => a.date === d));
@@ -228,16 +235,17 @@ function MyShifts({ actor }: { actor: WorkforceActor }) {
 
   const row = (a: (typeof mine)[number]) => {
     const shift = shiftById(a.shiftId, data);
-    const note = compOffReason(a.date, holidaysForPerson(ctx.holidays, actor.id));
+    const off = offReason(a.date);
+    const note = off ? null : compOffReason(a.date, myHolidays);
     return [
       <button key="d" type="button" className="link-btn" onClick={() => open(a.date)}>
         {shortDay(a.date)}
       </button>,
       <ShiftChip key="s" shift={shift} />,
       shift ? `${shift.start}–${shift.end}` : "—",
-      `${netHours(shift)} h`,
+      off ? "—" : `${netHours(shift)} h`,
       shift?.location || "—",
-      [isWeekend(a.date) ? "Weekend" : "", note ?? ""].filter(Boolean).join(" · "),
+      off ? <span key="o" className="wf-tag info">{off}</span> : [isWeekend(a.date) ? "Weekend" : "", note ?? ""].filter(Boolean).join(" · "),
     ];
   };
   const monthDays = monthDates(month.y, month.m);
@@ -245,7 +253,7 @@ function MyShifts({ actor }: { actor: WorkforceActor }) {
   return (
     <>
       <MetricGrid>
-        <MetricCard label="Next shift" value={next ? shiftById(next.shiftId, data)?.name ?? "—" : "None"} hint={next ? shortDay(next.date) : undefined} />
+        <MetricCard label="Next shift" value={nextShift ? nextShift.name : "None"} hint={next && nextShift ? `${shortDay(next.date)} · ${nextShift.start}–${nextShift.end}` : undefined} />
         <MetricCard label="Hours this week" value={`${weekHours} h`} hint={`${weekRows.length} shifts${nights ? ` · ${nights} night` : ""}`} />
         <MetricCard label="Weekly offs" value={weeklyOffs.length} hint={weeklyOffs.map((d) => shortDay(d).split(",")[0]).join(", ") || "None this week"} />
         <MetricCard label="Comp-off available" value={apiCompOff ? apiCompOff.available : credits.length} hint="Days" />
@@ -287,18 +295,26 @@ function MyShifts({ actor }: { actor: WorkforceActor }) {
               const a = mine.find((x) => x.date === d);
               const shift = a ? shiftById(a.shiftId, data) : undefined;
               const leave = leaveOn(actor.id, d, ctx.leaves);
-              const holiday = holidayOn(d, holidaysForPerson(ctx.holidays, actor.id));
+              const holiday = holidayOn(d, myHolidays);
+              const off = Boolean(holiday || leave);
               return (
-                <button key={d} type="button" className={`wf-my-day wf-day-btn${isWeekend(d) ? " weekend" : ""}${d === today ? " today" : ""}`} onClick={() => open(d)} aria-label={`${shortDay(d)}: ${shift ? shift.name : "no shift"}. Open details`}>
+                <button key={d} type="button" className={`wf-my-day wf-day-btn${isWeekend(d) ? " weekend" : ""}${d === today ? " today" : ""}${holiday ? " sr-holiday" : ""}${d < today ? " sr-past" : ""}`} onClick={() => open(d)} aria-label={`${shortDay(d)}: ${holiday ? holiday.name : leave ? "on leave" : shift ? shift.name : "no shift"}. Open details`}>
                   <strong>{shortDay(d)}</strong>
-                  {shift ? <ShiftChip shift={shift} /> : <span className="muted">{isWeeklyOff(d) ? "Weekly off" : "Off"}</span>}
-                  {shift && (
+                  {holiday ? (
+                    <span className="sr-off">Holiday</span>
+                  ) : leave ? (
+                    <span className="sr-off">On leave</span>
+                  ) : shift ? (
+                    <ShiftChip shift={shift} />
+                  ) : (
+                    <span className="muted">{isWeeklyOff(d) ? "Weekly off" : "Off"}</span>
+                  )}
+                  {shift && !off && (
                     <span className="muted">
                       {shift.start}–{shift.end} · {netHours(shift)} h
                     </span>
                   )}
-                  {leave && <span className="wf-tag warn">On leave</span>}
-                  {holiday && <span className="wf-tag info">{holiday.name}</span>}
+                  {holiday && <span className="muted">{holiday.name}</span>}
                 </button>
               );
             })}
@@ -317,17 +333,16 @@ function MyShifts({ actor }: { actor: WorkforceActor }) {
               const a = mine.find((x) => x.date === d);
               const shift = a ? shiftById(a.shiftId, data) : undefined;
               const leave = leaveOn(actor.id, d, ctx.leaves);
+              const holiday = holidayOn(d, myHolidays);
               return (
-                <button key={d} type="button" className={`wf-month-day${d === today ? " today" : ""}${isWeekend(d) ? " weekend" : ""}`} onClick={() => open(d)} aria-label={`${shortDay(d)}: ${shift ? shift.name : "no shift"}`}>
+                <button key={d} type="button" className={`wf-month-day${d === today ? " today" : ""}${isWeekend(d) ? " weekend" : ""}${holiday ? " sr-holiday" : ""}`} onClick={() => open(d)} aria-label={`${shortDay(d)}: ${holiday ? holiday.name : shift ? shift.name : "no shift"}`}>
                   <span className="wf-month-num">{Number(d.slice(8))}</span>
-                  {shift ? <ShiftChip shift={shift} short /> : <span className="muted">{isWeeklyOff(d) ? "Off" : ""}</span>}
-                  {leave && <span className="wf-tag warn">L</span>}
+                  {holiday ? <span className="sr-off">Holiday</span> : leave ? <span className="wf-tag warn">Leave</span> : shift ? <ShiftChip shift={shift} short /> : <span className="muted">{isWeeklyOff(d) ? "Off" : ""}</span>}
                 </button>
               );
             })}
           </div>
         )}
-        <p className="muted">Click a day for the shift's times, break, location and manager.</p>
       </Card>
       <Card
         title="Upcoming"
@@ -462,7 +477,10 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
       : [];
 
   const forMe = data.swaps.filter((s) => s.teammateId === actor.id && s.status === "awaiting_teammate");
-  const toApprove = data.swaps.filter((s) => s.status === "awaiting_manager" && canApproveSwap(actor, s));
+  // Backend mode: the server lists only swaps this person may decide (view "to_decide").
+  const toApprove = data.swaps.filter(
+    (s) => s.status === "awaiting_manager" && (API_ENABLED ? s.requesterId !== actor.id && s.teammateId !== actor.id : canApproveSwap(actor, s)),
+  );
   const needle = search.trim().toLowerCase();
   const mine = data.swaps
     .filter((s) => s.requesterId === actor.id || (s.teammateId === actor.id && s.status !== "awaiting_teammate"))
@@ -593,7 +611,7 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
               </Field>
               <Field label="Swap with">
                 <select value={teammateId} onChange={(e) => setTeammateId(e.target.value)} disabled={!date}>
-                  <option value="">{date && !teammates.length ? "No eligible teammate on another shift" : "Pick a teammate"}</option>
+                  <option value="">{!date ? "Pick a date first" : !teammates.length ? "No teammate on another shift that day" : "Pick a teammate"}</option>
                   {teammates.map((a) => (
                     <option key={a.id} value={a.personId}>
                       {personName(a.personId)}
@@ -606,7 +624,6 @@ function Swaps({ actor }: { actor: WorkforceActor }) {
                 <input value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} />
               </Field>
             </div>
-            <p className="muted">Only teammates on the same published roster, on a different shift that day, can be asked. They accept first, then your manager approves.</p>
             <div className="row-gap">
               <SubmitButton action={swapAction} className="btn">
                 Submit request
@@ -727,7 +744,6 @@ function CompOff({ actor }: { actor: WorkforceActor }) {
               <input value={reason} maxLength={300} placeholder="e.g. For working Saturday's release" onChange={(e) => setReason(e.target.value)} />
             </Field>
           </div>
-          <p className="muted">Goes to your manager like any leave request. You'll be notified when it's decided.</p>
           <div className="row-gap">
             <SubmitButton action={applyAction} className="btn" disabled={available <= 0}>
               Apply
@@ -1018,6 +1034,11 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
             <button className="btn-ghost btn-tiny" type="button" onClick={() => (mode === "week" ? moveWeek(-1) : moveMonth(-1))}>
               Previous
             </button>
+            {mode === "week" && weekStart !== weekStartOf(today) && (
+              <button className="btn-ghost btn-tiny" type="button" onClick={() => moveWeek(Math.round((parseISODate(weekStartOf(today)).getTime() - parseISODate(weekStart).getTime()) / 604800000))}>
+                This week
+              </button>
+            )}
             <button className="btn-ghost btn-tiny" type="button" onClick={() => (mode === "week" ? moveWeek(1) : moveMonth(1))}>
               Next
             </button>
@@ -1126,7 +1147,12 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
                 </thead>
                 <tbody>
                   {team.map((person) => {
-                    const hours = hoursFor(person.id, dates, data);
+                    const hours =
+                      Math.round(
+                        data.assignments
+                          .filter((a) => a.personId === person.id && dates.includes(a.date))
+                          .reduce((sum, a) => sum + netHours(shiftById(a.shiftId, data)), 0) * 100,
+                      ) / 100;
                     const nights = data.assignments.filter(
                       (a) => a.personId === person.id && dates.includes(a.date) && isNightShift(shiftById(a.shiftId, data)),
                     ).length;
@@ -1145,22 +1171,24 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
               </table>
             </div>
           )}
-          <p className="muted">
-            {brush !== null
-              ? "Click cells to apply. You can also drag a shift onto a cell."
-              : short
-                ? "Pick a shift above to paint cells, or click a day to open that week."
-                : `Drag a shift onto a cell or pick one above. ${MIN_REST_HOURS} h rest between shifts · up to ${MAX_DAYS_PER_WEEK} days a week. Past days are locked.`}
-          </p>
         </div>
       </Card>
       {mode === "week" && (
         <Card title="Coverage">
           <div className="stack">
             {gaps.length > 0 ? (
-              <p className="note wf-danger">
-                {gaps.length} under-covered {gaps.length === 1 ? "shift" : "shifts"}: {describeGaps(gaps, data)}.
-              </p>
+              <div className="sr-gaps" role="status">
+                <strong>
+                  {gaps.length} {gaps.length === 1 ? "shift needs" : "shifts need"} people
+                </strong>
+                <ul>
+                  {gaps.map((g) => (
+                    <li key={`${g.date}-${g.shiftId}`}>
+                      {shortDay(g.date)} · {shiftById(g.shiftId, data)?.name ?? g.shiftId} · {g.assigned}/{g.required}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ) : (
               coverage.some((c) => c.required > 0) && <p className="muted">Every shift meets its minimum this week.</p>
             )}
@@ -1171,7 +1199,6 @@ function TeamRoster({ actor }: { actor: WorkforceActor }) {
               <span><span className="wf-cov under">0/1</span> Under minimum</span>
               <span><span className="wf-cov ok">1/1</span> Covered</span>
               <span><span className="wf-cov over">2/1</span> Over minimum</span>
-              <span>People on approved leave don't count.</span>
             </div>
           </div>
         </Card>
@@ -1267,12 +1294,6 @@ function CoverageSettings({ actor }: { actor: WorkforceActor }) {
         }
       >
         <div className="stack">
-          <p className="muted">
-            {scope === COMPANY_SCOPE
-              ? "People needed on each shift, per day. Applies to every team unless a manager sets their own."
-              : "People needed on each shift in your team, per day. Highlighted values are your own; the rest follow the company default."}{" "}
-            Holidays need no one.
-          </p>
           <div className="wf-grid">
             <DataTable headers={["Shift", ...WEEK_ORDER.map((d) => WEEKDAY_NAMES[d])]} rows={rows} empty={<EmptyState title="No active shifts" />} />
           </div>

@@ -44,6 +44,7 @@ import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../.
 import { API_ENABLED } from "../../api/syncOps.ts";
 import { managementChain } from "../../demoAccounts.ts";
 import "./compliance.css";
+import "../../styles/workspace.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -75,7 +76,7 @@ export function GrievancePage() {
   const byCode = codeCase ? findCaseByCode(actor, codeCase) : undefined;
 
   return (
-    <Page title={window.location.pathname.startsWith("/people/cases") ? "HR cases" : "Raise a concern"} subtitle="Grievances and POSH">
+    <Page title={window.location.pathname.startsWith("/people/cases") ? "HR cases" : "Raise a concern"}>
       <Banner message={msg} />
       <Tabs
         tabs={tabs}
@@ -91,24 +92,13 @@ export function GrievancePage() {
           actor={actor}
           onRaised={(code) => {
             setNewCode(code);
-            setMsg({ tone: "ok", text: "Case raised. HR will be in touch through the case timeline." });
+            setTab("mine");
+            setMsg({ tone: "ok", text: `Case ${code} raised. It is listed under My cases and HR will reply on its timeline.` });
           }}
         />
       )}
 
-      {tab === "mine" && (
-        <Card title="My cases">
-          {mine.length === 0 ? (
-            <EmptyState title="No cases" />
-          ) : (
-            <ul className="cmp-list">
-              {mine.map((c) => (
-                <CaseSummary key={c.id} c={c} onOpen={() => setOpenId(c.id)} showCode />
-              ))}
-            </ul>
-          )}
-        </Card>
-      )}
+      {tab === "mine" && <MyCases cases={mine} onOpen={setOpenId} onRaise={() => setTab("raise")} />}
 
       {tab === "lookup" && <CodeLookup onFound={(code) => setCodeCase(code)} actor={actor} />}
 
@@ -145,6 +135,108 @@ export function GrievancePage() {
   );
 }
 
+/** What each category covers and who handles it. */
+const CATEGORY_INFO: Record<CaseCategory, { blurb: string; handler: string }> = {
+  Grievance: { blurb: "Workload, pay, leave, manager or team concerns", handler: "HR business partner" },
+  "Harassment/POSH": { blurb: "Sexual harassment or unwelcome conduct", handler: "Internal Committee" },
+  Discrimination: { blurb: "Unfair treatment based on who you are", handler: "HR, confidentially" },
+  "Ethics/whistleblowing": { blurb: "Fraud, bribery, policy or legal breaches", handler: "Ethics officer and HR" },
+  Safety: { blurb: "Unsafe premises, equipment or practices", handler: "HR and facilities" },
+};
+
+const CASE_STEPS: { status: CaseStatus; label: string }[] = [
+  { status: "Open", label: "Received" },
+  { status: "Investigating", label: "Investigating" },
+  { status: "Resolved", label: "Resolved" },
+  { status: "Closed", label: "Closed" },
+];
+
+/** Received → Investigating → Resolved → Closed, with the date each step was reached. */
+function CaseProgress({ c }: { c: CaseRecord }) {
+  const archived = isCaseArchived(c);
+  const at = CASE_STEPS.findIndex((s) => s.status === c.status);
+  const reached = archived ? CASE_STEPS.length - 1 : Math.max(0, at);
+  const dateOf = (status: CaseStatus) =>
+    status === "Open" ? c.createdOn : c.timeline.find((e) => e.status === status)?.at.slice(0, 10) ?? (status === "Closed" ? c.closedOn : undefined);
+  return (
+    <ol className="ws-steps" aria-label="Case progress">
+      {CASE_STEPS.map((step, i) => {
+        const state = i < reached || (i === reached && (step.status === "Closed" || archived)) ? "done" : i === reached ? "current" : "todo";
+        const when = i <= reached ? dateOf(step.status) : undefined;
+        return (
+          <li key={step.status} className={`ws-step ${state}`} aria-current={state === "current" ? "step" : undefined}>
+            <span className="ws-step-dot" aria-hidden="true">
+              {state === "done" ? "✓" : i + 1}
+            </span>
+            <span className="ws-step-label">{step.label}</span>
+            <span className="ws-step-date">{when ? formatShortDate(when) : ""}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function MyCases({ cases, onOpen, onRaise }: { cases: CaseRecord[]; onOpen: (id: string) => void; onRaise: () => void }) {
+  const sorted = [...cases].sort((a, b) => b.createdOn.localeCompare(a.createdOn));
+  const open = cases.filter(isCaseOpen).length;
+  return (
+    <Card
+      title="My cases"
+      action={
+        <button type="button" className="btn-ghost btn-tiny" onClick={onRaise}>
+          Raise a new case
+        </button>
+      }
+    >
+      {sorted.length === 0 ? (
+        <EmptyState title="You have not raised any cases" />
+      ) : (
+        <div className="stack">
+          <div className="ws-summary">
+            <span>
+              <strong>{open}</strong> open
+            </span>
+            <span>
+              <strong>{cases.length - open}</strong> resolved or closed
+            </span>
+          </div>
+          <ul className="ws-case-list">
+            {sorted.map((c) => {
+              const last = reporterTimeline(c).at(-1);
+              return (
+                <li key={c.id} className="ws-case">
+                  <div className="ws-case-head">
+                    <div>
+                      <strong>{c.category}</strong>
+                      <span className="ws-case-code">{c.code}</span>
+                    </div>
+                    <span className="row-gap">
+                      {c.anonymous && <StatusBadge status="Anonymous" tone="neutral" literal />}
+                      <StatusBadge status={c.status} tone={toneFor(c.status)} literal />
+                    </span>
+                  </div>
+                  <p className="ws-case-desc">{c.description.length > 180 ? `${c.description.slice(0, 180)}…` : c.description}</p>
+                  <CaseProgress c={c} />
+                  <div className="ws-case-foot">
+                    <span className="muted">
+                      Raised {formatShortDate(c.createdOn)}
+                      {last && last.kind !== "filed" ? ` · last update ${formatStamp(last.at)} by ${last.authorLabel}` : " · awaiting first response"}
+                    </span>
+                    <button className="btn-ghost btn-tiny" type="button" onClick={() => onOpen(c.id)}>
+                      View case
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (code: string) => void }) {
   const [category, setCategory] = useState<CaseCategory>("Grievance");
   const {
@@ -160,6 +252,7 @@ function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (cod
   const [anonymous, setAnonymous] = useState(false);
   const [error, setError] = useState("");
   const [pickerKey, setPickerKey] = useState(0);
+  const posh = category === "Harassment/POSH";
 
   async function submit() {
     if (hasTemplateBlanks(description)) {
@@ -186,61 +279,121 @@ function RaiseForm({ actor, onRaised }: { actor: ComplianceActor; onRaised: (cod
   }
 
   return (
-    <Card title="Raise a case">
-      <div className="stack">
-        {error && <p className="note err">{error}</p>}
-        <div className="cmp-form">
-          <Field label="Category" wide>
-            <select
-              value={category}
-              onChange={(e) => {
-                setCategory(e.target.value as CaseCategory);
-                fillDescription("grievance", e.target.value);
-              }}
-            >
+    <div className="ws-raise">
+      <Card title="Raise a case">
+        <div className="stack">
+          {error && <p className="note err">{error}</p>}
+          <fieldset className="ws-fieldset">
+            <legend>1. What is it about?</legend>
+            <div className="ws-cat-grid" role="radiogroup" aria-label="Category">
               {CASE_CATEGORIES.map((c) => (
-                <option key={c}>{c}</option>
+                <button
+                  key={c}
+                  type="button"
+                  role="radio"
+                  aria-checked={category === c}
+                  className={`ws-cat${category === c ? " active" : ""}`}
+                  onClick={() => {
+                    setCategory(c);
+                    fillDescription("grievance", c);
+                  }}
+                >
+                  <strong>{c}</strong>
+                  <span>{CATEGORY_INFO[c].blurb}</span>
+                </button>
               ))}
-            </select>
-          </Field>
-          <Field label="What happened" wide>
-            <textarea
-              ref={descriptionRef}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              onFocus={() => fillDescriptionIfEmpty("grievance", category)}
-              placeholder="When, where, who was involved, and anything already tried" />
-          </Field>
-          <label className="cmp-check" style={{ gridColumn: "1 / -1" }}>
-            <input type="checkbox" checked={namePerson} onChange={(e) => setNamePerson(e.target.checked)} />
-            Name a person this is about
-          </label>
-          {namePerson && (
-            <Field label="Person" wide>
-              <PersonPicker key={pickerKey} value={againstId} onChange={setAgainstId} excludeId={actor.id} />
+            </div>
+          </fieldset>
+
+          <fieldset className="ws-fieldset">
+            <legend>2. What happened?</legend>
+            <Field label="Description" wide>
+              <textarea
+                ref={descriptionRef}
+                rows={6}
+                value={description}
+                maxLength={4000}
+                onChange={(e) => setDescription(e.target.value)}
+                onFocus={() => fillDescriptionIfEmpty("grievance", category)}
+                placeholder="When, where, who was involved, and anything already tried"
+              />
             </Field>
-          )}
-          <label className="cmp-check" style={{ gridColumn: "1 / -1" }}>
-            <input type="checkbox" checked={anonymous} onChange={(e) => setAnonymous(e.target.checked)} />
-            Raise anonymously
-          </label>
+            <span className="ws-count">{description.trim().length} / 4,000</span>
+            <label className="cmp-check">
+              <input type="checkbox" checked={namePerson} onChange={(e) => setNamePerson(e.target.checked)} />
+              Name a person this is about
+            </label>
+            {namePerson && (
+              <Field label="Person" wide>
+                <PersonPicker key={pickerKey} value={againstId} onChange={setAgainstId} excludeId={actor.id} />
+              </Field>
+            )}
+          </fieldset>
+
+          <fieldset className="ws-fieldset">
+            <legend>3. How should we handle your identity?</legend>
+            <div className="ws-choice-row" role="radiogroup" aria-label="Identity">
+              <button type="button" role="radio" aria-checked={!anonymous} className={`ws-choice${!anonymous ? " active" : ""}`} onClick={() => setAnonymous(false)}>
+                <strong>Share my name</strong>
+                <span>Only the case handler sees it, so they can follow up with you directly.</span>
+              </button>
+              <button type="button" role="radio" aria-checked={anonymous} className={`ws-choice${anonymous ? " active" : ""}`} onClick={() => setAnonymous(true)}>
+                <strong>Stay anonymous</strong>
+                <span>Your name is never shown. Follow the case with the private code you get.</span>
+              </button>
+            </div>
+          </fieldset>
+
+          <div className="ws-attach-note">
+            <strong>Evidence and attachments</strong>
+            <span>
+              {API_ENABLED
+                ? "After you submit, open the case under My cases to attach screenshots, emails or documents. Files are visible only to the case handler."
+                : "After you submit, share screenshots, emails or documents with the case handler through the case timeline."}
+            </span>
+          </div>
+
+          <div className="ws-submit-row">
+            <ActionButton className="btn" success={posh ? "Case sent to the Internal Committee." : "Case sent to HR."} onAction={submit}>
+              Submit case
+            </ActionButton>
+            <span className="muted">
+              {posh ? `Handled by the Internal Committee within ${POSH_SLA_DAYS} days.` : `Handled by the ${CATEGORY_INFO[category].handler.toLowerCase()}.`}
+            </span>
+          </div>
         </div>
-        <p className="muted">
-          {anonymous ? "Your name is never shown to anyone handling the case. " : ""}
-          {category === "Harassment/POSH" ? `Handled by the Internal Committee within ${POSH_SLA_DAYS} days.` : "Handled confidentially by HR."}
-          {managementChain(actor.id).length > 0 ? " Your manager cannot see cases." : ""}
-        </p>
-        <div>
-          <ActionButton
-            className="btn"
-            success={category === "Harassment/POSH" ? "Case sent to the Internal Committee." : "Case sent to HR."}
-            onAction={submit}
-          >
-            Submit case
-          </ActionButton>
-        </div>
-      </div>
-    </Card>
+      </Card>
+
+      <aside className="ws-aside">
+        <Card title="What happens next">
+          <ol className="ws-howto">
+            <li>
+              <strong>Received</strong>
+              <span>You get a private case code straight away.</span>
+            </li>
+            <li>
+              <strong>Investigating</strong>
+              <span>{posh ? "The Internal Committee reviews the facts." : "HR reviews the facts and may ask you questions."}</span>
+            </li>
+            <li>
+              <strong>Resolved</strong>
+              <span>You see the outcome on the case timeline.</span>
+            </li>
+            <li>
+              <strong>Closed</strong>
+              <span>The file is kept confidential under the retention rule.</span>
+            </li>
+          </ol>
+        </Card>
+        <Card title="Your protection">
+          <ul className="ws-bullets">
+            <li>Cases are confidential to HR{posh ? " and the Internal Committee" : ""}.</li>
+            {managementChain(actor.id).length > 0 && <li>Your manager cannot see cases.</li>}
+            <li>Retaliation for raising a concern in good faith is not tolerated.</li>
+          </ul>
+        </Card>
+      </aside>
+    </div>
   );
 }
 
@@ -667,6 +820,7 @@ function ReporterCaseDialog({ c, actor, code, onClose }: { c: CaseRecord; actor:
           </span>
           <StatusBadge status={c.status} tone={toneFor(c.status)} literal />
         </div>
+        <CaseProgress c={c} />
         <p className="cmp-desc">{c.description}</p>
         {c.resolution && <p className="note ok">Resolution: {c.resolution}</p>}
         <CaseExtras c={c} staff={false} onMsg={setMsg} />

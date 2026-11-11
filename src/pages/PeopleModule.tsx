@@ -7,7 +7,6 @@ import { dataScopeFor, dataScopeLabel, personFilterFor, useAccessVersion } from 
 import { listPeople, subscribePeople } from "../data/peopleLocal.ts";
 import { canManagePeople, canViewPeopleDirectory, getPeopleListScope } from "../data/peoplePermissions.ts";
 import { directoryFieldLevel } from "../data/rbac.ts";
-import { RegionalFilter } from "../locale/RegionalFilter.tsx";
 import { useLocale } from "../locale/LocaleContext.tsx";
 import { usePortal } from "../store.tsx";
 import { EmployeeFormDialog, saveEmployee, saveEmployeeOnServer } from "./EmployeeFormDialog.tsx";
@@ -28,7 +27,7 @@ function statusTone(status: EmploymentStatus): "ok" | "warn" | "danger" {
 
 export function PeopleDirectoryPage() {
   const { demoProfile, employee } = usePortal();
-  const { matchesRegion, t } = useLocale();
+  const { t } = useLocale();
   const people = usePeople();
   const navigate = useNavigate();
   const canEdit = canManagePeople(demoProfile.role);
@@ -73,7 +72,7 @@ export function PeopleDirectoryPage() {
   const scoped = useMemo(
     () =>
       people.filter((p) => {
-        if (!matchesRegion(String(p.countryCode), p.countryName)) return false;
+        // The directory is the whole company (within your data scope), not the top bar's region: use the Country filter.
         if (listScope === "self") return p.id === employee.id;
         // The basic directory is the whole company (basic fields only); full records follow the data scope.
         if (!basic && !canSee(p)) return false;
@@ -81,7 +80,7 @@ export function PeopleDirectoryPage() {
         if (basic && p.employmentStatus === "Terminated") return false;
         return true;
       }),
-    [people, matchesRegion, listScope, employee.id, canSee, basic],
+    [people, listScope, employee.id, canSee, basic],
   );
 
   const managers = useMemo(() => [...new Set(scoped.map((p) => p.managerName).filter(Boolean))].sort(), [scoped]);
@@ -198,7 +197,6 @@ export function PeopleDirectoryPage() {
     >
       <Card title={`${t("common.filter")} & search`}>
         <FilterBar>
-          <RegionalFilter label={t("locale.region")} />
           <label className="filter-label">
             Search
             <input

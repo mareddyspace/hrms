@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
-import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, Page, StatusBadge, SubmitButton, Tabs, notify, useAction } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Dialog, EmptyState, Field, Page, SubmitButton, Tabs, notify, useAction } from "../components/ui.tsx";
 import { OptionalHolidayDialog, OptionalHolidaysCard } from "../features/workforce/OptionalHolidaysPage.tsx";
 import {
   getOptionalHolidayState,
@@ -11,7 +11,7 @@ import {
   subscribeOptionalHolidays,
   type OptionalHoliday,
 } from "../features/workforce/optionalHolidaysStore.ts";
-import { isPrimaryWeeklyOffLabel, isWeeklyOffDate, scheduleForEmployee } from "../data/workSchedule.ts";
+import { isWeeklyOffDate, scheduleForEmployee } from "../data/workSchedule.ts";
 import { buildHolidayIcs, canEditHolidays, downloadIcs, loadApiHolidays, removeHoliday, saveHoliday } from "../data/holidayAdmin.ts";
 import { API_ENABLED } from "../api/client.ts";
 import {
@@ -20,7 +20,6 @@ import {
   holidaysForCountry,
   holidaysForPerson,
   monthCells,
-  monthLabel,
   parseISODate,
   todayISO,
   type CountryCode,
@@ -28,8 +27,9 @@ import {
 } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import "./holidays.css";
+import "../styles/pay-claims.css";
 
-type View = "month" | "list" | "year";
+type View = "list" | "calendar";
 type Kind = "public" | "regional" | "optional" | "weekly";
 type Row = { id: string; date: string; name: string; kind: Kind; region?: string; description?: string; pick?: string };
 
@@ -38,6 +38,15 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 const KIND_LABEL: Record<Kind, string> = { public: "Public holiday", regional: "Regional holiday", optional: "Optional holiday", weekly: "Weekly off" };
 const countryName = (code: string) => TIMEZ_COUNTRIES.find((c) => c.code === code)?.name ?? code;
 const longDate = (iso: string) => parseISODate(iso).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+const weekdayShort = (iso: string) => parseISODate(iso).toLocaleDateString("en-GB", { weekday: "short" });
+
+function whenText(iso: string, today: string): string {
+  const n = Math.round((parseISODate(iso).getTime() - parseISODate(today).getTime()) / 86_400_000);
+  if (n === 0) return "Today";
+  if (n === 1) return "Tomorrow";
+  if (n > 1 && n <= 30) return `In ${n} days`;
+  return "";
+}
 
 function describe(row: Row, country: string): string {
   if (row.description) return row.description;
@@ -47,37 +56,34 @@ function describe(row: Row, country: string): string {
   return "Weekly day off under your work schedule.";
 }
 
-/** Holidays by month, as a list or the whole year; details on click; .ics export of chosen holidays. HR edits per country. */
+/** The viewer's public holidays for a year, grouped by month (or as a year calendar); optional holidays in their own card. HR edits per country. */
 export function HolidaysPage() {
   const today = todayISO();
+  const currentYear = Number(today.slice(0, 4));
   const { state, employee, demoProfile, replaceHolidays } = usePortal();
   const editor = canEditHolidays(demoProfile.role);
   const myCountry = String(employee.countryCode ?? "IN");
   const [country, setCountry] = useState(myCountry);
   const viewingOwn = country === myCountry;
-  const [view, setView] = useState<View>("month");
-  const now = new Date();
-  const [cursor, setCursor] = useState({ year: now.getFullYear(), month: now.getMonth() });
+  const [view, setView] = useState<View>("list");
+  const [year, setYear] = useState(currentYear);
+  const [showPast, setShowPast] = useState(true);
   const [editing, setEditing] = useState<Holiday | "new" | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
   const [icsOpen, setIcsOpen] = useState(false);
-  const [q, setQ] = useState("");
-  const [kind, setKind] = useState<"" | Kind>("");
-  const [month, setMonth] = useState("");
-  const [region, setRegion] = useState("");
 
   // Backend mode: the year's list from the server, into portal state (so leave counts and other pages agree).
   useEffect(() => {
     if (!API_ENABLED) return;
     let live = true;
-    void loadApiHolidays(replaceHolidays, country, cursor.year, editor).then((e) => live && setLoadError(e));
+    void loadApiHolidays(replaceHolidays, country, year, editor).then((e) => live && setLoadError(e));
     return () => {
       live = false;
     };
     // replaceHolidays is rebuilt with state; reload only when the country or year changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [country, cursor.year, editor]);
+  }, [country, year, editor]);
 
   const holidays = useMemo(
     () => (viewingOwn ? holidaysForPerson(state.holidays, employee.id) : holidaysForCountry(state.holidays, country as CountryCode)),
@@ -85,9 +91,9 @@ export function HolidaysPage() {
   );
   const byDate = useMemo(() => new Map(holidays.map((h) => [h.date, h])), [holidays]);
   const optionalState = useSyncExternalStore(subscribeOptionalHolidays, getOptionalHolidayState, getOptionalHolidayState);
-  const optional = optionalHolidaysFor(country, cursor.year, optionalState, viewingOwn);
+  const optional = optionalHolidaysFor(country, year, optionalState, viewingOwn);
   const optionalByDate = new Map(optional.map((h) => [h.date, h]));
-  const myOptional = viewingOwn ? optionalRequestsFor(state.leaveRequests, employee.id, cursor.year) : [];
+  const myOptional = viewingOwn ? optionalRequestsFor(state.leaveRequests, employee.id, year) : [];
   const schedule = useMemo(
     () =>
       viewingOwn
@@ -100,68 +106,43 @@ export function HolidaysPage() {
     const pick = requestOn(myOptional, date);
     return pick?.status === "approved" ? "Selected" : pick?.status === "pending" ? "Waiting" : undefined;
   };
-  const yearRows: Row[] = [
-    ...holidays
-      .filter((h) => h.date.startsWith(`${cursor.year}-`))
-      .map((h) => ({
-        id: h.id,
-        date: h.date,
-        name: h.name,
-        kind: (h.region ? "regional" : "public") as Kind,
-        region: h.region,
-        description: h.description,
-      })),
-    ...optional
-      .filter((h) => !byDate.has(h.date))
-      .map((h) => ({ id: h.id, date: h.date, name: h.name, kind: "optional" as Kind, region: h.region, description: h.description, pick: pickText(h.date) })),
-  ].sort((a, b) => a.date.localeCompare(b.date));
-  const regions = [...new Set(yearRows.map((r) => r.region).filter(Boolean) as string[])];
-  const weeklyRows: Row[] = useMemo(() => {
-    if (kind !== "weekly") return [];
-    const out: Row[] = [];
-    for (let d = new Date(cursor.year, 0, 1); d.getFullYear() === cursor.year; d.setDate(d.getDate() + 1)) {
-      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      if (schedule.weeklyOffDays.includes(d.getDay())) out.push({ id: `wo-${iso}`, date: iso, name: "Weekly off", kind: "weekly" });
-    }
-    return out;
-  }, [kind, cursor.year, schedule.weeklyOffDays]);
-  const listRows = (kind === "weekly" ? weeklyRows : yearRows).filter(
-    (r) =>
-      (!kind || r.kind === kind) &&
-      (!month || r.date.slice(5, 7) === month) &&
-      (!region || (region === "national" ? !r.region : r.region === region)) &&
-      (!q.trim() || `${r.name} ${r.description ?? ""} ${r.region ?? ""}`.toLowerCase().includes(q.trim().toLowerCase())),
-  );
+  const publicRows: Row[] = holidays
+    .filter((h) => h.date.startsWith(`${year}-`))
+    .map((h) => ({ id: h.id, date: h.date, name: h.name, kind: (h.region ? "regional" : "public") as Kind, region: h.region, description: h.description }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const optionalRows: Row[] = optional
+    .filter((h) => !byDate.has(h.date))
+    .map((h) => ({ id: h.id, date: h.date, name: h.name, kind: "optional" as Kind, region: h.region, description: h.description, pick: pickText(h.date) }));
+  const icsRows = [...publicRows, ...optionalRows].sort((a, b) => a.date.localeCompare(b.date));
+  const thisYear = year === currentYear;
+  const upcoming = publicRows.filter((r) => r.date >= today);
+  const next = upcoming[0];
+  const passed = thisYear ? publicRows.length - upcoming.length : 0;
+  const listed = thisYear && !showPast ? upcoming : publicRows;
+  const groups = MONTHS.map((label, m) => ({ label, m, rows: listed.filter((r) => Number(r.date.slice(5, 7)) - 1 === m) })).filter((g) => g.rows.length);
   const editable = new Set(holidaysForCountry(state.holidays, country as CountryCode).map((h) => h.id));
-  const publicCount = yearRows.filter((r) => r.kind !== "optional").length;
-  const upcoming = yearRows.find((r) => r.date >= today && r.kind !== "optional");
-
-  function move(delta: number) {
-    if (view === "month") {
-      const next = new Date(cursor.year, cursor.month + delta, 1);
-      setCursor({ year: next.getFullYear(), month: next.getMonth() });
-    } else {
-      setCursor({ year: cursor.year + delta, month: cursor.month });
-    }
-  }
-
-  function goToday() {
-    setCursor({ year: now.getFullYear(), month: now.getMonth() });
-    if (view === "list") setMonth(String(now.getMonth() + 1).padStart(2, "0"));
-  }
-
   const actor = { id: demoProfile.id, fullName: demoProfile.fullName, role: demoProfile.role };
 
   const rowOn = (date: string): Row | undefined => {
     const holiday = byDate.get(date);
-    if (holiday) return yearRows.find((r) => r.id === holiday.id) ?? { id: holiday.id, date, name: holiday.name, kind: holiday.region ? "regional" : "public", region: holiday.region, description: holiday.description };
+    if (holiday) {
+      return (
+        publicRows.find((r) => r.id === holiday.id) ?? {
+          id: holiday.id,
+          date,
+          name: holiday.name,
+          kind: holiday.region ? "regional" : "public",
+          region: holiday.region,
+          description: holiday.description,
+        }
+      );
+    }
     const opt = optionalByDate.get(date);
     if (opt) return { id: opt.id, date, name: opt.name, kind: "optional", region: opt.region, description: opt.description, pick: pickText(date) };
-    if (isWeeklyOffDate(date, schedule.weeklyOffDays)) return { id: `wo-${date}`, date, name: "Weekly off", kind: "weekly" };
     return undefined;
   };
 
-  const dayCell = (date: string, compact = false) => {
+  const dayCell = (date: string) => {
     const row = rowOn(date);
     const cls = [
       "day",
@@ -169,60 +150,56 @@ export function HolidaysPage() {
       row?.kind === "public" || row?.kind === "regional" ? "holiday" : "",
       row?.kind === "regional" ? "regional" : "",
       row?.kind === "optional" ? (row.pick === "Selected" ? "optional picked" : "optional") : "",
-      row?.kind === "weekly" ? "weekend" : "",
+      !row && isWeeklyOffDate(date, schedule.weeklyOffDays) ? "weekend" : "",
       date === today ? "today" : "",
-      date === detail ? "selected" : "",
     ]
       .filter(Boolean)
       .join(" ");
-    const title = row ? `${formatShortDate(date)} · ${row.kind === "weekly" ? "Weekly off" : `${row.name} (${KIND_LABEL[row.kind].toLowerCase()})`}` : formatShortDate(date);
-    if (compact) {
+    if (!row) {
       return (
-        <button key={date} type="button" className={cls} title={title} aria-label={title} onClick={() => setDetail(date)}>
+        <div key={date} className={cls}>
           {Number(date.slice(-2))}
-        </button>
+        </div>
       );
     }
-    const showOff = row?.kind === "weekly" && isPrimaryWeeklyOffLabel(date, schedule.weeklyOffDays);
+    const title = `${formatShortDate(date)} · ${row.name} (${KIND_LABEL[row.kind].toLowerCase()})`;
     return (
       <button key={date} type="button" className={cls} title={title} aria-label={title} onClick={() => setDetail(date)}>
-        <strong>{Number(date.slice(-2))}</strong>
-        {date === today && <span className="day-today-tag">Today</span>}
-        {row && row.kind !== "weekly" ? (
-          <span className="hol-day-name">
-            {row.name}
-            {row.kind === "optional" ? ` (optional${row.pick ? ` · ${row.pick.toLowerCase()}` : ""})` : row.kind === "regional" ? " (regional)" : ""}
-          </span>
-        ) : showOff ? (
-          <span className="hol-day-name">Weekly off</span>
-        ) : null}
+        {Number(date.slice(-2))}
       </button>
     );
   };
 
-  const heading = view === "month" ? monthLabel(cursor.year, cursor.month) : String(cursor.year);
   const detailRow = detail ? rowOn(detail) : undefined;
   const detailOptional: OptionalHoliday | undefined = detail && viewingOwn && detailRow?.kind === "optional" ? optionalByDate.get(detail) : undefined;
 
   return (
     <Page title="Holiday calendar" action={<Link className="btn-ghost" to="/workforce/optional-holidays">Optional holidays</Link>}>
-      {upcoming && (
-        <p className="note hol-next">
-          Next holiday: <strong>{upcoming.name}</strong> · {longDate(upcoming.date)}
-        </p>
-      )}
       <Card>
-        <div className="holiday-toolbar">
+        <div className="pc-hol-bar">
+          <div className="pc-hol-year" role="group" aria-label="Year">
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => setYear(year - 1)} aria-label="Previous year">
+              ‹
+            </button>
+            <strong>{year}</strong>
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => setYear(year + 1)} aria-label="Next year">
+              ›
+            </button>
+            {!thisYear && (
+              <button type="button" className="btn-ghost btn-tiny" onClick={() => setYear(currentYear)}>
+                This year
+              </button>
+            )}
+          </div>
           <Tabs
             tabs={[
-              { id: "month", label: "Month" },
               { id: "list", label: "List" },
-              { id: "year", label: "Year" },
+              { id: "calendar", label: "Calendar" },
             ]}
             value={view}
             onChange={(v) => setView(v as View)}
           />
-          <span className="form-actions holiday-tools">
+          <span className="form-actions pc-hol-tools">
             {editor && (
               <select aria-label="Country" value={country} onChange={(e) => setCountry(e.target.value)}>
                 {TIMEZ_COUNTRIES.map((c) => (
@@ -242,168 +219,137 @@ export function HolidaysPage() {
             )}
           </span>
         </div>
-        <div className="row-between holiday-nav">
-          <h2 className="card-title" style={{ margin: 0 }}>
-            {heading}
-            <span className="muted"> · {countryName(country)}</span>
-          </h2>
-          <span className="form-actions" style={{ marginTop: 0 }}>
-            <button className="btn-ghost" type="button" onClick={() => move(-1)}>
-              Previous
-            </button>
-            <button className="btn-ghost" type="button" onClick={goToday}>
-              Today
-            </button>
-            <button className="btn-ghost" type="button" onClick={() => move(1)}>
-              Next
-            </button>
-          </span>
+
+        <div className="pc-hol-stats">
+          <div>
+            <span className="muted">Public holidays · {countryName(country)}</span>
+            <strong>{publicRows.length}</strong>
+          </div>
+          {thisYear && (
+            <div>
+              <span className="muted">Still to come</span>
+              <strong>{upcoming.length}</strong>
+            </div>
+          )}
+          {next && (
+            <div className="pc-hol-next">
+              <span className="muted">Next holiday</span>
+              <strong>{next.name}</strong>
+              <span className="muted">
+                {longDate(next.date)}
+                {whenText(next.date, today) ? ` · ${whenText(next.date, today)}` : ""}
+              </span>
+            </div>
+          )}
         </div>
         <Banner message={loadError ? { tone: "err", text: loadError } : null} />
 
-        {view === "month" && (
-          <div className="cal">
-            {WEEKDAYS.map((label) => (
-              <div key={label} className="cal-head">
-                {label}
+        {view === "list" &&
+          (publicRows.length === 0 ? (
+            <EmptyState title="No holidays listed" description={`Nothing for ${countryName(country)} in ${year} yet.`} />
+          ) : (
+            <>
+              {groups.length === 0 && <EmptyState title="No more holidays this year" description={`All ${publicRows.length} have passed.`} />}
+              <div className="pc-hol-months">
+                {groups.map((g) => (
+                  <section key={g.m} className="pc-hol-month">
+                    <h3>
+                      {g.label} <span className="muted">· {g.rows.length}</span>
+                    </h3>
+                    <ul>
+                      {g.rows.map((r) => {
+                        const when = whenText(r.date, today);
+                        return (
+                          <li key={r.id} className={`pc-hol-row${r.date < today ? " is-past" : ""}${r.date === today ? " is-today" : ""}`}>
+                            <button type="button" className="pc-hol-open" onClick={() => setDetail(r.date)}>
+                              <span className="pc-hol-date">
+                                <strong>{Number(r.date.slice(-2))}</strong>
+                                <span>{weekdayShort(r.date)}</span>
+                              </span>
+                              <span className="pc-hol-name">
+                                <strong>{r.name}</strong>
+                                {r.region && <span className="muted">{r.region} only</span>}
+                              </span>
+                              {when && <span className="pc-hol-when">{when}</span>}
+                            </button>
+                            {editor && editable.has(r.id) && (
+                              <span className="pc-hol-actions">
+                                <button type="button" className="btn-ghost btn-tiny" onClick={() => setEditing(holidays.find((h) => h.id === r.id) ?? null)}>
+                                  Edit
+                                </button>
+                                <ActionButton
+                                  className="btn-ghost btn-tiny"
+                                  toastError
+                                  success={`Removed ${r.name}.`}
+                                  onAction={() => removeHoliday(replaceHolidays, state.holidays, actor, r.id)}
+                                >
+                                  Remove
+                                </ActionButton>
+                              </span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                ))}
               </div>
-            ))}
-            {monthCells(cursor.year, cursor.month).map((date, index) => (date ? dayCell(date) : <div key={`blank-${index}`} />))}
-          </div>
-        )}
-
-        {view === "list" && (
-          <>
-            <div className="hol-filters">
-              <label className="filter-label">
-                Search
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Holiday name…" />
-              </label>
-              <label className="filter-label">
-                Type
-                <select value={kind} onChange={(e) => setKind(e.target.value as "" | Kind)}>
-                  <option value="">All holidays</option>
-                  <option value="public">Public</option>
-                  <option value="regional">Regional</option>
-                  <option value="optional">Optional</option>
-                  <option value="weekly">Weekly offs</option>
-                </select>
-              </label>
-              <label className="filter-label">
-                Month
-                <select value={month} onChange={(e) => setMonth(e.target.value)}>
-                  <option value="">All</option>
-                  {MONTHS.map((m, i) => (
-                    <option key={m} value={String(i + 1).padStart(2, "0")}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="filter-label">
-                Year
-                <select value={cursor.year} onChange={(e) => setCursor({ ...cursor, year: Number(e.target.value) })}>
-                  {[cursor.year - 1, cursor.year, cursor.year + 1].map((y) => (
-                    <option key={y} value={y}>
-                      {y}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="filter-label">
-                Region
-                <select value={region} onChange={(e) => setRegion(e.target.value)}>
-                  <option value="">All</option>
-                  <option value="national">Whole country</option>
-                  {regions.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {(q || kind || month || region) && (
-                <button type="button" className="btn-ghost btn-tiny" onClick={() => (setQ(""), setKind(""), setMonth(""), setRegion(""))}>
-                  Clear
+              {passed > 0 && (
+                <button type="button" className="link-btn pc-hol-past" onClick={() => setShowPast(!showPast)}>
+                  {showPast ? "Hide past holidays" : `Show ${passed} past ${passed === 1 ? "holiday" : "holidays"}`}
                 </button>
               )}
+            </>
+          ))}
+
+        {view === "calendar" && (
+          <>
+            <div className="holiday-year">
+              {Array.from({ length: 12 }, (_, m) => (
+                <section key={m} className="holiday-mini">
+                  <div className="holiday-mini-title">{MONTHS[m]}</div>
+                  <div className="cal cal-mini">
+                    {WEEKDAYS.map((label) => (
+                      <div key={label} className="cal-head">
+                        {label[0]}
+                      </div>
+                    ))}
+                    {monthCells(year, m).map((date, i) => (date ? dayCell(date) : <div key={`b-${i}`} />))}
+                  </div>
+                </section>
+              ))}
             </div>
-            <DataTable
-              headers={["Date", "Day", "Holiday", "Type", ...(editor ? [""] : [])]}
-              rows={listRows.map((r) => [
-                formatShortDate(r.date),
-                parseISODate(r.date).toLocaleDateString("en-US", { weekday: "short" }),
-                <button key="n" type="button" className="link-btn" onClick={() => setDetail(r.date)}>
-                  {r.name}
-                </button>,
-                r.kind === "optional" ? (
-                  <StatusBadge key="t" status={r.pick ? `Optional · ${r.pick.toLowerCase()}` : "Optional"} tone="info" literal keepCase />
-                ) : r.kind === "weekly" ? (
-                  <StatusBadge key="t" status="Weekly off" tone="neutral" literal keepCase />
-                ) : (
-                  <StatusBadge key="t" status={r.kind === "regional" ? `Regional · ${r.region}` : "Public"} tone="ok" literal keepCase />
-                ),
-                ...(editor
-                  ? [
-                      (r.kind === "public" || r.kind === "regional") && editable.has(r.id) ? (
-                        <span key="a" className="form-actions" style={{ marginTop: 0 }}>
-                          <button type="button" className="btn-ghost btn-tiny" onClick={() => setEditing(holidays.find((h) => h.id === r.id) ?? null)}>
-                            Edit
-                          </button>
-                          <ActionButton
-                            className="btn-ghost btn-tiny"
-                            toastError
-                            success={`Removed ${r.name}.`}
-                            onAction={() => removeHoliday(replaceHolidays, state.holidays, actor, r.id)}
-                          >
-                            Remove
-                          </ActionButton>
-                        </span>
-                      ) : (
-                        ""
-                      ),
-                    ]
-                  : []),
-              ])}
-              empty={<EmptyState title="No holidays" description={q || kind || month || region ? "Nothing matches the filters." : `Nothing listed for ${cursor.year}.`} />}
-            />
+            <p className="muted holiday-legend">
+              <span className="hol-swatch is-holiday" /> Public holiday
+              {optionalRows.length > 0 && (
+                <>
+                  <span className="hol-swatch is-optional" /> Optional
+                </>
+              )}
+              <span className="hol-swatch is-weekly" /> Weekly off
+            </p>
           </>
         )}
-
-        {view === "year" && (
-          <div className="holiday-year">
-            {Array.from({ length: 12 }, (_, m) => (
-              <section key={m} className="holiday-mini">
-                <button type="button" className="link-btn holiday-mini-title" onClick={() => (setCursor({ year: cursor.year, month: m }), setView("month"))}>
-                  {MONTHS[m]}
-                </button>
-                <div className="cal cal-mini">
-                  {WEEKDAYS.map((label) => (
-                    <div key={label} className="cal-head">
-                      {label[0]}
-                    </div>
-                  ))}
-                  {monthCells(cursor.year, m).map((date, i) => (date ? dayCell(date, true) : <div key={`b-${i}`} />))}
-                </div>
-              </section>
-            ))}
-          </div>
-        )}
-
-        <p className="muted holiday-legend">
-          {publicCount} public · {yearRows.length - publicCount} optional in {cursor.year}
-          <span className="hol-swatch is-holiday" /> Public
-          {regions.length > 0 && (
-            <>
-              <span className="hol-swatch is-regional" /> Regional
-            </>
-          )}
-          <span className="hol-swatch is-optional" /> Optional
-          <span className="hol-swatch is-picked" /> Selected
-          <span className="hol-swatch is-weekly" /> Weekly off
-        </p>
       </Card>
-      {viewingOwn && <OptionalHolidaysCard />}
+
+      {viewingOwn ? (
+        <OptionalHolidaysCard />
+      ) : (
+        optionalRows.length > 0 && (
+          <Card title={`Optional holidays · ${countryName(country)}`}>
+            <ul className="pc-hol-optlist">
+              {optionalRows.map((r) => (
+                <li key={r.id}>
+                  <strong>{r.name}</strong>
+                  <span className="muted">
+                    {formatShortDate(r.date)} · select by {formatShortDate(pickDeadline(optionalByDate.get(r.date)!))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )
+      )}
 
       {detail && detailOptional && <OptionalHolidayDialog holiday={detailOptional} onClose={() => setDetail(null)} />}
       {detail && !detailOptional && (
@@ -423,20 +369,12 @@ export function HolidaysPage() {
           }
         />
       )}
-      {icsOpen && (
-        <IcsPicker
-          rows={yearRows}
-          year={cursor.year}
-          country={country}
-          viewingOwn={viewingOwn}
-          onClose={() => setIcsOpen(false)}
-        />
-      )}
+      {icsOpen && <IcsPicker rows={icsRows} year={year} country={country} viewingOwn={viewingOwn} onClose={() => setIcsOpen(false)} />}
       {editing && (
         <HolidayEditor
           holiday={editing === "new" ? undefined : editing}
           country={country}
-          defaultDate={view === "month" ? `${cursor.year}-${String(cursor.month + 1).padStart(2, "0")}-01` : `${cursor.year}-01-01`}
+          defaultDate={thisYear ? today : `${year}-01-01`}
           onClose={() => setEditing(null)}
           onSave={(input) => saveHoliday(replaceHolidays, state.holidays, actor, input)}
         />
@@ -545,7 +483,6 @@ function IcsPicker({ rows, year, country, viewingOwn, onClose }: { rows: Row[]; 
   return (
     <Dialog open title={`Add to my calendar · ${year}`} onClose={onClose}>
       <div className="stack">
-        <p className="muted">Pick the holidays to add. You get an .ics file for Google, Outlook or Apple Calendar.</p>
         <div className="row-gap hol-ics-tools">
           <label className="hol-check">
             <input type="checkbox" checked={upcomingOnly} onChange={(e) => setUpcomingOnly(e.target.checked)} /> Upcoming only

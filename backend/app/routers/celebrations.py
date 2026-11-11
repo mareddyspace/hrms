@@ -74,6 +74,11 @@ def _next_in(d: date, start: date, end: date) -> date | None:
     return None
 
 
+def is_milestone(years: int) -> bool:
+    """Work anniversaries worth a calendar entry: 1, 3 and 5 years, then every five (10, 15, 20, ...)."""
+    return years in (1, 3, 5) or (years >= 10 and years % 5 == 0)
+
+
 def circle_ids(db: Session, viewer_id: str | None) -> set[str]:
     """The people around the viewer: themselves, their manager, teammates under the same manager and their direct
     reports. The calendar shows only these, not the whole company (nor everyone who happens to have a sign-in)."""
@@ -114,7 +119,7 @@ def celebrations(db: Session, today: date, days: int, viewer_id: str | None, yea
         if emp.joining_date and has_started(emp, today):
             occ = _next_in(emp.joining_date, start, end)
             years = occ.year - emp.joining_date.year if occ else 0
-            if occ and years >= 1:
+            if occ and years >= 1 and (not circle or is_milestone(years)):
                 out.append(CelebrationOut(**base, kind="anniversary", date=occ, years=years))
             elif year is None and today - timedelta(days=7) <= emp.joining_date <= today:
                 out.append(CelebrationOut(**base, kind="new_joiner", date=emp.joining_date))
@@ -127,7 +132,8 @@ def list_celebrations(db: DbSession, user: CurrentUserDep,
                       days: Annotated[int, Query(ge=1, le=31)] = 7,
                       year: Annotated[int | None, Query(ge=2000, le=2100)] = None,
                       circle: bool = False) -> list[CelebrationOut]:
-    """circle=true: only the people around you (circle_ids), for the calendar; otherwise the whole company."""
+    """circle=true: only the people around you (circle_ids), for the calendar, with milestone work anniversaries
+    only (is_milestone); otherwise the whole company."""
     emp = user.employee
     today = today_for(emp) if emp else date.today()
     return celebrations(db, today, days, user.employee_id, year, circle)

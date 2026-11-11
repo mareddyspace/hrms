@@ -228,7 +228,7 @@ export function AnalyticsPage() {
 
   if (!hasModuleAccess(demoProfile, "analytics") && !canSystem) {
     return (
-      <Page title="Analytics" subtitle="Workforce intelligence">
+      <Page title="Analytics">
         <EmptyState title="Not authorized" description="You don't have access to Analytics." />
       </Page>
     );
@@ -248,7 +248,7 @@ export function AnalyticsPage() {
 
   if (!analyticsTabs.length) {
     return (
-      <Page title="Analytics" subtitle="Workforce intelligence">
+      <Page title="Analytics">
         <EmptyState title="Nothing to show" description="No reports available." />
       </Page>
     );
@@ -748,7 +748,7 @@ function AiCopilotChat() {
   }, [history]);
 
   return (
-    <Page title={activeAgent ? activeAgent.name : "AI Copilot"} subtitle={activeAgent?.purpose}>
+    <Page title={activeAgent ? activeAgent.name : "AI Copilot"}>
       {requestedAgent && !activeAgent && <Banner message={{ tone: "err", text: "This assistant is unavailable or you do not have access to it." }} />}
       {chatError && <Banner message={{ tone: "err", text: chatError }} />}
       <div className="copilot-layout">
@@ -886,7 +886,7 @@ export function AiAgentsPage() {
   const status = useAgentStatus();
   if (!hasModuleAccess(demoProfile, "agents")) {
     return (
-      <Page title="AI Agents" subtitle="Autonomous assistants">
+      <Page title="AI Agents">
         <EmptyState title="Not authorized" description="You don't have access to AI Agents." />
       </Page>
     );
@@ -898,14 +898,13 @@ export function AiAgentsPage() {
   const hrLetters = canManageLetters(demoProfile);
   const startersFor = (id: string) => (id === "document" && !hrLetters ? SELF_DOCUMENT_STARTERS : (AGENT_STARTERS[id] ?? []));
   return (
-    <Page title="AI Agents" subtitle="Assistants that answer from the data you are allowed to see">
+    <Page title="AI Agents">
       {status.error && <Banner message={{ tone: "warn", text: "Couldn't check the AI service. Assistants use the built-in answers for now." }} />}
       {agents.length === 0 && <EmptyState title="No agents switched on" description="An admin can switch agents on in AI settings." />}
       <div className="agent-grid">
         {agents.map((agent) => (
           <Card key={agent.id} title={agent.name} className="agent-card">
             <p className="note">{agent.audience}</p>
-            <p>{agent.purpose}</p>
             <dl className="info-grid">
               <div className="info-fact">
                 <dt>Availability</dt>
@@ -1307,7 +1306,7 @@ export function PayrollPage() {
 
   if (!hasModuleAccess(demoProfile, "payroll") && !hasModuleAccess(demoProfile, "*")) {
     return (
-      <Page title="Payroll" subtitle="Payroll providers">
+      <Page title="Payroll">
         <EmptyState title="Not authorized" description="You don't have access to Payroll." />
       </Page>
     );
@@ -1393,7 +1392,7 @@ export function AdminPage() {
 
   if (!hasModuleAccess(demoProfile, "administration") && !hasModuleAccess(demoProfile, "*")) {
     return (
-      <Page title="Administration" subtitle="Platform configuration">
+      <Page title="Administration">
         <EmptyState title="Not authorized" description="You don't have access to Administration." />
       </Page>
     );
@@ -1519,7 +1518,6 @@ export function AdminPage() {
                       />
                       <span>
                         <strong>{p.label}</strong>
-                        <span className="note">{p.description}</span>
                       </span>
                     </label>
                   </li>

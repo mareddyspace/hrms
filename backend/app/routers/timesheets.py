@@ -277,6 +277,67 @@ def delete_entry(entry_id: str, request: Request, db: DbSession, user: CurrentUs
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+class DayEntriesIn(BaseModel):
+    """Every block of one day, as the day editor shows them (replaces what was logged that day)."""
+
+    entries: list[TimesheetEntryIn]
+
+
+@router.put("/days/{work_date}/entries", response_model=list[TimesheetEntryOut])
+def save_day_entries(work_date: date, body: DayEntriesIn, request: Request, db: DbSession, user: CurrentUserDep) -> list[TimesheetEntry]:
+    """Save a day's blocks in one go (the day editor's "Save draft"): the day's entries are replaced by these, with the
+    same rules as adding one block (day editable, project member, no overlaps, no hours on leave or a holiday). Nothing
+    is changed when any block is refused."""
+    emp = me(user)
+    if len(body.entries) > 40:
+        raise HTTPException(422, "A day can have at most 40 blocks.")
+    if any(e.work_date != work_date for e in body.entries):
+        raise HTTPException(422, "Every block must be on the day being saved.")
+    week = _editable_week(db, emp, work_date)
+    old = rules.day_entries(db, emp.id, work_date)
+    for entry in old:
+        if rules.entry_in_locked_week(db.get(TimesheetWeek, entry.week_id), entry):
+            raise HTTPException(409, "That week can't be changed.")
+    before = [_entry_snapshot(e) for e in old]
+    for entry in old:
+        db.delete(entry)
+    db.flush()
+    saved: list[TimesheetEntry] = []
+    total = 0.0
+    for item in body.entries:
+        project = _project_for(db, emp, item.project_id)
+        hours, start, brk = _entry_times(db, emp.id, item)  # overlaps are checked against the blocks already placed
+        total += hours
+        if total > rules.MAX_DAY_HOURS:
+            raise HTTPException(422, "A day can't have more than 24 h.")
+        entry = TimesheetEntry(
+            id=f"tse-{uuid.uuid4().hex[:12]}",
+            employee_id=emp.id,
+            week_id=week.id,
+            work_date=work_date,
+            project_id=project.id,
+            task=item.task.strip(),
+            hours=hours,
+            billable=project.billable_default if item.billable is None else item.billable,
+            comment=(item.comment or "").strip() or None,
+            start_minute=start,
+            break_minutes=brk,
+            work_type=item.work_type,
+            work_id=item.work_id if item.work_type in ("ticket", "task") else None,
+            work_label=(item.work_label or "").strip() or None,
+        )
+        db.add(entry)
+        db.flush()
+        saved.append(entry)
+    record_audit(
+        db, actor_id=user.id, action="timesheet_day_saved", entity="timesheet_day", entity_id=f"{emp.id}:{work_date}",
+        subject_id=emp.id, before={"entries": before}, after={"entries": [_entry_snapshot(e) for e in saved]},
+        ip=client_ip(request),
+    )
+    db.commit()
+    return saved
+
+
 @router.post("/weeks/{week_start}/submit", response_model=TimesheetWeekOut)
 def submit_week(week_start: date, db: DbSession, user: CurrentUserDep) -> TimesheetWeekOut:
     """Retired: timesheets are daily (today only, 9 h, after check-out; POST /timesheets/days/{date}/submit).

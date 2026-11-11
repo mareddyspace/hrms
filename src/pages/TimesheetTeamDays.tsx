@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { ActionButton, Card, StatusBadge } from "../components/ui.tsx";
+import { ActionButton, Card } from "../components/ui.tsx";
 import {
   addDaysISO,
   blockingLeave,
@@ -25,13 +25,22 @@ import {
   type WeekEntryOut,
 } from "../api/syncTimeSheets.ts";
 import { approvalProgressText } from "../api/approvalProgress.ts";
-import { DAY_STATUS_LABEL, dayTargetFor, halfDayTargetFor, useDayRecords, type DayStatus } from "../data/timesheetDays.ts";
+import { DAY_STATUS_LABEL, DAY_STATUS_TONE, dayTargetFor, halfDayTargetFor, useDayRecords, type DayStatus, type TimeTone } from "../data/timesheetDays.ts";
 import "./timesheetDays.css";
+import "../styles/time.css";
+
+/** A status chip in the shared time legend (src/styles/time.css). */
+export function ToneChip({ tone, label, dashed = false, title }: { tone: TimeTone; label: string; dashed?: boolean; title?: string }) {
+  return (
+    <span className={`tz-chip tz-tone-${tone}${dashed ? " dashed" : ""}`} title={title}>
+      {label}
+    </span>
+  );
+}
 
 export function DayStatusBadge({ status }: { status: string }) {
   const key = (status in DAY_STATUS_LABEL ? status : "draft") as DayStatus;
-  const tone = key === "approved" ? "ok" : key === "submitted" ? "warn" : key === "rejected" ? "danger" : key === "reopened" ? "info" : "neutral";
-  return <StatusBadge status={DAY_STATUS_LABEL[key]} tone={tone} literal />;
+  return <ToneChip tone={DAY_STATUS_TONE[key]} label={DAY_STATUS_LABEL[key]} />;
 }
 
 export function HoursMeter({ total, target }: { total: number; target: number }) {
@@ -450,18 +459,22 @@ export function TimesheetTeamDays({ weekStart, onWaitingCount }: { weekStart: st
                             {workDays(person).map((d) => {
                               const key = `${person.employee_id}|${d.work_date}`;
                               const label = parseISODate(d.work_date).toLocaleDateString("en-IN", { weekday: "short", day: "numeric" });
+                              const missing = d.status === "draft" && d.work_date < today && d.target_hours > 0 && d.total_hours < d.target_hours;
+                              const tone: TimeTone =
+                                d.day_kind === "leave" ? "purple" : d.day_kind === "holiday" ? "blue" : d.day_kind === "weekend" && !d.id ? "grey"
+                                  : missing ? "red" : d.status === "draft" && d.work_date > today ? "none" : DAY_STATUS_TONE[(d.status in DAY_STATUS_TONE ? d.status : "draft") as DayStatus];
                               return (
                                 <button
                                   key={d.work_date}
                                   type="button"
-                                  className={`ts-day-chip ${d.status} ${open === key ? "open" : ""}`}
+                                  className={`ts-day-chip tz-day tz-tone-${tone} ${d.status} ${open === key ? "open" : ""}`}
                                   title={`${label}: ${DAY_STATUS_LABEL[(d.status in DAY_STATUS_LABEL ? d.status : "draft") as DayStatus]}${d.decision_note ? ` · “${d.decision_note}”` : ""}`}
                                   onClick={() => setOpen(open === key ? null : key)}
                                   aria-expanded={open === key}
                                 >
                                   <span>{label}</span>
                                   <strong>{d.day_kind === "leave" || d.day_kind === "holiday" ? d.day_kind : formatHoursAmount(d.total_hours)}</strong>
-                                  <span>{d.status === "draft" ? (d.work_date > today ? "" : "Draft") : DAY_STATUS_LABEL[d.status as DayStatus] ?? d.status}</span>
+                                  <span>{d.status === "draft" ? (d.work_date > today ? "" : missing ? "Missing" : "Draft") : DAY_STATUS_LABEL[d.status as DayStatus] ?? d.status}</span>
                                 </button>
                               );
                             })}

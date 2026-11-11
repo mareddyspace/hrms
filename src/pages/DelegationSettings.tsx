@@ -84,9 +84,6 @@ export function DelegationSettings({ myId }: { myId: string }) {
           {formatShortDate(current.to)} · {scopeText(current.scope)}
         </p>
       )}
-      <p className="muted">
-        Your delegate decides your team's requests for the dates you set — never their own.
-      </p>
       <div className="form-grid">
         <Field label="Delegate to">
           <select value={delegateId} onChange={(e) => setDelegateId(e.target.value)}>

@@ -930,6 +930,22 @@ export function BenefitsPage() {
         </Card>
       )}
       {tab === "plans" && (
+        <Card title="My plans" action={myEnrollments.length ? <span className="muted">{activeMine.length} active</span> : undefined}>
+          <DataTable
+            headers={["Plan", "Status", "Effective", "Dependents covered"]}
+            rows={myEnrollments.map((e) => [
+              <button key={e.id} type="button" className="quiet-link" onClick={() => setPlanId(e.planId)}>
+                {e.planName}
+              </button>,
+              <StatusBadge key={`${e.id}-s`} status={e.status} literal />,
+              e.effective || "—",
+              coveredBy(e.planName, e.employeeId).join(", ") || "—",
+            ])}
+            empty={<EmptyState title="No plans yet" description="Plans you join show here with their status." />}
+          />
+        </Card>
+      )}
+      {tab === "plans" && (
         <div className="mgr-home-grid">
           <Card title={`Benefit plans · ${country || "All countries"}`}>
             <div className="form-actions" style={{ justifyContent: "flex-start", flexWrap: "wrap", marginTop: 0 }}>
@@ -1121,7 +1137,6 @@ export function BenefitsPage() {
           </Card>
 
           <Card title="Life events">
-            <p className="note">A life event lets you change benefits for 30 days from the event date.</p>
             {myEvent ? (
               <p className="note">Your {myEvent.type.toLowerCase()} window is open until {formatShortDate(myEvent.windowEnds)}.</p>
             ) : (
@@ -1409,7 +1424,6 @@ export function DocumentsLettersPage() {
             </Card>
           )}
           <Card title="My documents">
-            <p className="note">Your uploaded and HR-issued documents, with preview, versions and download, are in the Document library tab.</p>
             <button type="button" className="btn-ghost" onClick={() => setTab("library")}>
               Open my document library
             </button>

@@ -286,6 +286,13 @@ export function apiRemoveTimeEntry(entryId: string): Promise<string | null> {
   }, timeMirror);
 }
 
+/** Day editor: replace every block of one day in one go (nothing changes when any block is refused). */
+export function apiSaveDay(date: string, blocks: { projectId: string; input: Omit<TimeEntry, "id"> }[]): Promise<string | null> {
+  return mutate(
+    () => apiPut<TimesheetEntryOut[]>(`/timesheets/days/${encodeURIComponent(date)}/entries`, { entries: blocks.map((b) => entryBody(b.projectId, b.input)) }),
+    timeMirror,
+  );
+}
 
 /** Submit one day (needs 9 h, 4.5 h on half-day leave) to the manager. */
 export function apiSubmitDay(date: string): Promise<string | null> {

@@ -96,7 +96,7 @@ export function HeadcountAnalysisCard({ scopePeople, allPeople, today }: { scope
 }
 
 export function NewHiringCard({ people, today }: { people: PersonRecord[]; today: string }) {
-  const [days, setDays] = useState("30");
+  const [days, setDays] = useState("90");
   const joiners = useMemo(() => recentJoiners(people, today, Number(days)), [people, today, days]);
   const trend = useMemo(() => monthlyHires(people, today, 12), [people, today]);
   const pick = useChartSelection();

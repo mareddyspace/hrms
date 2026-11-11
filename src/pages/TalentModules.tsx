@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type InputHTMLAttributes } from "react";
+import { SavedTick, SuccessFlash } from "../components/SuccessFlash.tsx";
 import { getPerson } from "../data/peopleLocal.ts";
 import { hasStarted } from "../data/peopleData.ts";
 import { API_ENABLED } from "../api/client.ts";
@@ -1655,6 +1656,13 @@ export function PerformancePage() {
     ? pickedCycleId
     : (cycles.find((c) => cycleStatusOf(talent, c.id) === "Active") ?? cycles[0])?.id ?? "";
   const [notice, setNotice] = useState<Notice>(null);
+  /** The goal whose progress was just saved: shows a tick beside its slider for a moment. */
+  const [savedGoal, setSavedGoal] = useState<string | null>(null);
+  useEffect(() => {
+    if (!savedGoal) return;
+    const timer = window.setTimeout(() => setSavedGoal(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [savedGoal]);
   const [goalForm, setGoalForm] = useState<GoalInput | null>(null);
   const [removing, setRemoving] = useState<{ id: string; title: string } | null>(null);
   const [cycleOpen, setCycleOpen] = useState(false);
@@ -1751,7 +1759,7 @@ export function PerformancePage() {
         }}
       />
 
-      <Banner message={notice} />
+      <SuccessFlash message={notice} onDismiss={() => setNotice(null)} />
       {loading && <LoadingState label="Loading performance data…" />}
 
       {tab === "goals" && !loading && (
@@ -1785,18 +1793,24 @@ export function PerformancePage() {
                 `${g.weight ?? 0}%`,
                 g.period || "—",
                 <Progress key={g.id} value={g.progress} />,
-                <ProgressSlider
-                  aria-label="Goal progress"
-                  key={`${g.id}-p`}
-                  min={0}
-                  max={100}
-                  value={g.progress}
-                  disabled={!editable}
-                  onCommit={(v, settled) => talentAction(() => updateGoalProgress(actor, g.id, v), (res) => {
-                    settled();
-                    run(res, `Progress for "${g.title}" saved: ${v}%.`);
-                  })}
-                />,
+                <span key={`${g.id}-p`} className="ws-slider-cell">
+                  <ProgressSlider
+                    aria-label="Goal progress"
+                    min={0}
+                    max={100}
+                    value={g.progress}
+                    disabled={!editable}
+                    onCommit={(v, settled) => talentAction(() => updateGoalProgress(actor, g.id, v), (res) => {
+                      settled();
+                      run(res, `Progress for "${g.title}" saved: ${v}%.`);
+                      if (!res) {
+                        setSavedGoal(g.id);
+                        notify(`Goal progress saved: ${v}%.`);
+                      }
+                    })}
+                  />
+                  {savedGoal === g.id && <SavedTick />}
+                </span>,
                 editable ? (
                   <span key={`${g.id}-e`} className="row-gap">
                   <button
@@ -1865,7 +1879,10 @@ export function PerformancePage() {
           actor={actor}
           onClose={(message) => {
             setGoalForm(null);
-            if (message) setNotice({ tone: "ok", text: message });
+            if (message) {
+              setTab("goals");
+              setNotice({ tone: "ok", text: message });
+            }
           }}
         />
       )}
@@ -1885,8 +1902,14 @@ export function PerformancePage() {
                 <li key={r.id} className="feedback-item">
                   <div className="row-between">
                     <strong>{r.employeeName}</strong>
-                    <StatusBadge status={r.selfStatus} literal />
+                    <StatusBadge status={r.selfStatus} literal tone={r.selfStatus === "Submitted" ? "ok" : undefined} />
                   </div>
+                  {r.selfStatus === "Submitted" && r.employeeId === actor.id && (
+                    <div className="ws-done-note">
+                      <span aria-hidden="true">✓</span>
+                      <span>Submitted to your manager. You will see their assessment once your rating is released.</span>
+                    </div>
+                  )}
                   <AssessmentEditor
                     key={`${r.id}-${r.selfStatus}`}
                     text={r.selfText}
@@ -1921,8 +1944,14 @@ export function PerformancePage() {
                   <li key={r.id} className="feedback-item">
                     <div className="row-between">
                       <strong>{r.employeeName}</strong>
-                      <StatusBadge status={r.managerStatus} literal />
+                      <StatusBadge status={r.managerStatus} literal tone={r.managerStatus === "Submitted" ? "ok" : undefined} />
                     </div>
+                    {r.managerStatus === "Submitted" && writer && !isOwn && (
+                      <div className="ws-done-note">
+                        <span aria-hidden="true">✓</span>
+                        <span>Assessment submitted. HR can now release the rating.</span>
+                      </div>
+                    )}
                     {isOwn && !r.released ? (
                       <p className="muted">Shared when your rating is released.</p>
                     ) : (
@@ -2112,6 +2141,9 @@ export function LearningPage() {
   const [category, setCategory] = useState("");
   const [mandatoryOnly, setMandatoryOnly] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  /** Courses enrolled in on this visit: they show as Enrolled straight away, before the list refreshes. */
+  const [justEnrolled, setJustEnrolled] = useState<Set<string>>(() => new Set());
+  const markEnrolled = (...ids: string[]) => setJustEnrolled((prev) => new Set([...prev, ...ids]));
   // New expiry dates typed for renewals of certifications without a fixed validity.
   const [renewExpiry, setRenewExpiry] = useState<Record<string, string>>({});
   const [credIds, setCredIds] = useState<Record<string, string>>({});
@@ -2125,7 +2157,7 @@ export function LearningPage() {
 
   const today = todayISO();
   const mine = talent.enrollments.filter((e) => e.employeeId === employee.id);
-  const enrolledCourseIds = new Set(mine.map((e) => e.courseId));
+  const enrolledCourseIds = new Set([...mine.map((e) => e.courseId), ...justEnrolled]);
   const overdue = mine.filter((e) => e.status !== "Completed" && e.due && e.due < today);
   const myCerts = talent.certifications.filter((c) => c.employeeId === employee.id);
   const visibleCerts = hr ? talent.certifications : myCerts;
@@ -2225,7 +2257,17 @@ export function LearningPage() {
         }}
       />
 
-      <Banner message={notice} />
+      <SuccessFlash
+        message={notice}
+        onDismiss={() => setNotice(null)}
+        action={
+          notice?.tone === "ok" && tab !== "mine" && /enrolled/i.test(notice.text) ? (
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => { setTab("mine"); setNotice(null); }}>
+              Go to My learning
+            </button>
+          ) : undefined
+        }
+      />
       {loadingLearning && <LoadingState label="Loading courses and your learning…" />}
 
       {tab === "catalog" && (
@@ -2241,9 +2283,9 @@ export function LearningPage() {
                 c.mandatory ? "Yes" : "No",
                 c.audience,
                 enrolledCourseIds.has(c.id) ? (
-                  <button key={c.id} type="button" className="btn-ghost" disabled>
-                    Enrolled
-                  </button>
+                  <span key={c.id} className={`ws-enrolled${justEnrolled.has(c.id) ? " fresh" : ""}`}>
+                    ✓ {mine.find((e) => e.courseId === c.id)?.status === "Completed" ? "Completed" : "Enrolled"}
+                  </span>
                 ) : !open ? (
                   <span key={c.id} className="muted">Not for your role</span>
                 ) : (
@@ -2253,7 +2295,12 @@ export function LearningPage() {
                     busyLabel="Enrolling…"
                     doneLabel="Enrolled"
                     success={`Enrolled in ${c.title}.`}
-                    onAction={() => talentRun(() => enrollInCourse(demoProfile, c.id), (res) => setNotice(noticeFor(res, `Enrolled in ${c.title}.`)))}
+                    onAction={() =>
+                      talentRun(() => enrollInCourse(demoProfile, c.id), (res) => {
+                        if (!res) markEnrolled(c.id);
+                        setNotice(noticeFor(res, `You're enrolled in ${c.title}. It's now in My learning${c.mandatory ? " as mandatory training" : ""}.`));
+                      })
+                    }
                   >
                     Enroll
                   </ActionButton>
@@ -2300,6 +2347,7 @@ export function LearningPage() {
                   for (const id of missing) {
                     const result = await talentRun(() => enrollInCourse(demoProfile, id), () => {});
                     if (result) { setNotice({ tone: "err", text: result }); return result; }
+                    markEnrolled(id);
                   }
                   setNotice({ tone: "ok", text: `Enrolled in ${missing.length} course${missing.length === 1 ? "" : "s"} from ${p.title}.` });
                   return null;
@@ -2586,7 +2634,7 @@ export function SkillsCareerPage() {
     return out.slice(0, 6);
   }, [gaps, demoProfile, myEnrollments]);
   const enrollFor = (c: Course) =>
-    talentRun(() => enrollInCourse(demoProfile, c.id), (res) => setNotice(noticeFor(res, `Enrolled in ${c.title}. Track it in Learning → My learning.`)));
+    talentRun(() => enrollInCourse(demoProfile, c.id), (res) => setNotice(noticeFor(res, `You're enrolled in ${c.title}. Track it in Learning → My learning.`)));
   const courseAction = (c: Course) => {
     const e = myEnrollments.find((x) => x.courseId === c.id);
     if (e) return <span key={`${c.id}-st`} className="muted">{e.status} · {e.progress}%</span>;
@@ -2618,7 +2666,7 @@ export function SkillsCareerPage() {
         }}
       />
 
-      <Banner message={notice} />
+      <SuccessFlash message={notice} onDismiss={() => setNotice(null)} />
 
       {tab === "interests" && <CareerInterestsPanel me={demoProfile} />}
       {tab === "matches" && <RoleMatchesPanel me={demoProfile} />}

@@ -3,8 +3,9 @@
 Members see their conversations. A restricted thread (hr_confidential / compensation) is also open to HR, and only
 members or HR can be in it. Each new message notifies the other members (one bell item per thread until read).
 
-Who can start a chat with whom (reporting line + HR): everyone can reach their manager, teammates under the same
-manager, the people who report to them (all levels) and HR. HR, super admins and executives can reach anyone.
+Who can start a chat with whom (reporting line + HR): everyone can reach the managers above them (the whole chain),
+teammates under the same manager, the people who report to them (all levels) and HR. Only the HR team (HR_ROLES) can
+reach anyone; executives (the CEO) and admins follow the same reporting-line rule as everyone else.
 Managers can also message their whole team at once (POST /chat/team).
 """
 
@@ -22,7 +23,7 @@ from app.deps import CurrentUserDep, DbSession, client_ip
 from app.models import Account, ChatConversation, ChatMember, ChatMessage, Notification
 from app.services.activity import record_audit
 from app.models import Employee
-from app.services.scope import HR_ROLES
+from app.services.scope import HR_ROLES, manager_chain_ids
 from app.services.sharing import is_hr, now, person_exists, person_name, tell
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -71,11 +72,11 @@ class ContactOut(BaseModel):
     id: str
     name: str
     job_title: str | None
-    relation: str  # manager | teammate | team | hr
+    relation: str  # manager (anyone above you) | teammate | team | hr
 
 
 class ContactsOut(BaseModel):
-    anyone: bool  # HR, super admin and executives can message anyone in the directory
+    anyone: bool  # only the HR team can message anyone in the directory
     contacts: list[ContactOut]
 
 
@@ -83,8 +84,8 @@ class TeamMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
-ANYONE_ROLES = frozenset({"executive", "founder", "cofounder"})
 NOT_ALLOWED = "You can message your manager, teammates, your team and HR."
+GONE = ("Terminated", "Exited")
 
 
 class MessageIn(BaseModel):
@@ -104,7 +105,7 @@ def _role_of(db: Session, person_id: str) -> str | None:
 
 def _contacts(db: Session, user) -> tuple[bool, dict[str, str]]:  # type: ignore[no-untyped-def]
     """(anyone, {person_id: relation}) for the reporting-line + HR rule."""
-    if is_hr(user.account.role) or user.account.role in ANYONE_ROLES:
+    if user.account.role in HR_ROLES:
         return True, {}
     me_emp = user.employee
     out: dict[str, str] = {}
@@ -113,9 +114,11 @@ def _contacts(db: Session, user) -> tuple[bool, dict[str, str]]:  # type: ignore
         out[hr_id] = "hr"
     if me_emp is not None:
         if me_emp.manager_id:
-            for mate in db.scalars(select(Employee.id).where(Employee.manager_id == me_emp.manager_id)):
+            for mate in db.scalars(select(Employee.id).where(Employee.manager_id == me_emp.manager_id,
+                                                             Employee.employment_status.not_in(GONE))):
                 out.setdefault(mate, "teammate")
-            out[me_emp.manager_id] = "manager"
+        for mid in manager_chain_ids(db, me_emp.id):
+            out[mid] = "manager"
         for rid in user.scope.reports:
             out[rid] = "team"
         out.pop(me_emp.id, None)
@@ -172,19 +175,18 @@ def contacts(db: DbSession, user: CurrentUserDep) -> ContactsOut:
     """The people this person may start a chat with (empty list + anyone=true for HR, admins and executives)."""
     _me(user)
     anyone, allowed = _contacts(db, user)
-    people = {e.id: e for e in db.scalars(select(Employee).where(Employee.id.in_(list(allowed) or [""])))}
-    order = {"manager": 0, "team": 1, "teammate": 2, "hr": 3}
+    people = {e.id: e for e in db.scalars(select(Employee).where(Employee.id.in_(list(allowed) or [""]),
+                                                                 Employee.employment_status.not_in(GONE)))}
     rows = [ContactOut(id=pid, name=people[pid].full_name, job_title=people[pid].job_title, relation=rel)
             for pid, rel in allowed.items() if pid in people]
-    return ContactsOut(anyone=anyone, contacts=sorted(rows, key=lambda c: (order.get(c.relation, 9), c.name)))
+    return ContactsOut(anyone=anyone, contacts=sorted(rows, key=lambda c: (c.name.casefold(), c.id)))
 
 
 @router.post("/team", response_model=ConversationOut, status_code=status.HTTP_201_CREATED)
 def message_team(payload: TeamMessageIn, request: Request, db: DbSession, user: CurrentUserDep) -> ConversationOut:
     """A manager messages their whole team at once: one group chat (created once, kept in step with the team)."""
     me, role = _me(user), user.account.role
-    team = list(db.scalars(select(Employee.id).where(Employee.manager_id == me,
-                                                     Employee.employment_status.not_in(("Terminated", "Exited")))))
+    team = list(db.scalars(select(Employee.id).where(Employee.manager_id == me, Employee.employment_status.not_in(GONE))))
     if not team:
         raise HTTPException(409, "Nobody reports to you, so there is no team to message.")
     my_name = person_name(db, me)
@@ -221,8 +223,8 @@ def start_conversation(payload: ConversationIn, request: Request, db: DbSession,
     for pid in others:
         if not person_exists(db, pid):
             raise HTTPException(422, "Pick people from the directory.")
-    if not payload.restricted:  # a confidential thread with HR is always allowed (it must include HR)
-        _check_allowed(db, user, others)
+    # A confidential thread may add HR (and admins with HR access); everyone else in it must be on your contact list.
+    _check_allowed(db, user, [p for p in others if not (payload.restricted and is_hr(_role_of(db, p) or ""))])
     if payload.kind == "direct" and len(others) != 1:
         raise HTTPException(422, "A direct chat is between two people.")
     restricted = payload.restricted or None

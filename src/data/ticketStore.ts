@@ -47,6 +47,7 @@ export interface Ticket {
   /** Backend mode: what the server says this person may do. */
   serverCanPlan?: boolean;
   serverNextStatuses?: TicketStatus[];
+  serverCanTake?: boolean;
 }
 
 export interface TicketTask {
@@ -330,6 +331,7 @@ interface TicketOut {
   names: Record<string, string>;
   can_plan: boolean;
   next_statuses: TicketStatus[];
+  can_take?: boolean;
 }
 
 /** Names the server sent for people the portal directory may not list. */
@@ -357,6 +359,7 @@ function fromApi(t: TicketOut): Ticket {
     updatedAt: t.updated_at,
     serverCanPlan: t.can_plan,
     serverNextStatuses: t.next_statuses,
+    serverCanTake: t.can_take ?? false,
   };
 }
 
@@ -468,7 +471,35 @@ export function nextStatuses(t: Ticket, actor: TicketActor): TicketStatus[] {
     if (t.status === "Waiting") out.push("In progress", "Resolved");
   }
   if (t.requesterId === actor.id && t.status === "Resolved") out.push("Closed", "In progress");
+  // The requester may withdraw a ticket nobody has started on yet.
+  if (t.requesterId === actor.id && t.status === "Open") out.push("Closed");
   return [...new Set(out)];
+}
+
+const HR_ROLES = ["hr", "hr_admin", "hrbp", "admin", "super_admin"];
+const IT_TYPES: TicketType[] = ["IT support", "Access request"];
+
+/** Who may pick up an open ticket they don't own: a manager of the requester or owner, the IT desk, HR for HR queries. */
+export function canTakeTicket(t: Ticket, actor: TicketActor): boolean {
+  if (!isOpenTicket(t) || t.assigneeId === actor.id) return false;
+  if (t.serverCanTake !== undefined) return t.serverCanTake;
+  if (isAdmin(actor.role) && IT_TYPES.includes(t.type)) return true;
+  if (HR_ROLES.includes(actor.role) && t.type === "HR query") return true;
+  return managesPerson(actor.id, t.requesterId) || managesPerson(actor.id, t.assigneeId);
+}
+
+/** Response target by priority, counted from when the ticket was raised (used when no deadline is set). */
+export const SLA_HOURS: Record<TicketPriority, number> = { urgent: 8, high: 24, medium: 72, low: 120 };
+
+/** The date a ticket should be done by (its deadline, or the priority's SLA) and how it stands today. */
+export function ticketTarget(t: Ticket, now = new Date()): { date: string; source: "deadline" | "sla"; state: "met" | "ok" | "soon" | "late" } {
+  const date = t.due ?? new Date(Date.parse(t.createdAt) + SLA_HOURS[t.priority] * 3_600_000).toISOString().slice(0, 10);
+  const source = t.due ? "deadline" : "sla";
+  if (!isOpenTicket(t)) return { date, source, state: "met" };
+  const today = now.toISOString().slice(0, 10);
+  if (date < today) return { date, source, state: "late" };
+  const days = Math.round((Date.parse(`${date}T00:00:00`) - Date.parse(`${today}T00:00:00`)) / 86_400_000);
+  return { date, source, state: days <= 1 ? "soon" : "ok" };
 }
 
 function nextId(list: Ticket[]): string {
@@ -562,7 +593,9 @@ export async function assignTicket(id: string, assigneeId: string, actor: Ticket
   if (!t) return "Ticket not found.";
   if (!isOpenTicket(t)) return "This ticket is already resolved.";
   if (t.assigneeId === assigneeId) return "Already assigned to that person.";
-  if (!canAssignTo(actor, assigneeId)) return "You can only assign to your team.";
+  if (assigneeId === actor.id ? !canTakeTicket(t, actor) : !canAssignTo(actor, assigneeId)) {
+    return assigneeId === actor.id ? "You can't take this ticket." : "You can only assign to your team.";
+  }
   if (API_ENABLED) return send(`/${enc(id)}/assign`, "POST", { assignee_id: assigneeId });
   patch(id, (x) => ({
     ...x,
@@ -691,6 +724,18 @@ export async function setTicketSubOwner(id: string, personId: string, actor: Tic
   }));
   if (!error && personId && personId !== actor.id && t) {
     pushPersonTaskAlert({ recipientId: personId, title: `Sub-owner on ${id}`, body: `${t.title} — from ${actor.fullName}.`, href: href(id) });
+  }
+  return error;
+}
+
+export async function setTicketPriority(id: string, priority: TicketPriority, actor: TicketActor): Promise<string | null> {
+  const t = getTickets().find((x) => x.id === id);
+  if (!t) return "Ticket not found.";
+  if (t.priority === priority) return "The ticket already has that priority.";
+  if (API_ENABLED) return send(`/${enc(id)}/priority`, "PUT", { priority });
+  const error = plan(id, actor, `Priority ${t.priority} → ${priority}.`, (x) => ({ ...x, priority }));
+  if (!error && t.assigneeId && t.assigneeId !== actor.id) {
+    pushPersonTaskAlert({ recipientId: t.assigneeId, title: `${id} is now ${priority} priority`, body: t.title, href: href(id) });
   }
   return error;
 }

@@ -53,6 +53,7 @@ import { holidaysForCountry, holidaysForPerson, type CountryCode } from "../mode
 import { usePortal } from "../store.tsx";
 import { useChartTip } from "./dashboards/chartKit.tsx";
 import "./policies.css";
+import "../styles/workspace.css";
 
 /** Engineering teammates who appear across the portal but can't sign in. */
 const TEAMMATE_IDS = ["emp-anu", "emp-kabir", "emp-diya"];
@@ -227,6 +228,7 @@ function MyPoliciesView({
   acks: ReturnType<typeof getPolicyAcks>;
 }) {
   const [query, setQuery] = useState("");
+  const [show, setShow] = useState<"all" | "due" | "done">("all");
   const [params, setParams] = useSearchParams();
   // Copilot source links and notifications open a policy directly: /policies?policy=<id>
   // Open something useful straight away: the linked policy, else the first one waiting on me, else the first listed.
@@ -260,7 +262,23 @@ function MyPoliciesView({
     p.title.toLowerCase().includes(q) ||
     p.category.toLowerCase().includes(q) ||
     p.sections.some((s) => s.heading.toLowerCase().includes(q) || s.rules.some((r) => r.toLowerCase().includes(q)));
-  const filtered = entries.filter((e) => matches(e.policy));
+  /** due: waiting on my acknowledgement; done: acknowledged; read: no acknowledgement needed. */
+  const ackState = (e: Entry): { state: "due" | "done" | "read"; label: string } => {
+    if (e.kind === "managed") {
+      const ack = myAckOf(e.managed, userId);
+      if (needsMyAck(e.managed, userId)) return { state: "due", label: ack ? "Re-acknowledge" : "Acknowledge" };
+      if (e.managed.requiresAck) return { state: "done", label: "Acknowledged" };
+      return { state: "read", label: "For reference" };
+    }
+    const ack = latestAck(acks, userId, e.policy.id);
+    const current = ack?.version === e.policy.version;
+    if (e.policy.mandatory && !current) return { state: "due", label: ack ? "Re-acknowledge" : "Acknowledge" };
+    if (current) return { state: "done", label: "Acknowledged" };
+    return { state: "read", label: "For reference" };
+  };
+  const dueCount = entries.filter((e) => ackState(e).state === "due").length;
+  const doneCount = entries.filter((e) => ackState(e).state === "done").length;
+  const filtered = entries.filter((e) => matches(e.policy) && (show === "all" || (show === "due" ? ackState(e).state === "due" : ackState(e).state === "done")));
   const open = entries.find((e) => e.policy.id === openId) ?? null;
   const categories = [...POLICY_CATEGORIES, ...new Set(entries.map((e) => e.policy.category).filter((c) => !(POLICY_CATEGORIES as readonly string[]).includes(c)))];
 
@@ -283,42 +301,49 @@ function MyPoliciesView({
           </ul>
         </Card>
       )}
-      {builtinPending + managedPending.length > 0 && (
-        <p className="note warn pol-alert">
-          {builtinPending + managedPending.length}{" "}
-          {builtinPending + managedPending.length === 1 ? "policy needs" : "policies need"} your acknowledgement.
-        </p>
-      )}
+      <div className="ws-pol-summary" role="group" aria-label="Filter policies">
+        {(
+          [
+            ["all", "All policies", entries.length],
+            ["due", "Needs acknowledgement", Math.max(dueCount, builtinPending + managedPending.length)],
+            ["done", "Acknowledged", doneCount],
+          ] as const
+        ).map(([id, label, n]) => (
+          <button key={id} type="button" className={`ws-pol-stat${show === id ? " active" : ""}${id === "due" && n > 0 ? " due" : ""}`} aria-pressed={show === id} onClick={() => setShow(id)}>
+            <strong>{n}</strong>
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
       <div className="pol-layout">
         <Card className="pol-list-card">
           <input className="pol-search" value={query} placeholder="Search policies and rules…" aria-label="Search policies" onChange={(e) => setQuery(e.target.value)} />
-          {filtered.length === 0 && <p className="empty">No policy matches that search.</p>}
+          {filtered.length === 0 && <p className="empty">{show === "all" ? "No policy matches that search." : show === "due" ? "Nothing waiting on you." : "No acknowledged policies yet."}</p>}
           {categories.map((cat) => {
             const inCat = filtered.filter((e) => e.policy.category === cat);
             if (inCat.length === 0) return null;
             return (
-              <div key={cat} className="pol-group">
-                <h3>{cat}</h3>
+              <div key={cat} className="ws-pol-group">
+                <h3>
+                  <span>{cat}</span>
+                  <span className="ws-pol-group-n">{inCat.length}</span>
+                </h3>
                 <ul>
                   {inCat.map((e) => {
                     const p = e.policy;
-                    let badge = null;
-                    if (e.kind === "managed") {
-                      const ack = myAckOf(e.managed, userId);
-                      if (needsMyAck(e.managed, userId)) badge = <span className="pol-badge pol-badge-due">{ack ? "Re-acknowledge" : "Acknowledge"}</span>;
-                      else if (e.managed.requiresAck) badge = <span className="pol-badge pol-badge-ok">Acknowledged</span>;
-                    } else {
-                      const ack = latestAck(acks, userId, p.id);
-                      const current = ack?.version === p.version;
-                      if (p.mandatory && !current) badge = <span className="pol-badge pol-badge-due">{ack ? "Re-acknowledge" : "Acknowledge"}</span>;
-                      else if (current) badge = <span className="pol-badge pol-badge-ok">Acknowledged</span>;
-                    }
+                    const st = ackState(e);
                     return (
                       <li key={p.id}>
-                        <button type="button" className={p.id === openId ? "pol-row active" : "pol-row"} aria-current={p.id === openId ? "true" : undefined} onClick={() => openPolicy(p.id)}>
-                          <span className="pol-row-title" title={p.title}>{p.title}</span>
-                          <span className="pol-row-ver">v{p.version}</span>
-                          <span className="pol-row-status">{badge}</span>
+                        <button type="button" className={`ws-pol-row${p.id === openId ? " active" : ""}`} aria-current={p.id === openId ? "true" : undefined} onClick={() => openPolicy(p.id)}>
+                          <span className={`ws-pol-dot ${st.state}`} aria-hidden="true" />
+                          <span className="ws-pol-main">
+                            <span className="ws-pol-title">{p.title}</span>
+                            <span className="ws-pol-meta">
+                              <span>Version {p.version}</span>
+                              {p.mandatory && <span>Mandatory</span>}
+                            </span>
+                          </span>
+                          <span className={`ws-pol-chip ${st.state}`}>{st.label}</span>
                         </button>
                       </li>
                     );

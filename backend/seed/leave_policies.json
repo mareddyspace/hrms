@@ -132,6 +132,24 @@
       },
       "US": {
         "quota": 1
+      },
+      "GB": {
+        "quota": 1
+      },
+      "AU": {
+        "quota": 1
+      },
+      "CA": {
+        "quota": 1
+      },
+      "AE": {
+        "quota": 1
+      },
+      "SA": {
+        "quota": 1
+      },
+      "DE": {
+        "quota": 1
       }
     }
   }

@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActionButton, Banner, Card, Field, Page, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
+import { ActionButton, Banner, Card, Field, Page, StatusBadge, StatusPill, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { managementChain } from "../demoAccounts.ts";
 import type { BackdatedLeavePermission, LeaveCode, LeaveHalf } from "../model.ts";
 import {
+  addDaysISO,
   backdatedPermissionFor,
   formatShortDate,
   holidaySet,
@@ -26,7 +27,6 @@ import {
   LeaveBalanceCards,
   LeavePoliciesCard,
   LeaveRequestHistory,
-  UpcomingHolidaysCard,
   dateProblem,
   dayBreakdown,
   localPolicyLines,
@@ -35,6 +35,7 @@ import {
 import { scheduleForEmployee } from "../data/workSchedule.ts";
 import { taskPersonById } from "../data/taskTeam.ts";
 import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../data/requestTemplates.ts";
+import "../styles/home-leave-desk.css";
 
 const PERMISSION_LABEL: Record<BackdatedLeavePermission["status"], { text: string; tone: "ok" | "warn" | "danger" | "neutral" | "info" }> = {
   pending: { text: "Awaiting approval", tone: "warn" },
@@ -146,6 +147,21 @@ export function LeavePage() {
   const teamLeave = state.leaveRequests.filter(
     (r) => r.status === "pending" && (API_ENABLED ? Boolean(apiLeaveMeta.get(r.id)?.canDecide) : canDecideFor(r.employeeId)),
   );
+  // Managers: who in their team is away today or in the next two weeks (approved or still pending).
+  const soon = addDaysISO(today, 14);
+  const teamAway = state.leaveRequests
+    .filter(
+      (r) =>
+        r.employeeId !== employee.id &&
+        (r.status === "approved" || r.status === "pending") &&
+        r.to >= today &&
+        r.from <= soon &&
+        (API_ENABLED ? Boolean(apiLeaveMeta.get(r.id)?.canDecide) || canDecideFor(r.employeeId) : canDecideFor(r.employeeId)),
+    )
+    .sort((a, b) => a.from.localeCompare(b.from));
+  const isManager = teamAway.length > 0 || teamLeave.length > 0 || people.some((p) => p.id !== employee.id && canDecideFor(p.id));
+  const upcomingHolidays = myHolidays.filter((h) => h.date >= today).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 6);
+  const balanceAfter = selectedRow && code !== "unpaid" ? selectedRow.available - days : null;
   const nameOf = (id: string) =>
     demoAccounts.find((a) => a.id === id)?.fullName ?? taskPersonById(id)?.fullName ?? getPerson(id)?.fullName ?? id;
   /** Working days of a request: the server's count in backend mode. */
@@ -318,11 +334,71 @@ export function LeavePage() {
           </button>
         ))}
       </div>
+      <nav className="lvx-holidays" aria-label="Upcoming holidays">
+        <span className="lvx-holidays-label">Upcoming holidays · {employee.countryName || "your country"}</span>
+        {upcomingHolidays.length ? (
+          upcomingHolidays.map((h) => (
+            <Link key={h.id} to="/holidays" className="lvx-holiday-chip">
+              <strong>{formatShortDate(h.date)}</strong>
+              <span>{h.name}</span>
+            </Link>
+          ))
+        ) : (
+          <span className="muted">No more holidays this year</span>
+        )}
+        <Link to="/holidays" className="lvx-holidays-all">
+          Holiday calendar
+        </Link>
+      </nav>
       <div className="leave-layout">
         <div className="leave-main">
           <Card title={`Leave balance · ${year}`}>
             {/* Unpaid leave has no balance; it stays available in the apply form below. */}
             <LeaveBalanceCards rows={yearRows.filter((row) => row.code !== "unpaid")} showPending={hasApprover} onApply={startApply} />
+          </Card>
+          {isManager && (
+            <Card
+              title={`Team on leave · next 2 weeks (${teamAway.length})`}
+              action={
+                <Link to="/leave/team-calendar" className="quiet-link">
+                  Team calendar
+                </Link>
+              }
+            >
+              {teamAway.length === 0 ? (
+                <p className="note">Nobody in your team is away in the next two weeks.</p>
+              ) : (
+                <ul className="lvx-team-list">
+                  {teamAway.slice(0, 10).map((r) => (
+                    <li key={r.id}>
+                      <strong>{nameOf(r.employeeId)}</strong>
+                      <span className="muted">
+                        {leaveName(r.code, r.employeeId)} · {r.from === r.to ? formatShortDate(r.from) : `${formatShortDate(r.from)} – ${formatShortDate(r.to)}`}
+                        {r.from <= today ? " · away today" : ""}
+                      </span>
+                      <StatusPill status={r.status} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {teamAway.length > 10 && <p className="note">Showing 10 of {teamAway.length}.</p>}
+            </Card>
+          )}
+          <Card title={hasApprover ? `My requests · ${year}` : `My leave · ${year}`}>
+            <LeaveRequestHistory
+              requests={requests}
+              leaveName={(c) => leaveTable.find((row) => row.code === c)?.name ?? leaveName(c, employee.id)}
+              daysOf={(request) =>
+                daysOf(request.id, () =>
+                  workingDays(request.from, request.to, holidaySet(myHolidays), activeOffs, request.half),
+                )
+              }
+              approverName={approver?.fullName}
+              today={today}
+              onWithdraw={(request) => setLeaveStatus(request.id, "withdrawn")}
+              onChange={API_ENABLED ? (request, input) => changeLeave(request.id, input) : undefined}
+              onError={(error) => setMessage({ tone: "err", text: error })}
+            />
           </Card>
           {(teamPermissions.length > 0 || teamLeave.length > 0) && (
             <Card title={`Team approvals (${teamPermissions.length + teamLeave.length})`}>
@@ -438,22 +514,6 @@ export function LeavePage() {
             </Card>
           )}
 
-          <Card title={hasApprover ? `My requests · ${year}` : `My leave · ${year}`}>
-            <LeaveRequestHistory
-              requests={requests}
-              leaveName={(c) => leaveTable.find((row) => row.code === c)?.name ?? leaveName(c, employee.id)}
-              daysOf={(request) =>
-                daysOf(request.id, () =>
-                  workingDays(request.from, request.to, holidaySet(myHolidays), activeOffs, request.half),
-                )
-              }
-              approverName={approver?.fullName}
-              today={today}
-              onWithdraw={(request) => setLeaveStatus(request.id, "withdrawn")}
-              onChange={API_ENABLED ? (request, input) => changeLeave(request.id, input) : undefined}
-              onError={(error) => setMessage({ tone: "err", text: error })}
-            />
-          </Card>
         </div>
         <div className="leave-side" ref={formRef}>
         <Card title={hasApprover ? "Apply for leave" : "Record leave"}>
@@ -566,14 +626,36 @@ export function LeavePage() {
                 />
               </Field>
             </div>
-            <p className="note">
-              Working days: <strong>{days}</strong>
-              {half ? ` (${halfLabel(half)})` : ""}
-              {breakdown.calendar > 0 && !half
-                ? ` of ${breakdown.calendar} ${breakdown.calendar === 1 ? "day" : "days"}${breakdown.weekends ? ` · ${breakdown.weekends} weekly off` : ""}${breakdown.holidays.length ? ` · ${breakdown.holidays.length} holiday` : ""}`
-                : ""}
-              .
-            </p>
+            <div className="lvx-summary" aria-live="polite">
+              <div>
+                <span>Dates</span>
+                <strong>
+                  {from && to ? (from === to ? formatShortDate(from) : `${formatShortDate(from)} – ${formatShortDate(to)}`) : "—"}
+                </strong>
+              </div>
+              <div>
+                <span>Leave days</span>
+                <strong>
+                  {days}
+                  {half ? ` · ${halfLabel(half)}` : ""}
+                </strong>
+              </div>
+              <div>
+                <span>Available</span>
+                <strong>{selectedRow && code !== "unpaid" ? selectedRow.available : "—"}</strong>
+              </div>
+              <div className={balanceAfter != null && balanceAfter < 0 ? "is-over" : undefined}>
+                <span>Balance after</span>
+                <strong>{balanceAfter != null ? balanceAfter : "Unpaid"}</strong>
+              </div>
+            </div>
+            {breakdown.calendar > 0 && !half && (
+              <p className="muted lvx-breakdown">
+                {breakdown.calendar} calendar {breakdown.calendar === 1 ? "day" : "days"}
+                {breakdown.weekends ? ` · ${breakdown.weekends} weekly off` : ""}
+                {breakdown.holidays.length ? ` · ${breakdown.holidays.length} holiday` : ""} · weekly offs and holidays are not counted
+              </p>
+            )}
             {breakdown.holidays.length > 0 && (
               <p className="muted">Not counted: {breakdown.holidays.map((h) => `${h.name} (${formatShortDate(h.date)})`).join(", ")}</p>
             )}
@@ -604,7 +686,6 @@ export function LeavePage() {
             <Banner message={message} />
           </form>
         </Card>
-          <UpcomingHolidaysCard holidays={myHolidays} today={today} countryName={employee.countryName || "your country"} />
           {leaveTable.some((row) => row.code === "optional" && row.quota > 0) && <OptionalHolidaysCard />}
           <LeavePoliciesCard
             countryName={employee.countryName || "your country"}

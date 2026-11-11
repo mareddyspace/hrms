@@ -30,6 +30,7 @@ import {
 import { courseCatalog, courseOpenTo, courseRequiredFor, skillProfileFor, type getTalentState } from "../../data/talentLocal.ts";
 import { careerTarget } from "../../data/careerProfile.ts";
 import { dayStatusOf, waitingDays } from "../../data/timesheetDays.ts";
+import { buildMore, type CopilotContextMore, type MoreSources } from "./moreContext.ts";
 
 type TalentState = ReturnType<typeof getTalentState>;
 
@@ -61,6 +62,10 @@ export interface CopilotSources {
   compReview?: CopilotContext["compReview"];
   summarisePerson?: CopilotContext["summarisePerson"];
   assist?: CopilotContext["assist"];
+  /** Attendance sessions and corrections, tickets and trips (for moreContext.ts). */
+  attendance?: MoreSources["attendance"];
+  tickets?: MoreSources["tickets"];
+  trips?: MoreSources["trips"];
 }
 
 /** Monday of the week that holds `iso`. */
@@ -73,7 +78,7 @@ function navHas(viewer: DemoAccount, id: string): boolean {
   return viewer.navAccess.includes("*" as never) || viewer.navAccess.includes(id as never);
 }
 
-export function buildCopilotContext(src: CopilotSources): CopilotContext {
+export function buildCopilotContext(src: CopilotSources): CopilotContextMore {
   const { today, viewer, employee, state, people } = src;
   const year = today.slice(0, 4);
   const me = employee.id;
@@ -339,5 +344,18 @@ export function buildCopilotContext(src: CopilotSources): CopilotContext {
     ],
     summarisePerson: src.summarisePerson,
     assist: src.assist,
+    more: buildMore({
+      today,
+      viewer,
+      employee,
+      state,
+      people,
+      teamIds,
+      orgWide: src.orgWide,
+      weeklyOffDays: src.weeklyOffDays,
+      attendance: src.attendance,
+      tickets: src.tickets,
+      trips: src.trips,
+    }),
   };
 }

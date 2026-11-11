@@ -179,7 +179,7 @@ def test_personal_email_code_also_goes_to_the_new_address(client, jordan, echo):
 
 def test_bad_requests_and_hr_needs_no_code(client, jordan, farhan):
     assert client.post(f"{P}/me/otp", headers=jordan, json={"changes": {"mobile": "abc"}}).status_code == 422
-    assert client.post(f"{P}/me/otp", headers=jordan, json={"changes": {"first_name": "X"}}).status_code == 422
+    assert client.post(f"{P}/me/otp", headers=jordan, json={"changes": {"job_title": "CTO"}}).status_code == 422
     assert client.post(f"{P}/me/otp", headers=jordan, json={"field": "mobile", "new_value": "+44 7700 900111"}).status_code == 422
     # HR editing someone else keeps the HR flow.
     target = _me(client, jordan).id

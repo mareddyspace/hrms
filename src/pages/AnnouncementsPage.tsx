@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ActionButton, Banner, DataTable, EmptyState, Field, Page, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
+import { ActionButton, Banner, EmptyState, Field, Page, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
 import { canManageAnnouncement, isHrRole, type Announcement, type AnnouncementScope } from "../data/collabData.ts";
 import { getCollabState, markAnnouncementRead, setAnnouncementState, subscribeCollab } from "../data/collabLocal.ts";
 import {
@@ -28,9 +28,10 @@ import { managementChain } from "../demoAccounts.ts";
 import { TIMEZ_COUNTRIES } from "../model.ts";
 import { usePortal } from "../store.tsx";
 import "./announcements.css";
+import "../styles/comms.css";
 
 const countryLabel = (code: string) => TIMEZ_COUNTRIES.find((c) => c.code === code)?.name ?? code;
-type Show = "all" | "unread" | "ack" | "pinned";
+type Show = "all" | "unread" | "ack";
 
 function dateLabel(iso?: string): string {
   if (!iso) return "";
@@ -38,6 +39,26 @@ function dateLabel(iso?: string): string {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
+
+/** "Today", "Yesterday", "3 days ago", then the date. */
+function relativeLabel(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days > 1 && days < 7) return `${days} days ago`;
+  return dateLabel(iso);
+}
+
+function initials(name: string): string {
+  const parts = name.replace(/[^\p{L}\s]/gu, " ").trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() || "?";
+}
+
+const catClass = (c: string) => `annx-${c.toLowerCase().replace(/[^a-z]+/g, "-")}`;
+const stamp = (a: Announcement) => a.publishedAt ?? a.scheduledFor ?? "";
 
 function audienceLabel(a: Announcement): string {
   if (a.scope === "Company") return "Everyone";
@@ -55,7 +76,7 @@ export function AnnouncementsPage() {
   const [category, setCategory] = useState("");
   const [show, setShow] = useState<Show>("all");
   const [stateFilter, setStateFilter] = useState("");
-  const [selectedId, setSelectedId] = useState(() => params.get("id") ?? "");
+  const [openId, setOpenId] = useState(() => params.get("id") ?? "");
   const [error, setError] = useState("");
   const [composing, setComposing] = useState(false);
   const blank = { title: "", body: "", scope: "Company" as AnnouncementScope, audience: "", mustAcknowledge: false, category: "General", pinned: false };
@@ -69,17 +90,13 @@ export function AnnouncementsPage() {
     if (!API_ENABLED) ensureLocalAnnouncements();
   }, []);
 
-  const linked = params.get("id");
-  useEffect(() => {
-    if (linked) setSelectedId(linked);
-  }, [linked]);
-
   const actor = { id: employee.id, fullName: employee.fullName, role: demoProfile.role };
   const me = employee.id;
   const canManage = (a: Announcement) => (API_ENABLED ? !!a.serverCanManage : canManageAnnouncement(a, actor));
   const isRead = (a: Announcement) => a.readBy.includes(me);
   const isAcked = (a: Announcement) => (API_ENABLED ? !!a.acknowledged : !!a.acknowledgedBy?.includes(me));
   const needsAck = (a: Announcement) => !!a.mustAcknowledge && a.state === "Published" && !isAcked(a) && !canManage(a);
+  const isImportant = (a: Announcement) => !!a.pinned || needsAck(a);
   const leadsAll = isHrRole(demoProfile.role) || ["admin", "super_admin"].includes(demoProfile.role);
   const leadsTeam = ["manager", "executive"].includes(demoProfile.role);
   const scopeOptions: AnnouncementScope[] = leadsAll ? ["Company", "Country", "Department"] : ["Team"];
@@ -103,23 +120,17 @@ export function AnnouncementsPage() {
       mine
         .filter((a) => !category || (a.category ?? "General") === category)
         .filter((a) => !stateFilter || a.state === stateFilter)
-        .filter((a) =>
-          show === "unread" ? a.state === "Published" && !isRead(a) : show === "ack" ? needsAck(a) : show === "pinned" ? !!a.pinned : true,
-        )
+        .filter((a) => (show === "unread" ? a.state === "Published" && !isRead(a) : show === "ack" ? needsAck(a) : true))
         .filter((a) => !needle || `${a.title} ${a.body} ${a.author} ${a.category ?? ""} ${audienceLabel(a)}`.toLowerCase().includes(needle))
-        .sort((a, b) => {
-          if (!!b.pinned !== !!a.pinned) return b.pinned ? 1 : -1;
-          return (b.publishedAt ?? b.scheduledFor ?? "").localeCompare(a.publishedAt ?? a.scheduledFor ?? "");
-        }),
+        .sort((a, b) => stamp(b).localeCompare(stamp(a))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mine, category, stateFilter, show, needle],
   );
+  const important = list.filter(isImportant);
+  const latest = list.filter((a) => !isImportant(a));
   const unreadCount = mine.filter((a) => a.state === "Published" && !isRead(a)).length;
   const ackCount = mine.filter(needsAck).length;
-  const pinnedCount = mine.filter((a) => a.pinned).length;
   const categoryCount = (c: string) => mine.filter((a) => (a.category ?? "General") === c).length;
-
-  const selected = list.find((a) => a.id === selectedId) ?? mine.find((a) => a.id === selectedId) ?? list[0] ?? null;
 
   function markRead(a: Announcement) {
     if (a.state !== "Published" || isRead(a)) return;
@@ -127,20 +138,32 @@ export function AnnouncementsPage() {
     else markAnnouncementRead(a.id, me);
   }
 
-  // Opening a post marks it read.
+  // A link to one post (?id=…, from a notification or the dashboard) opens it, marks it read and scrolls to it.
+  const linked = params.get("id");
   useEffect(() => {
-    if (selected) markRead(selected);
+    if (!linked) return;
+    const a = mine.find((x) => x.id === linked);
+    if (!a) return;
+    setOpenId(a.id);
+    markRead(a);
+    requestAnimationFrame(() => document.getElementById(`ann-${a.id}`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id]);
+  }, [linked, mine.length]);
 
-  function open(a: Announcement) {
-    setSelectedId(a.id);
+  function toggle(a: Announcement) {
     setError("");
+    setReceipts(null);
     if (params.get("id")) {
       const next = new URLSearchParams(params);
       next.delete("id");
       setParams(next, { replace: true });
     }
+    if (openId === a.id) {
+      setOpenId("");
+      return;
+    }
+    setOpenId(a.id);
+    markRead(a);
   }
 
   async function save(state: "Draft" | "Published") {
@@ -164,7 +187,7 @@ export function AnnouncementsPage() {
     setComposing(false);
     setComposeError("");
     setDraft(blank);
-    if (newId) setSelectedId(newId);
+    if (newId) setOpenId(newId);
     notify(state === "Published" ? "Announcement published." : "Draft saved.");
     return true;
   }
@@ -184,6 +207,127 @@ export function AnnouncementsPage() {
     if (typeof rows === "string") return rows;
     setReceipts({ id, rows });
     return null;
+  }
+
+  function actions(a: Announcement) {
+    const manage = canManage(a);
+    const canUnread = !API_ENABLED && a.state === "Published" && isRead(a) && !a.mustAcknowledge;
+    if (!needsAck(a) && !manage && !canUnread && !error) return null;
+    return (
+      <div className="annx-actions">
+        {error && <Banner message={{ tone: "err", text: error }} />}
+        <div className="row-gap">
+          {needsAck(a) && (
+            <ActionButton
+              className="btn"
+              success="Acknowledged."
+              toastError
+              onAction={() => (API_ENABLED ? apiAcknowledgeAnnouncement(a.id) : acknowledgeLocal(a.id, me))}
+            >
+              Acknowledge
+            </ActionButton>
+          )}
+          {canUnread && (
+            <ActionButton className="btn-ghost" success="Marked unread." onAction={() => markUnreadLocal(a.id, me)}>
+              Mark unread
+            </ActionButton>
+          )}
+          {manage && (
+            <>
+              <ActionButton
+                className="btn-ghost"
+                success={a.pinned ? "Unpinned." : "Pinned to the top."}
+                toastError
+                onAction={() => (API_ENABLED ? apiPinAnnouncement(a.id, !a.pinned) : pinLocal(a.id, !a.pinned, actor))}
+              >
+                {a.pinned ? "Unpin" : "Pin"}
+              </ActionButton>
+              {a.state !== "Published" && (
+                <ActionButton className="btn" toastError onAction={() => changeState(a, "Published")}>
+                  Publish
+                </ActionButton>
+              )}
+              {a.state === "Published" && (
+                <ActionButton className="btn-ghost" busyLabel="Moving…" doneLabel="Moved" toastError onAction={() => changeState(a, "Draft")}>
+                  Move to drafts
+                </ActionButton>
+              )}
+              {a.receipts && (
+                <ActionButton className="btn-ghost" busyLabel="Loading…" doneLabel="Loaded" toastError onAction={() => toggleReceipts(a.id)}>
+                  {receipts?.id === a.id ? "Hide receipts" : `Receipts · ${a.receipts.read}/${a.receipts.audience} read`}
+                </ActionButton>
+              )}
+            </>
+          )}
+        </div>
+        {receipts?.id === a.id && (
+          <ul className="annx-receipts" aria-label="Read receipts">
+            {receipts.rows.map((r) => (
+              <li key={r.personId}>
+                <span className="annx-receipt-who">
+                  <strong>{r.name}</strong>
+                  <small>{r.department}</small>
+                </span>
+                <span className={r.readAt ? "annx-ok" : "muted"}>{r.readAt ? `Read ${dateLabel(r.readAt)}` : "Not read"}</span>
+                {a.mustAcknowledge && (
+                  <span className={r.acknowledgedAt ? "annx-ok" : "muted"}>
+                    {r.acknowledgedAt ? `Acknowledged ${dateLabel(r.acknowledgedAt)}` : "Not acknowledged"}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  function card(a: Announcement) {
+    const unread = a.state === "Published" && !isRead(a);
+    const open = openId === a.id;
+    const cat = a.category ?? "General";
+    const when = stamp(a);
+    return (
+      <article
+        key={a.id}
+        id={`ann-${a.id}`}
+        className={`annx-card ${catClass(cat)}${open ? " open" : ""}${unread ? " unread" : ""}${a.pinned ? " pinned" : ""}`}
+      >
+        <div className="annx-top">
+          <span className="annx-tag">
+            <span className="annx-dot" aria-hidden />
+            {cat}
+          </span>
+          {a.pinned && <span className="annx-flag pin">Pinned</span>}
+          {needsAck(a) && <span className="annx-flag ack">Acknowledge</span>}
+          {a.mustAcknowledge && isAcked(a) && <span className="annx-flag done">Acknowledged</span>}
+          {a.state !== "Published" && <StatusBadge status={a.state} />}
+          <time className="annx-when" dateTime={when} title={dateLabel(when)}>
+            {a.state === "Scheduled" && a.scheduledFor ? `Scheduled ${dateLabel(a.scheduledFor)}` : relativeLabel(when)}
+          </time>
+        </div>
+        <h3 className="annx-title">
+          <button type="button" aria-expanded={open} onClick={() => toggle(a)}>
+            {unread && <span className="annx-unread" aria-label="Unread" />}
+            {a.title}
+          </button>
+        </h3>
+        <p className={open ? "annx-body" : "annx-body clamp"}>{a.body}</p>
+        <div className="annx-foot">
+          <span className="annx-author">
+            <span className="annx-avatar" aria-hidden>
+              {initials(a.author)}
+            </span>
+            {a.author}
+          </span>
+          <span className="annx-aud">To {audienceLabel(a)}</span>
+          <button type="button" className="annx-more" aria-expanded={open} onClick={() => toggle(a)}>
+            {open ? "Show less" : "Read more"}
+          </button>
+        </div>
+        {open && actions(a)}
+      </article>
+    );
   }
 
   return (
@@ -278,19 +422,19 @@ export function AnnouncementsPage() {
         </form>
       )}
 
-      <div className="ann-toolbar">
+      <div className="annx-bar">
         <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search announcements" aria-label="Search announcements" />
-        <div className="ann-chips" role="group" aria-label="Show">
+        <div className="annx-seg" role="group" aria-label="Show">
           {(
             [
-              ["all", `All · ${mine.length}`],
-              ["unread", `Unread · ${unreadCount}`],
-              ["ack", `To acknowledge · ${ackCount}`],
-              ["pinned", `Pinned · ${pinnedCount}`],
+              ["all", "All", mine.length],
+              ["unread", "Unread", unreadCount],
+              ["ack", "To acknowledge", ackCount],
             ] as const
-          ).map(([id, label]) => (
-            <button key={id} type="button" className={show === id ? "chip-btn active" : "chip-btn"} aria-pressed={show === id} onClick={() => setShow(id)}>
+          ).map(([id, label, n]) => (
+            <button key={id} type="button" className={show === id ? "active" : ""} aria-pressed={show === id} onClick={() => setShow(id)}>
               {label}
+              <span className="annx-count">{n}</span>
             </button>
           ))}
         </div>
@@ -303,154 +447,61 @@ export function AnnouncementsPage() {
           </select>
         )}
       </div>
-      <div className="ann-chips ann-cats" role="group" aria-label="Category">
-        <button type="button" className={!category ? "chip-btn active" : "chip-btn"} onClick={() => setCategory("")}>
-          All categories
+      <div className="annx-cats" role="group" aria-label="Category">
+        <button type="button" className={!category ? "annx-cat active" : "annx-cat"} aria-pressed={!category} onClick={() => setCategory("")}>
+          All
         </button>
         {ANNOUNCEMENT_CATEGORIES.filter((c) => categoryCount(c) > 0 || c === category).map((c) => (
-          <button key={c} type="button" className={category === c ? "chip-btn active" : "chip-btn"} aria-pressed={category === c} onClick={() => setCategory(c)}>
-            <span className={`ann-dot cat-${c.toLowerCase()}`} aria-hidden /> {c} · {categoryCount(c)}
+          <button
+            key={c}
+            type="button"
+            className={`annx-cat ${catClass(c)}${category === c ? " active" : ""}`}
+            aria-pressed={category === c}
+            onClick={() => setCategory(category === c ? "" : c)}
+          >
+            <span className="annx-dot" aria-hidden />
+            {c}
+            <span className="annx-count">{categoryCount(c)}</span>
           </button>
         ))}
       </div>
 
-      <div className="ann-layout">
-        <section className="ann-list" aria-label="Announcements">
-          {list.length === 0 ? (
-            <EmptyState
-              title="No announcements here"
-              action={
-                q || category || show !== "all" || stateFilter ? (
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    onClick={() => {
-                      setQ("");
-                      setCategory("");
-                      setShow("all");
-                      setStateFilter("");
-                    }}
-                  >
-                    Clear filters
-                  </button>
-                ) : undefined
-              }
-            />
-          ) : (
-            <ul>
-              {list.map((a) => {
-                const unread = a.state === "Published" && !isRead(a);
-                return (
-                  <li key={a.id}>
-                    <button type="button" className={`ann-item${selected?.id === a.id ? " active" : ""}${unread ? " unread" : ""}`} onClick={() => open(a)}>
-                      <span className="ann-item-top">
-                        <span className={`ann-tag cat-${(a.category ?? "General").toLowerCase()}`}>{a.category ?? "General"}</span>
-                        {a.pinned && <span className="ann-pin">Pinned</span>}
-                        {needsAck(a) && <span className="ann-ack">Acknowledge</span>}
-                        {a.state !== "Published" && <StatusBadge status={a.state} />}
-                        <span className="ann-date">{dateLabel(a.publishedAt ?? a.scheduledFor)}</span>
-                      </span>
-                      <strong className="ann-title">
-                        {unread && <span className="ann-unread-dot" aria-label="Unread" />}
-                        {a.title}
-                      </strong>
-                      <span className="ann-snippet">{a.body.replace(/\s+/g, " ").slice(0, 110)}</span>
-                      <span className="ann-meta">
-                        {a.author} · {audienceLabel(a)}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+      {list.length === 0 ? (
+        <EmptyState
+          title="No announcements here"
+          action={
+            q || category || show !== "all" || stateFilter ? (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  setQ("");
+                  setCategory("");
+                  setShow("all");
+                  setStateFilter("");
+                }}
+              >
+                Clear filters
+              </button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <>
+          {important.length > 0 && (
+            <section className="annx-section" aria-label="Pinned and important">
+              <h2 className="annx-h">Pinned and important</h2>
+              <div className="annx-grid featured">{important.map(card)}</div>
+            </section>
           )}
-        </section>
-
-        <article className="ann-reader" aria-label="Announcement">
-          {!selected ? (
-            <EmptyState title="Pick an announcement" />
-          ) : (
-            <>
-              <header className="ann-reader-head">
-                <div className="ann-item-top">
-                  <span className={`ann-tag cat-${(selected.category ?? "General").toLowerCase()}`}>{selected.category ?? "General"}</span>
-                  {selected.pinned && <span className="ann-pin">Pinned</span>}
-                  <StatusBadge status={selected.state} />
-                  {selected.mustAcknowledge && (
-                    <StatusBadge status={isAcked(selected) ? "Acknowledged" : "Must acknowledge"} tone={isAcked(selected) ? "ok" : "warn"} />
-                  )}
-                </div>
-                <h2>{selected.title}</h2>
-                <p className="muted">
-                  {selected.author} · {audienceLabel(selected)}
-                  {selected.publishedAt ? ` · ${dateLabel(selected.publishedAt)}` : ""}
-                  {selected.scheduledFor ? ` · Scheduled ${dateLabel(selected.scheduledFor)}` : ""}
-                </p>
-              </header>
-              <div className="ann-body">{selected.body}</div>
-
-              {error && <Banner message={{ tone: "err", text: error }} />}
-
-              <div className="ann-actions">
-                {needsAck(selected) && (
-                  <ActionButton
-                    className="btn"
-                    success="Acknowledged."
-                    toastError
-                    onAction={() => (API_ENABLED ? apiAcknowledgeAnnouncement(selected.id) : acknowledgeLocal(selected.id, me))}
-                  >
-                    Acknowledge
-                  </ActionButton>
-                )}
-                {!API_ENABLED && selected.state === "Published" && isRead(selected) && !selected.mustAcknowledge && (
-                  <ActionButton className="btn-ghost" success="Marked unread." onAction={() => markUnreadLocal(selected.id, me)}>
-                    Mark unread
-                  </ActionButton>
-                )}
-                {canManage(selected) && (
-                  <>
-                    <ActionButton
-                      className="btn-ghost"
-                      success={selected.pinned ? "Unpinned." : "Pinned to the top."}
-                      toastError
-                      onAction={() => (API_ENABLED ? apiPinAnnouncement(selected.id, !selected.pinned) : pinLocal(selected.id, !selected.pinned, actor))}
-                    >
-                      {selected.pinned ? "Unpin" : "Pin"}
-                    </ActionButton>
-                    {selected.state !== "Published" && (
-                      <ActionButton className="btn" toastError onAction={() => changeState(selected, "Published")}>
-                        Publish
-                      </ActionButton>
-                    )}
-                    {selected.state === "Published" && (
-                      <ActionButton className="btn-ghost" busyLabel="Moving…" doneLabel="Moved" toastError onAction={() => changeState(selected, "Draft")}>
-                        Move to drafts
-                      </ActionButton>
-                    )}
-                    {selected.receipts && (
-                      <ActionButton className="btn-ghost" busyLabel="Loading…" doneLabel="Loaded" toastError onAction={() => toggleReceipts(selected.id)}>
-                        {receipts?.id === selected.id ? "Hide receipts" : `Receipts · ${selected.receipts.read}/${selected.receipts.audience} read`}
-                      </ActionButton>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {receipts?.id === selected.id && (
-                <DataTable
-                  headers={["Name", "Department", "Read", ...(selected.mustAcknowledge ? ["Acknowledged"] : [])]}
-                  rows={receipts.rows.map((r) => [
-                    r.name,
-                    r.department,
-                    r.readAt ? dateLabel(r.readAt) : "—",
-                    ...(selected.mustAcknowledge ? [r.acknowledgedAt ? dateLabel(r.acknowledgedAt) : "—"] : []),
-                  ])}
-                />
-              )}
-            </>
+          {latest.length > 0 && (
+            <section className="annx-section" aria-label="Latest">
+              <h2 className="annx-h">Latest</h2>
+              <div className="annx-grid">{latest.map(card)}</div>
+            </section>
           )}
-        </article>
-      </div>
+        </>
+      )}
     </Page>
   );
 }

@@ -32,7 +32,7 @@ const groupKey = (key: string) => key.replace(/(.{4})/g, "$1 ").trim();
 export function SecuritySettingsPage() {
   if (!API_ENABLED) {
     return (
-      <Page title="Two-step sign-in" subtitle="Sign-in security for your account">
+      <Page title="Two-step sign-in">
         <Card title="Not available">
           <p className="muted">Two-step sign-in and signed-in devices work when the portal is connected to the server.</p>
         </Card>
@@ -48,7 +48,7 @@ function SecuritySettings() {
     apiSessionMe().then((me) => setRole(me.role)).catch(() => setRole(""));
   }, []);
   return (
-    <Page title="Two-step sign-in" subtitle="Sign-in security for your account">
+    <Page title="Two-step sign-in">
       <div className="stack">
         <MfaCard />
         <DevicesCard />

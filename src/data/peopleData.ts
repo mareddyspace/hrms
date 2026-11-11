@@ -11,6 +11,7 @@ import {
   TEAMMATES,
   buildTimezWorkforce,
   gradeForTitle,
+  hiringFor,
 } from "../workforce.ts";
 import {
   NATIONALITY_BY_COUNTRY,
@@ -108,6 +109,9 @@ export interface PersonRecord {
   spokenLanguages?: string[];
   /** Where the person wants their career to go. Employee-editable. */
   careerGoals?: string;
+  /** Who hired the person: the recruiter, and the hiring manager at the time (names; HR-owned). */
+  hiredBy?: string;
+  hiringManager?: string;
   /** Fixed-term / contractor end date (contract extensions move it). */
   contractEndDate?: string;
   /** Date probation was completed (probation completion action). */
@@ -508,7 +512,9 @@ function buildBasePeople(): PersonRecord[] {
 
   const byId = new Map<string, PersonRecord>();
   for (const person of [...fromWorkforce, ...personas, ...teammates]) byId.set(person.id, ensureProfileDetails(person));
-  return [...byId.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
+  const all = [...byId.values()];
+  const hiring = hiringFor(all);
+  return all.map((p) => ({ ...p, ...hiring.get(p.id) })).sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
 
 let cachedPeople: PersonRecord[] | null = null;

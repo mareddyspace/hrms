@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, Suspense } from "react";
 import { countUnreadNotificationsFor } from "../data/notificationFeed.ts";
-import type { FormEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Bell,
@@ -60,6 +60,8 @@ import { CopilotPopup } from "./CopilotPopup.tsx";
 import { NotesButton } from "./NotesPanel.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { ToastHost } from "./Toast.tsx";
+import { GlobalSearch } from "./GlobalSearch.tsx";
+import { PasswordRules, passwordRuleError } from "./PasswordRules.tsx";
 import { SectionTabs } from "./SectionTabs.tsx";
 import { Banner, Dropdown, Field, SubmitButton, useAction } from "./ui.tsx";
 import { updatePreferences, useApplyPreferences } from "../data/preferences.ts";
@@ -134,7 +136,7 @@ function GlobeIcon() {
 }
 
 function WelcomeLoginDialog() {
-  const { loginNotice, dismissLoginNotice, changePasswordAfterStaleLogin } = usePortal();
+  const { loginNotice, dismissLoginNotice, changePasswordAfterStaleLogin, demoProfile } = usePortal();
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
@@ -148,6 +150,11 @@ function WelcomeLoginDialog() {
   const stale = loginNotice.requirePasswordChange;
 
   async function submitPassword() {
+    const invalid = passwordRuleError(newPassword, confirm, undefined, demoProfile.email);
+    if (invalid) {
+      setMessage({ tone: "err", text: invalid });
+      return false;
+    }
     const error = await changePasswordAfterStaleLogin(newPassword, confirm);
     if (error) {
       setMessage({ tone: "err", text: error });
@@ -169,7 +176,7 @@ function WelcomeLoginDialog() {
         <h2 id="welcome-login-title">{stale ? "Update password" : stamp ? "Welcome back" : `Welcome to ${COMPANY_NAME}`}</h2>
         <p className="modal-lede">
           {stale
-            ? "Please set a new password to continue."
+            ? `Your password is more than ${PASSWORD_STALE_DAYS} days old. Set a new one to continue.`
             : stamp
               ? "Here are your last sign-in details."
               : "This is your first sign-in. Your home page shows what needs your attention today."}
@@ -211,6 +218,7 @@ function WelcomeLoginDialog() {
                 />
               </Field>
             </div>
+            <PasswordRules next={newPassword} confirm={confirm} email={demoProfile.email} />
             <Banner message={message} />
             <div className="form-actions">
               <SubmitButton action={passwordAction} className="btn">
@@ -236,7 +244,7 @@ function Badge({ count }: { count: number }) {
 }
 
 function usePasswordPolicyPrompt() {
-  const { signedIn, passwordPolicy, changePassword, loginNotice } = usePortal();
+  const { signedIn, passwordPolicy, changePassword, loginNotice, demoProfile } = usePortal();
   const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -249,6 +257,15 @@ function usePasswordPolicyPrompt() {
   const changeAction = useAction();
 
   async function submit() {
+    if (!current) {
+      setMessage({ tone: "err", text: "Enter your current password." });
+      return false;
+    }
+    const invalid = passwordRuleError(newPassword, confirm, current, demoProfile.email);
+    if (invalid) {
+      setMessage({ tone: "err", text: invalid });
+      return false;
+    }
     const error = await changePassword(current, newPassword, confirm);
     if (error) {
       setMessage({ tone: "err", text: error });
@@ -270,7 +287,7 @@ function usePasswordPolicyPrompt() {
       <button className="modal-scrim" type="button" aria-label="Close" onClick={() => setOpen(false)} />
       <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="password-policy-title">
         <h2 id="password-policy-title">Change password</h2>
-        <p className="modal-lede">Please set a new password every {PASSWORD_STALE_DAYS} days.</p>
+        <p className="modal-lede">Passwords expire every {PASSWORD_STALE_DAYS} days.</p>
         <form onSubmit={changeAction.submit(submit, { success: "Password updated." })}>
           <div className="stack" style={{ marginTop: 12 }}>
             <Field label="Current password">
@@ -283,6 +300,7 @@ function usePasswordPolicyPrompt() {
               <input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} autoComplete="new-password" />
             </Field>
           </div>
+          <PasswordRules next={newPassword} confirm={confirm} current={current} email={demoProfile.email} />
           <Banner message={message} />
           <div className="form-actions">
             <button className="btn-ghost" type="button" onClick={() => setOpen(false)}>
@@ -297,7 +315,15 @@ function usePasswordPolicyPrompt() {
     </div>
   ) : null;
 
-  return { visible, due, label, openPrompt: () => setOpen(true), modal };
+  function openPrompt() {
+    setCurrent("");
+    setNewPassword("");
+    setConfirm("");
+    setMessage(null);
+    setOpen(true);
+  }
+
+  return { visible, due, label, openPrompt, modal };
 }
 
 export function Shell() {
@@ -309,7 +335,6 @@ export function Shell() {
   /** Icon menu: the section whose pages are shown as tabs above the page. */
   const [tabGroup, setTabGroup] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [headerSearch, setHeaderSearch] = useState("");
   const prefs = useApplyPreferences(employee.id);
   // Task due/overdue reminders fire on any page, not only when Tasks is open.
   useTaskAutoReminders();
@@ -425,18 +450,10 @@ export function Shell() {
     );
   }
 
-  function onHeaderSearch(event: FormEvent) {
-    event.preventDefault();
-    const q = headerSearch.trim().toLowerCase();
-    if (!q) return;
-    const hit = [...pinned, ...roleNav.flatMap((group) => group.links)].find((link) =>
-      link.label.toLowerCase().includes(q),
-    );
-    if (hit) {
-      navigate(hit.to);
-      setHeaderSearch("");
-    }
-  }
+  const searchLinks = [
+    ...pinned.map((link) => ({ link, group: "Pinned" })),
+    ...roleNav.flatMap((group) => group.links.map((link) => ({ link, group: group.label }))),
+  ];
 
   return (
     <div className={`app${collapsed ? " sidebar-collapsed" : ""}`}>
@@ -517,15 +534,7 @@ export function Shell() {
             <Menu size={18} />
           </button>
 
-          <form className="topbar-search" onSubmit={onHeaderSearch} role="search">
-            <Search size={18} aria-hidden />
-            <input
-              value={headerSearch}
-              onChange={(event) => setHeaderSearch(event.target.value)}
-              placeholder={`Search ${COMPANY_NAME}…`}
-              aria-label="Global search"
-            />
-          </form>
+          <GlobalSearch links={searchLinks} />
 
           <label className="topbar-locale top-wide-only" title={t("locale.region")}>
             <span className="sr-only">{t("locale.region")}</span>
@@ -612,6 +621,7 @@ export function Shell() {
               items={[
                 { id: "profile", label: "My profile", to: "/info" },
                 { id: "personalise", label: "Personalisation", to: "/settings/personalisation" },
+                { id: "change-password", label: "Change password", onSelect: passwordPrompt.openPrompt },
                 { id: "security", label: "Two-step sign-in", to: "/settings/security" },
                 {
                   id: "org-context",

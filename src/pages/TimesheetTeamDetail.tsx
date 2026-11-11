@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActionButton, StatusPill, notify } from "../components/ui.tsx";
+import { ActionButton, notify } from "../components/ui.tsx";
+import { DayStatusBadge } from "./TimesheetTeamDays.tsx";
 import { formatHoursAmount, formatShortDate, weekDates } from "../model.ts";
 import type { OrgTimesheetRecord } from "../model.ts";
 import { usePortal } from "../store.tsx";
@@ -113,7 +114,7 @@ export function TimesheetTeamDetail({ row, canDecide }: { row: OrgTimesheetRecor
       )}
       {row.decisionNote && row.status !== "submitted" && (
         <p className="muted">
-          <StatusPill status={row.status === "draft" ? "sent back" : row.status} /> “{row.decisionNote}”
+          <DayStatusBadge status={row.status === "draft" ? "rejected" : row.status} /> “{row.decisionNote}”
         </p>
       )}
       {row.status === "submitted" && canDecide && (

@@ -43,13 +43,25 @@ export function Card({
 
 export function Breadcrumbs({ pathname }: { pathname: string }) {
   const crumbs = breadcrumbsFor(pathname);
+  const location = useLocation();
+  // The last step links back to the page's start when a tab or filter is open (?tab=…); otherwise it is plain text.
+  const deeper = location.pathname !== pathname || location.search !== "";
   return (
     <ol className="breadcrumbs" aria-label="Breadcrumb">
-      {crumbs.map((crumb, index) => (
-        <li key={`${crumb.label}-${index}`}>
-          {crumb.to && index < crumbs.length - 1 ? <Link to={crumb.to}>{crumb.label}</Link> : <span>{crumb.label}</span>}
-        </li>
-      ))}
+      {crumbs.map((crumb, index) => {
+        const last = index === crumbs.length - 1;
+        return (
+          <li key={`${crumb.label}-${index}`}>
+            {crumb.to && (!last || deeper) ? (
+              <Link to={crumb.to} aria-current={last ? "page" : undefined}>
+                {crumb.label}
+              </Link>
+            ) : (
+              <span aria-current={last ? "page" : undefined}>{crumb.label}</span>
+            )}
+          </li>
+        );
+      })}
     </ol>
   );
 }

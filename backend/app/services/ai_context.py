@@ -60,12 +60,22 @@ def _fmt(n: float) -> str:
 
 def _profile_block(db: Session, me: Employee, role: str) -> str:
     manager = db.get(Employee, me.manager_id) if me.manager_id else None
+    years = max(0.0, (local_today(me) - me.joining_date).days / 365.25)
+    shift = f"{me.shift_start}-{me.shift_end}" if me.shift_start and me.shift_end else "standard"
+    hired_by = getattr(me, "hired_by", None)
+    hiring_manager = getattr(me, "hiring_manager", None)
+    extra = (f"; contract ends: {me.contract_end_date.isoformat()}" if me.contract_end_date else "") + (
+        f"; last working day: {me.last_working_day.isoformat()}" if me.last_working_day else "")
     return (
         "ABOUT THE PERSON ASKING\n"
-        f"- Name: {me.preferred_name or me.full_name}\n- Role in the portal: {role}\n"
-        f"- Job title: {me.job_title}; department: {me.department}; location: {me.location}; country: {me.country_code}\n"
-        f"- Employment type: {me.employment_type}; joined: {me.joining_date.isoformat()}\n"
-        f"- Manager: {manager.full_name if manager else 'none'}"
+        f"- Name: {me.preferred_name or me.full_name}; employee ID: {me.employee_code}\n- Role in the portal: {role}\n"
+        f"- Job title: {me.job_title}; grade: {me.grade}; department: {me.department}; business unit: {me.business_unit}\n"
+        f"- Location: {me.location}; country: {me.country_code}; legal entity: {me.legal_entity}; "
+        f"work arrangement: {me.work_arrangement or 'not set'}; time zone: {me.time_zone}; shift: {shift}\n"
+        f"- Employment type: {me.employment_type}; status: {me.employment_status}; "
+        f"joined: {me.joining_date.isoformat()} ({years:.1f} years of service){extra}\n"
+        f"- Manager: {f'{manager.full_name} ({manager.job_title})' if manager else 'none'}\n"
+        f"- Hired by: {hired_by or 'not recorded'}; hiring manager: {hiring_manager or 'not recorded'}"
     )
 
 
@@ -225,6 +235,14 @@ def build_context(db: Session, user: CurrentUser, question: str) -> CopilotConte
     from app.services.ai_talent_context import copilot_blocks
 
     for text, title, ref in copilot_blocks(db, user):
+        ctx.blocks.append(text)
+        if title and ref and not any(s.ref == ref for s in ctx.data_refs):
+            ctx.data_refs.append(Source(title, ref))
+
+    # upcoming leave, today's attendance, payslips (own), holidays, tax, claims, tasks, directory, org, recruiting, pages
+    from app.services.ai_more_context import more_blocks
+
+    for text, title, ref in more_blocks(db, user, question):
         ctx.blocks.append(text)
         if title and ref and not any(s.ref == ref for s in ctx.data_refs):
             ctx.data_refs.append(Source(title, ref))

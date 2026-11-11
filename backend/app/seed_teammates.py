@@ -65,8 +65,11 @@ def _roster(db: Session, today: date) -> int:
                 continue
             if db.scalar(select(RosterShift.id).where(RosterShift.employee_id == emp_id, RosterShift.work_date == day)):
                 continue
+            from app.seed_shift_roster import _target  # weekly rotation
+
+            week = day - timedelta(days=day.weekday())
             db.add(RosterShift(id=f"rs-seed-{emp_id}-{day.isoformat()}", employee_id=emp_id, work_date=day,
-                               shift_id="sh-general", manager_id=RAM))
+                               shift_id=_target(emp_id, week), manager_id=RAM))
             added += 1
     return added
 

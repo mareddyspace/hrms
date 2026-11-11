@@ -1,6 +1,9 @@
 import { useState } from "react";
-import { Banner, Card, Field, Page, StatusPill, SubmitButton, notify, useAction } from "../components/ui.tsx";
-import { claimLimitsFor, itemCurrency, money, payRulesFor, receiptThresholdFor } from "../countryPay.ts";
+import { Banner, Card, EmptyState, Field, Page, StatusPill, SubmitButton, Tabs, notify, useAction } from "../components/ui.tsx";
+import { TravelReimbursements } from "../features/payrequests/TravelReimbursements.tsx";
+import { SummaryTiles } from "../features/payrequests/requestKit.tsx";
+import "../styles/pay-claims.css";
+import { claimLimitsFor, itemCurrency, money, moneyTotals, payRulesFor, receiptThresholdFor } from "../countryPay.ts";
 import { addDaysISO, EXPENSE_CLAIM_WINDOW_DAYS, formatShortDate, todayISO } from "../model.ts";
 
 import { usePortal } from "../store.tsx";
@@ -8,7 +11,25 @@ import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../d
 
 const REIMBURSE_CATEGORIES = ["Internet", "Books", "Medical", "Conveyance", "Other"] as const;
 
+/** Travel claims (linked to an approved trip, with history) and other reimbursements. */
 export function ReimbursementPage() {
+  const [tab, setTab] = useState("travel");
+  return (
+    <Page title="Travel reimbursements">
+      <Tabs
+        tabs={[
+          { id: "travel", label: "Travel claims" },
+          { id: "other", label: "Other reimbursements" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      {tab === "travel" ? <TravelReimbursements /> : <OtherReimbursements />}
+    </Page>
+  );
+}
+
+function OtherReimbursements() {
   const { state, employee, addReimbursement, hasApprover } = usePortal();
   const currency = payRulesFor(employee.countryCode).currency;
   const receiptAbove = receiptThresholdFor(employee.countryCode);
@@ -30,6 +51,7 @@ export function ReimbursementPage() {
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   const reimburseAction = useAction();
+  const total = (list: typeof mine) => moneyTotals(list.map((r) => ({ amount: r.amount, currency: itemCurrency(r) })), currency);
 
   function onSubmit(): boolean {
     if (hasTemplateBlanks(description)) {
@@ -64,7 +86,18 @@ export function ReimbursementPage() {
   }
 
   return (
-    <Page title="Other reimbursements">
+    <>
+      <SummaryTiles
+        label="Reimbursement summary"
+        items={[
+          { label: "Claims", value: mine.length },
+          { label: "Pending", value: mine.filter((r) => r.status === "submitted").length, tone: "sky" },
+          { label: "Approved", value: mine.filter((r) => r.status === "approved").length },
+          { label: "Declined", value: mine.filter((r) => r.status === "rejected").length },
+          { label: "Total claimed", value: total(mine.filter((r) => r.status !== "rejected" && r.status !== "withdrawn")), tone: "lilac" },
+          { label: "Approved amount", value: total(mine.filter((r) => r.status === "approved")) },
+        ]}
+      />
       <div className="split">
         <Card title="New reimbursement">
           <form onSubmit={reimburseAction.submit(onSubmit)}>
@@ -121,6 +154,9 @@ export function ReimbursementPage() {
           </form>
         </Card>
         <Card title="My reimbursements">
+          {mine.length === 0 ? (
+            <EmptyState title="No reimbursements yet" description="Submitted claims show here with their status." />
+          ) : (
           <div className="table-scroll">
             <table className="data">
               <thead>
@@ -148,9 +184,10 @@ export function ReimbursementPage() {
               </tbody>
             </table>
           </div>
+          )}
         </Card>
       </div>
-    </Page>
+    </>
   );
 }
 

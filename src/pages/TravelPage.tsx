@@ -35,6 +35,7 @@ import {
   useOpenFromQuery,
 } from "../features/payrequests/requestKit.tsx";
 import { ATTACH_TYPES, addComment, addFile, loadOpenInfo, recordLocalEvent, subscribeThreads, threadsVersion, type ThreadContext } from "../features/payrequests/threadStore.ts";
+import "../styles/pay-claims.css";
 
 type Msg = { tone: "ok" | "err" | "warn"; text: string } | null;
 
@@ -362,6 +363,7 @@ export function TravelPage() {
   const [message, setMessage] = useState<Msg>(null);
   const [tab, setTab] = useState("mine");
   const [when, setWhen] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
   const [localInfo, setLocalInfo] = useState<Set<string>>(new Set());
 
   const mine = requests.filter((t) => t.employeeId === employee.id);
@@ -469,13 +471,24 @@ export function TravelPage() {
     setAdvanceNeeded(false);
     setAdvance("");
     setAdvanceReason("");
+    setFormOpen(false);
     return true;
   }
 
+  const showForm = formOpen || ((!API_ENABLED || claimsMirror.loaded()) && mine.length === 0);
   const showTeam = waiting.length > 0 || admin || others.length > 0;
 
   return (
-    <Page title="Travel">
+    <Page
+      title="Travel"
+      action={
+        !showTeam || tab === "mine" ? (
+          <button type="button" className={showForm ? "btn-ghost" : "btn"} onClick={() => setFormOpen(!showForm)} aria-expanded={showForm}>
+            {showForm ? "Close form" : "New trip"}
+          </button>
+        ) : undefined
+      }
+    >
       <SummaryTiles
         label="Travel summary"
         items={[
@@ -513,7 +526,7 @@ export function TravelPage() {
             extra={<CsvButton filename={`travel-${tab}-${today}.csv`} headers={csvHeaders} rows={() => csvRows(teamShown)} />}
           />
           {teamShown.length === 0 ? (
-            <EmptyState title={teamSource.length ? "No trips match these filters" : "Nothing here"} />
+            <EmptyState title={teamSource.length ? "No trips match these filters" : tab === "approve" ? "Nothing waiting on you" : "No trips yet"} />
           ) : (
             <div className="pr-list">
               {teamShown.map((t) => (
@@ -525,7 +538,8 @@ export function TravelPage() {
       )}
 
       {(!showTeam || tab === "mine") && (
-        <div className="split">
+        <div className="pc-stack">
+          {showForm && (
           <Card title="New travel request">
             <form onSubmit={travelAction.submit(onSubmit, { toastError: true })} noValidate>
               <div className="form-grid">
@@ -605,9 +619,11 @@ export function TravelPage() {
                   </>
                 )}
               </div>
-              <p className="pr-note" style={{ margin: "10px 0" }}>
-                Goes to your manager, then the next approver in the travel workflow. Estimates and advances are in {homeCurrency}; an advance can't exceed the estimate or the country limit of {money(advanceCap, homeCurrency)}. Requests can be raised up to 30 days after a trip starts.
-              </p>
+              <ul className="pc-rules" aria-label="Travel rules">
+                <li>Manager approval</li>
+                <li>Advance up to {money(advanceCap, homeCurrency)}</li>
+                <li>In {homeCurrency}</li>
+              </ul>
               <div className="form-actions">
                 <SubmitButton action={travelAction} className="btn">
                   Submit request
@@ -615,7 +631,8 @@ export function TravelPage() {
               </div>
             </form>
           </Card>
-          <Card title="My trips">
+          )}
+          <Card title="My trips" action={mine.length ? <span className="muted">{estimate(mine.filter((t) => t.status === "pending" || t.status === "approved"))} estimated</span> : undefined}>
             <ListFilters
               state={mineFilters.filters}
               onChange={mineFilters.set}
@@ -642,7 +659,11 @@ export function TravelPage() {
             {API_ENABLED && !claimsMirror.loaded() ? (
               <p className="muted">Loading…</p>
             ) : mineShown.length === 0 ? (
-              <EmptyState title={mine.length ? "No trips match these filters" : "No travel requests yet"} />
+              <EmptyState
+                title={mine.length ? "No trips match these filters" : "No trips yet"}
+                description={mine.length ? "Clear the filters to see all your trips." : "Trips you request show here with approval, booking and linked claims."}
+                action={mine.length ? <button type="button" className="btn-ghost" onClick={() => (mineFilters.reset(), setWhen(""))}>Clear filters</button> : undefined}
+              />
             ) : (
               <div className="pr-list">
                 {mineShown.map((t) => (

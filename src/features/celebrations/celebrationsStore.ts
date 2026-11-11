@@ -6,7 +6,6 @@
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { API_ENABLED, api, apiRequest } from "../../api/client.ts";
-import { DEMO_ACCOUNTS } from "../../demoAccounts.ts";
 import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { addDaysISO, todayISO } from "../../model.ts";
 import {
@@ -110,17 +109,22 @@ export async function setHideBirthday(employeeId: string, hide: boolean): Promis
 
 /* ───────────── Local list ───────────── */
 
-/** The people around someone (backend circle_ids): themselves, their manager, teammates under the same manager,
- *  their direct reports and everyone who can sign in. The calendar shows only these, not the whole company. */
+/** The people around someone (backend circle_ids): themselves, their manager, teammates under the same manager and
+ *  their direct reports. The calendar shows only these, not the whole company. */
 export function localCircle(actorId: string): Set<string> {
   const people = listPeople();
-  const ids = new Set<string>([actorId, ...DEMO_ACCOUNTS.map((a) => a.id)]);
+  const ids = new Set<string>([actorId]);
   const managerId = people.find((p) => p.id === actorId)?.managerId;
   if (managerId) ids.add(managerId);
   for (const p of people) {
     if (p.managerId === actorId || (managerId && p.managerId === managerId)) ids.add(p.id);
   }
   return ids;
+}
+
+/** Work anniversaries worth a calendar entry (backend is_milestone): 1, 3 and 5 years, then every five. */
+export function isMilestone(years: number): boolean {
+  return years === 1 || years === 3 || years === 5 || (years >= 10 && years % 5 === 0);
 }
 
 function occurrenceIn(iso: string, start: string, end: string): string | null {
@@ -166,7 +170,7 @@ export function localCelebrations(actorId: string, days: number, today = todayIS
     }
     const occ = occurrenceIn(p.dateOfJoining, start, end);
     const years = occ ? Number(occ.slice(0, 4)) - Number(p.dateOfJoining.slice(0, 4)) : 0;
-    if (occ && years >= 1) out.push({ ...base, kind: "anniversary", date: occ, years });
+    if (occ && years >= 1 && (!around || isMilestone(years))) out.push({ ...base, kind: "anniversary", date: occ, years });
     else if (p.dateOfJoining >= addDaysISO(today, -7)) out.push({ ...base, kind: "new_joiner", date: p.dateOfJoining });
   }
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
@@ -257,7 +261,7 @@ export async function sendWish(actor: PlusActor, c: Celebration, message: string
 
 /* ───────────── Whole year (calendar month / year views) ───────────── */
 
-/** Birthdays (hidden ones left out) and work anniversaries for every day of `year`, of the people around `actorId`. */
+/** Birthdays (hidden ones left out) and milestone work anniversaries for every day of `year`, of the people around `actorId`. */
 export function localYearCelebrations(year: number, actorId: string, today = todayISO()): Celebration[] {
   const hidden = readPrefs();
   const start = `${year}-01-01`;
@@ -281,7 +285,7 @@ export function localYearCelebrations(year: number, actorId: string, today = tod
     }
     const occ = occurrenceIn(p.dateOfJoining, start, end);
     const years = occ ? year - Number(p.dateOfJoining.slice(0, 4)) : 0;
-    if (occ && years >= 1) out.push({ ...base, kind: "anniversary", date: occ, years });
+    if (occ && years >= 1 && isMilestone(years)) out.push({ ...base, kind: "anniversary", date: occ, years });
   }
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
 }

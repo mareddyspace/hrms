@@ -48,8 +48,10 @@ import { TEMPLATE_BLANKS_ERROR, hasTemplateBlanks, useTemplatedText } from "../d
 import { API_ENABLED } from "../api/client.ts";
 import { usePortal } from "../store.tsx";
 import "./helpdesk.css";
+import "../styles/home-leave-desk.css";
 
 type QueueFilter = "open" | "mine" | "unassigned" | "overdue" | "all";
+type HistoryFilter = "all" | "open" | "waiting" | "closed";
 const MAX_FILES = 5;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 // Same as the server (backend/app/services/storage.py ALLOWED_TYPES).
@@ -114,6 +116,8 @@ export function HelpdeskPage() {
   const [selectedId, setSelectedId] = useState("");
   const [queueFilter, setQueueFilter] = useState<QueueFilter>("open");
   const [historyQ, setHistoryQ] = useState("");
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>("all");
+  const [queueCategory, setQueueCategory] = useState<HrRequestCategory | "">("");
 
   // /help?request=<id> from a notification opens that request.
   const linkedId = params.get("request");
@@ -132,6 +136,7 @@ export function HelpdeskPage() {
   const queueRows = useMemo(() => {
     const now = Date.now();
     return queue
+      .filter((r) => !queueCategory || r.category === queueCategory)
       .filter((r) => {
         if (queueFilter === "open") return !isClosed(r);
         if (queueFilter === "mine") return r.assigneeId === me && !isClosed(r);
@@ -144,12 +149,33 @@ export function HelpdeskPage() {
         const ob = hrRequestOverdue(b, now) ? 0 : 1;
         return oa - ob || (Date.parse(a.dueAt ?? "") || Infinity) - (Date.parse(b.dueAt ?? "") || Infinity);
       });
-  }, [queue, queueFilter, me]);
+  }, [queue, queueFilter, queueCategory, me]);
 
   const historyRows = useMemo(() => {
     const n = historyQ.trim().toLowerCase();
-    return mine.filter((r) => !n || `${r.id} ${r.subject} ${r.category} ${r.subcategory ?? ""} ${r.status}`.toLowerCase().includes(n));
-  }, [mine, historyQ]);
+    return mine
+      .filter((r) =>
+        historyFilter === "open"
+          ? !isClosed(r) && r.status !== "Waiting on you"
+          : historyFilter === "waiting"
+            ? r.status === "Waiting on you"
+            : historyFilter === "closed"
+              ? isClosed(r)
+              : true,
+      )
+      .filter((r) => !n || `${r.id} ${r.subject} ${r.category} ${r.subcategory ?? ""} ${r.status}`.toLowerCase().includes(n));
+  }, [mine, historyQ, historyFilter]);
+
+  const own = useMemo(() => {
+    const responses = mine.map((r) => hoursBetween(r.submittedAt, r.firstResponseAt)).filter((h): h is number => h !== null);
+    return {
+      open: mine.filter((r) => !isClosed(r) && r.status !== "Waiting on you").length,
+      waiting: mine.filter((r) => r.status === "Waiting on you").length,
+      closed: mine.filter(isClosed).length,
+      toRate: mine.filter((r) => isClosed(r) && r.satisfaction === undefined).length,
+      avg: responses.length ? responses.reduce((sum, h) => sum + h, 0) / responses.length : null,
+    };
+  }, [mine]);
 
   const sla = useMemo(() => {
     const now = Date.now();
@@ -203,6 +229,12 @@ export function HelpdeskPage() {
                 <MetricCard label="Avg first response" value={hoursLabel(sla.avg)} hint={sla.count ? `${sla.count} requests` : "No replies yet"} />
               </MetricGrid>
               <FilterBar>
+                <select value={queueCategory} onChange={(e) => setQueueCategory(e.target.value as HrRequestCategory | "")} aria-label="Category">
+                  <option value="">All categories</option>
+                  {HR_REQUEST_CATEGORIES.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
                 <div className="chip-row" role="group" aria-label="Show">
                   {(
                     [
@@ -222,9 +254,31 @@ export function HelpdeskPage() {
             </>
           )}
           {tab === "history" && (
-            <FilterBar>
-              <input type="search" value={historyQ} onChange={(e) => setHistoryQ(e.target.value)} placeholder="Search requests" aria-label="Search requests" />
-            </FilterBar>
+            <>
+              <MetricGrid>
+                <MetricCard label="Open" value={own.open} hint="With the desk" />
+                <MetricCard label="Waiting on you" value={own.waiting} hint={own.waiting ? "Reply to continue" : "Nothing needed"} />
+                <MetricCard label="Resolved" value={own.closed} hint={own.toRate ? `${own.toRate} to rate` : "All rated"} />
+                <MetricCard label="Avg first response" value={hoursLabel(own.avg)} />
+              </MetricGrid>
+              <FilterBar>
+                <input type="search" value={historyQ} onChange={(e) => setHistoryQ(e.target.value)} placeholder="Search requests" aria-label="Search requests" />
+                <div className="chip-row" role="group" aria-label="Show">
+                  {(
+                    [
+                      ["all", `All · ${mine.length}`],
+                      ["open", `Open · ${own.open}`],
+                      ["waiting", `Waiting on you · ${own.waiting}`],
+                      ["closed", `Resolved · ${own.closed}`],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button key={id} type="button" className={historyFilter === id ? "chip-btn active" : "chip-btn"} aria-pressed={historyFilter === id} onClick={() => setHistoryFilter(id)}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </FilterBar>
+            </>
           )}
           <div className={selected ? "hd-split with-detail" : "hd-split"}>
             <section className="hd-table-wrap">
@@ -250,6 +304,7 @@ export function HelpdeskPage() {
                       <th>Priority</th>
                       <th>Status</th>
                       <th>SLA due</th>
+                      <th>First response</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -277,6 +332,13 @@ export function HelpdeskPage() {
                         </td>
                         <td>
                           <SlaCell r={r} />
+                        </td>
+                        <td>
+                          {r.firstResponseAt ? (
+                            hoursLabel(hoursBetween(r.submittedAt, r.firstResponseAt))
+                          ) : (
+                            <span className="muted">Awaiting</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -364,23 +426,34 @@ function NewRequestForm({ onCreated }: { onCreated: (id: string) => void }) {
 
   return (
     <form className="hd-form" onSubmit={action.submit(submit)}>
+      <fieldset className="hdx-cats">
+        <legend>What do you need help with?</legend>
+        <div className="hdx-cat-grid">
+          {HR_REQUEST_CATEGORIES.map((c) => {
+            const r = HR_REQUEST_SLA[c] ?? HR_REQUEST_SLA.Other;
+            return (
+              <label key={c} className={category === c ? "hdx-cat active" : "hdx-cat"}>
+                <input
+                  type="radio"
+                  name="hd-category"
+                  value={c}
+                  checked={category === c}
+                  onChange={() => {
+                    setCategory(c);
+                    setSubcategory(HR_REQUEST_SUBCATEGORIES[c][0]);
+                    fill("hrRequest", c);
+                  }}
+                />
+                <strong>{c}</strong>
+                <span className="muted">
+                  {hrDeskOwnerName(r.ownerId)} · {r.workingDays} working {r.workingDays === 1 ? "day" : "days"}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
       <div className="hd-form-grid">
-        <label className="field">
-          <span>Category</span>
-          <select
-            value={category}
-            onChange={(e) => {
-              const c = e.target.value as HrRequestCategory;
-              setCategory(c);
-              setSubcategory(HR_REQUEST_SUBCATEGORIES[c][0]);
-              fill("hrRequest", c);
-            }}
-          >
-            {HR_REQUEST_CATEGORIES.map((c) => (
-              <option key={c}>{c}</option>
-            ))}
-          </select>
-        </label>
         <label className="field">
           <span>Subcategory</span>
           <select value={subcategory} onChange={(e) => setSubcategory(e.target.value)}>
@@ -482,6 +555,7 @@ function RequestDetail({ r, onClose }: { r: HrRequest; onClose: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [fileKey, setFileKey] = useState(0);
   const [rating, setRating] = useState(5);
+  const [ratingNote, setRatingNote] = useState("");
   const replyAction = useAction();
   const works = worksHrRequest(r, me, demoProfile.role) || (API_ENABLED && demoProfile.role === "admin" && r.requesterId !== me);
   const statuses = allowedHrStatuses(r, me, demoProfile.role);
@@ -623,7 +697,11 @@ function RequestDetail({ r, onClose }: { r: HrRequest; onClose: () => void }) {
         {r.satisfaction !== undefined && (
           <>
             <dt>Rating</dt>
-            <dd>{r.satisfaction}/5</dd>
+            <dd>
+              {"★".repeat(r.satisfaction)}
+              <span className="muted">{"★".repeat(Math.max(0, 5 - r.satisfaction))}</span> {r.satisfaction}/5
+              {r.satisfactionComment ? ` · “${r.satisfactionComment}”` : ""}
+            </dd>
           </>
         )}
       </dl>
@@ -634,21 +712,39 @@ function RequestDetail({ r, onClose }: { r: HrRequest; onClose: () => void }) {
             Escalate
           </ActionButton>
         )}
-        {canRate && (
-          <span className="row-gap">
-            <select value={rating} onChange={(e) => setRating(Number(e.target.value))} aria-label="Rating">
-              {[5, 4, 3, 2, 1].map((n) => (
-                <option key={n} value={n}>
-                  {n} / 5
-                </option>
-              ))}
-            </select>
-            <ActionButton className="btn-ghost" busyLabel="Sending…" doneLabel="Rated" success="Thanks for rating." toastError onAction={() => rateHrRequestApi(r.id, rating)}>
-              Rate service
-            </ActionButton>
-          </span>
-        )}
       </div>
+      {canRate && (
+        <section className="hdx-rate" aria-label="Rate this request">
+          <strong>How did we do?</strong>
+          <div className="hdx-stars" role="radiogroup" aria-label="Rating">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button
+                key={n}
+                type="button"
+                role="radio"
+                aria-checked={rating === n}
+                aria-label={`${n} of 5`}
+                className={n <= rating ? "hdx-star on" : "hdx-star"}
+                onClick={() => setRating(n)}
+              >
+                ★
+              </button>
+            ))}
+            <span className="muted">{rating} / 5</span>
+          </div>
+          <textarea rows={2} value={ratingNote} onChange={(e) => setRatingNote(e.target.value)} placeholder="Comment (optional)" aria-label="Rating comment" />
+          <ActionButton
+            className="btn"
+            busyLabel="Sending…"
+            doneLabel="Rated"
+            success="Thanks for rating."
+            toastError
+            onAction={() => rateHrRequestApi(r.id, rating, ratingNote.trim() || undefined)}
+          >
+            Submit rating
+          </ActionButton>
+        </section>
+      )}
       {error && <Banner message={{ tone: "err", text: error }} />}
 
       <section className="hd-block">

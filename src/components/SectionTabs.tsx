@@ -57,6 +57,48 @@ export function SectionTabs({ label, title, watch, children }: { label: string; 
     return () => observer.disconnect();
   }, [watch, measure]);
 
+  // A normal mouse wheel scrolls the tabs sideways (the row has no visible scrollbar), and the row can be dragged.
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const onWheel = (e: WheelEvent) => {
+      if (row.scrollWidth <= row.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      row.scrollBy({ left: e.deltaY });
+    };
+    let drag: { x: number; left: number; moved: boolean } | null = null;
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || e.button !== 0 || row.scrollWidth <= row.clientWidth) return;
+      drag = { x: e.clientX, left: row.scrollLeft, moved: false };
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x;
+      if (Math.abs(dx) > 4) drag.moved = true;
+      if (drag.moved) row.scrollLeft = drag.left - dx;
+    };
+    const onUp = () => {
+      const moved = drag?.moved;
+      drag = null;
+      if (moved) {
+        // a drag is not a click on the tab under the pointer
+        const stop = (ev: Event) => { ev.preventDefault(); ev.stopPropagation(); };
+        row.addEventListener("click", stop, { capture: true, once: true });
+        setTimeout(() => row.removeEventListener("click", stop, { capture: true }), 0);
+      }
+    };
+    row.addEventListener("wheel", onWheel, { passive: false });
+    row.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      row.removeEventListener("wheel", onWheel);
+      row.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, []);
+
   function nudge(direction: -1 | 1) {
     const row = rowRef.current;
     if (!row) return;

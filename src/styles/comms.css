@@ -1,0 +1,220 @@
+/* Announcements: card feed (pinned and important first, then latest). Uses the tokens from styles.css. */
+
+/* ---------- category colours (one accent per category, tints mixed from it so night mode works) ---------- */
+.annx-holiday { --cat: #2f9e57; }
+.annx-policy { --cat: #3b5bdb; }
+.annx-event { --cat: #9c4ddb; }
+.annx-it { --cat: #0e7490; }
+.annx-wellness { --cat: #20a07e; }
+.annx-people { --cat: #e07b20; }
+.annx-leadership { --cat: #5b4bc4; }
+.annx-general { --cat: #8a99a8; }
+
+/* ---------- toolbar ---------- */
+.annx-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.annx-bar input[type="search"] { flex: 1 1 240px; max-width: 380px; }
+.annx-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+}
+.annx-seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-sm, 13px);
+  font-weight: 600;
+  cursor: pointer;
+}
+.annx-seg button:hover { color: var(--ink); }
+.annx-seg button.active { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
+.annx-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.annx-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+.annx-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm, 13px);
+  cursor: pointer;
+}
+.annx-cat:hover { border-color: var(--cat, var(--accent)); }
+.annx-cat.active {
+  border-color: var(--cat, var(--accent));
+  background: color-mix(in srgb, var(--cat, var(--accent)) 14%, var(--card));
+  font-weight: 600;
+}
+.annx-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--cat, var(--accent)); }
+
+/* ---------- sections and grid ---------- */
+.annx-section { margin-bottom: 22px; }
+.annx-h {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.annx-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; align-items: start; }
+.annx-grid.featured { grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
+
+/* ---------- card ---------- */
+.annx-card {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: inset 4px 0 0 var(--cat, var(--accent));
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.annx-card:hover { border-color: color-mix(in srgb, var(--cat, var(--accent)) 55%, var(--line)); }
+.annx-card.pinned { background: color-mix(in srgb, var(--cat, var(--accent)) 6%, var(--card)); }
+.annx-card.open {
+  grid-column: 1 / -1;
+  border-color: var(--cat, var(--accent));
+  box-shadow: inset 4px 0 0 var(--cat, var(--accent)), 0 4px 16px rgb(0 0 0 / 0.08);
+}
+
+.annx-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.annx-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cat, var(--accent)) 14%, transparent);
+  color: color-mix(in srgb, var(--cat, var(--accent)) 70%, var(--ink));
+  font-size: 12px;
+  font-weight: 600;
+}
+.annx-flag { padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.annx-flag.pin { background: color-mix(in srgb, #e0a100 18%, transparent); color: color-mix(in srgb, #b07a00 80%, var(--ink)); }
+.annx-flag.ack { background: color-mix(in srgb, var(--danger, #c62828) 14%, transparent); color: var(--danger, #c62828); }
+.annx-flag.done { background: color-mix(in srgb, var(--ok, #2e7d32) 14%, transparent); color: var(--ok, #2e7d32); }
+.annx-when { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+.annx-title { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.35; }
+.annx-title button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.annx-title button:hover { color: var(--accent); }
+.annx-card.unread .annx-title { font-weight: 750; }
+.annx-unread { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); transform: translateY(-2px); }
+
+.annx-body { margin: 0; color: var(--ink); font-size: 14px; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+.annx-body.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--ink) 80%, var(--muted));
+}
+.annx-card.open .annx-body { max-width: 75ch; font-size: 15px; }
+
+.annx-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+.annx-author { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 600; }
+.annx-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--cat, var(--accent)) 20%, var(--card));
+  color: color-mix(in srgb, var(--cat, var(--accent)) 75%, var(--ink));
+  font-size: 11px;
+  font-weight: 700;
+}
+.annx-aud { padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; }
+.annx-more {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.annx-more:hover { text-decoration: underline; }
+
+/* ---------- actions and receipts (open card) ---------- */
+.annx-actions { display: grid; gap: 10px; padding-top: 4px; }
+.annx-receipts {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 8px);
+}
+.annx-receipts li {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.annx-receipts li + li { border-top: 1px solid var(--line); }
+.annx-receipt-who { display: grid; }
+.annx-receipt-who small { color: var(--muted); }
+.annx-ok { color: var(--ok, #2e7d32); }
+
+@media (max-width: 720px) {
+  .annx-grid,
+  .annx-grid.featured { grid-template-columns: 1fr; }
+  .annx-when { margin-left: 0; width: 100%; }
+  .annx-receipts li { grid-template-columns: 1fr; gap: 2px; }
+}

@@ -561,8 +561,10 @@ export interface Task {
   links?: TaskLink[];
   /** Another task this one relates to. */
   referenceTaskId?: string;
-  /** People kept informed. They can view the task but not change it. */
+  /** People kept informed. They can view the task and comment, but not change it. */
   ccIds?: string[];
+  /** Who created the task (employee id); powers the "Assigned by me" view. */
+  createdById?: string;
   subtasks?: TaskSubtask[];
   attachments?: TaskAttachment[];
   comments?: TaskComment[];

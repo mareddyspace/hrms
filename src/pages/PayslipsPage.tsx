@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ActionButton, Banner, Card, Page, Tabs } from "../components/ui.tsx";
 import { legalEntityFor, money, payRulesFor, taxYearStartFor } from "../countryPay.ts";
@@ -23,6 +23,7 @@ import { usePortal } from "../store.tsx";
 import { STATUS_TEXT, downloadPayslip, monthTitle, slipBreakdown, slipStatus, type SlipStatus } from "../features/payroll/payslipDoc.ts";
 import { declConfig, myDeclarations, reloadDeclarations, useDeclarationsVersion } from "../features/taxdecl/taxDeclStore.ts";
 import "../features/payroll/payslips.css";
+import "../styles/pay-claims.css";
 
 /** First and last day of the payslip's month. */
 function payPeriod(month: string): { from: string; to: string } {
@@ -116,7 +117,6 @@ export function PayslipBody({ payslip }: { payslip: PayslipView }) {
       {detail && detail.employerContributions.length > 0 && (
         <section style={{ marginTop: 16 }}>
           <h2 className="card-title">Employer contributions</h2>
-          <p className="muted" style={{ margin: "0 0 6px" }}>Paid by the company on top of your pay; not deducted.</p>
           <div className="doc-table-wrap">
             <table className="data pay-lines-table pay-employer-table">
               <tbody>
@@ -264,7 +264,7 @@ export function TaxYearCard({ input, slips }: { input: PayslipInput; slips: Pays
   return (
     <Card title="Tax this year">
       <p className="muted" style={{ margin: "0 0 12px" }}>
-        {sum.taxYear} · {sum.basis} · <SlipTag status="estimated" /> projection from payslips so far and today's pay
+        {sum.taxYear} · {sum.basis} · <SlipTag status="estimated" />
       </p>
       <div className="pay-head slip-stats">
         {stat("Tax paid so far", money(sum.ytdTax, c))}
@@ -296,7 +296,7 @@ function MonthSoFarCard({ est }: { est: MonthSoFar }) {
   return (
     <Card title="This month so far">
       <p className="muted" style={{ margin: "0 0 12px" }}>
-        Earned so far, {spanText(est.from, est.to)} · <SlipTag status="estimated" /> paid on payday
+        {spanText(est.from, est.to)} · <SlipTag status="estimated" />
       </p>
       <div className="pay-head slip-stats">
         <div>
@@ -328,6 +328,185 @@ function MonthSoFarCard({ est }: { est: MonthSoFar }) {
 
 function taxYearOf(slip: PayslipView): string {
   return asDetailView(slip)?.tax.taxYear ?? slip.month.slice(0, 4);
+}
+
+/** Pay periods as a horizontal strip (arrows, drag, wheel, keys; click selects) with the chosen payslip in full below. */
+function PeriodPicker({ slips, employee, regime }: { slips: PayslipView[]; employee: Employee; regime?: string }) {
+  const navigate = useNavigate();
+  const ordered = useMemo(() => [...slips].sort((a, b) => a.month.localeCompare(b.month)), [slips]);
+  const [chosen, setChosen] = useState<string | undefined>(undefined);
+  const index = Math.max(0, chosen ? ordered.findIndex((s) => s.id === chosen) : ordered.length - 1);
+  const slip = ordered[index];
+  const rail = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ x: number; left: number; moved: boolean } | null>(null);
+  const [edges, setEdges] = useState({ start: true, end: true });
+
+  const updateEdges = useCallback(() => {
+    const el = rail.current;
+    if (!el) return;
+    setEdges({ start: el.scrollLeft <= 2, end: el.scrollLeft + el.clientWidth >= el.scrollWidth - 2 });
+  }, []);
+
+  // Keep the chosen month in view without moving the page.
+  useEffect(() => {
+    const el = rail.current;
+    const chip = el?.querySelector<HTMLElement>(`[data-slip="${slip?.id}"]`);
+    if (!el || !chip) return;
+    el.scrollTo({ left: chip.offsetLeft - el.clientWidth / 2 + chip.clientWidth / 2, behavior: chosen ? "smooth" : "auto" });
+    window.setTimeout(updateEdges, chosen ? 350 : 0);
+  }, [slip?.id, chosen, updateEdges]);
+
+  // A mouse wheel scrolls the strip sideways (React wheel handlers are passive, so listen directly).
+  useEffect(() => {
+    const el = rail.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || el.scrollWidth <= el.clientWidth) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("resize", updateEdges);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      window.removeEventListener("resize", updateEdges);
+    };
+  }, [updateEdges]);
+
+  if (!slip) return null;
+  const select = (i: number) => setChosen(ordered[Math.min(ordered.length - 1, Math.max(0, i))]?.id);
+  const scrollBy = (dir: number) => rail.current?.scrollBy({ left: dir * Math.max(160, (rail.current.clientWidth ?? 0) * 0.7), behavior: "smooth" });
+  const b = slipBreakdown(slip);
+  const status = slipStatus(slip);
+
+  return (
+    <Card title="Pay periods" className="pc-periods-card">
+      <div className="pc-periods">
+        <button type="button" className="pc-periods-arrow" aria-label="Earlier months" disabled={edges.start} onClick={() => scrollBy(-1)}>
+          ‹
+        </button>
+        <div
+          ref={rail}
+          className="pc-periods-rail"
+          role="listbox"
+          aria-label="Pay periods"
+          aria-activedescendant={`period-${slip.id}`}
+          tabIndex={0}
+          onScroll={updateEdges}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+              e.preventDefault();
+              select(index + (e.key === "ArrowLeft" ? -1 : 1));
+            } else if (e.key === "Home" || e.key === "End") {
+              e.preventDefault();
+              select(e.key === "Home" ? 0 : ordered.length - 1);
+            }
+          }}
+          onPointerDown={(e) => {
+            if (e.pointerType !== "mouse" || e.button !== 0 || !rail.current) return;
+            drag.current = { x: e.clientX, left: rail.current.scrollLeft, moved: false };
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current;
+            if (!d || !rail.current) return;
+            if (Math.abs(e.clientX - d.x) > 5) d.moved = true;
+            if (d.moved) rail.current.scrollLeft = d.left - (e.clientX - d.x);
+          }}
+          onPointerUp={() => window.setTimeout(() => (drag.current = null), 0)}
+          onPointerLeave={() => (drag.current = null)}
+        >
+          {ordered.map((s, i) => {
+            const st = slipStatus(s);
+            const d = parseISODate(`${s.month}-01`);
+            return (
+              <button
+                key={s.id}
+                id={`period-${s.id}`}
+                data-slip={s.id}
+                type="button"
+                role="option"
+                aria-selected={i === index}
+                tabIndex={-1}
+                className={`pc-period${i === index ? " is-on" : ""} is-${st}`}
+                onClick={(e) => {
+                  if (drag.current?.moved) {
+                    e.preventDefault();
+                    return;
+                  }
+                  select(i);
+                }}
+              >
+                <span className="pc-period-month">{d.toLocaleDateString("en-GB", { month: "short" })}</span>
+                <span className="pc-period-year">{d.getFullYear()}</span>
+                <span className="pc-period-net">{money(s.net, s.currency)}</span>
+                <span className="pc-period-dot" aria-label={st === "final" ? "Final" : "Estimated"} />
+              </button>
+            );
+          })}
+        </div>
+        <button type="button" className="pc-periods-arrow" aria-label="Later months" disabled={edges.end} onClick={() => scrollBy(1)}>
+          ›
+        </button>
+      </div>
+
+      <div className="pc-slip">
+        <div className="pc-slip-top">
+          <div className="pc-slip-title">
+            <button type="button" className="btn-ghost btn-tiny" aria-label="Previous month" disabled={index === 0} onClick={() => select(index - 1)}>
+              ‹
+            </button>
+            <h3>{monthTitle(slip.month)}</h3>
+            <button
+              type="button"
+              className="btn-ghost btn-tiny"
+              aria-label="Next month"
+              disabled={index === ordered.length - 1}
+              onClick={() => select(index + 1)}
+            >
+              ›
+            </button>
+            <SlipTag status={status} />
+            {slip.finalSettlement && <span className="pill pill-mandatory">Final settlement</span>}
+          </div>
+          <span className="form-actions pc-slip-actions">
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => navigate(`/payslips/${slip.id}`)}>
+              Open
+            </button>
+            <ActionButton
+              className="btn btn-tiny"
+              busyLabel="Preparing…"
+              doneLabel="Downloaded"
+              onAction={() => downloadPayslip(slip, employee, regime)}
+              success={`${monthTitle(slip.month)} payslip downloaded (PDF).`}
+              toastError
+            >
+              Download PDF
+            </ActionButton>
+          </span>
+        </div>
+        <div className="pc-slip-figures">
+          <div>
+            <span className="muted">Gross</span>
+            <strong>{money(b.gross, slip.currency)}</strong>
+          </div>
+          <div>
+            <span className="muted">Deductions</span>
+            <strong>{money(b.deductions, slip.currency)}</strong>
+          </div>
+          <div>
+            <span className="muted">Tax</span>
+            <strong>{money(b.tax, slip.currency)}</strong>
+          </div>
+          <div className="is-net">
+            <span className="muted">Net pay</span>
+            <strong>{money(b.net, slip.currency)}</strong>
+          </div>
+        </div>
+        <PayslipHead payslip={slip} person={employee} />
+        <PayslipBody payslip={slip} />
+      </div>
+    </Card>
+  );
 }
 
 /** Monthly summary: basic, allowances, gross, deductions, tax, net; click a month for the full payslip. */
@@ -591,8 +770,7 @@ function MonthlyDeductionsCard({ slips }: { slips: PayslipView[] }) {
   const months = [...slips].sort((a, b) => a.month.localeCompare(b.month)).slice(-6);
   const names = [...new Set(months.flatMap((s) => s.deductions.map((d) => d.name)))];
   return (
-    <Card title="Monthly deductions">
-      <p className="muted" style={{ marginTop: 0 }}>Last {months.length} months.</p>
+    <Card title={`Monthly deductions · last ${months.length} months`}>
       <div className="doc-table-wrap scroll-x">
         <table className="data">
           <thead>
@@ -701,9 +879,6 @@ function PayrollCalendarCard({ slips, employee }: { slips: PayslipView[]; employ
   });
   return (
     <Card title={`Payroll calendar · ${rules.taxYearLabel(start)}`}>
-      <p className="muted" style={{ marginTop: 0 }}>
-        Paid in {rules.currency} on the last working day of each month. Payroll locks the month after HR prepares it and a second person approves.
-      </p>
       <div className="doc-table-wrap scroll-x">
         <table className="data">
           <thead>
@@ -814,6 +989,7 @@ export function PayslipsPage() {
       {tab === "payslips" && (
         <>
           {est && <MonthSoFarCard est={est} />}
+          <PeriodPicker slips={payslipViews} employee={employee} regime={employee.countryCode === "IN" ? regime : undefined} />
           <SummaryCard slips={payslipViews} employee={employee} regime={employee.countryCode === "IN" ? regime : undefined} />
         </>
       )}

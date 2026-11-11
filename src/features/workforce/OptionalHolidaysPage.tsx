@@ -54,9 +54,9 @@ const longDate = (iso: string) =>
 
 /** Picks, limit and actions for the signed-in person's optional holidays in a year. */
 export function useOptionalPicks(year = currentYear()) {
-  const { demoProfile, state, leaveTable, applyLeave, setLeaveStatus } = usePortal();
+  const { demoProfile, employee, state, leaveTable, applyLeave, setLeaveStatus } = usePortal();
   const data = useOptional();
-  const country = countryOf(demoProfile.id);
+  const country = employee.countryCode ? String(employee.countryCode) : countryOf(demoProfile.id);
   const list = holidaysFor(country, year, data);
   const requests = optionalRequestsFor(state.leaveRequests, demoProfile.id, year);
   const balance = leaveTable.find((r) => r.code === OPTIONAL_CODE);

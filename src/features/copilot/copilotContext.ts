@@ -7,6 +7,8 @@ import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import { canApproveCompReviews, canViewReport } from "../../data/rbac.ts";
 import { getRewardState } from "../../data/rewardLocal.ts";
 import { getTalentState } from "../../data/talentLocal.ts";
+import { getTickets } from "../../data/ticketStore.ts";
+import { getTravelRequests } from "../../data/travelStore.ts";
 import { TASK_TEAM } from "../../data/taskTeam.ts";
 import { scheduleForEmployee } from "../../data/workSchedule.ts";
 import { teamBelow } from "../../data/workforceStats.ts";
@@ -56,6 +58,9 @@ export function useCopilotContext(): () => CopilotContext {
       orgWide,
       talent: getTalentState(),
       corrections: getAttendanceState().corrections,
+      attendance: getAttendanceState(),
+      tickets: getTickets(),
+      trips: getTravelRequests(),
       swaps: shifts.swaps,
       todayShift: rosteredShift ? shiftLabel(rosteredShift) : undefined,
       compReview: comp ?? undefined,

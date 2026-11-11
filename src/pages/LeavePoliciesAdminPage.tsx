@@ -400,7 +400,7 @@ export function LeavePoliciesAdminPage() {
   const [country, setCountry] = useState<CountryCode>("IN");
   const [tab, setTab] = useState("policies");
   return (
-    <Page title="Leave policies" subtitle="Leave rules and holidays by country">
+    <Page title="Leave policies">
       <FilterBar>
         <label className="filter-label">
           Country

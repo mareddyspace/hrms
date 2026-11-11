@@ -398,55 +398,112 @@ def reference_number(letter_type: str, country_code: str, serial: int, on: date)
     return f"INF-{country_code or 'IN'}/HR/{TYPE_CODE[letter_type]}/{on.year}/{serial:04d}"
 
 
+ENTITY_CONTACT = {
+    "IN": ("+91 80 4710 2200", "hr.in@timez.com", "CIN U72900KA2015PTC081234"),
+    "US": ("+1 212 555 0142", "hr.us@timez.com", "EIN 84-2917365"),
+    "GB": ("+44 20 7946 0321", "hr.uk@timez.com", "Company No. 10293847 (England & Wales)"),
+    "AU": ("+61 2 9067 4410", "hr.au@timez.com", "ABN 51 824 753 556"),
+    "CA": ("+1 416 555 0187", "hr.ca@timez.com", "BN 81729 4563 RC0001"),
+    "AE": ("+971 4 555 0193", "hr.ae@timez.com", "DED Licence 784512"),
+    "SA": ("+966 11 555 0174", "hr.sa@timez.com", "CR 1010654321"),
+    "DE": ("+49 30 5557 1290", "hr.de@timez.com", "HRB 214587 B, Amtsgericht Charlottenburg"),
+}
+
+
 def build_pdf(*, fields: dict[str, str], title: str, to_whom: bool, paragraphs: list[str], reference_no: str, on: date,
               approved_by: str, doc_id: str, version: int) -> bytes:
-    """A4 letter on the entity letterhead (reportlab)."""
+    """A4 letter on the entity letterhead (reportlab): letterhead, ref/date, addressee, subject, body, signatory and a
+    registered-office footer on every page."""
     from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import HRFlowable, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     c = fields["country_code"]
     navy = colors.HexColor("#1d3d6e")
-    body = ParagraphStyle("body", fontName="Times-Roman", fontSize=11, leading=16, spaceAfter=8)
-    small = ParagraphStyle("small", fontName="Helvetica", fontSize=9, leading=12, textColor=colors.HexColor("#555555"))
-    head = ParagraphStyle("head", fontName="Helvetica-Bold", fontSize=16, leading=20, textColor=navy)
-    h1 = ParagraphStyle("h1", fontName="Helvetica-Bold", fontSize=13, leading=18, alignment=TA_CENTER, spaceBefore=6, spaceAfter=14)
-    approval = ParagraphStyle("approval", parent=small, textColor=navy)
-    foot = ParagraphStyle("foot", parent=small, fontSize=8, alignment=TA_CENTER, textColor=colors.HexColor("#777777"))
+    gold = colors.HexColor("#c9a227")
+    grey = colors.HexColor("#5a6475")
+    body = ParagraphStyle("body", fontName="Times-Roman", fontSize=11, leading=16, spaceAfter=8, alignment=TA_JUSTIFY)
+    plain = ParagraphStyle("plain", parent=body, alignment=TA_LEFT)
+    small = ParagraphStyle("small", fontName="Helvetica", fontSize=9, leading=12, textColor=grey)
+    contact_style = ParagraphStyle("contact", parent=small, fontSize=8.5, alignment=TA_RIGHT)
+    brand = ParagraphStyle("brand", fontName="Helvetica-Bold", fontSize=19, leading=21, textColor=navy)
+    entity_style = ParagraphStyle("entity", fontName="Helvetica-Bold", fontSize=9, leading=11,
+                                  textColor=colors.HexColor("#33415c"))
+    mark = ParagraphStyle("mark", fontName="Helvetica-Bold", fontSize=13, leading=15, textColor=colors.white,
+                          alignment=TA_CENTER)
+    meta_style = ParagraphStyle("meta", fontName="Helvetica", fontSize=9.5, leading=12)
+    meta_right = ParagraphStyle("meta_r", parent=meta_style, alignment=TA_RIGHT)
+    h1 = ParagraphStyle("h1", fontName="Helvetica-Bold", fontSize=13, leading=18, alignment=TA_CENTER, spaceBefore=4,
+                        spaceAfter=14)
+    subject = ParagraphStyle("subject", fontName="Helvetica-Bold", fontSize=10.5, leading=14, spaceAfter=12)
+    approval = ParagraphStyle("approval", parent=small, fontSize=8.5, textColor=navy)
 
     entity = escape(fields["legal_entity"])
-    story: list[Any] = [
-        Paragraph("TimeZ", head),
-        Paragraph(f"{entity} · {escape(ENTITY_ADDRESS.get(c, ENTITY_ADDRESS['IN']))}", small),
-        HRFlowable(width="100%", thickness=1.5, color=navy, spaceBefore=4, spaceAfter=10),
-    ]
-    meta = Table([[Paragraph(f"Ref: {escape(reference_no)}", small), Paragraph(escape(letter_date(on.isoformat(), c)), small)]],
-                 colWidths=["70%", "30%"])
-    meta.setStyle(TableStyle([("ALIGN", (1, 0), (1, 0), "RIGHT"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+    address = escape(ENTITY_ADDRESS.get(c, ENTITY_ADDRESS["IN"]))
+    phone, email, registration = ENTITY_CONTACT.get(c, ENTITY_CONTACT["IN"])
+    long_date = escape(letter_date(on.isoformat(), c))
+
+    def label(text: str) -> str:
+        return f'<font name="Helvetica-Bold" size="8" color="#5a6475">{text}</font>'
+
+    logo = Table([[Paragraph("TZ", mark)]], colWidths=[11 * mm], rowHeights=[11 * mm])
+    logo.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), navy), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                              ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    head = Table([[logo, [Paragraph("TimeZ", brand), Paragraph(entity, entity_style)],
+                   Paragraph(f"{address}<br/>{escape(phone)} · {escape(email)}<br/>www.timez.com", contact_style)]],
+                 colWidths=[14 * mm, 70 * mm, None])
+    head.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
                               ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
-    story += [meta, Spacer(1, 6)]
-    if not to_whom:
-        story.append(Paragraph(f"{escape(fields['employee_name'])}<br/>{escape(fields['title'])}, {escape(fields['department'])}"
-                               f"<br/>Employee ID {escape(fields['employee_code'])}", body))
-    story.append(Paragraph(escape(title.upper()), h1))
-    story.append(Paragraph("To whom it may concern," if to_whom else f"Dear {escape(fields['employee_name'])},", body))
-    story += [Paragraph(p, body) for p in paragraphs]
-    story += [
-        Spacer(1, 18), Paragraph(f"For {entity}", body), Spacer(1, 28),
-        HRFlowable(width=55 * mm, thickness=0.8, color=colors.black, hAlign="LEFT", spaceAfter=4),
-        Paragraph("<b>Authorised Signatory</b><br/>Human Resources, TimeZ", body),
-        Paragraph(f"Approved by {escape(approved_by)} on {escape(letter_date(on.isoformat(), c))}", approval),
-        Spacer(1, 30),
-        HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cccccc"), spaceAfter=4),
-        Paragraph(f"Document {escape(doc_id)} · version {version}", foot),
+    story: list[Any] = [
+        head,
+        HRFlowable(width="100%", thickness=2, color=navy, spaceBefore=6, spaceAfter=1.5),
+        HRFlowable(width="100%", thickness=0.8, color=gold, spaceAfter=12),
     ]
+    meta = Table([[Paragraph(f"{label('REF. NO.')}&nbsp;&nbsp;{escape(reference_no)}", meta_style),
+                   Paragraph(f"{label('DATE')}&nbsp;&nbsp;{long_date}", meta_right)]], colWidths=["65%", "35%"])
+    meta.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    story += [meta, Spacer(1, 10)]
+    if not to_whom:
+        story.append(Paragraph(f"{label('TO')}<br/><b>{escape(fields['employee_name'])}</b><br/>"
+                               f"{escape(fields['title'])}, {escape(fields['department'])}"
+                               f"<br/>Employee ID {escape(fields['employee_code'])}", plain))
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(f"<u>Subject:</u> {escape(title)}", subject))
+    else:
+        story.append(Paragraph(f"<u>{escape(title.upper())}</u>", h1))
+    story.append(Paragraph("To whom it may concern," if to_whom else f"Dear {escape(fields['employee_name'])},", plain))
+    story += [Paragraph(p, body) for p in paragraphs]
+    story.append(KeepTogether([
+        Spacer(1, 10), Paragraph("Yours sincerely,", plain), Paragraph(f"For <b>{entity}</b>", plain), Spacer(1, 26),
+        HRFlowable(width=58 * mm, thickness=0.8, color=colors.black, hAlign="LEFT", spaceAfter=4),
+        Paragraph(f"<b>{escape(approved_by)}</b><br/>Authorised Signatory<br/>Human Resources", plain),
+        Paragraph(f"Approved by {escape(approved_by)} on {long_date}", approval),
+    ]))
+
+    foot_lines = [f"Registered office: {fields['legal_entity']}, {ENTITY_ADDRESS.get(c, ENTITY_ADDRESS['IN'])}",
+                  f"{registration} · Document {doc_id} · version {version}",
+                  "Issued electronically from TimeZ HRMS. Verify with HR quoting the reference number."]
+
+    def footer(canvas: Any, doc: Any) -> None:
+        canvas.saveState()
+        width = A4[0]
+        canvas.setStrokeColor(colors.HexColor("#c9ced8"))
+        canvas.setLineWidth(0.5)
+        canvas.line(16 * mm, 17 * mm, width - 16 * mm, 17 * mm)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(grey)
+        for i, line in enumerate(foot_lines):
+            canvas.drawCentredString(width / 2, 13.5 * mm - i * 3.4 * mm, line)
+        canvas.drawRightString(width - 16 * mm, 4 * mm, f"Page {doc.page}")
+        canvas.restoreState()
+
     buf = io.BytesIO()
-    pdf = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=20 * mm,
-                            title=title, author=fields["legal_entity"], subject=reference_no)
-    pdf.build(story)
+    pdf = SimpleDocTemplate(buf, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm, topMargin=14 * mm,
+                            bottomMargin=24 * mm, title=title, author=fields["legal_entity"], subject=reference_no)
+    pdf.build(story, onFirstPage=footer, onLaterPages=footer)
     return buf.getvalue()
 
 

@@ -251,9 +251,40 @@ def assign_missing_managers(db: Session) -> int:
     return assigned
 
 
+def fill_hiring(db: Session) -> int:
+    """Blank "hired by" (a recruiter: someone in HR / talent in the same country who joined earlier) and "hiring
+    manager" (the person's manager; the board for the CEO). Fills blanks only."""
+    people = {e.id: e for e in db.scalars(select(Employee))}
+    recruiters: dict[str, list[Employee]] = {}
+    for e in people.values():
+        dept = (e.department or "").lower()
+        if e.id == "demo-recruiter" or "human resources" in dept or "talent" in dept or "people" in dept:
+            recruiters.setdefault(e.country_code, []).append(e)
+    for group in recruiters.values():
+        group.sort(key=lambda x: (x.id != "demo-recruiter", x.joining_date or date.min, x.id))
+    filled = 0
+    for e in people.values():
+        if _blank(e.hiring_manager):
+            boss = people.get(e.manager_id or "")
+            e.hiring_manager = "Board of Directors" if e.id == CEO else (boss.full_name if boss else "Board of Directors")
+            filled += 1
+        if _blank(e.hired_by):
+            if e.id == CEO:
+                e.hired_by = "Board of Directors (executive search)"
+            else:
+                pool = [r for r in recruiters.get(e.country_code, []) if r.id != e.id
+                        and (r.joining_date is None or e.joining_date is None or r.joining_date <= e.joining_date)]
+                pick = _pick(e.id + ":recruiter", pool) if pool else None
+                e.hired_by = f"{pick.full_name} (Talent Acquisition)" if pick else "TimeZ Talent Acquisition"
+            filled += 1
+    return filled
+
+
 def seed_profiles(db: Session) -> dict[str, int]:
     out = {"profile_fields_filled": fill_missing_profiles(db)}
     db.flush()
     out["managers_assigned"] = assign_missing_managers(db)
+    db.flush()
+    out["hiring_fields_filled"] = fill_hiring(db)
     db.flush()
     return out

@@ -315,7 +315,6 @@ export function LoginPage() {
             TZ
           </span>
           <h1>Forgot password</h1>
-          <p className="lede">We send a one-time code to your registered mobile or email, then you set a new password.</p>
           <div className="stack">
             <Field label="Work email or employee ID">
               <input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" />

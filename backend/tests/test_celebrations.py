@@ -116,3 +116,16 @@ def test_calendar_circle_shows_only_people_around_me(client, babu, ram):
     team = {c["employee_id"] for c in client.get("/api/v1/celebrations", headers=ram,
                                                   params={"year": 2026, "circle": True}).json()}
     assert {"emp-mahesh", "emp-priya", "emp-oliver"} <= team
+
+
+def test_calendar_circle_has_birthdays_and_only_milestone_anniversaries(client, babu, ram):
+    from app.routers.celebrations import is_milestone
+
+    assert [y for y in range(1, 26) if is_milestone(y)] == [1, 3, 5, 10, 15, 20, 25]
+    for headers in (babu, ram):
+        rows = client.get("/api/v1/celebrations", headers=headers, params={"year": 2026, "circle": True}).json()
+        assert any(r["kind"] == "birthday" for r in rows)
+        assert all(is_milestone(r["years"]) for r in rows if r["kind"] == "anniversary")
+    # The company-wide list (Celebrations page) still has every anniversary.
+    everyone = client.get("/api/v1/celebrations", headers=babu, params={"year": 2026}).json()
+    assert any(r["kind"] == "anniversary" and not is_milestone(r["years"]) for r in everyone)

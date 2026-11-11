@@ -150,7 +150,7 @@ function tenureText(dateOfJoining: string, today: string): string {
 
 const MASK = "••••••";
 
-type TabId =
+export type TabId =
   | "personal"
   | "employment"
   | "org"
@@ -178,6 +178,8 @@ export function Employee360View({
   hideHeader = false,
   hideSummary = false,
   selfEdit,
+  onlyTabs,
+  extraTabs = [],
 }: {
   person: PersonRecord;
   viewer: DemoAccount;
@@ -189,6 +191,10 @@ export function Employee360View({
   hideSummary?: boolean;
   /** Your own profile: Edit buttons per section and "Request correction" for HR-owned fields. */
   selfEdit?: { editContact: () => void; editPersonal: () => void; correct: (field: CorrectionField) => ReactNode };
+  /** Only these tabs, in this order (the profile page shows personal and employment details as cards above). */
+  onlyTabs?: TabId[];
+  /** Extra tabs from the page (e.g. Calendar on the profile), after the built-in ones. */
+  extraTabs?: { id: string; label: string; node: ReactNode }[];
 }) {
   const { state, employee } = usePortal();
   const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
@@ -203,7 +209,7 @@ export function Employee360View({
   const isSelf = access.isSelf;
   const terminated = isTerminated(person);
   const exit = getExitDetails(person);
-  const [tab, setTab] = useState<TabId>("personal");
+  const [tab, setTab] = useState<string>(onlyTabs?.[0] ?? "personal");
   const [revealPay, setRevealPay] = useState(false);
   const [viewingCert, setViewingCert] = useState<CertificateDoc | null>(null);
   const correct = (field: CorrectionField) => selfEdit?.correct(field);
@@ -414,7 +420,7 @@ export function Employee360View({
     .filter((e) => (e.type === "Hire" || e.type === "Promotion" || e.type === "Job change") && !isScheduled(e, today))
     .sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))[0]?.effectiveDate;
 
-  const tabs: { id: TabId; label: string }[] = [
+  const allTabs: { id: TabId; label: string }[] = [
     { id: "personal", label: "Personal information" },
     { id: "employment", label: "Employment information" },
     { id: "org", label: "Org structure" },
@@ -437,7 +443,12 @@ export function Employee360View({
     ...(docsVisible ? [{ id: "docs" as const, label: "Documents" }] : []),
     ...(access.work ? [{ id: "lifecycle" as const, label: "Lifecycle history" }] : []),
   ];
-  const activeTab = tabs.some((t) => t.id === tab) ? tab : "personal";
+  const tabs: { id: string; label: string }[] = [
+    ...(onlyTabs ? onlyTabs.flatMap((id) => allTabs.filter((t) => t.id === id)) : allTabs),
+    ...extraTabs.map(({ id, label }) => ({ id, label })),
+  ];
+  const activeTab = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "personal");
+  const extraTab = extraTabs.find((t) => t.id === activeTab);
 
   /* ───── Summary draft: built only from sections this viewer can already see ───── */
   const summaryOn = useAiOn("employee360");
@@ -634,7 +645,8 @@ export function Employee360View({
         </Card>
       )}
 
-      <Tabs tabs={tabs} value={activeTab} onChange={(id) => setTab(id as TabId)} />
+      <Tabs tabs={tabs} value={activeTab} onChange={(id) => setTab(id)} />
+      {extraTab?.node}
 
       {activeTab === "personal" && (
         <Card title="Personal information" className="pi-card">

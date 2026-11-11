@@ -83,6 +83,18 @@ def can_plan(db: Session, t: Ticket, actor_id: str) -> bool:
     return actor_id in (t.assignee_id, t.sub_owner_id, t.requester_id) or manages(db, actor_id, t.assignee_id)
 
 
+def can_take(db: Session, t: Ticket, actor_id: str, role: str) -> bool:
+    """Who may pick up (assign to themselves) an open ticket they don't own: a manager of the requester or of the
+    current owner, the IT desk for IT / access requests and HR for HR queries."""
+    if not is_open(t) or t.assignee_id == actor_id:
+        return False
+    if role in ADMIN_ROLES and t.type in IT_TYPES:
+        return True
+    if role in HR_ACCESS_ROLES and t.type == "HR query":
+        return True
+    return manages(db, actor_id, t.requester_id) or manages(db, actor_id, t.assignee_id)
+
+
 def next_statuses(t: Ticket, actor_id: str) -> list[str]:
     out: list[str] = []
     if t.assignee_id == actor_id:
@@ -90,6 +102,9 @@ def next_statuses(t: Ticket, actor_id: str) -> list[str]:
                 "Waiting": ["In progress", "Resolved"]}.get(t.status, [])
     if t.requester_id == actor_id and t.status == "Resolved":
         out += ["Closed", "In progress"]
+    # The requester may withdraw a ticket nobody has started on yet.
+    if t.requester_id == actor_id and t.status == "Open":
+        out += ["Closed"]
     return list(dict.fromkeys(out))
 
 

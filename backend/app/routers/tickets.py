@@ -59,6 +59,7 @@ class TicketOut(BaseModel):
     names: dict[str, str]  # display names for everyone on the ticket
     can_plan: bool
     next_statuses: list[str]
+    can_take: bool = False  # may assign it to themselves ("Take it")
 
 
 class TicketIn(BaseModel):
@@ -89,6 +90,10 @@ class PersonIn(BaseModel):
     person_id: str | None = Field(default=None, max_length=64)
 
 
+class PriorityIn(BaseModel):
+    priority: str
+
+
 class DueIn(BaseModel):
     due: date | None = None
 
@@ -114,7 +119,7 @@ def _load(db: Session, ticket_id: str, actor_id: str, role: str) -> Ticket:
     return t
 
 
-def _out(db: Session, t: Ticket, actor_id: str) -> TicketOut:
+def _out(db: Session, t: Ticket, actor_id: str, role: str = "") -> TicketOut:
     people = {t.requester_id, t.assignee_id, t.sub_owner_id, *(t.watcher_ids or []), *(k.owner_id for k in t.tasks),
               *(e.by_id for e in t.events)} - {None}
     return TicketOut(
@@ -126,6 +131,7 @@ def _out(db: Session, t: Ticket, actor_id: str) -> TicketOut:
         created_at=t.created_at, updated_at=t.updated_at,
         names={p: rules.person_name(db, p) for p in people},  # type: ignore[misc]
         can_plan=rules.can_plan(db, t, actor_id), next_statuses=rules.next_statuses(t, actor_id),
+        can_take=rules.can_take(db, t, actor_id, role),
     )
 
 
@@ -141,7 +147,7 @@ def _save(db: Session, request: Request, user, t: Ticket, action: str, after: di
                  after=after, ip=client_ip(request))
     db.commit()
     db.refresh(t)
-    return _out(db, t, user.employee_id)
+    return _out(db, t, user.employee_id, user.account.role)
 
 
 def _check_person(db: Session, person_id: str) -> None:
@@ -162,7 +168,7 @@ def list_tickets(db: DbSession, user: CurrentUserDep) -> list[TicketOut]:
     actor_id, role = _actor(user)
     rows = db.scalars(select(Ticket).options(selectinload(Ticket.tasks), selectinload(Ticket.events))
                       .order_by(Ticket.updated_at.desc())).all()
-    return [_out(db, t, actor_id) for t in rows if rules.can_view(db, t, actor_id, role)]
+    return [_out(db, t, actor_id, role) for t in rows if rules.can_view(db, t, actor_id, role)]
 
 
 @router.post("", response_model=TicketOut, status_code=status.HTTP_201_CREATED)
@@ -208,7 +214,10 @@ def assign_ticket(ticket_id: str, body: AssignIn, request: Request, db: DbSessio
     if t.assignee_id == body.assignee_id:
         raise HTTPException(409, "Already assigned to that person.")
     _check_person(db, body.assignee_id)
-    if not rules.manages(db, actor_id, body.assignee_id):
+    if body.assignee_id == actor_id:
+        if not rules.can_take(db, t, actor_id, role):
+            raise HTTPException(403, "You can't take this ticket.")
+    elif not rules.manages(db, actor_id, body.assignee_id):
         raise HTTPException(403, "You can only assign to your team.")
     before = t.assignee_id
     t.assignee_id = body.assignee_id
@@ -285,6 +294,23 @@ def set_sub_owner(ticket_id: str, body: PersonIn, request: Request, db: DbSessio
     rules.add_event(t, actor_id, "task", f"Sub-owner set to {rules.person_name(db, person)}." if person else "Sub-owner removed.")
     _tell(db, person, actor_id, f"Sub-owner on {t.id}", f"{t.title} — from {rules.person_name(db, actor_id)}.", t.id)
     return _save(db, request, user, t, "ticket_sub_owner", {"from": before, "to": person})
+
+
+@router.put("/{ticket_id}/priority", response_model=TicketOut)
+def set_priority(ticket_id: str, body: PriorityIn, request: Request, db: DbSession, user: CurrentUserDep) -> TicketOut:
+    actor_id, role = _actor(user)
+    t = _load(db, ticket_id, actor_id, role)
+    if body.priority not in rules.PRIORITIES:
+        raise HTTPException(422, "Pick a priority.")
+    _plan_guard(db, t, actor_id)
+    if body.priority == t.priority:
+        raise HTTPException(409, "The ticket already has that priority.")
+    before = t.priority
+    t.priority = body.priority
+    rules.add_event(t, actor_id, "status", f"Priority {before} → {body.priority}.")
+    for person in {t.assignee_id, t.sub_owner_id} - {None}:
+        _tell(db, person, actor_id, f"{t.id} is now {body.priority} priority", t.title, t.id)
+    return _save(db, request, user, t, "ticket_priority", {"from": before, "to": body.priority})
 
 
 @router.put("/{ticket_id}/due", response_model=TicketOut)

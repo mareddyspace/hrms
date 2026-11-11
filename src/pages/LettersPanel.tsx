@@ -811,6 +811,7 @@ function ApiLetterViewer({ row, onClose }: { row: LetterRequest; onClose: () => 
           referenceNo: shown?.referenceNo ?? "DRAFT",
           date: shown?.on ?? todayISO(),
           approval: issued ? `Approved${row.approver ? ` by ${row.approver}` : ""}` : "Pending approval",
+          signatory: issued ? row.approver : undefined,
           footer: issued ? `${shown?.referenceNo ?? ""} · version ${shown?.version ?? 1}` : "Draft preview — not valid until approved",
         }),
         { title: `${template.label}${issued ? "" : " (draft)"}`, draft: !issued },

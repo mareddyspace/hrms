@@ -602,6 +602,17 @@ def list_feedback(db: DbSession, user: CurrentUserDep) -> list[PerfFeedbackOut]:
     praise = list(db.scalars(select(PerfFeedback).where(PerfFeedback.kind == "praise").order_by(PerfFeedback.created_at.desc()).limit(200)))
     mine: list[PerfFeedback] = []
     if user.employee_id:
+        # always every praise to or from me and my manager / teammates / reports, not only the company's latest 200
+        me_row = db.get(Employee, user.employee_id)
+        near = {user.employee_id}
+        near |= set(db.scalars(select(Employee.id).where(Employee.manager_id == user.employee_id)))
+        if me_row is not None and me_row.manager_id:
+            near.add(me_row.manager_id)
+            near |= set(db.scalars(select(Employee.id).where(Employee.manager_id == me_row.manager_id)))
+        seen = {r.id for r in praise}
+        praise += [r for r in db.scalars(select(PerfFeedback).where(
+            PerfFeedback.kind == "praise", PerfFeedback.to_id.in_(near) | (PerfFeedback.from_id == user.employee_id)))
+            if r.id not in seen]
         mine = list(db.scalars(select(PerfFeedback).where(
             PerfFeedback.kind.in_(("feedback", "request")),
             (PerfFeedback.to_id == user.employee_id) | (PerfFeedback.from_id == user.employee_id),

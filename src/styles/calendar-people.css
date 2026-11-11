@@ -1,0 +1,112 @@
+/* Calendar birthdays, org chart hover card, global search and change-password rules. */
+
+/* —— Calendar: a named birthday pill in month cells —— */
+.cal-mini.cal-birthday-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #fce7f3;
+  color: #9d174d;
+}
+html[data-theme="night"] .cal-mini.cal-birthday-pill {
+  background: rgba(236, 72, 153, 0.18);
+  color: #f9a8d4;
+}
+
+/* —— Org chart hover card —— */
+.org-hover-wrap { position: relative; }
+.org-hovercard {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 190px;
+  max-width: 260px;
+  padding: 10px 12px;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+}
+.org-hovercard strong { font-size: 14px; }
+.org-hovercard .muted { font-size: 12px; }
+.org-hovercard .btn { align-self: flex-start; margin-top: 4px; display: inline-flex; align-items: center; gap: 5px; }
+
+/* —— Global search —— */
+.gsearch { position: relative; }
+.gsearch-kbd {
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 5px;
+  white-space: nowrap;
+}
+.gsearch:focus-within .gsearch-kbd { display: none; }
+.gsearch-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  max-height: min(70vh, 460px);
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+}
+.gsearch-group {
+  display: block;
+  padding: 8px 8px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.gsearch-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.gsearch-item.active { background: var(--accent-soft, #e0f2f7); }
+.gsearch-ico { display: inline-flex; color: var(--muted); flex: none; }
+.gsearch-text { display: flex; flex-direction: column; min-width: 0; }
+.gsearch-text strong { font-size: 13px; font-weight: 600; }
+.gsearch-text small { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gsearch-empty { padding: 10px 8px; color: var(--muted); font-size: 13px; }
+html[data-theme="night"] .gsearch-item.active { background: rgba(14, 116, 144, 0.25); }
+@media (max-width: 720px) {
+  .gsearch-kbd { display: none; }
+}
+
+/* —— Change password rules —— */
+.pw-rules { margin-top: 10px; }
+.pw-rules ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.pw-rules li { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.pw-rules li.ok { color: #047857; }
+html[data-theme="night"] .pw-rules li.ok { color: #6ee7b7; }
+.pw-meter { margin: 0 0 6px; font-size: 12px; font-weight: 650; }
+.pw-meter.weak { color: #b91c1c; }
+.pw-meter.good { color: #b45309; }
+.pw-meter.strong { color: #047857; }
+html[data-theme="night"] .pw-meter.weak { color: #fca5a5; }
+html[data-theme="night"] .pw-meter.good { color: #fcd34d; }
+html[data-theme="night"] .pw-meter.strong { color: #6ee7b7; }

@@ -1,33 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import {
-  ActionButton,
-  Banner,
-  Card,
-  EmptyState,
-  FilterBar,
-  MetricCard,
-  MetricGrid,
-  Page,
-  StatusBadge,
-  StatusPill,
-  notify,
-} from "../components/ui.tsx";
+import { ActionButton, Banner, Card, EmptyState, Page, notify } from "../components/ui.tsx";
 import {
   ensureTaskExtras,
   isTaskBlocked,
-  isTaskDueSoon,
   isTaskOverdue,
   nextTaskActionHint,
   taskProgress,
   taskStatusLabel,
 } from "../data/taskHelpers.ts";
-import { TASK_TEAM, taskPersonById, taskPersonLabel, taskTeamFor } from "../data/taskTeam.ts";
-import { ProgressBar } from "./dashboards/widgets.tsx";
+import { TASK_TEAM, taskPersonById, taskTeamFor, type TaskTeamPerson } from "../data/taskTeam.ts";
 import {
   formatShortDate,
   formatStamp,
-  parseISODate,
   toISO,
   todayISO,
   TASK_TYPES,
@@ -37,1725 +22,1441 @@ import {
   type TaskStatus,
   type TaskType,
 } from "../model.ts";
-import { DEMO_ACCOUNTS } from "../seed.ts";
 import { managementChain } from "../demoAccounts.ts";
 import { usePortal } from "../store.tsx";
 import { useTaskAutoMode } from "../data/taskAutoMode.ts";
 import { useTaskAutoReminders } from "../data/taskAutoReminders.ts";
+import { useProjects } from "../data/projectStore.ts";
+import { useProjectContext } from "./projectContext.ts";
+import { Avatar, Drawer, PriorityChip, WorkSwitch, dayGap, dueText } from "./workParts.tsx";
 
-type TaskTab = "dashboard" | "open" | "mine" | "scheduled" | "closed" | "report" | "people" | "history";
-type ViewMode = "list" | "board" | "calendar";
-type SortKey = "due" | "priority" | "status" | "updated" | "code";
-type SummaryFocus = "todo" | "progress" | "blocked" | "soon" | "overdue" | "done" | "all";
+type View = "mine" | "byme" | "team" | "following" | "insights";
+type StatusSet = "active" | "scheduled" | "done" | "all";
+type Focus = "" | "late" | "today" | "week" | "progress" | "blocked";
+type Layout = "list" | "board" | "calendar";
+type SortKey = "due" | "priority" | "recent";
+type Column = "todo" | "progress" | "review" | "blocked" | "done";
+type Action = "accept" | "decline" | "start" | "progress" | "block" | "unblock" | "help" | "review" | "complete";
 
+const PRIORITIES: TaskPriority[] = ["urgent", "high", "medium", "low"];
 const PRIORITY_RANK: Record<TaskPriority, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+const WIDE_ROLES = ["hr", "hr_admin", "hrbp", "admin", "super_admin"];
 
-function monthMatrix(year: number, monthIndex: number): { day: number | null; date: string | null }[] {
-  const first = new Date(year, monthIndex, 1);
-  const pad = first.getDay();
-  const days = new Date(year, monthIndex + 1, 0).getDate();
-  const cells: { day: number | null; date: string | null }[] = Array.from({ length: pad }, () => ({
-    day: null,
-    date: null,
-  }));
-  for (let day = 1; day <= days; day += 1) {
-    cells.push({ day, date: toISO(new Date(year, monthIndex, day)) });
-  }
-  while (cells.length % 7 !== 0) cells.push({ day: null, date: null });
+/** Which board column a task sits in. */
+function columnOf(t: Task): Column | "scheduled" {
+  if (t.status === "done") return "done";
+  if (t.status === "scheduled") return "scheduled";
+  if (isTaskBlocked(t)) return "blocked";
+  if (t.inReview) return "review";
+  if (t.status === "progress") return "progress";
+  return "todo";
+}
+
+const DOT: Record<Column | "scheduled", string> = {
+  todo: "s-todo",
+  progress: "s-progress",
+  review: "s-review",
+  blocked: "s-blocked",
+  done: "s-done",
+  scheduled: "s-scheduled",
+};
+
+function dueClass(t: Task, today: string): string {
+  if (!t.due || t.status === "done" || t.status === "scheduled") return "";
+  const d = dayGap(today, t.due);
+  return d < 0 ? "late" : d <= 1 ? "soon" : "";
+}
+
+function bucketOf(t: Task, today: string): string {
+  if (t.status === "done") return "Done";
+  if (!t.due) return "No due date";
+  const d = dayGap(today, t.due);
+  if (d < 0 && t.status !== "scheduled") return "Overdue";
+  if (d <= 0) return "Today";
+  if (d <= 7) return "Next 7 days";
+  return "Later";
+}
+const BUCKETS = ["Overdue", "Today", "Next 7 days", "Later", "No due date", "Done"];
+
+function monthCells(year: number, month: number): (string | null)[] {
+  const pad = (new Date(year, month, 1).getDay() + 6) % 7; // weeks start on Monday
+  const days = new Date(year, month + 1, 0).getDate();
+  const cells: (string | null)[] = Array.from({ length: pad }, () => null);
+  for (let d = 1; d <= days; d += 1) cells.push(toISO(new Date(year, month, d)));
+  while (cells.length % 7) cells.push(null);
   return cells;
 }
 
-function daysBetween(fromIso: string, toIso: string): number {
-  const from = parseISODate(fromIso).getTime();
-  const to = parseISODate(toIso).getTime();
-  return Math.round((to - from) / 86400000);
-}
-
-function matchesQuery(task: Task, q: string): boolean {
-  if (!q) return true;
-  const hay = `${task.code} ${task.subject} ${task.owner} ${task.client} ${task.blocked} ${task.notes} ${task.projectName ?? ""}`.toLowerCase();
-  return hay.includes(q);
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
 }
 
 export function TasksPage() {
+  const portal = usePortal();
+  const { state, employee, createTask, taskAction } = portal;
+  const today = todayISO();
+  const me = employee.id;
+  const myFirst = employee.fullName.split(" ")[0];
+  const [autoMode, setAutoMode] = useTaskAutoMode(me);
+  useTaskAutoReminders();
+
+  const myTeam = useMemo(() => taskTeamFor(me), [me]);
+  const teamIds = useMemo(() => new Set(myTeam.map((p) => p.id)), [myTeam]);
+  const hasTeam = myTeam.length > 0;
+
+  // People I can give work to: me, my reports, colleagues on my projects (not my managers); HR and admins: anyone.
+  const projects = useProjects(useProjectContext());
+  const assignable = useMemo(() => {
+    const above = new Set(managementChain(me).map((m) => m.id));
+    const wide = WIDE_ROLES.includes(employee.role);
+    const colleagues = new Set<string>();
+    for (const p of projects) {
+      for (const m of p.members) colleagues.add(m.employeeId);
+      if (p.managerId) colleagues.add(p.managerId);
+    }
+    const group = (p: TaskTeamPerson): string =>
+      p.id === me ? "You" : teamIds.has(p.id) ? "Your team" : colleagues.has(p.id) && !above.has(p.id) ? "Project colleagues" : wide ? "Everyone" : "";
+    return TASK_TEAM.map((p) => ({ person: p, group: group(p) })).filter((x) => x.group);
+  }, [projects, me, teamIds, employee.role]);
+  const allowedOwnerIds = useMemo(() => assignable.map((x) => x.person.id), [assignable]);
+
+  const scope = useMemo(
+    () =>
+      state.tasks
+        .filter(
+          (t) =>
+            t.employeeId === me ||
+            teamIds.has(t.employeeId) ||
+            t.createdById === me ||
+            t.ccIds?.includes(me) ||
+            t.peopleIds?.includes(me),
+        )
+        .map(ensureTaskExtras),
+    [state.tasks, me, teamIds],
+  );
+
+  const inView = useCallback(
+    (t: Task, v: View): boolean => {
+      if (v === "mine") return t.employeeId === me;
+      if (v === "byme") return t.employeeId !== me && (t.createdById === me || (!t.createdById && t.assignedBy === myFirst));
+      if (v === "team") return teamIds.has(t.employeeId);
+      if (v === "following") return t.employeeId !== me && (!!t.ccIds?.includes(me) || !!t.peopleIds?.includes(me));
+      return false;
+    },
+    [me, myFirst, teamIds],
+  );
+  const openCount = (v: View) => scope.filter((t) => inView(t, v) && t.status !== "done").length;
+
+  const [params, setParams] = useSearchParams();
+  const selectedId = params.get("task") ?? "";
+  const [view, setView] = useState<View>(() => (hasTeam && openCount("mine") === 0 ? "team" : "mine"));
+  const [statusSet, setStatusSet] = useState<StatusSet>("active");
+  const [focus, setFocus] = useState<Focus>("");
+  const [layout, setLayout] = useState<Layout>("list");
+  const [sort, setSort] = useState<SortKey>("due");
+  const [query, setQuery] = useState("");
+  const [priority, setPriority] = useState<"" | TaskPriority>("");
+  const [project, setProject] = useState("");
+  const [showNew, setShowNew] = useState(false);
+  const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [dragOver, setDragOver] = useState<Column | "">("");
+  const [cal, setCal] = useState(() => ({ y: new Date().getFullYear(), m: new Date().getMonth() }));
+
+  const open = (id: string | null) => {
+    const next = new URLSearchParams(params);
+    if (id) {
+      const t = scope.find((x) => x.id === id || x.code === id);
+      next.set("task", t?.id ?? id);
+    } else next.delete("task");
+    setParams(next, { replace: true });
+  };
+  const selected = scope.find((t) => t.id === selectedId || t.code === selectedId) ?? null;
+
+  const viewTasks = scope.filter((t) => inView(t, view));
+  const activeInView = viewTasks.filter((t) => t.status !== "done" && t.status !== "scheduled");
+  const stats = {
+    late: activeInView.filter((t) => isTaskOverdue(t, today)).length,
+    today: activeInView.filter((t) => t.due === today).length,
+    week: activeInView.filter((t) => t.due && t.due >= today && dayGap(today, t.due) <= 7).length,
+    progress: activeInView.filter((t) => t.status === "progress" && !isTaskBlocked(t)).length,
+    blocked: activeInView.filter((t) => isTaskBlocked(t)).length,
+    done: viewTasks.filter((t) => t.status === "done").length,
+  };
+  const projectNames = [...new Set(viewTasks.map((t) => t.projectName || t.client).filter(Boolean))].sort();
+
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const list = viewTasks.filter((t) => {
+      if (layout !== "board") {
+        if (statusSet === "active" && (t.status === "done" || t.status === "scheduled")) return false;
+        if (statusSet === "scheduled" && t.status !== "scheduled") return false;
+        if (statusSet === "done" && t.status !== "done") return false;
+      }
+      if (focus === "late" && !isTaskOverdue(t, today)) return false;
+      if (focus === "today" && (t.due !== today || t.status === "done")) return false;
+      if (focus === "week" && (!t.due || t.due < today || dayGap(today, t.due) > 7 || t.status === "done")) return false;
+      if (focus === "progress" && (t.status !== "progress" || isTaskBlocked(t))) return false;
+      if (focus === "blocked" && !isTaskBlocked(t)) return false;
+      if (priority && t.priority !== priority) return false;
+      if (project && (t.projectName || t.client) !== project) return false;
+      if (q && !`${t.code} ${t.subject} ${t.owner} ${t.projectName ?? t.client} ${t.notes}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+    return list.sort((a, b) => {
+      if (sort === "priority") return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || (a.due || "9").localeCompare(b.due || "9");
+      if (sort === "recent") return b.lastActivityAt.localeCompare(a.lastActivityAt);
+      return (a.due || "9999").localeCompare(b.due || "9999") || PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
+    });
+  }, [viewTasks, layout, statusSet, focus, priority, project, query, sort, today]);
+
+  const filtersOn = !!(focus || priority || project || query);
+  const clearFilters = () => {
+    setFocus("");
+    setPriority("");
+    setProject("");
+    setQuery("");
+  };
+
+  function run(task: Task, action: Action, payload?: { progressPct?: number; blockedReason?: string; dependsOn?: string; comment?: string }) {
+    const error = taskAction(task.id, action, payload);
+    if (error) {
+      notify(error, "err");
+      return error;
+    }
+    return null;
+  }
+
+  /** Board drag and drop: each column maps to the action that gets a task there. */
+  function dropOn(col: Column, id: string) {
+    const t = scope.find((x) => x.id === id);
+    if (!t || columnOf(t) === col) return;
+    let error: string | null = null;
+    if (col === "progress") error = run(t, isTaskBlocked(t) ? "unblock" : t.inReview ? "progress" : "start", t.inReview ? { progressPct: 80 } : undefined);
+    else if (col === "review") error = run(t, "review");
+    else if (col === "done") error = run(t, "complete");
+    else if (col === "blocked") {
+      open(t.id);
+      return;
+    } else error = "A started task can't go back to To do.";
+    if (error) notify(error, "err");
+    else notify(`${t.code} moved.`);
+  }
+
+  // Quick add: a to-do for yourself.
+  const [quick, setQuick] = useState({ subject: "", due: today, priority: "medium" as TaskPriority });
+  function addQuick(e: FormEvent) {
+    e.preventDefault();
+    if (!quick.subject.trim()) return;
+    const error = createTask({
+      subject: quick.subject,
+      ownerId: me,
+      priority: quick.priority,
+      due: quick.due || today,
+      taskType: "Admin",
+      estimatedHours: 1,
+      client: "Internal",
+      allowedOwnerIds,
+    });
+    if (error) {
+      setMessage({ tone: "err", text: error });
+      return;
+    }
+    setMessage(null);
+    notify("Task added.");
+    setQuick({ subject: "", due: today, priority: quick.priority });
+  }
+
+  const views: [View, string][] = [
+    ["mine", "My tasks"],
+    ["byme", "Assigned by me"],
+    ...(hasTeam ? ([["team", "My team"]] as [View, string][]) : []),
+    ["following", "Following"],
+    ...(hasTeam ? ([["insights", "Workload"]] as [View, string][]) : []),
+  ];
+
+  return (
+    <Page
+      title="Tasks"
+      action={
+        <button type="button" className="btn" onClick={() => setShowNew(true)}>
+          New task
+        </button>
+      }
+    >
+      <WorkSwitch />
+
+      <div className="wk-tabs" role="tablist" aria-label="Task views">
+        {views.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={view === id}
+            className={view === id ? "on" : undefined}
+            onClick={() => {
+              setView(id);
+              setFocus("");
+            }}
+          >
+            {label}
+            {id !== "insights" && <span className="wk-count">{openCount(id)}</span>}
+          </button>
+        ))}
+      </div>
+
+      <Banner message={message} />
+
+      {view === "insights" ? (
+        <Workload tasks={scope.filter((t) => teamIds.has(t.employeeId))} today={today} onOpen={(id) => open(id)} />
+      ) : (
+        <>
+          <div className="wk-stats" role="group" aria-label="Task totals">
+            {(
+              [
+                ["late", "Overdue", stats.late, "late"],
+                ["today", "Due today", stats.today, "soon"],
+                ["week", "Next 7 days", stats.week, ""],
+                ["progress", "In progress", stats.progress, "active"],
+                ["blocked", "Blocked", stats.blocked, "blocked"],
+              ] as const
+            ).map(([key, label, value, tone]) => (
+              <button
+                key={key}
+                type="button"
+                className={`wk-stat ${tone}${focus === key ? " on" : ""}`}
+                aria-pressed={focus === key}
+                onClick={() => {
+                  setFocus(focus === key ? "" : key);
+                  if (statusSet === "done") setStatusSet("active");
+                }}
+              >
+                <b>{value}</b>
+                <span>{label}</span>
+              </button>
+            ))}
+            <button
+              type="button"
+              className={`wk-stat done${statusSet === "done" && !focus ? " on" : ""}`}
+              aria-pressed={statusSet === "done" && !focus}
+              onClick={() => {
+                setFocus("");
+                setStatusSet(statusSet === "done" ? "active" : "done");
+                setLayout(layout === "board" ? "list" : layout);
+              }}
+            >
+              <b>{stats.done}</b>
+              <span>Done</span>
+            </button>
+          </div>
+
+          {view === "mine" && (
+            <form className="wk-quick" onSubmit={addQuick}>
+              <input
+                type="text"
+                value={quick.subject}
+                maxLength={120}
+                onChange={(e) => setQuick({ ...quick, subject: e.target.value })}
+                placeholder="Add a to-do for yourself and press Enter"
+                aria-label="New to-do"
+              />
+              <input type="date" value={quick.due} min={today} onChange={(e) => setQuick({ ...quick, due: e.target.value })} aria-label="Due date" />
+              <select value={quick.priority} onChange={(e) => setQuick({ ...quick, priority: e.target.value as TaskPriority })} aria-label="Priority">
+                {PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {p[0].toUpperCase() + p.slice(1)}
+                  </option>
+                ))}
+              </select>
+              <button type="submit" className="btn" disabled={!quick.subject.trim()}>
+                Add
+              </button>
+            </form>
+          )}
+
+          <div className="wk-toolbar">
+            <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tasks" aria-label="Search tasks" />
+            {layout !== "board" && (
+              <select value={statusSet} onChange={(e) => setStatusSet(e.target.value as StatusSet)} aria-label="Status">
+                <option value="active">Active</option>
+                <option value="scheduled">Scheduled</option>
+                <option value="done">Done</option>
+                <option value="all">All</option>
+              </select>
+            )}
+            <select value={priority} onChange={(e) => setPriority(e.target.value as "" | TaskPriority)} aria-label="Priority">
+              <option value="">Any priority</option>
+              {PRIORITIES.map((p) => (
+                <option key={p} value={p}>
+                  {p[0].toUpperCase() + p.slice(1)}
+                </option>
+              ))}
+            </select>
+            {projectNames.length > 1 && (
+              <select value={project} onChange={(e) => setProject(e.target.value)} aria-label="Project">
+                <option value="">All projects</option>
+                {projectNames.map((p) => (
+                  <option key={p}>{p}</option>
+                ))}
+              </select>
+            )}
+            {layout === "list" && (
+              <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort">
+                <option value="due">By due date</option>
+                <option value="priority">By priority</option>
+                <option value="recent">Recently updated</option>
+              </select>
+            )}
+            {filtersOn && (
+              <button type="button" className="btn-ghost btn-tiny wk-clear" onClick={clearFilters}>
+                Clear
+              </button>
+            )}
+            <span className="wk-spacer" />
+            <label className="wk-chip" title="Sends due-date reminders and moves tasks along when you log work">
+              <input type="checkbox" role="switch" checked={autoMode} onChange={(e) => setAutoMode(e.target.checked)} />
+              Auto
+            </label>
+            <div className="wk-seg" role="group" aria-label="Layout">
+              {(["list", "board", "calendar"] as Layout[]).map((l) => (
+                <button key={l} type="button" className={layout === l ? "on" : undefined} aria-pressed={layout === l} onClick={() => setLayout(l)}>
+                  {l[0].toUpperCase() + l.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {layout === "list" && (
+            <TaskList
+              rows={rows}
+              grouped={sort === "due"}
+              today={today}
+              selectedId={selected?.id}
+              showOwner={view !== "mine"}
+              onOpen={open}
+              empty={
+                <EmptyState
+                  title={filtersOn ? "No tasks match" : view === "mine" ? "Nothing on your list" : "No tasks here"}
+                  action={
+                    filtersOn ? (
+                      <button type="button" className="btn-ghost" onClick={clearFilters}>
+                        Clear filters
+                      </button>
+                    ) : (
+                      <button type="button" className="btn-ghost" onClick={() => setShowNew(true)}>
+                        New task
+                      </button>
+                    )
+                  }
+                />
+              }
+            />
+          )}
+
+          {layout === "board" && (
+            <div className="wk-board">
+              {(
+                [
+                  ["todo", "To do"],
+                  ["progress", "In progress"],
+                  ["review", "In review"],
+                  ["blocked", "Blocked"],
+                  ["done", "Done"],
+                ] as [Column, string][]
+              ).map(([col, label]) => {
+                const cards = rows.filter((t) => columnOf(t) === col || (col === "todo" && t.status === "scheduled"));
+                return (
+                  <section
+                    key={col}
+                    className={dragOver === col ? "wk-col drop" : "wk-col"}
+                    aria-label={label}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDragOver(col);
+                    }}
+                    onDragLeave={() => setDragOver("")}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragOver("");
+                      dropOn(col, e.dataTransfer.getData("text/plain"));
+                    }}
+                  >
+                    <div className="wk-col-head">
+                      <span className={`wk-dot ${DOT[col]}`} aria-hidden="true" />
+                      {label}
+                      <span className="wk-count">{cards.length}</span>
+                    </div>
+                    {cards.map((t) => {
+                      const dc = dueClass(t, today);
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          draggable={t.status !== "done"}
+                          onDragStart={(e) => e.dataTransfer.setData("text/plain", t.id)}
+                          className={`wk-card p-${t.priority}${t.id === selected?.id ? " on" : ""}`}
+                          onClick={() => open(t.id)}
+                        >
+                          <span className="wk-meta">
+                            <code>{t.code}</code>
+                            {t.status === "scheduled" && <span>Scheduled</span>}
+                            <span>{t.projectName || t.client}</span>
+                          </span>
+                          <span className="wk-card-title">{t.subject}</span>
+                          <span className="wk-card-foot">
+                            {t.due && <span className={`wk-chip ${dc}`}>{dueText(t.due, today, formatShortDate)}</span>}
+                            <PriorityChip priority={t.priority} />
+                            <Avatar name={taskPersonById(t.employeeId)?.fullName ?? t.owner} />
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {cards.length === 0 && <p className="wk-col-empty">Empty</p>}
+                  </section>
+                );
+              })}
+            </div>
+          )}
+
+          {layout === "calendar" && (
+            <Card
+              title={new Date(cal.y, cal.m, 1).toLocaleString("en-GB", { month: "long", year: "numeric" })}
+              action={
+                <div className="wk-seg">
+                  <button type="button" onClick={() => setCal((c) => ({ y: c.m === 0 ? c.y - 1 : c.y, m: (c.m + 11) % 12 }))} aria-label="Previous month">
+                    ‹
+                  </button>
+                  <button type="button" onClick={() => setCal({ y: new Date().getFullYear(), m: new Date().getMonth() })}>
+                    Today
+                  </button>
+                  <button type="button" onClick={() => setCal((c) => ({ y: c.m === 11 ? c.y + 1 : c.y, m: (c.m + 1) % 12 }))} aria-label="Next month">
+                    ›
+                  </button>
+                </div>
+              }
+            >
+              <div className="task-cal">
+                {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+                  <div key={d} className="task-cal-head">
+                    {d}
+                  </div>
+                ))}
+                {monthCells(cal.y, cal.m).map((date, i) => {
+                  const due = date ? rows.filter((t) => t.due === date) : [];
+                  return (
+                    <div key={date ?? `pad-${i}`} className={`task-cal-cell${date === today ? " today" : ""}${due.length ? " has-due" : ""}`}>
+                      {date && <span className="task-cal-day">{Number(date.slice(8))}</span>}
+                      {due.slice(0, 3).map((t) => (
+                        <button key={t.id} type="button" className={`task-cal-chip ${t.priority}`} title={t.subject} onClick={() => open(t.id)}>
+                          {t.code}
+                        </button>
+                      ))}
+                      {due.length > 3 && <span className="muted">+{due.length - 3}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+        </>
+      )}
+
+      {selected && <TaskDrawer key={selected.id} task={selected} scope={scope} assignable={assignable} onClose={() => open(null)} onOpen={open} />}
+
+      {showNew && (
+        <NewTaskDialog
+          assignable={assignable}
+          teamIds={teamIds}
+          tasks={scope}
+          projectOptions={[...new Set([...state.projects.map((p) => p.name), ...projects.map((p) => p.name)])]}
+          onClose={() => setShowNew(false)}
+          onCreated={(ownerId) => {
+            setShowNew(false);
+            setView(ownerId === me ? "mine" : "byme");
+            setStatusSet("active");
+          }}
+        />
+      )}
+    </Page>
+  );
+}
+
+function TaskList({
+  rows,
+  grouped,
+  today,
+  selectedId,
+  showOwner,
+  onOpen,
+  empty,
+}: {
+  rows: Task[];
+  grouped: boolean;
+  today: string;
+  selectedId?: string;
+  showOwner: boolean;
+  onOpen: (id: string) => void;
+  empty: ReactNode;
+}) {
+  if (rows.length === 0) return <div className="wk-list">{empty}</div>;
+  const groups = grouped
+    ? BUCKETS.map((b) => [b, rows.filter((t) => bucketOf(t, today) === b)] as const).filter(([, list]) => list.length)
+    : ([["", rows]] as const);
+  return (
+    <div className="wk-list">
+      {groups.map(([name, list]) => (
+        <div key={name || "all"}>
+          {name && (
+            <div className={name === "Overdue" ? "wk-group late" : "wk-group"}>
+              {name} <span className="wk-count">{list.length}</span>
+            </div>
+          )}
+          <ul className="wk-rows">
+            {list.map((t) => {
+              const col = columnOf(t);
+              const dc = dueClass(t, today);
+              const checks = t.subtasks ?? [];
+              const ownerName = taskPersonById(t.employeeId)?.fullName ?? t.owner;
+              return (
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    className={`wk-row p-${t.priority}${t.id === selectedId ? " on" : ""}${t.status === "done" ? " is-done" : ""}`}
+                    onClick={() => onOpen(t.id)}
+                  >
+                    <span className={`wk-dot ${DOT[col]}`} title={taskStatusLabel(t)} />
+                    <span className="wk-main">
+                      <span className="wk-title">{t.subject}</span>
+                      <span className="wk-meta">
+                        <code>{t.code}</code>
+                        <span>{taskStatusLabel(t)}</span>
+                        <span>{t.projectName || t.client}</span>
+                        {checks.length > 0 && (
+                          <span>
+                            ☑ {checks.filter((c) => c.done).length}/{checks.length}
+                          </span>
+                        )}
+                        {(t.comments?.length ?? 0) > 0 && <span>💬 {t.comments!.length}</span>}
+                        {isTaskBlocked(t) && <span style={{ color: "var(--danger)" }}>Blocked</span>}
+                      </span>
+                    </span>
+                    <span className="wk-who">
+                      {showOwner ? (
+                        <>
+                          <Avatar name={ownerName} />
+                          <span>{ownerName}</span>
+                        </>
+                      ) : (
+                        <span className="muted">from {t.assignedBy}</span>
+                      )}
+                    </span>
+                    <span className="wk-hide-sm">
+                      {t.due ? <span className={`wk-chip ${dc}`}>{t.status === "done" ? formatShortDate(t.due) : dueText(t.due, today, formatShortDate)}</span> : <span className="muted">—</span>}
+                    </span>
+                    <span className="wk-cell-end">
+                      <PriorityChip priority={t.priority} />
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Workload({ tasks, today, onOpen }: { tasks: Task[]; today: string; onOpen: (id: string) => void }) {
+  const people = [...new Set(tasks.map((t) => t.employeeId))]
+    .map((id) => {
+      const theirs = tasks.filter((t) => t.employeeId === id);
+      const active = theirs.filter((t) => t.status !== "done" && t.status !== "scheduled");
+      const done = theirs.filter((t) => t.status === "done");
+      const next = active.filter((t) => t.due).sort((a, b) => a.due.localeCompare(b.due))[0];
+      return {
+        id,
+        name: taskPersonById(id)?.fullName ?? theirs[0]?.owner ?? id,
+        active: active.length,
+        late: active.filter((t) => isTaskOverdue(t, today)).length,
+        hot: active.filter((t) => t.priority === "urgent" || t.priority === "high").length,
+        blocked: active.filter((t) => isTaskBlocked(t)).length,
+        done: done.length,
+        onTime: done.filter((t) => t.due && t.lastActivityAt.slice(0, 10) <= t.due).length,
+        next,
+      };
+    })
+    .sort((a, b) => b.late - a.late || b.active - a.active);
+  if (people.length === 0) return <EmptyState title="No team tasks yet" />;
+  return (
+    <Card title={`Team workload · ${people.length} people`}>
+      <div className="table-scroll">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Person</th>
+              <th>Active</th>
+              <th>Overdue</th>
+              <th>Urgent / high</th>
+              <th>Blocked</th>
+              <th>Done</th>
+              <th>On time</th>
+              <th>Next due</th>
+            </tr>
+          </thead>
+          <tbody>
+            {people.map((p) => (
+              <tr key={p.id}>
+                <td>
+                  <span className="wk-who">
+                    <Avatar name={p.name} />
+                    <span>{p.name}</span>
+                  </span>
+                </td>
+                <td>{p.active}</td>
+                <td style={p.late ? { color: "var(--danger)", fontWeight: 600 } : undefined}>{p.late}</td>
+                <td>{p.hot}</td>
+                <td>{p.blocked}</td>
+                <td>{p.done}</td>
+                <td>{p.done ? `${Math.round((p.onTime / p.done) * 100)}%` : "—"}</td>
+                <td>
+                  {p.next ? (
+                    <button type="button" className="link-btn" onClick={() => onOpen(p.next!.id)}>
+                      {formatShortDate(p.next.due)} · {p.next.code}
+                    </button>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+type Assignable = { person: TaskTeamPerson; group: string }[];
+
+function TaskDrawer({
+  task: t,
+  scope,
+  assignable,
+  onClose,
+  onOpen,
+}: {
+  task: Task;
+  scope: Task[];
+  assignable: Assignable;
+  onClose: () => void;
+  onOpen: (id: string) => void;
+}) {
   const {
     state,
     employee,
-    isManager: isManagerRole,
-    moveTask,
+    taskAction,
+    editTask,
+    toggleTaskSubtask,
+    addTaskComment,
     reassignTask,
     addTaskPerson,
     removeTaskPerson,
-    createTask,
-    taskAction,
-    toggleTaskSubtask,
-    addTaskComment,
+    moveTask,
     canApproveLeaveFor,
-    canDecideFor,
   } = usePortal();
-  // Team task tools only for people who actually have someone below them (not an admin with no reports).
-  // The CEO's role is not a "manager" role, but his summary already counts his line's tasks, so he gets the team view too.
-  const isManager = (isManagerRole || managementChain(employee.id).length === 0) && taskTeamFor(employee.id).length > 0;
+  const me = employee.id;
   const today = todayISO();
-  // The CEO has nobody above him, so task wording doesn't mention "your manager".
-  const hasManager = managementChain(employee.id).length > 0;
-  const [autoMode, setAutoMode] = useTaskAutoMode(employee.id);
-  useTaskAutoReminders();
-  const myTeam = useMemo(() => taskTeamFor(employee.id), [employee.id]);
-  // Own tasks plus tasks of people below you in your own reporting line (HR's leave rights don't make
-  // other managers' teams yours).
-  const scopeTasks = useMemo(() => {
-    const below = new Set(myTeam.map((p) => p.id));
-    return state.tasks
-      .filter(
-        (task) =>
-          task.employeeId === employee.id ||
-          below.has(task.employeeId) ||
-          task.ccIds?.includes(employee.id) ||
-          task.peopleIds?.includes(employee.id),
-      )
-      .map(ensureTaskExtras);
-  }, [state.tasks, employee.id, myTeam]);
+  const hasManager = managementChain(me).length > 0;
+  const isOwn = t.employeeId === me;
+  const isCreator = t.createdById === me;
+  const managesOwner = !isOwn && canApproveLeaveFor(t.employeeId);
+  const canAct = (isOwn || managesOwner) && t.status !== "done";
+  const canEdit = (isCreator || managesOwner) && t.status !== "done";
+  const canReview = (managesOwner || (isCreator && !isOwn)) && t.status !== "done";
+  const follower = !isOwn && !managesOwner && !isCreator;
+  const canComment = isOwn || managesOwner || isCreator || !!t.ccIds?.includes(me) || !!t.peopleIds?.includes(me);
+  const blocked = isTaskBlocked(t);
+  const col = columnOf(t);
+  const pct = taskProgress(t);
+  const late = isTaskOverdue(t, today);
 
-  const [tab, setTab] = useState<TaskTab>(isManager ? "dashboard" : "mine");
-  const [view, setView] = useState<ViewMode>("list");
-  // A notification link (/tasks?task=TSK-…) opens that task directly.
-  const [params] = useSearchParams();
-  const linked = params.get("task");
-  const [selectedId, setSelectedId] = useState(
-    (linked && scopeTasks.find((task) => task.id === linked || (task as { code?: string }).code === linked)?.id) ||
-      scopeTasks.find((task) => task.status !== "done")?.id ||
-      scopeTasks[0]?.id ||
-      "",
+  const [form, setForm] = useState<"" | "block" | "help" | "decline" | "edit" | "progress">("");
+  const [text, setText] = useState("");
+  const [depends, setDepends] = useState("");
+  const [pctDraft, setPctDraft] = useState(Math.max(pct, 10));
+  const [comment, setComment] = useState("");
+  const [addPerson, setAddPerson] = useState("");
+  const [edit, setEdit] = useState({ subject: t.subject, notes: t.notes });
+
+  function act(action: Action, payload?: { progressPct?: number; blockedReason?: string; dependsOn?: string; comment?: string }, ok?: string) {
+    const error = taskAction(t.id, action, payload);
+    if (error) return error;
+    notify(ok ?? "Task updated.");
+    setForm("");
+    setText("");
+    setDepends("");
+    return null;
+  }
+  const result = (error: string | null, ok: string) => {
+    if (error) notify(error, "err");
+    else notify(ok);
+    return error;
+  };
+
+  const ownerName = taskPersonById(t.employeeId)?.fullName ?? t.owner;
+  const related = t.referenceTaskId ? state.tasks.find((x) => x.id === t.referenceTaskId) : undefined;
+  const feed = [
+    ...(t.comments ?? []).map((c) => ({ kind: "comment" as const, id: c.id, at: c.at, who: c.author, text: c.text })),
+    ...(t.activity ?? [])
+      .filter((a) => a.action !== "Commented")
+      .map((a) => ({ kind: "event" as const, id: a.id, at: a.at, who: a.actor, text: `${a.action}${a.detail ? ` · ${a.detail}` : ""}` })),
+  ].sort((a, b) => b.at.localeCompare(a.at));
+
+  const statusName = taskStatusLabel(t);
+  // Handing a task over or adding people stays within your own team (HR: anyone), as the store and server allow.
+  const owners = assignable.filter((x) => x.group === "Your team" || x.group === "Everyone");
+
+  const foot = (
+    <>
+      {t.status === "scheduled" && managesOwner && (
+        <ActionButton
+          className="btn"
+          onAction={() => {
+            moveTask(t.id, "open");
+            notify("Task released.");
+          }}
+        >
+          Release
+        </ActionButton>
+      )}
+      {canAct && t.status === "open" && !t.accepted && !blocked && isOwn && (
+        <>
+          <ActionButton className="btn" onAction={() => act("accept", undefined, "Task accepted.")}>
+            Accept
+          </ActionButton>
+          {!t.activity?.some((a) => a.action === "Declined") && (
+            <button type="button" className="btn-ghost" onClick={() => setForm("decline")}>
+              Decline
+            </button>
+          )}
+        </>
+      )}
+      {canAct && t.status === "open" && (t.accepted || !isOwn) && !blocked && (
+        <ActionButton className="btn" onAction={() => act("start", undefined, "Task started.")}>
+          Start
+        </ActionButton>
+      )}
+      {canAct && t.status === "progress" && !blocked && !t.inReview && (
+        <>
+          {isOwn && !isCreator && hasManager ? (
+            <ActionButton className="btn" onAction={() => act("review", undefined, hasManager ? "Sent for review." : "Submitted.")}>
+              Send for review
+            </ActionButton>
+          ) : (
+            <ActionButton className="btn" onAction={() => act("complete", undefined, "Task done.")}>
+              Mark done
+            </ActionButton>
+          )}
+          <button type="button" className="btn-ghost" onClick={() => setForm("progress")}>
+            Update progress
+          </button>
+        </>
+      )}
+      {t.inReview && canReview && !blocked && (
+        <>
+          <ActionButton className="btn" onAction={() => act("complete", undefined, "Task done.")}>
+            Approve and close
+          </ActionButton>
+          <ActionButton className="btn-ghost" onAction={() => act("progress", { progressPct: Math.min(pct, 80) }, "Sent back.")}>
+            Send back
+          </ActionButton>
+        </>
+      )}
+      {canAct && blocked && (
+        <ActionButton className="btn" onAction={() => act("unblock", undefined, "Blocker cleared.")}>
+          Clear blocker
+        </ActionButton>
+      )}
+      {canAct && t.status !== "scheduled" && (t.accepted || !isOwn) && !t.inReview && (
+        <button type="button" className="btn-ghost" onClick={() => setForm("block")}>
+          {blocked ? "Update blocker" : "Blocked"}
+        </button>
+      )}
+      {canAct && isOwn && hasManager && t.status !== "scheduled" && (
+        <button type="button" className="btn-ghost" onClick={() => setForm("help")}>
+          Ask for help
+        </button>
+      )}
+      <span className="wk-spacer" />
+      {isOwn && t.accepted && (t.status === "open" || t.status === "progress") && (
+        <Link className="btn-ghost" to={`/timesheet?work=task:${encodeURIComponent(t.id)}`}>
+          Log time
+        </Link>
+      )}
+    </>
   );
-  const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const [calCursor, setCalCursor] = useState(() => {
-    const now = new Date();
-    return { year: now.getFullYear(), month: now.getMonth() };
-  });
-  const [historyPerson, setHistoryPerson] = useState(employee.id);
-  const [addPersonId, setAddPersonId] = useState("");
-  const [showCreate, setShowCreate] = useState(false);
-  const [query, setQuery] = useState("");
-  const [filterPriority, setFilterPriority] = useState("");
-  const [filterStatus, setFilterStatus] = useState("");
-  const [filterDue, setFilterDue] = useState<"all" | "overdue" | "soon" | "none">("all");
-  const [filterBlocked, setFilterBlocked] = useState<"all" | "blocked" | "clear">("all");
-  const [sortKey, setSortKey] = useState<SortKey>("due");
-  const [summaryFocus, setSummaryFocus] = useState<SummaryFocus | "">("");
-  const [progressDraft, setProgressDraft] = useState(50);
-  const [blockReason, setBlockReason] = useState("");
-  const [blockDepends, setBlockDepends] = useState("");
-  const [showBlockForm, setShowBlockForm] = useState(false);
-  const [showHelpForm, setShowHelpForm] = useState(false);
-  const [showDeclineForm, setShowDeclineForm] = useState(false);
-  const [declineReason, setDeclineReason] = useState("");
-  const [commentDraft, setCommentDraft] = useState("");
-  const [helpDraft, setHelpDraft] = useState("");
-  const emptyDraft = () => ({
+
+  return (
+    <Drawer
+      label={`${t.code} ${t.subject}`}
+      onClose={onClose}
+      head={
+        <>
+          <div className="wk-dhead-top">
+            <span className={`wk-dot ${DOT[col]}`} aria-hidden="true" />
+            <span className="wk-status">{statusName}</span>
+            <code>{t.code}</code>
+            {canEdit && form !== "edit" && (
+              <button type="button" className="btn-ghost btn-tiny" onClick={() => setForm("edit")}>
+                Edit
+              </button>
+            )}
+            <button type="button" className="wk-x" aria-label="Close" onClick={onClose}>
+              ×
+            </button>
+          </div>
+          <h2>{t.subject}</h2>
+          <div className="wk-dhead-chips">
+            <PriorityChip priority={t.priority} />
+            {t.due && <span className={`wk-chip ${dueClass(t, today)}`}>Due {formatShortDate(t.due)}</span>}
+            {t.taskType && <span className="wk-chip">{t.taskType}</span>}
+            {(t.projectName || t.client) && <span className="wk-chip">{t.projectName || t.client}</span>}
+          </div>
+        </>
+      }
+      foot={canAct || canReview ? foot : undefined}
+    >
+      {form === "edit" && (
+        <div className="wk-inline-form">
+          <label className="field">
+            Name
+            <input value={edit.subject} maxLength={120} onChange={(e) => setEdit({ ...edit, subject: e.target.value })} />
+          </label>
+          <label className="field">
+            Description
+            <textarea rows={4} value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} />
+          </label>
+          <div className="wk-compose-actions">
+            <ActionButton
+              className="btn btn-tiny"
+              onAction={() => {
+                const error = editTask(t.id, edit);
+                if (!error) setForm("");
+                return result(error, "Task saved.");
+              }}
+            >
+              Save
+            </ActionButton>
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => setForm("")}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {(form === "block" || form === "help" || form === "decline") && (
+        <div className="wk-inline-form">
+          <label className="field">
+            {form === "block" ? "What is blocking it?" : form === "help" ? "What do you need?" : "Why are you declining?"}
+            <input value={text} onChange={(e) => setText(e.target.value)} autoFocus />
+          </label>
+          {form === "block" && (
+            <label className="field">
+              Waiting on (optional)
+              <input value={depends} onChange={(e) => setDepends(e.target.value)} placeholder="e.g. TSK-1080, access to staging" />
+            </label>
+          )}
+          <div className="wk-compose-actions">
+            <ActionButton
+              className="btn btn-tiny"
+              onAction={() =>
+                form === "block"
+                  ? act("block", { blockedReason: text, dependsOn: depends }, "Marked blocked.")
+                  : form === "help"
+                    ? act("help", { comment: text || "Need guidance on this task." }, "Help request sent.")
+                    : act("decline", { comment: text }, "Task declined.")
+              }
+            >
+              {form === "block" ? "Save blocker" : form === "help" ? "Send" : "Decline task"}
+            </ActionButton>
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => setForm("")}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {form === "progress" && (
+        <div className="wk-inline-form">
+          <label className="field">
+            Progress · {pctDraft}%
+            <input type="range" min={0} max={99} step={5} value={pctDraft} onChange={(e) => setPctDraft(Number(e.target.value))} />
+          </label>
+          <div className="wk-compose-actions">
+            <ActionButton className="btn btn-tiny" onAction={() => act("progress", { progressPct: pctDraft }, "Progress updated.")}>
+              Save
+            </ActionButton>
+            <button type="button" className="btn-ghost btn-tiny" onClick={() => setForm("")}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {t.status !== "done" && !follower && (
+        <div className={late || blocked ? "wk-next late" : "wk-next"}>
+          <span>{blocked ? `Blocked: ${t.blocked}` : late ? `Overdue by ${-dayGap(today, t.due)} day(s)` : "Next step"}</span>
+          {nextTaskActionHint(t)}
+        </div>
+      )}
+
+      <dl className="wk-facts">
+        <div className="wk-fact">
+          <dt>Owner</dt>
+          <dd>
+            {managesOwner && t.status !== "done" ? (
+              <select
+                value={t.employeeId}
+                aria-label="Owner"
+                onChange={(e) => result(reassignTask(t.id, e.target.value), "Owner changed.")}
+              >
+                {!owners.some((x) => x.person.id === t.employeeId) && <option value={t.employeeId}>{ownerName}</option>}
+                {owners.map((x) => (
+                  <option key={x.person.id} value={x.person.id}>
+                    {x.person.fullName}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <>
+                <Avatar name={ownerName} />
+                {ownerName}
+              </>
+            )}
+          </dd>
+        </div>
+        <div className="wk-fact">
+          <dt>Assigned by</dt>
+          <dd>{t.assignedBy}</dd>
+        </div>
+        <div className="wk-fact">
+          <dt>Due</dt>
+          <dd>
+            {canEdit ? (
+              <input type="date" value={t.due} aria-label="Due date" onChange={(e) => result(editTask(t.id, { due: e.target.value }), "Due date changed.")} />
+            ) : (
+              <span className={late ? "wk-chip late" : undefined}>{t.due ? formatShortDate(t.due) : "—"}</span>
+            )}
+          </dd>
+        </div>
+        <div className="wk-fact">
+          <dt>Priority</dt>
+          <dd>
+            {canEdit ? (
+              <select value={t.priority} aria-label="Priority" onChange={(e) => result(editTask(t.id, { priority: e.target.value as TaskPriority }), "Priority changed.")}>
+                {PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {p[0].toUpperCase() + p.slice(1)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <PriorityChip priority={t.priority} />
+            )}
+          </dd>
+        </div>
+        <div className="wk-fact">
+          <dt>Progress</dt>
+          <dd>
+            <span className="wk-mini-bar" aria-hidden="true">
+              <i style={{ width: `${pct}%` }} />
+            </span>
+            {pct}%
+          </dd>
+        </div>
+        <div className="wk-fact">
+          <dt>Time</dt>
+          <dd>
+            {t.hoursSpent}h of {t.estimatedHours}h
+          </dd>
+        </div>
+        {(related || t.dependsOn) && (
+          <div className="wk-fact wide">
+            <dt>{related ? "Related task" : "Waiting on"}</dt>
+            <dd>
+              {related &&
+                (scope.some((x) => x.id === related.id) ? (
+                  <button type="button" className="link-btn" onClick={() => onOpen(related.id)}>
+                    {related.code} · {related.subject}
+                  </button>
+                ) : (
+                  related.code
+                ))}
+              {t.dependsOn && <span>{related ? ` · waiting on ${t.dependsOn}` : t.dependsOn}</span>}
+            </dd>
+          </div>
+        )}
+      </dl>
+
+      <section className="wk-sec">
+        <h3>Description</h3>
+        <p className={t.notes ? "wk-desc" : "wk-desc empty"}>{t.notes || "No description."}</p>
+        {(t.links?.length ?? 0) > 0 && (
+          <ul className="wk-links">
+            {t.links!.map((link) => (
+              <li key={link.url}>
+                <a href={link.url} target="_blank" rel="noopener noreferrer">
+                  {link.label}
+                </a>
+                <span> · {hostOf(link.url)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {(t.subtasks?.length ?? 0) > 0 && (
+        <section className="wk-sec">
+          <h3>
+            Checklist
+            <span className="wk-count">
+              {t.subtasks!.filter((s) => s.done).length}/{t.subtasks!.length}
+            </span>
+          </h3>
+          <div className="wk-bar" aria-hidden="true">
+            <i style={{ width: `${(t.subtasks!.filter((s) => s.done).length / t.subtasks!.length) * 100}%` }} />
+          </div>
+          <ul className="wk-check">
+            {t.subtasks!.map((s) => (
+              <li key={s.id} className={s.done ? "done" : undefined}>
+                <input
+                  type="checkbox"
+                  checked={s.done}
+                  disabled={!canAct || t.status === "scheduled"}
+                  aria-label={s.title}
+                  onChange={() => result(toggleTaskSubtask(t.id, s.id), "Checklist updated.")}
+                />
+                <span className="wk-check-title">{s.title}</span>
+                <span />
+                <span />
+                <span />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="wk-sec">
+        <h3>People</h3>
+        <div className="wk-people">
+          <span className="wk-person">
+            <Avatar name={ownerName} />
+            {ownerName} <em>owner</em>
+          </span>
+          {(t.peopleIds ?? []).map((id) => {
+            const name = taskPersonById(id)?.fullName ?? id;
+            return (
+              <span key={id} className="wk-person">
+                <Avatar name={name} />
+                {name}
+                {managesOwner && t.status !== "done" && (
+                  <button type="button" aria-label={`Remove ${name}`} onClick={() => result(removeTaskPerson(t.id, id), `${name} removed.`)}>
+                    ×
+                  </button>
+                )}
+              </span>
+            );
+          })}
+          {(t.ccIds ?? []).map((id) => {
+            const name = taskPersonById(id)?.fullName ?? id;
+            return (
+              <span key={`cc-${id}`} className="wk-person">
+                <Avatar name={name} />
+                {name} <em>cc</em>
+              </span>
+            );
+          })}
+        </div>
+        {managesOwner && t.status !== "done" && (
+          <div className="wk-inline">
+            <select value={addPerson} onChange={(e) => setAddPerson(e.target.value)} aria-label="Add a person">
+              <option value="">Add a teammate…</option>
+              {assignable
+                .filter((x) => x.person.id !== t.employeeId && !(t.peopleIds ?? []).includes(x.person.id) && owners.includes(x))
+                .map((x) => (
+                  <option key={x.person.id} value={x.person.id}>
+                    {x.person.fullName}
+                  </option>
+                ))}
+            </select>
+            <ActionButton
+              className="btn-ghost btn-tiny"
+              disabled={!addPerson}
+              onAction={() => {
+                const error = addTaskPerson(t.id, addPerson);
+                if (!error) setAddPerson("");
+                return result(error, "Person added.");
+              }}
+            >
+              Add
+            </ActionButton>
+          </div>
+        )}
+      </section>
+
+      <section className="wk-sec">
+        <h3>
+          Conversation <span className="wk-count">{t.comments?.length ?? 0}</span>
+        </h3>
+        {canComment && (
+          <div className="wk-compose">
+            <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Write a comment" aria-label="Comment" rows={2} />
+            <div className="wk-compose-actions">
+              <ActionButton
+                className="btn btn-tiny"
+                disabled={!comment.trim()}
+                onAction={() => {
+                  const error = addTaskComment(t.id, comment);
+                  if (!error) setComment("");
+                  return result(error, "Comment posted.");
+                }}
+              >
+                Comment
+              </ActionButton>
+            </div>
+          </div>
+        )}
+        <ul className="wk-feed">
+          {feed.map((f) =>
+            f.kind === "comment" ? (
+              <li key={f.id}>
+                <Avatar name={f.who} />
+                <div className="wk-bubble">
+                  <header>
+                    <b>{f.who}</b>
+                    <time>{formatStamp(f.at)}</time>
+                  </header>
+                  <p>{f.text}</p>
+                </div>
+              </li>
+            ) : (
+              <li key={f.id}>
+                <span className="wk-tick" aria-hidden="true" />
+                <div className="wk-ev">
+                  <b>{f.who}</b> {f.text} · <time>{formatStamp(f.at)}</time>
+                </div>
+              </li>
+            ),
+          )}
+        </ul>
+      </section>
+    </Drawer>
+  );
+}
+
+function NewTaskDialog({
+  assignable,
+  teamIds,
+  tasks,
+  projectOptions,
+  onClose,
+  onCreated,
+}: {
+  assignable: Assignable;
+  teamIds: Set<string>;
+  tasks: Task[];
+  projectOptions: string[];
+  onClose: () => void;
+  onCreated: (ownerId: string) => void;
+}) {
+  const { employee, createTask } = usePortal();
+  const today = todayISO();
+  const [d, setD] = useState({
     subject: "",
-    ownerId: taskTeamFor(employee.id)[0]?.id ?? "",
+    ownerId: employee.id,
     taskType: "Feature" as TaskType,
     priority: "medium" as TaskPriority,
     status: "open" as TaskStatus,
     client: "",
     notes: "",
-    due: today,
+    due: toISO(new Date(Date.now() + 2 * 86_400_000)),
     estimatedHours: 4,
     peopleIds: [] as string[],
     ccIds: [] as string[],
     referenceTaskId: "",
-    links: [{ label: "", url: "" }] as TaskLink[],
+    link: { label: "", url: "" } as TaskLink,
   });
-  const [draft, setDraft] = useState(emptyDraft);
-  // Anyone in the company can be CC'd; owner and collaborators come from your own team.
-  const ccCandidates = TASK_TEAM.filter((p) => p.id !== employee.id && p.id !== draft.ownerId && !draft.peopleIds.includes(p.id));
-  const projectOptions = [...new Set([...state.projects.map((p) => p.name), ...state.tasks.map((t) => t.projectName || t.client)].filter(Boolean))];
-  const toggleIn = (list: string[], id: string) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+  const [error, setError] = useState<string | null>(null);
+  const groups = [...new Set(assignable.map((x) => x.group))];
+  const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+  const others = assignable.filter((x) => x.person.id !== d.ownerId && x.group !== "You");
+  const ccPool = TASK_TEAM.filter((p) => p.id !== d.ownerId && p.id !== employee.id && !d.peopleIds.includes(p.id));
 
-  const selected = scopeTasks.find((task) => task.id === selectedId) ?? null;
-  const selectedPeople = selected?.peopleIds ?? [];
-  const addablePeople = myTeam.filter(
-    (p) => selected && p.id !== selected.employeeId && !selectedPeople.includes(p.id),
-  );
-
-  useEffect(() => {
-    if (!selected) return;
-    setProgressDraft(taskProgress(selected));
-    setShowBlockForm(false);
-    setShowHelpForm(false);
-  }, [selected?.id]);
-
-  useEffect(() => {
-    if (selectedId && scopeTasks.some((t) => t.id === selectedId)) return;
-    const fallback =
-      scopeTasks.find((t) => t.status !== "done" && t.status !== "scheduled") ?? scopeTasks[0];
-    setSelectedId(fallback?.id ?? "");
-  }, [scopeTasks, selectedId]);
-
-  const summary = useMemo(() => {
-    const total = scopeTasks.length;
-    const todo = scopeTasks.filter((t) => t.status === "open" && !t.blocked).length;
-    const inProgress = scopeTasks.filter((t) => t.status === "progress" && !t.blocked).length;
-    const blocked = scopeTasks.filter((t) => isTaskBlocked(t)).length;
-    const dueSoon = scopeTasks.filter((t) => isTaskDueSoon(t, today)).length;
-    const overdue = scopeTasks.filter((t) => isTaskOverdue(t, today)).length;
-    const completed = scopeTasks.filter((t) => t.status === "done").length;
-    return { total, todo, inProgress, blocked, dueSoon, overdue, completed };
-  }, [scopeTasks, today]);
-
-  const tabFiltered = scopeTasks.filter((task) => {
-    if (tab === "mine") {
-      return (
-        task.employeeId === employee.id &&
-        (task.status === "open" || task.status === "progress")
-      );
-    }
-    if (tab === "open") return task.status === "open" || task.status === "progress";
-    if (tab === "scheduled") return task.status === "scheduled";
-    if (tab === "closed") return task.status === "done";
-    return true;
-  });
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let rows = tabFiltered.filter((task) => {
-      if (!matchesQuery(task, q)) return false;
-      if (filterPriority && task.priority !== filterPriority) return false;
-      if (filterStatus) {
-        const label = taskStatusLabel(task).toLowerCase();
-        if (filterStatus === "todo" && label !== "to do") return false;
-        if (filterStatus === "progress" && label !== "in progress") return false;
-        if (filterStatus === "blocked" && label !== "blocked") return false;
-        if (filterStatus === "done" && task.status !== "done") return false;
-        if (filterStatus === "scheduled" && task.status !== "scheduled") return false;
-        if (filterStatus === "review" && !task.inReview) return false;
-      }
-      if (filterDue === "overdue" && !isTaskOverdue(task, today)) return false;
-      if (filterDue === "soon" && !isTaskDueSoon(task, today)) return false;
-      if (filterDue === "none" && task.due) return false;
-      if (filterBlocked === "blocked" && !isTaskBlocked(task)) return false;
-      if (filterBlocked === "clear" && isTaskBlocked(task)) return false;
-      return true;
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    const result = createTask({
+      ...d,
+      client: d.client.trim() || "Internal",
+      links: d.link.url.trim() ? [d.link] : [],
+      allowedOwnerIds: assignable.map((x) => x.person.id),
     });
-    rows = rows.slice().sort((a, b) => {
-      if (sortKey === "priority") return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
-      if (sortKey === "status") return taskStatusLabel(a).localeCompare(taskStatusLabel(b));
-      if (sortKey === "updated") return a.lastActivityAt < b.lastActivityAt ? 1 : -1;
-      if (sortKey === "code") return a.code.localeCompare(b.code);
-      const overdueBoost = (t: Task) => (isTaskOverdue(t, today) ? 0 : 1);
-      if (sortKey === "due") {
-        const byOverdue = overdueBoost(a) - overdueBoost(b);
-        if (byOverdue !== 0) return byOverdue;
-      }
-      return (a.due || "9999").localeCompare(b.due || "9999");
-    });
-    return rows;
-  }, [tabFiltered, query, filterPriority, filterStatus, filterDue, filterBlocked, sortKey, today]);
-
-  // Keep the detail panel on a task the list actually shows (a summary tile or filter can hide the open one).
-  useEffect(() => {
-    if (filtered.length === 0 || filtered.some((t) => t.id === selectedId)) return;
-    setSelectedId(filtered[0].id);
-  }, [filtered, selectedId]);
-
-  function selectTask(id: string) {
-    setSelectedId(id);
-    setMessage(null);
+    if (result) {
+      setError(result);
+      return;
+    }
+    notify(d.ownerId === employee.id ? "Task added." : "Task assigned. The owner has been notified.");
+    onCreated(d.ownerId);
   }
-
-  function applySummaryFocus(focus: SummaryFocus) {
-    setSummaryFocus(focus);
-    setFilterPriority("");
-    setFilterDue("all");
-    setFilterBlocked("all");
-    setFilterStatus("");
-    if (focus === "all") {
-      setTab(isManager ? "open" : "mine");
-      return;
-    }
-    if (focus === "todo") {
-      setTab(isManager ? "open" : "mine");
-      setFilterStatus("todo");
-      setFilterBlocked("clear");
-      return;
-    }
-    if (focus === "progress") {
-      setTab(isManager ? "open" : "mine");
-      setFilterStatus("progress");
-      setFilterBlocked("clear");
-      return;
-    }
-    if (focus === "blocked") {
-      setTab(isManager ? "open" : "mine");
-      setFilterBlocked("blocked");
-      return;
-    }
-    if (focus === "soon") {
-      setTab(isManager ? "open" : "mine");
-      setFilterDue("soon");
-      return;
-    }
-    if (focus === "overdue") {
-      setTab(isManager ? "open" : "mine");
-      setFilterDue("overdue");
-      return;
-    }
-    if (focus === "done") {
-      setTab("closed");
-      setFilterStatus("done");
-    }
-  }
-
-  const openCount = scopeTasks.filter((t) => t.status === "open").length;
-  const progressCount = scopeTasks.filter((t) => t.status === "progress").length;
-  const scheduledCount = scopeTasks.filter((t) => t.status === "scheduled").length;
-  const closedCount = scopeTasks.filter((t) => t.status === "done").length;
-  const overdueCount = summary.overdue;
-
-  const monthLabel = new Date(calCursor.year, calCursor.month, 1).toLocaleString("en-GB", {
-    month: "long",
-    year: "numeric",
-  });
-  const cells = monthMatrix(calCursor.year, calCursor.month);
-  const dueOnDay = (date: string) => scopeTasks.filter((task) => task.due === date);
-
-  const peopleRows = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        id: string;
-        name: string;
-        department: string;
-        role: string;
-        managerName: string;
-        assigned: number;
-        completed: number;
-        open: number;
-        overdue: number;
-        onTime: number;
-        hours: number;
-        score: number;
-      }
-    >();
-    for (const task of scopeTasks) {
-      const row =
-        map.get(task.employeeId) ??
-        {
-          id: task.employeeId,
-          name: task.owner,
-          department: task.department,
-          role: task.role,
-          managerName: task.managerName,
-          assigned: 0,
-          completed: 0,
-          open: 0,
-          overdue: 0,
-          onTime: 0,
-          hours: 0,
-          score: task.score,
-        };
-      row.assigned += 1;
-      row.hours += task.hoursSpent;
-      row.score = Math.max(row.score, task.score);
-      if (task.status === "done") {
-        row.completed += 1;
-        if (task.due && task.lastActivityAt.slice(0, 10) <= task.due) row.onTime += 1;
-      } else if (task.status !== "scheduled") {
-        // Same rule as the person's own Tasks page: scheduled (not yet started) tasks aren't open or overdue.
-        row.open += 1;
-        if (isTaskOverdue(task, today)) row.overdue += 1;
-      }
-      map.set(task.employeeId, row);
-    }
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [scopeTasks, today]);
-
-  // History can be viewed for yourself or for people below you in the reporting line — never anyone else.
-  const historyPeople = DEMO_ACCOUNTS.filter((account) => account.id === employee.id || canDecideFor(account.id));
-
-  const historyTasks = scopeTasks
-    .filter((task) =>
-      isManager ? task.employeeId === historyPerson && historyPeople.some((person) => person.id === historyPerson) : true,
-    )
-    .slice()
-    .sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : -1));
-
-  const tabs: Array<[TaskTab, string]> = isManager
-    ? [
-        ["dashboard", "Dashboard"],
-        ["open", "Open"],
-        ["mine", "My tasks"],
-        ["scheduled", "Scheduled"],
-        ["closed", "Closed / resolved"],
-        ["report", "Report"],
-        ["people", "By person"],
-        ["history", "History"],
-      ]
-    : [
-        ["mine", "My tasks"],
-        ["open", "Open"],
-        ["scheduled", "Scheduled"],
-        ["closed", "Closed / resolved"],
-        ["history", "History"],
-      ];
-
-  function shiftMonth(delta: number) {
-    setCalCursor((prev) => {
-      const d = new Date(prev.year, prev.month + delta, 1);
-      return { year: d.getFullYear(), month: d.getMonth() };
-    });
-  }
-
-  function runAction(
-    action: "accept" | "decline" | "start" | "progress" | "block" | "unblock" | "help" | "review" | "complete",
-    payload?: { progressPct?: number; blockedReason?: string; dependsOn?: string; comment?: string },
-  ) {
-    if (!selected) return false;
-    const error = taskAction(selected.id, action, payload);
-    if (error) {
-      setMessage({ tone: "err", text: error });
-      return false;
-    }
-    const labels: Record<typeof action, string> = {
-      accept: "Task accepted.",
-      decline: hasManager ? "Task declined — manager notified." : "Task declined.",
-      start: "Task started.",
-      progress: "Progress updated.",
-      block: hasManager ? "Task marked blocked — manager notified." : "Task marked blocked.",
-      unblock: "Blocker cleared.",
-      help: hasManager ? "Help request sent to your manager." : "Help request sent.",
-      review: hasManager ? "Submitted for review — manager notified." : "Submitted for review.",
-      complete: "Task marked complete.",
-    };
-    setMessage({ tone: "ok", text: labels[action] });
-    notify(labels[action]);
-    setShowBlockForm(false);
-    setShowHelpForm(false);
-    setBlockReason("");
-    setBlockDepends("");
-    setHelpDraft("");
-    if (action === "complete") setTab("closed");
-    return true;
-  }
-
-  const canActOnSelected =
-    !!selected &&
-    (selected.employeeId === employee.id || canApproveLeaveFor(selected.employeeId)) &&
-    selected.status !== "done";
-  const selectedBlocked = selected ? isTaskBlocked(selected) : false;
-  const selectedIsOwn = selected?.employeeId === employee.id;
-  const selectedInReview = Boolean(selected?.inReview);
-  const nextHint = selected ? nextTaskActionHint(selected) : "";
 
   return (
-    <Page
-      title={isManager ? "Team tasks" : "My tasks"}
-      action={
-        isManager && isManagerRole ? (
-          <button type="button" className="btn" onClick={() => setShowCreate((v) => !v)}>
-            {showCreate ? "Cancel" : "Add task"}
-          </button>
-        ) : undefined
-      }
-    >
-      <div className="row-gap" style={{ alignItems: "center", marginBottom: 12 }}>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <input
-            type="checkbox"
-            role="switch"
-            aria-checked={autoMode}
-            checked={autoMode}
-            onChange={(e) => setAutoMode(e.target.checked)}
-          />
-          <strong>Automatic mode</strong>
-        </label>
-      </div>
-      <MetricGrid>
-        {(
-          [
-            ["all", "Total", summary.total, undefined, "tone-total"],
-            ["todo", "To do", summary.todo, "Open & unblocked", "tone-todo"],
-            ["progress", "In progress", summary.inProgress, undefined, "tone-progress"],
-            ["blocked", "Blocked", summary.blocked, summary.blocked ? "Needs unblock" : "None", "tone-blocked"],
-            ["soon", "Due soon", summary.dueSoon, "Next 3 days", "tone-soon"],
-            ["overdue", "Overdue", summary.overdue, summary.overdue ? "Needs attention" : "None", "tone-overdue"],
-            ["done", "Completed", summary.completed, undefined, "tone-done"],
-          ] as const
-        ).map(([key, label, value, hint, tone]) => (
-          <button
-            key={key}
-            type="button"
-            className={`metric-as-btn task-tile ${tone}${summaryFocus === key ? " selected" : ""}`}
-            aria-pressed={summaryFocus === key}
-            onClick={() => applySummaryFocus(key)}
-          >
-            <MetricCard label={label} value={value} hint={hint} />
-          </button>
-        ))}
-      </MetricGrid>
-
-      {!isManager && (
-        <p className="note">
-          Today: <strong>{summary.overdue}</strong> overdue · <strong>{summary.dueSoon}</strong> due soon ·{" "}
-          <strong>{summary.blocked}</strong> blocked.
-        </p>
-      )}
-
-      {message && <Banner message={message} />}
-
-      {isManager && showCreate && (
-        <Card title="New task">
-          <div className="form-grid-2">
-            <label className="field" style={{ gridColumn: "1 / -1" }}>
-              Task name *
-              <input
-                value={draft.subject}
-                maxLength={120}
-                onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))}
-                placeholder="What needs to be done?"
-              />
+    <div className="modal-root" role="presentation">
+      <button className="modal-scrim" type="button" aria-label="Close" onClick={onClose} />
+      <div className="modal-card wk-modal" role="dialog" aria-modal="true" aria-labelledby="new-task-title">
+        <h2 id="new-task-title">New task</h2>
+        <form onSubmit={submit}>
+          <div className="wk-form">
+            <label className="wide">
+              Title
+              <input value={d.subject} maxLength={120} autoFocus onChange={(e) => setD({ ...d, subject: e.target.value })} placeholder="What needs doing?" />
             </label>
-            <label className="field">
-              Type *
-              <select value={draft.taskType} onChange={(e) => setDraft((d) => ({ ...d, taskType: e.target.value as TaskType }))}>
-                {TASK_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              Owner *
+            <label>
+              Owner
               <select
-                value={draft.ownerId}
+                value={d.ownerId}
                 onChange={(e) =>
-                  setDraft((d) => ({
+                  setD({
                     ...d,
                     ownerId: e.target.value,
-                    peopleIds: d.peopleIds.filter((id) => id !== e.target.value),
-                    ccIds: d.ccIds.filter((id) => id !== e.target.value),
-                  }))
+                    status: teamIds.has(e.target.value) ? d.status : "open",
+                    peopleIds: d.peopleIds.filter((x) => x !== e.target.value),
+                    ccIds: d.ccIds.filter((x) => x !== e.target.value),
+                  })
                 }
               >
-                {myTeam.length === 0 && <option value="">No one reports to you</option>}
-                {myTeam.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.fullName} · {p.role}
+                {groups.map((g) => (
+                  <optgroup key={g} label={g}>
+                    {assignable
+                      .filter((x) => x.group === g)
+                      .map((x) => (
+                        <option key={x.person.id} value={x.person.id}>
+                          {x.person.id === employee.id ? `Me (${x.person.fullName})` : x.person.fullName}
+                        </option>
+                      ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+            <label>
+              Due date
+              <input type="date" min={today} value={d.due} onChange={(e) => setD({ ...d, due: e.target.value })} />
+            </label>
+            <label>
+              Priority
+              <select value={d.priority} onChange={(e) => setD({ ...d, priority: e.target.value as TaskPriority })}>
+                {PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {p[0].toUpperCase() + p.slice(1)}
                   </option>
                 ))}
               </select>
             </label>
-            <label className="field">
-              Due date *
-              <input type="date" min={today} value={draft.due} onChange={(e) => setDraft((d) => ({ ...d, due: e.target.value }))} />
-            </label>
-            <label className="field">
-              Estimate (hours)
-              <input
-                type="number"
-                min={0.5}
-                max={200}
-                step={0.5}
-                value={draft.estimatedHours}
-                onChange={(e) => setDraft((d) => ({ ...d, estimatedHours: Number(e.target.value) }))}
-              />
-            </label>
-            <label className="field">
-              Priority
-              <select value={draft.priority} onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value as TaskPriority }))}>
-                <option value="urgent">Urgent</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
+            <label>
+              Type
+              <select value={d.taskType} onChange={(e) => setD({ ...d, taskType: e.target.value as TaskType })}>
+                {TASK_TYPES.map((x) => (
+                  <option key={x}>{x}</option>
+                ))}
               </select>
             </label>
-            <label className="field">
-              Start as
-              <select value={draft.status} onChange={(e) => setDraft((d) => ({ ...d, status: e.target.value as TaskStatus }))}>
-                <option value="open">To do</option>
-                <option value="scheduled">Scheduled (released later)</option>
-              </select>
-            </label>
-            <label className="field">
+            <label>
               Project
-              <input
-                list="task-projects"
-                value={draft.client}
-                onChange={(e) => setDraft((d) => ({ ...d, client: e.target.value }))}
-                placeholder="Internal"
-              />
-              <datalist id="task-projects">
-                {projectOptions.map((name) => (
-                  <option key={name} value={name} />
+              <input list="wk-projects" value={d.client} onChange={(e) => setD({ ...d, client: e.target.value })} placeholder="Internal" />
+              <datalist id="wk-projects">
+                {projectOptions.map((p) => (
+                  <option key={p} value={p} />
                 ))}
               </datalist>
             </label>
-            <label className="field">
-              Related task
-              <select value={draft.referenceTaskId} onChange={(e) => setDraft((d) => ({ ...d, referenceTaskId: e.target.value }))}>
-                <option value="">None</option>
-                {scopeTasks.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.code} · {t.subject}
-                  </option>
-                ))}
-              </select>
+            <label>
+              Estimate (hours)
+              <input type="number" min={0.5} max={200} step={0.5} value={d.estimatedHours} onChange={(e) => setD({ ...d, estimatedHours: Number(e.target.value) })} />
             </label>
-            <label className="field" style={{ gridColumn: "1 / -1" }}>
-              Description
-              <textarea
-                rows={3}
-                value={draft.notes}
-                onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
-                placeholder="Context, acceptance criteria, anything the owner needs to know"
-              />
-            </label>
-          </div>
-
-          <fieldset className="task-form-group">
-            <legend>Links</legend>
-            {draft.links.map((link, index) => (
-              <div key={index} className="task-link-row">
-                <input
-                  value={link.label}
-                  placeholder="Label (e.g. Spec)"
-                  aria-label={`Link ${index + 1} label`}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, links: d.links.map((l, i) => (i === index ? { ...l, label: e.target.value } : l)) }))
-                  }
-                />
-                <input
-                  value={link.url}
-                  placeholder="https://…"
-                  aria-label={`Link ${index + 1} address`}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, links: d.links.map((l, i) => (i === index ? { ...l, url: e.target.value } : l)) }))
-                  }
-                />
-                <button
-                  type="button"
-                  className="btn-ghost btn-tiny"
-                  aria-label={`Remove link ${index + 1}`}
-                  onClick={() => setDraft((d) => ({ ...d, links: d.links.filter((_, i) => i !== index) }))}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-            {draft.links.length < 10 && (
-              <button
-                type="button"
-                className="btn-ghost btn-tiny"
-                onClick={() => setDraft((d) => ({ ...d, links: [...d.links, { label: "", url: "" }] }))}
-              >
-                + Add link
-              </button>
+            {teamIds.has(d.ownerId) && (
+              <label>
+                Start
+                <select value={d.status} onChange={(e) => setD({ ...d, status: e.target.value as TaskStatus })}>
+                  <option value="open">Now</option>
+                  <option value="scheduled">Later (I release it)</option>
+                </select>
+              </label>
             )}
-          </fieldset>
-
-          {myTeam.filter((p) => p.id !== draft.ownerId).length > 0 && (
-            <fieldset className="task-form-group">
-              <legend>Collaborators (your team)</legend>
-              <div className="task-chip-picks">
-                {myTeam
-                  .filter((p) => p.id !== draft.ownerId)
-                  .map((p) => (
-                    <label key={p.id} className={draft.peopleIds.includes(p.id) ? "chip-pick on" : "chip-pick"}>
-                      <input
-                        type="checkbox"
-                        checked={draft.peopleIds.includes(p.id)}
-                        onChange={() =>
-                          setDraft((d) => ({ ...d, peopleIds: toggleIn(d.peopleIds, p.id), ccIds: d.ccIds.filter((id) => id !== p.id) }))
-                        }
-                      />
-                      {p.fullName}
-                    </label>
-                  ))}
-              </div>
-            </fieldset>
-          )}
-
-          <fieldset className="task-form-group">
-            <legend>CC — kept informed, view only</legend>
-            <div className="task-chip-picks">
-              {ccCandidates.map((p) => (
-                <label key={p.id} className={draft.ccIds.includes(p.id) ? "chip-pick on" : "chip-pick"}>
-                  <input
-                    type="checkbox"
-                    checked={draft.ccIds.includes(p.id)}
-                    onChange={() => setDraft((d) => ({ ...d, ccIds: toggleIn(d.ccIds, p.id) }))}
-                  />
-                  {p.fullName}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-
-          <div className="form-actions">
-            <button type="button" className="btn-ghost" onClick={() => { setShowCreate(false); setDraft(emptyDraft()); }}>
-              Cancel
-            </button>
-            <ActionButton
-              className="btn"
-              onAction={() => {
-                const error = createTask({ ...draft, client: draft.client.trim() || "Internal" });
-                if (error) {
-                  setMessage({ tone: "err", text: error });
-                  return false;
-                }
-                setMessage({ tone: "ok", text: "Task created. The owner and everyone on CC have been notified." });
-                notify("Task created. The owner and everyone on CC have been notified.");
-                setShowCreate(false);
-                setDraft(emptyDraft());
-                setTab("open");
-                return true;
-              }}
-            >
-              Create task
-            </ActionButton>
-          </div>
-        </Card>
-      )}
-
-      <div className="year-bar" role="tablist" aria-label="Task views">
-        {tabs.map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            role="tab"
-            aria-selected={tab === value}
-            className={tab === value ? "year-chip active" : "year-chip"}
-            onClick={() => {
-              setTab(value);
-              setSummaryFocus("");
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === "dashboard" && isManager && (
-        <>
-          <section className="summary-row" aria-label="Task totals">
-            <div className="summary">
-              <span>People</span>
-              <strong>{peopleRows.length}</strong>
-            </div>
-            <div className="summary sky">
-              <span>Open</span>
-              <strong>{openCount}</strong>
-            </div>
-            <div className="summary lilac">
-              <span>In progress</span>
-              <strong>{progressCount}</strong>
-            </div>
-            <div className="summary">
-              <span>Scheduled</span>
-              <strong>{scheduledCount}</strong>
-            </div>
-            <div className="summary rose">
-              <span>Overdue</span>
-              <strong>{overdueCount}</strong>
-            </div>
-            <div className="summary">
-              <span>Closed</span>
-              <strong>{closedCount}</strong>
-            </div>
-          </section>
-
-          <div className="task-dash-grid">
-            <Card
-              title="Deadline calendar"
-              action={
-                <div className="cal-nav">
-                  <button type="button" className="btn-ghost" onClick={() => shiftMonth(-1)}>
-                    ← Prev
-                  </button>
-                  <strong>{monthLabel}</strong>
-                  <button type="button" className="btn-ghost" onClick={() => shiftMonth(1)}>
-                    Next →
-                  </button>
-                </div>
-              }
-            >
-              <div className="task-cal">
-                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-                  <div key={d} className="task-cal-head">
-                    {d}
-                  </div>
-                ))}
-                {cells.map((cell, index) => {
-                  const dues = cell.date ? dueOnDay(cell.date) : [];
-                  const isToday = cell.date === today;
-                  return (
-                    <div
-                      key={cell.date ?? `pad-${index}`}
-                      className={`task-cal-cell${isToday ? " today" : ""}${dues.length ? " has-due" : ""}`}
-                    >
-                      {cell.day != null && <span className="task-cal-day">{cell.day}</span>}
-                      {dues.slice(0, 2).map((task) => (
-                        <button
-                          key={task.id}
-                          type="button"
-                          className={`task-cal-chip ${task.priority}`}
-                          onClick={() => {
-                            setSelectedId(task.id);
-                            setTab(task.status === "done" ? "closed" : task.status === "scheduled" ? "scheduled" : "open");
-                            setView("list");
-                          }}
-                        >
-                          {task.code}
-                        </button>
-                      ))}
-                      {dues.length > 2 && <span className="muted">+{dues.length - 2}</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-
-            <Card title="Priority · deadline by person">
-              <div className="table-scroll">
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>Person</th>
-                      <th>Open</th>
-                      <th>Overdue</th>
-                      <th>Urgent/High</th>
-                      <th>Next due</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {peopleRows.map((person) => {
-                      const theirs = scopeTasks.filter((t) => t.employeeId === person.id && t.status !== "done");
-                      const hot = theirs.filter((t) => t.priority === "urgent" || t.priority === "high").length;
-                      const next = theirs.filter((t) => t.due).sort((a, b) => a.due.localeCompare(b.due))[0];
-                      return (
-                        <tr key={person.id}>
-                          <td>{person.name}</td>
-                          <td>{person.open}</td>
-                          <td>{person.overdue}</td>
-                          <td>{hot}</td>
-                          <td>{next ? `${formatShortDate(next.due)} · ${next.code}` : "—"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          </div>
-        </>
-      )}
-
-      {(tab === "open" || tab === "mine" || tab === "scheduled" || tab === "closed") && (
-        <>
-          <FilterBar>
-            <label className="filter-label">
-              Search
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Title, ID, client, blocker…"
-              />
-            </label>
-            <label className="filter-label">
-              Status
-              <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-                <option value="">All</option>
-                <option value="todo">To do</option>
-                <option value="progress">In progress</option>
-                <option value="blocked">Blocked</option>
-                <option value="review">Action required</option>
-                <option value="scheduled">Scheduled</option>
-                <option value="done">Completed</option>
-              </select>
-            </label>
-            <label className="filter-label">
-              Priority
-              <select value={filterPriority} onChange={(e) => setFilterPriority(e.target.value)}>
-                <option value="">All</option>
-                <option value="urgent">Urgent</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-              </select>
-            </label>
-            <label className="filter-label">
-              Due
-              <select value={filterDue} onChange={(e) => setFilterDue(e.target.value as typeof filterDue)}>
-                <option value="all">All dates</option>
-                <option value="overdue">Overdue</option>
-                <option value="soon">Due soon</option>
-                <option value="none">No due date</option>
-              </select>
-            </label>
-            <label className="filter-label">
-              Blocker
-              <select value={filterBlocked} onChange={(e) => setFilterBlocked(e.target.value as typeof filterBlocked)}>
-                <option value="all">All</option>
-                <option value="blocked">Blocked only</option>
-                <option value="clear">Not blocked</option>
-              </select>
-            </label>
-            <label className="filter-label">
-              Sort
-              <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}>
-                <option value="due">Due date</option>
-                <option value="priority">Priority</option>
-                <option value="status">Status</option>
-                <option value="updated">Last activity</option>
-                <option value="code">Task ID</option>
-              </select>
-            </label>
-            <div className="year-bar" style={{ margin: 0 }} role="tablist" aria-label="Display mode">
-              {(["list", "board", "calendar"] as ViewMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={view === mode ? "year-chip active" : "year-chip"}
-                  onClick={() => setView(mode)}
-                >
-                  {mode === "list" ? "List" : mode === "board" ? "Board" : "Calendar"}
-                </button>
-              ))}
-            </div>
-          </FilterBar>
-
-          {view === "list" && (
-            <div className="task-workbench">
-              <Card
-                title={
-                  tab === "mine"
-                    ? "My active tasks"
-                    : tab === "open"
-                      ? "Open queue"
-                      : tab === "scheduled"
-                        ? "Scheduled"
-                        : "Closed / resolved"
-                }
-                action={<span className="muted">{filtered.length} shown</span>}
-              >
-                {filtered.length === 0 ? (
-                  <EmptyState title="No tasks match" description="Try other filters." />
-                ) : (
-                  <ul className="task-list">
-                    {filtered.map((task) => {
-                      const pct = taskProgress(task);
-                      const overdue = isTaskOverdue(task, today);
-                      const soon = isTaskDueSoon(task, today);
-                      return (
-                        <li key={task.id}>
-                          <button
-                            type="button"
-                            className={task.id === selected?.id ? "task-list-item active" : "task-list-item"}
-                            onClick={() => selectTask(task.id)}
-                          >
-                            <div className="task-list-top">
-                              <span className="task-code">{task.code}</span>
-                              <StatusPill status={task.priority} />
-                              <StatusBadge status={taskStatusLabel(task)} />
-                              {overdue && <StatusBadge status="Overdue" tone="danger" literal />}
-                            </div>
-                            <strong className="task-list-title">{task.subject}</strong>
-                            <div className="task-list-meta">
-                              <span className={overdue ? "task-overdue" : undefined}>
-                                Due {task.due ? formatShortDate(task.due) : "—"}
-                                {overdue ? " · Overdue" : soon ? " · Due soon" : ""}
-                              </span>
-                              <span>Mgr {task.managerName}</span>
-                              <span>{pct}%</span>
-                            </div>
-                            <div className="task-list-progress" aria-hidden>
-                              <span style={{ width: `${pct}%` }} />
-                            </div>
-                            {isTaskBlocked(task) && (
-                              <p className="task-list-block">Blocked: {task.blocked}</p>
-                            )}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </Card>
-
-              <aside className="task-detail-panel">
-                {!selected ? (
-                  <Card>
-                    <EmptyState
-                      title="Select a task"
-                    />
-                  </Card>
-                ) : (
-                  <Card
-                    title={selected.code}
-                    action={
-                      <span className="row-gap">
-                        <StatusBadge status={taskStatusLabel(selected)} />
-                        {isTaskOverdue(selected, today) && <StatusBadge status="Overdue" tone="danger" literal />}
-                      </span>
-                    }
-                  >
-                    <div className="task-detail-cols">
-                    <div className="task-detail-col">
-                    <div className="task-next-action">
-                      <span className="muted">Next action</span>
-                      <strong>{nextHint}</strong>
-                    </div>
-
-                    <h3 className="task-section-title">{selected.subject}</h3>
-                    <div className="task-detail-grid compact">
-                      <div>
-                        <span className="muted">Priority</span>
-                        <StatusPill status={selected.priority} />
-                      </div>
-                      <div>
-                        <span className="muted">Due</span>
-                        <strong className={isTaskOverdue(selected, today) ? "task-overdue" : undefined}>
-                          {selected.due ? formatShortDate(selected.due) : "—"}
-                          {isTaskOverdue(selected, today)
-                            ? " · Overdue"
-                            : isTaskDueSoon(selected, today)
-                              ? " · Due soon"
-                              : ""}
-                        </strong>
-                      </div>
-                      <div>
-                        <span className="muted">Assignee</span>
-                        <strong>{selected.owner}</strong>
-                      </div>
-                      <div>
-                        <span className="muted">Manager</span>
-                        <strong>{selected.managerName}</strong>
-                      </div>
-                      <div>
-                        <span className="muted">Assigned by</span>
-                        <strong>{selected.assignedBy}</strong>
-                      </div>
-                      <div>
-                        <span className="muted">Project</span>
-                        <strong>{selected.projectName || selected.client}</strong>
-                      </div>
-                      <div>
-                        <span className="muted">Estimate / spent</span>
-                        <strong>
-                          {selected.estimatedHours}h / {selected.hoursSpent}h
-                        </strong>
-                      </div>
-                      <div>
-                        <span className="muted">Dependency</span>
-                        <strong>{selected.dependsOn || "—"}</strong>
-                      </div>
-                      {selected.taskType && (
-                        <div>
-                          <span className="muted">Type</span>
-                          <strong>{selected.taskType}</strong>
-                        </div>
-                      )}
-                      {selected.referenceTaskId && (
-                        <div>
-                          <span className="muted">Related task</span>
-                          <strong>
-                            {scopeTasks.some((t) => t.id === selected.referenceTaskId) ? (
-                              <button type="button" className="link-btn" onClick={() => setSelectedId(selected.referenceTaskId!)}>
-                                {state.tasks.find((t) => t.id === selected.referenceTaskId)?.code}
-                              </button>
-                            ) : (
-                              state.tasks.find((t) => t.id === selected.referenceTaskId)?.code ?? "—"
-                            )}
-                          </strong>
-                        </div>
-                      )}
-                      {(selected.ccIds?.length ?? 0) > 0 && (
-                        <div>
-                          <span className="muted">CC</span>
-                          <strong>{selected.ccIds!.map((id) => taskPersonById(id)?.fullName ?? id).join(", ")}</strong>
-                        </div>
-                      )}
-                    </div>
-                    {selected.ccIds?.includes(employee.id) && !canActOnSelected && (
-                      <p className="note">You're CC'd on this task — you can follow it but not change it.</p>
-                    )}
-
-                    <section className="task-section">
-                      <h4 className="task-section-title">Description</h4>
-                      <p className="task-description">{selected.notes || "No description provided."}</p>
-                      {(selected.links?.length ?? 0) > 0 && (
-                        <ul className="task-links">
-                          {selected.links!.map((link) => (
-                            <li key={link.url}>
-                              <a href={link.url} target="_blank" rel="noopener noreferrer">
-                                {link.label}
-                              </a>
-                              <span className="muted"> · {new URL(link.url).hostname}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      {selectedBlocked && <p className="note err">Blocked: {selected.blocked}</p>}
-                    </section>
-
-                    <section className="task-section">
-                      <h4 className="task-section-title">Progress · {taskProgress(selected)}%</h4>
-                      <ProgressBar value={taskProgress(selected)} label="Completion" />
-                      {(selected.subtasks?.length ?? 0) > 0 && (
-                        <>
-                          <h4 className="task-section-title" style={{ marginTop: 12 }}>
-                            Checklist
-                          </h4>
-                          <ul className="task-checklist">
-                            {selected.subtasks!.map((item) => (
-                              <li key={item.id}>
-                                <label>
-                                  <input
-                                    type="checkbox"
-                                    checked={item.done}
-                                    disabled={!canActOnSelected || selected.status === "scheduled"}
-                                    onChange={() => {
-                                      const error = toggleTaskSubtask(selected.id, item.id);
-                                      setMessage(
-                                        error
-                                          ? { tone: "err", text: error }
-                                          : { tone: "ok", text: "Checklist updated." },
-                                      );
-                                    }}
-                                  />
-                                  <span className={item.done ? "muted" : undefined}>{item.title}</span>
-                                </label>
-                              </li>
-                            ))}
-                          </ul>
-                        </>
-                      )}
-                    </section>
-
-                    </div>
-                    <div className="task-detail-col">
-                    <section className="task-section task-section-split">
-                      <div>
-                        <h4 className="task-section-title">Attachments</h4>
-                        {(selected.attachments?.length ?? 0) === 0 ? (
-                          <p className="muted">None</p>
-                        ) : (
-                          <ul className="todo">
-                            {selected.attachments!.map((file) => (
-                              <li key={file.id}>
-                                {file.name}
-                                <div className="muted">{formatStamp(file.at)}</div>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                      <div>
-                        <h4 className="task-section-title">Comments</h4>
-                        {(selected.comments?.length ?? 0) === 0 ? (
-                          <p className="muted">No comments yet.</p>
-                        ) : (
-                          <ul className="todo">
-                            {selected.comments!.map((c) => (
-                              <li key={c.id}>
-                                <strong>{c.author}</strong> · {c.text}
-                                <div className="muted">{formatStamp(c.at)}</div>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                        {canActOnSelected && (
-                          <div className="row-gap" style={{ marginTop: 8 }}>
-                            <input aria-label="Add a comment"
-                              value={commentDraft}
-                              onChange={(e) => setCommentDraft(e.target.value)}
-                              placeholder="Add a comment…"
-                              style={{ flex: 1 }}
-                            />
-                            <ActionButton
-                              className="btn-ghost"
-                              success="Comment added."
-                              onAction={() => {
-                                const error = addTaskComment(selected.id, commentDraft);
-                                setMessage(
-                                  error ? { tone: "err", text: error } : { tone: "ok", text: "Comment added." },
-                                );
-                                if (!error) setCommentDraft("");
-                                return error;
-                              }}
-                            >
-                              Post
-                            </ActionButton>
-                          </div>
-                        )}
-                      </div>
-                    </section>
-
-                    <section className="task-section">
-                      <h4 className="task-section-title">Activity</h4>
-                      <ul className="task-timeline">
-                        {[...(selected.activity ?? [])]
-                          .slice()
-                          .reverse()
-                          .map((ev) => (
-                            <li key={ev.id}>
-                              <strong>{ev.action}</strong> · {ev.actor}
-                              {ev.detail ? ` — ${ev.detail}` : ""}
-                              <div className="muted">{formatStamp(ev.at)}</div>
-                            </li>
-                          ))}
-                      </ul>
-                    </section>
-
-                    {isManager && selected.status !== "done" && (
-                      <section className="task-section">
-                        <h4 className="task-section-title">People on this task</h4>
-                        <div className="row-gap" style={{ flexWrap: "wrap" }}>
-                          <span className="year-chip active" style={{ cursor: "default" }}>
-                            {selected.owner} · Owner
-                          </span>
-                          {selectedPeople.map((pid) => (
-                            <span
-                              key={pid}
-                              className="year-chip"
-                              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-                            >
-                              {taskPersonLabel(pid)}
-                              <ActionButton
-                                className="btn-ghost"
-                                style={{ padding: "0 4px", minHeight: 0, fontSize: 12 }}
-                                success={`${taskPersonLabel(pid)} removed from the task.`}
-                                onAction={() => {
-                                  const error = removeTaskPerson(selected.id, pid);
-                                  setMessage(
-                                    error
-                                      ? { tone: "err", text: error }
-                                      : { tone: "ok", text: "Person removed." },
-                                  );
-                                  return error;
-                                }}
-                              >
-                                Remove
-                              </ActionButton>
-                            </span>
-                          ))}
-                        </div>
-                        <div className="form-grid-2" style={{ marginTop: 10 }}>
-                          <label className="field">
-                            Change owner
-                            <select
-                              value={selected.employeeId}
-                              onChange={(e) => {
-                                const error = reassignTask(selected.id, e.target.value);
-                                setMessage(
-                                  error ? { tone: "err", text: error } : { tone: "ok", text: "Owner updated." },
-                                );
-                              }}
-                            >
-                              {!myTeam.some((p) => p.id === selected.employeeId) && (
-                                <option value={selected.employeeId}>{selected.owner}</option>
-                              )}
-                              {myTeam.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.fullName}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="field">
-                            Add person
-                            <div className="row-gap">
-                              <select
-                                value={addPersonId}
-                                onChange={(e) => setAddPersonId(e.target.value)}
-                                style={{ flex: 1 }}
-                              >
-                                <option value="">Select teammate…</option>
-                                {addablePeople.map((p) => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.fullName}
-                                  </option>
-                                ))}
-                              </select>
-                              <ActionButton
-                                className="btn-ghost"
-                                disabled={!addPersonId}
-                                success={`${taskPersonLabel(addPersonId)} added to the task.`}
-                                onAction={() => {
-                                  const error = addTaskPerson(selected.id, addPersonId);
-                                  setMessage(
-                                    error ? { tone: "err", text: error } : { tone: "ok", text: "Person added." },
-                                  );
-                                  if (!error) setAddPersonId("");
-                                  return error;
-                                }}
-                              >
-                                Add
-                              </ActionButton>
-                            </div>
-                          </label>
-                        </div>
-                      </section>
-                    )}
-
-                    <section className="task-section task-actions">
-                      <h4 className="task-section-title">Actions</h4>
-                      <div className="form-actions" style={{ marginTop: 0 }}>
-                        {selectedIsOwn &&
-                          selected.accepted &&
-                          (selected.status === "open" || selected.status === "progress") && (
-                            <Link className="btn-ghost" to={`/timesheet?work=task:${encodeURIComponent(selected.id)}`}>
-                              Log time
-                            </Link>
-                          )}
-                        {canActOnSelected &&
-                          selected.status === "open" &&
-                          !selected.accepted &&
-                          !selectedBlocked && (
-                            <ActionButton className="btn" busyLabel="Accepting…" doneLabel="Accepted" onAction={() => runAction("accept")}>
-                              Accept task
-                            </ActionButton>
-                          )}
-                        {selectedIsOwn &&
-                          selected.status === "open" &&
-                          !selected.accepted &&
-                          !selectedBlocked &&
-                          !selected.activity?.some((a) => a.action === "Declined") &&
-                          (showDeclineForm ? (
-                            <>
-                              <label className="field" style={{ minWidth: 220 }}>
-                                Reason
-                                <input value={declineReason} onChange={(e) => setDeclineReason(e.target.value)} />
-                              </label>
-                              <ActionButton
-                                className="btn-ghost"
-                                onAction={() => {
-                                  if (!runAction("decline", { comment: declineReason })) return false;
-                                  setShowDeclineForm(false);
-                                  setDeclineReason("");
-                                  return true;
-                                }}
-                              >
-                                Send decline
-                              </ActionButton>
-                            </>
-                          ) : (
-                            <button type="button" className="btn-ghost" onClick={() => setShowDeclineForm(true)}>
-                              Decline
-                            </button>
-                          ))}
-                        {canActOnSelected &&
-                          selected.status === "open" &&
-                          selected.accepted &&
-                          !selectedBlocked && (
-                            <ActionButton className="btn" busyLabel="Starting…" doneLabel="Started" onAction={() => runAction("start")}>
-                              Start task
-                            </ActionButton>
-                          )}
-                        {canActOnSelected &&
-                          selected.status === "progress" &&
-                          !selectedBlocked &&
-                          !selectedInReview && (
-                            <>
-                              <label className="field" style={{ minWidth: 120 }}>
-                                Progress %
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={99}
-                                  value={progressDraft}
-                                  onChange={(e) => setProgressDraft(Number(e.target.value))}
-                                />
-                              </label>
-                              <ActionButton className="btn-ghost" onAction={() => runAction("progress", { progressPct: progressDraft })}>
-                                Update progress
-                              </ActionButton>
-                              <button
-                                type="button"
-                                className="btn-ghost"
-                                onClick={() => {
-                                  setShowBlockForm(true);
-                                  setShowHelpForm(false);
-                                }}
-                              >
-                                Mark as blocked
-                              </button>
-                              <button
-                                type="button"
-                                className="btn-ghost"
-                                onClick={() => {
-                                  setShowHelpForm(true);
-                                  setShowBlockForm(false);
-                                }}
-                              >
-                                Request help
-                              </button>
-                              {selectedIsOwn ? (
-                                <ActionButton className="btn-ghost" onAction={() => runAction("review")}>
-                                  Submit for review
-                                </ActionButton>
-                              ) : (
-                                <ActionButton className="btn" doneLabel="Completed" onAction={() => runAction("complete")}>
-                                  Mark complete
-                                </ActionButton>
-                              )}
-                            </>
-                          )}
-                        {canActOnSelected && selectedInReview && !selectedBlocked && (
-                          <>
-                            {/* Only the reviewer completes; the owner waits for review. */}
-                            {!selectedIsOwn && (
-                              <ActionButton className="btn" doneLabel="Completed" onAction={() => runAction("complete")}>
-                                Mark complete
-                              </ActionButton>
-                            )}
-                            <ActionButton className="btn-ghost" doneLabel="Returned" onAction={() => runAction("progress", { progressPct: Math.min(progressDraft, 89) })}>
-                              Return to in progress
-                            </ActionButton>
-                          </>
-                        )}
-                        {canActOnSelected && selectedBlocked && (
-                          <>
-                            <ActionButton className="btn" busyLabel="Clearing…" doneLabel="Cleared" onAction={() => runAction("unblock")}>
-                              Clear blocker
-                            </ActionButton>
-                            <button
-                              type="button"
-                              className="btn-ghost"
-                              onClick={() => {
-                                setShowHelpForm(true);
-                                setShowBlockForm(false);
-                              }}
-                            >
-                              Request help
-                            </button>
-                            <button
-                              type="button"
-                              className="btn-ghost"
-                              onClick={() => {
-                                setShowBlockForm(true);
-                                setShowHelpForm(false);
-                              }}
-                            >
-                              Update blocker
-                            </button>
-                          </>
-                        )}
-                        {selected.status === "scheduled" && isManager && (
-                          <ActionButton className="btn" busyLabel="Releasing…" doneLabel="Released" onAction={() => { moveTask(selected.id, "open"); notify("Task released to open."); }}>
-                            Release to open
-                          </ActionButton>
-                        )}
-                        {selected.status === "scheduled" && !isManager && (
-                          <p className="note">Scheduled. Your manager will release it.</p>
-                        )}
-                      </div>
-
-                      {showBlockForm && canActOnSelected && (
-                        <div className="form-grid-2" style={{ marginTop: 12 }}>
-                          <label className="field" style={{ gridColumn: "1 / -1" }}>
-                            Blocker reason
-                            <input
-                              value={blockReason}
-                              onChange={(e) => setBlockReason(e.target.value)}
-                              placeholder="What is blocking you?"
-                            />
-                          </label>
-                          <label className="field" style={{ gridColumn: "1 / -1" }}>
-                            Required dependency
-                            <input
-                              value={blockDepends}
-                              onChange={(e) => setBlockDepends(e.target.value)}
-                              placeholder="e.g. TSK-1080 or IT env refresh"
-                            />
-                          </label>
-                          <ActionButton className="btn" onAction={() => runAction("block", { blockedReason: blockReason, dependsOn: blockDepends })}>
-                            {hasManager ? "Save blocker & notify manager" : "Save blocker"}
-                          </ActionButton>
-                          <button type="button" className="btn-ghost" onClick={() => setShowBlockForm(false)}>
-                            Cancel
-                          </button>
-                        </div>
-                      )}
-
-                      {showHelpForm && canActOnSelected && (
-                        <label className="field" style={{ marginTop: 12 }}>
-                          Help note
-                          <div className="row-gap">
-                            <input
-                              value={helpDraft}
-                              onChange={(e) => setHelpDraft(e.target.value)}
-                              placeholder={hasManager ? "What do you need from your manager?" : "What do you need?"}
-                              style={{ flex: 1 }}
-                            />
-                            <ActionButton className="btn" onAction={() => runAction("help", {
-                                  comment: helpDraft || "Need guidance to unblock this work.",
-                                })}>
-                              Send help request
-                            </ActionButton>
-                            <button type="button" className="btn-ghost" onClick={() => setShowHelpForm(false)}>
-                              Cancel
-                            </button>
-                          </div>
-                        </label>
-                      )}
-                    </section>
-                    </div>
-                    </div>
-                  </Card>
-                )}
-              </aside>
-            </div>
-          )}
-
-          {view === "board" && (
-            <div className="task-board-wrap">
-              <div className="task-board">
-                {(
-                  [
-                    ["todo", "To do", (t: Task) => t.status === "open" && !t.blocked],
-                    ["progress", "In progress", (t: Task) => t.status === "progress" && !t.blocked],
-                    ["blocked", "Blocked", (t: Task) => isTaskBlocked(t)],
-                    ["done", "Completed", (t: Task) => t.status === "done"],
-                  ] as const
-                ).map(([key, label, pred]) => (
-                  <Card key={key} title={`${label} · ${filtered.filter(pred).length}`}>
-                    <ul className="task-board-list">
-                      {filtered.filter(pred).map((task) => (
-                        <li key={task.id}>
-                          <button
-                            type="button"
-                            className={
-                              task.id === selected?.id ? "task-board-card active" : "task-board-card"
-                            }
-                            onClick={() => selectTask(task.id)}
-                          >
-                            <strong>{task.code}</strong>
-                            <span>{task.subject}</span>
-                            <span className="muted">
-                              {task.owner} · {task.due ? formatShortDate(task.due) : "No due"} ·{" "}
-                              {taskProgress(task)}%
-                            </span>
-                            <StatusPill status={task.priority} />
-                          </button>
-                        </li>
-                      ))}
-                      {filtered.filter(pred).length === 0 && <li className="muted">No cards</li>}
-                    </ul>
-                  </Card>
-                ))}
-              </div>
-              {selected && (
-                <p className="note">
-                  Selected <strong>{selected.code}</strong>.
-                  <button type="button" className="btn-ghost" style={{ marginLeft: 8 }} onClick={() => setView("list")}>
-                    Open in list
-                  </button>
-                </p>
-              )}
-            </div>
-          )}
-
-          {view === "calendar" && (
-            <Card
-              title="Task calendar"
-              action={
-                <div className="cal-nav">
-                  <button type="button" className="btn-ghost" onClick={() => shiftMonth(-1)}>
-                    ← Prev
-                  </button>
-                  <strong>{monthLabel}</strong>
-                  <button type="button" className="btn-ghost" onClick={() => shiftMonth(1)}>
-                    Next →
-                  </button>
-                </div>
-              }
-            >
-              <div className="task-cal">
-                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-                  <div key={d} className="task-cal-head">
-                    {d}
-                  </div>
-                ))}
-                {cells.map((cell, index) => {
-                  const dues = cell.date ? filtered.filter((task) => task.due === cell.date) : [];
-                  const isToday = cell.date === today;
-                  return (
-                    <div
-                      key={cell.date ?? `pad-${index}`}
-                      className={`task-cal-cell${isToday ? " today" : ""}${dues.length ? " has-due" : ""}`}
-                    >
-                      {cell.day != null && <span className="task-cal-day">{cell.day}</span>}
-                      {dues.slice(0, 3).map((task) => (
-                        <button
-                          key={task.id}
-                          type="button"
-                          className={`task-cal-chip ${task.priority}${task.id === selected?.id ? " selected" : ""}`}
-                          onClick={() => {
-                            selectTask(task.id);
-                            setView("list");
-                          }}
-                        >
-                          {task.code}
-                        </button>
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-          )}
-        </>
-      )}
-
-
-      {tab === "report" && isManager && (
-        <Card title="Full task report">
-          <div className="table-scroll">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Subject</th>
-                  <th>Status</th>
-                  <th>Priority</th>
-                  <th>Client</th>
-                  <th>Owner</th>
-                  <th>Assigned by</th>
-                  <th>Due</th>
-                  <th>Progress</th>
-                  <th>Est.</th>
-                  <th>Spent</th>
-                  <th>Lag (days)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {scopeTasks.map((task) => {
-                  const lag = task.due ? daysBetween(today, task.due) * -1 : 0;
-                  return (
-                    <tr
-                      key={task.id}
-                      onClick={() => {
-                        setSelectedId(task.id);
-                        setTab(task.status === "done" ? "closed" : "open");
-                      }}
-                    >
-                      <td>{task.code}</td>
-                      <td>{task.subject}</td>
-                      <td>
-                        <StatusBadge status={taskStatusLabel(task)} />
-                      </td>
-                      <td>
-                        <StatusPill status={task.priority} />
-                      </td>
-                      <td>{task.client}</td>
-                      <td>{task.owner}</td>
-                      <td>{task.assignedBy}</td>
-                      <td>{task.due ? formatShortDate(task.due) : "—"}</td>
-                      <td>{taskProgress(task)}%</td>
-                      <td>{task.estimatedHours}h</td>
-                      <td>{task.hoursSpent}h</td>
-                      <td>{task.status === "done" ? "—" : lag > 0 ? `+${lag}` : lag}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-
-      {tab === "people" && isManager && (
-        <Card title="People · assigned / completed / open / overdue">
-          <div className="table-scroll">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Employee</th>
-                  <th>Department</th>
-                  <th>Role</th>
-                  <th>Manager</th>
-                  <th>Assigned</th>
-                  <th>Completed</th>
-                  <th>Open</th>
-                  <th>Overdue</th>
-                  <th>On time</th>
-                  <th>Hours</th>
-                  <th>Score</th>
-                </tr>
-              </thead>
-              <tbody>
-                {peopleRows.map((person) => (
-                  <tr key={person.id}>
-                    <td>{person.name}</td>
-                    <td>{person.department}</td>
-                    <td>{person.role}</td>
-                    <td>{person.managerName}</td>
-                    <td>{person.assigned}</td>
-                    <td>{person.completed}</td>
-                    <td>{person.open}</td>
-                    <td>{person.overdue}</td>
-                    <td>{person.onTime}</td>
-                    <td>{person.hours}h</td>
-                    <td>
-                      <strong>{person.score}</strong>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-
-      {tab === "history" && (
-        <div className="task-history-grid">
-          <Card
-            title="Activity history"
-            action={
-              isManager ? (
-                <select value={historyPerson} onChange={(event) => setHistoryPerson(event.target.value)} aria-label="Person">
-                  {historyPeople.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.fullName}
+            <label>
+              Related task
+              <select value={d.referenceTaskId} onChange={(e) => setD({ ...d, referenceTaskId: e.target.value })}>
+                <option value="">None</option>
+                {tasks
+                  .filter((x) => x.status !== "done")
+                  .map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.code} · {x.subject}
                     </option>
                   ))}
-                </select>
-              ) : undefined
-            }
-          >
-            <div className="table-scroll">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>ID</th>
-                    <th>Subject</th>
-                    <th>Status</th>
-                    <th>Automation</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historyTasks.map((task) => (
-                    <tr key={task.id}>
-                      <td>{formatStamp(task.lastActivityAt)}</td>
-                      <td>{task.code}</td>
-                      <td>{task.subject}</td>
-                      <td>
-                        <StatusBadge status={taskStatusLabel(task)} />
-                      </td>
-                      <td>{task.automationNote || "—"}</td>
-                    </tr>
+              </select>
+            </label>
+            <label className="wide">
+              Description
+              <textarea rows={3} value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} />
+            </label>
+            <label>
+              Link title
+              <input value={d.link.label} onChange={(e) => setD({ ...d, link: { ...d.link, label: e.target.value } })} placeholder="Spec" />
+            </label>
+            <label>
+              Link address
+              <input value={d.link.url} onChange={(e) => setD({ ...d, link: { ...d.link, url: e.target.value } })} placeholder="https://" />
+            </label>
+            {others.length > 0 && (
+              <div className="wide">
+                <p className="wk-hint">Working with</p>
+                <div className="wk-picks">
+                  {others.map((x) => (
+                    <label key={x.person.id} className={d.peopleIds.includes(x.person.id) ? "wk-pick on" : "wk-pick"}>
+                      <input
+                        type="checkbox"
+                        checked={d.peopleIds.includes(x.person.id)}
+                        onChange={() => setD({ ...d, peopleIds: toggle(d.peopleIds, x.person.id), ccIds: d.ccIds.filter((id) => id !== x.person.id) })}
+                      />
+                      {x.person.fullName}
+                    </label>
                   ))}
-                </tbody>
-              </table>
+                </div>
+              </div>
+            )}
+            <div className="wide">
+              <p className="wk-hint">Keep informed (cc)</p>
+              <div className="wk-picks">
+                {ccPool.map((p) => (
+                  <label key={p.id} className={d.ccIds.includes(p.id) ? "wk-pick on" : "wk-pick"}>
+                    <input type="checkbox" checked={d.ccIds.includes(p.id)} onChange={() => setD({ ...d, ccIds: toggle(d.ccIds, p.id) })} />
+                    {p.fullName}
+                  </label>
+                ))}
+              </div>
             </div>
-          </Card>
-
-        </div>
-      )}
-    </Page>
+          </div>
+          {error && <Banner message={{ tone: "err", text: error }} />}
+          <div className="form-actions">
+            <button type="button" className="btn-ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="btn" disabled={!d.subject.trim()}>
+              {d.ownerId === employee.id ? "Add task" : "Assign task"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }

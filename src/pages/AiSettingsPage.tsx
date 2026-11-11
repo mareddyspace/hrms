@@ -60,7 +60,6 @@ export function AiSettingsPage() {
     <Page title="AI settings">
       {aiSettingsError() && <Banner message={{ tone: "err", text: aiSettingsError() ?? "" }} />}
       <Card title={`Knowledge sources (${enabledCount} of ${policies.length} on)`}>
-        <p className="note">Copilot answers only from policies that are on.</p>
         {groups.map(([group, list]) => {
           const allOn = list.every((p) => !offPolicies.has(p.id));
           return (
@@ -114,7 +113,6 @@ export function AiSettingsPage() {
                 />
                 <span>
                   <strong>{a.name}</strong>
-                  <span className="note">{a.purpose}</span>
                 </span>
               </label>
             </li>
@@ -134,7 +132,6 @@ export function AiSettingsPage() {
                 />
                 <span>
                   <strong>{f.label}</strong>
-                  <span className="note">{f.hint}</span>
                 </span>
               </label>
             </li>

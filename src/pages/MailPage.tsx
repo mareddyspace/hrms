@@ -56,6 +56,9 @@ interface ComposeState {
   mode: "new" | "reply" | "all" | "forward" | "draft";
 }
 
+/** Older samples carry categories the server does not accept on send (IT, People, Hiring): reply as General. */
+const knownCategory = (c: string | null | undefined): MailCategory => (MAIL_CATEGORIES as string[]).includes(c ?? "") ? (c as MailCategory) : "General";
+
 const emptyCompose = (): ComposeState => ({ toIds: [], ccIds: [], subject: "", body: "", category: "General", mode: "new" });
 
 function fullStamp(iso: string, timeZone: string): string {
@@ -184,7 +187,7 @@ export function MailPage() {
     const latest = thread.latest;
     const quote = `\n\n----- ${mode === "forward" ? "Forwarded message" : "Original message"} -----\nFrom: ${latest.fromName}\nDate: ${fullStamp(latest.sentAt, tz)}\nSubject: ${latest.subject}\nTo: ${latest.toIds.map(nameOf).join(", ")}\n\n${latest.body}`;
     if (mode === "forward") {
-      setCompose({ ...emptyCompose(), subject: prefixed("Fwd", thread.subject), body: quote, category: thread.category ?? "General", mode });
+      setCompose({ ...emptyCompose(), subject: prefixed("Fwd", thread.subject), body: quote, category: knownCategory(thread.category), mode });
     } else {
       const replyTo = latest.fromId === me ? latest.toIds : [latest.fromId];
       const everyone = [...new Set([latest.fromId, ...latest.toIds, ...latest.ccIds])].filter((id) => id !== me && !replyTo.includes(id));
@@ -194,7 +197,7 @@ export function MailPage() {
         ccIds: mode === "all" ? everyone : [],
         subject: prefixed("Re", thread.subject),
         body: quote,
-        category: thread.category ?? "General",
+        category: knownCategory(thread.category),
         threadId: thread.threadId,
         mode,
       });

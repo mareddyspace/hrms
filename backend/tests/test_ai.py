@@ -64,6 +64,8 @@ def test_employee_context_has_only_own_data():
         allowed = {me.full_name}
         if me.manager_id:
             allowed.add(db.get(Employee, me.manager_id).full_name)
+        # who hired the person is part of their own profile (names as HR recorded them)
+        allowed |= {n for n in db.scalars(select(Employee.full_name)) if n in f"{me.hired_by} {me.hiring_manager}"}
         others = [n for n in db.scalars(select(Employee.full_name)) if n not in allowed]
         assert not [n for n in others if n in text], "context names someone else"
         assert me.email not in text and (me.mobile or "@@") not in text  # no contact details, even own

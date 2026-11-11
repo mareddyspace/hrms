@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Banner,
   Card,
@@ -8,7 +9,6 @@ import {
   MetricCard,
   MetricGrid,
   Page,
-  StatusBadge,
   ActionButton,
   Tabs,
   downloadText,
@@ -29,6 +29,8 @@ import {
   type AttendanceDayKind,
   type AttendanceDayRecord,
   type CorrectionKind,
+  type CorrectionStatus,
+  type PunchPhase,
 } from "../data/attendanceData.ts";
 import {
   attendanceActionAsync,
@@ -63,10 +65,37 @@ import {
 } from "../data/workSchedule.ts";
 import { managementChain } from "../demoAccounts.ts";
 import { usePortal } from "../store.tsx";
+import { ToneChip } from "./TimesheetTeamDays.tsx";
+import type { TimeTone } from "../data/timesheetDays.ts";
 import "./attendance.css";
+import "../styles/time.css";
 
 type RangeMode = "week" | "month" | "year" | "custom";
 type AttTab = "overview" | "history" | "corrections" | "schedule";
+const ATT_TABS: AttTab[] = ["overview", "history", "corrections", "schedule"];
+
+/** One colour per day status, the same in the legend, the calendar, the day panel and the history (src/styles/time.css). */
+const KIND_TONE: Record<AttendanceDayKind, { tone: TimeTone; dashed?: boolean }> = {
+  present: { tone: "green" },
+  wfh: { tone: "teal" },
+  leave: { tone: "purple" },
+  holiday: { tone: "blue" },
+  absent: { tone: "red" },
+  missing_punch: { tone: "red", dashed: true },
+  pending_correction: { tone: "amber" },
+  weekend: { tone: "grey" },
+  not_checked_in: { tone: "grey", dashed: true },
+  no_record: { tone: "none" },
+  upcoming: { tone: "none" },
+};
+const LEGEND_KINDS: AttendanceDayKind[] = ["present", "wfh", "leave", "holiday", "absent", "missing_punch", "pending_correction", "weekend", "not_checked_in"];
+const PHASE_TONE: Record<PunchPhase, TimeTone> = { not_started: "grey", checked_in: "green", on_break: "amber", checked_out: "grey" };
+const CORRECTION_TONE: Record<CorrectionStatus, TimeTone> = { Pending: "amber", Approved: "green", Rejected: "red" };
+
+function KindChip({ kind }: { kind: AttendanceDayKind }) {
+  const look = KIND_TONE[kind];
+  return <ToneChip tone={look.tone} label={kindLabel(kind)} dashed={look.dashed} />;
+}
 
 function useAttendance() {
   return useSyncExternalStore(subscribeAttendance, getAttendanceState, getAttendanceState);
@@ -166,7 +195,15 @@ export function AttendancePage() {
   const today = todayISO();
   const initial = new Date();
 
-  const [tab, setTab] = useState<AttTab>("overview");
+  // The tab lives in the address (?tab=history) so the breadcrumb and Back return to the overview.
+  const [params, setParams] = useSearchParams();
+  const tab: AttTab = ATT_TABS.includes(params.get("tab") as AttTab) ? (params.get("tab") as AttTab) : "overview";
+  const setTab = (next: AttTab) => {
+    const nextParams = new URLSearchParams(params);
+    if (next === "overview") nextParams.delete("tab");
+    else nextParams.set("tab", next);
+    setParams(nextParams);
+  };
   const [cursor, setCursor] = useState({ year: initial.getFullYear(), month: initial.getMonth() });
   const [rangeMode, setRangeMode] = useState<RangeMode>("month");
   const [customFrom, setCustomFrom] = useState(() => monthBounds(initial.getFullYear(), initial.getMonth()).from);
@@ -339,19 +376,6 @@ export function AttendancePage() {
       return { month: m, label: monthLabel(cursor.year, m), started: rows.some((r) => r.date <= today), ...monthFigures(rows, today) };
     }).filter((r) => r.started);
   }, [rangeMode, history, cursor.year, today]);
-
-  const summary = useMemo(() => {
-    const s = { present: 0, absent: 0, leave: 0, wfh: 0, exceptions: 0, holiday: 0 };
-    for (const row of history) {
-      if (row.kind === "present") s.present += 1;
-      else if (row.kind === "absent") s.absent += 1;
-      else if (row.kind === "leave") s.leave += 1;
-      else if (row.kind === "wfh") s.wfh += 1;
-      else if (row.kind === "holiday") s.holiday += 1;
-      else if (row.kind === "missing_punch" || row.kind === "pending_correction") s.exceptions += 1;
-    }
-    return s;
-  }, [history]);
 
   const session = getCurrentSession(employee.id, attState);
   const missingOut = missingCheckOutSessions(employee.id, attState);
@@ -544,7 +568,9 @@ export function AttendancePage() {
               : r.kind === "wfh" || r.note?.toLowerCase().includes("work from home")
                 ? "Work from home"
                 : "Working";
-      return { date: r.date, plan, working: plan === "Working" || plan === "Work from home", record: r.checkIn ? r : undefined };
+      const tone: TimeTone =
+        r.kind === "weekend" ? "grey" : r.kind === "holiday" ? "blue" : r.kind === "leave" ? "purple" : plan === "Work from home" ? "teal" : "green";
+      return { date: r.date, plan, tone, working: plan === "Working" || plan === "Work from home", record: r.checkIn ? r : undefined };
     });
   })();
 
@@ -554,7 +580,8 @@ export function AttendancePage() {
     return toISO(d);
   })();
 
-  const regionHolidays = employeeHolidays.filter((h) => h.date >= range.from && h.date <= range.to);
+  const shownMonth = monthBounds(cursor.year, cursor.month);
+  const regionHolidays = employeeHolidays.filter((h) => h.date >= shownMonth.from && h.date <= shownMonth.to);
 
   const corrDayRecord = corrRecord;
   const correctionForm = (
@@ -621,6 +648,7 @@ export function AttendancePage() {
         </button>
       }
     >
+      <div className="att-page">
       {message && <Banner message={message} />}
 
       <Tabs
@@ -634,15 +662,10 @@ export function AttendancePage() {
         onChange={(id) => setTab(id as AttTab)}
       />
 
-      <>
           {tab === "overview" && (
             <>
-              <Card title="Today's attendance" action={<StatusBadge status={phaseLabel(session.phase)} literal keepCase />}>
+              <Card title="Today" action={<ToneChip tone={PHASE_TONE[session.phase]} label={phaseLabel(session.phase)} />}>
                 <div className="att-today-grid">
-                  <div>
-                    <span className="muted">Status</span>
-                    <strong>{phaseLabel(session.phase)}</strong>
-                  </div>
                   <div>
                     <span className="muted">Check-in</span>
                     <strong>{session.checkIn ? formatHm(session.checkIn) : "—"}</strong>
@@ -663,17 +686,17 @@ export function AttendancePage() {
                     <strong>{formatHours(live.hoursWorked)}</strong>
                   </div>
                   <div>
-                    <span className="muted">Shift</span>
-                    <strong>
-                      {schedule.shiftName} · {shift.start}–{shift.end}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="muted">{session.checkOut ? "Shift target" : "Left to work"}</span>
+                    <span className="muted">{session.checkIn && !session.checkOut ? "Left to work" : "Shift target"}</span>
                     <strong>
                       {session.checkIn && !session.checkOut
                         ? formatHours(Math.max(0, expectedHours - live.hoursWorked))
                         : formatHours(expectedHours)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="muted">Shift</span>
+                    <strong>
+                      {shift.start}–{shift.end}
                     </strong>
                   </div>
                 </div>
@@ -685,15 +708,21 @@ export function AttendancePage() {
                 {session.date !== today && session.phase !== "not_started" && (
                   <p className="note warn">Session started {formatShortDate(session.date)} (overnight) — check out to close it.</p>
                 )}
+                {session.phase === "checked_out" && session.autoCheckout && (
+                  <p className="note warn">
+                    Stopped at 9 hours and checked out automatically. Add that day's timesheet and submit it.{" "}
+                    <Link to={`/timesheet?day=${session.date}`}>Open timesheet</Link>
+                  </p>
+                )}
                 {missingOut.map((s) => (
                   <p key={s.date} className="note warn att-missing-out">
                     Missing check-out on {formatShortDate(s.date)} (checked in {s.checkIn ? formatHm(s.checkIn) : "—"}).{" "}
-                    <button type="button" className="btn-ghost" onClick={() => openCorrection(s.date, "missing_check_out")}>
+                    <button type="button" className="btn-ghost btn-tiny" onClick={() => openCorrection(s.date, "missing_check_out")}>
                       Request correction
                     </button>
                   </p>
                 ))}
-                <div className="form-actions">
+                <div className="att-today-actions">
                   {session.phase === "not_started" &&
                     (todayOff ? (
                       <p className="note">{todayOff} No check-in needed.</p>
@@ -717,141 +746,46 @@ export function AttendancePage() {
                       End break
                     </ActionButton>
                   )}
-                  {session.phase === "checked_out" && (
-                    <p className="note">Day closed.</p>
-                  )}
                 </div>
               </Card>
-
-              <Card
-                title={`Monthly summary · ${monthLabel(cursor.year, cursor.month)}`}
-                action={
-                  <div className="row-gap">
-                    <button type="button" className="btn-ghost btn-tiny" aria-label="Previous month" onClick={() => moveMonth(-1)}>
-                      ←
-                    </button>
-                    <button type="button" className="btn-ghost btn-tiny" aria-label="Next month" onClick={() => moveMonth(1)}>
-                      →
-                    </button>
-                  </div>
-                }
-              >
-                <MetricGrid>
-                  <MetricCard label="Attendance" value={`${monthStats.pct}%`} hint={`${monthStats.present} present · ${monthStats.absent} absent`} />
-                  <MetricCard label="Avg working hours" value={formatHours(monthStats.avgHours)} hint={`${formatHours(monthStats.hours)} in total`} />
-                  <MetricCard label="Late arrivals" value={monthStats.late} hint={monthStats.lateMinutes ? `${monthStats.lateMinutes} min in total` : "None"} />
-                  <MetricCard label="Missing punches" value={monthStats.missing} hint={monthStats.missing ? "Request a correction" : "All complete"} />
-                </MetricGrid>
-                {monthStats.missing > 0 && (
-                  <button
-                    type="button"
-                    className="btn-ghost btn-tiny"
-                    onClick={() => {
-                      setRangeMode("month");
-                      setHistoryKind("missing_punch");
-                      setTab("history");
-                    }}
-                  >
-                    Show missing punches
-                  </button>
-                )}
-              </Card>
-
-              <FilterBar>
-                <label className="filter-label">
-                  Range
-                  <select value={rangeMode} onChange={(e) => setRangeMode(e.target.value as RangeMode)}>
-                    <option value="week">Week</option>
-                    <option value="month">Month</option>
-                    <option value="year">Year</option>
-                    <option value="custom">Custom</option>
-                  </select>
-                </label>
-                {rangeMode === "custom" && (
-                  <>
-                    <label className="filter-label">
-                      From
-                      <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
-                    </label>
-                    <label className="filter-label">
-                      To
-                      <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
-                    </label>
-                  </>
-                )}
-                {rangeMode === "week" && (
-                  <div className="row-gap">
-                    <button type="button" className="btn-ghost" onClick={() => moveWeek(-1)}>
-                      ← Prev week
-                    </button>
-                    <button type="button" className="btn-ghost" onClick={() => moveWeek(1)}>
-                      Next week →
-                    </button>
-                  </div>
-                )}
-                {rangeMode === "month" && (
-                  <div className="row-gap">
-                    <button type="button" className="btn-ghost" onClick={() => moveMonth(-1)}>
-                      ← Prev month
-                    </button>
-                    <button type="button" className="btn-ghost" onClick={() => moveMonth(1)}>
-                      Next month →
-                    </button>
-                  </div>
-                )}
-                {rangeMode === "year" && (
-                  <div className="row-gap">
-                    <button type="button" className="btn-ghost" onClick={() => moveMonth(-12)}>
-                      ← {cursor.year - 1}
-                    </button>
-                    <button type="button" className="btn-ghost" onClick={() => moveMonth(12)}>
-                      {cursor.year + 1} →
-                    </button>
-                  </div>
-                )}
-                <RegionalFilter label={t("locale.region")} />
-              </FilterBar>
-
-              <p className="note">
-                {formatShortDate(range.from)} – {formatShortDate(range.to)}
-              </p>
-
-              <MetricGrid>
-                <MetricCard label="Present" value={summary.present} />
-                <MetricCard label="Absent" value={summary.absent} />
-                <MetricCard label="Leave" value={summary.leave} />
-                <MetricCard label="Work from home" value={summary.wfh} />
-                <MetricCard label="Exceptions" value={summary.exceptions} hint="Missing punch / pending" />
-                <MetricCard label="Holidays" value={summary.holiday} />
-              </MetricGrid>
 
               <div className="att-workbench">
                 <Card
                   title={monthLabel(cursor.year, cursor.month)}
                   action={
-                    rangeMode === "month" ? undefined : (
-                      <div className="row-gap">
-                        <button type="button" className="btn-ghost" onClick={() => moveMonth(-1)}>
-                          ←
-                        </button>
-                        <button type="button" className="btn-ghost" onClick={() => moveMonth(1)}>
-                          →
-                        </button>
-                      </div>
-                    )
+                    <div className="att-month-nav">
+                      <button type="button" className="btn-ghost btn-tiny" aria-label="Previous month" onClick={() => moveMonth(-1)}>
+                        ‹
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-ghost btn-tiny"
+                        onClick={() => {
+                          setCursor({ year: initial.getFullYear(), month: initial.getMonth() });
+                          setSelectedDate(today);
+                        }}
+                      >
+                        This month
+                      </button>
+                      <button type="button" className="btn-ghost btn-tiny" aria-label="Next month" onClick={() => moveMonth(1)}>
+                        ›
+                      </button>
+                    </div>
                   }
                 >
-                  <div className="cal-legend">
-                    <span className="day present legend-swatch">Present</span>
-                    <span className="day leave legend-swatch">Leave</span>
-                    <span className="day wfh legend-swatch">WFH</span>
-                    <span className="day holiday legend-swatch">Holiday</span>
-                    <span className="day absent legend-swatch">Absent</span>
-                    <span className="day weekend legend-swatch">Weekly off</span>
-                    <span className="day missing_punch legend-swatch">Missing punch</span>
-                    <span className="day pending_correction legend-swatch">Correction</span>
-                    <span className="day no_record legend-swatch">No record</span>
-                  </div>
+                  <MetricGrid>
+                    <MetricCard label="Attendance" value={`${monthStats.pct}%`} hint={`${monthStats.present} present · ${monthStats.absent} absent · ${monthStats.leave} leave`} />
+                    <MetricCard label="Avg working hours" value={formatHours(monthStats.avgHours)} hint={`${formatHours(monthStats.hours)} in total`} />
+                    <MetricCard label="Late arrivals" value={monthStats.late} hint={monthStats.lateMinutes ? `${monthStats.lateMinutes} min in total` : "None"} />
+                    <MetricCard label="Missing punches" value={monthStats.missing} hint={monthStats.missing ? "Request a correction" : "All complete"} />
+                  </MetricGrid>
+                  <ul className="tz-legend" aria-label="Colours" style={{ marginTop: 14 }}>
+                    {LEGEND_KINDS.map((kind) => (
+                      <li key={kind}>
+                        <KindChip kind={kind} />
+                      </li>
+                    ))}
+                  </ul>
                   <div className="cal att-cal">
                     {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
                       <div key={label} className="cal-head">
@@ -862,22 +796,13 @@ export function AttendancePage() {
                       if (!date) return <div key={`blank-${index}`} />;
                       const row = byDate.get(date);
                       const kind = (row?.kind ?? "upcoming") as AttendanceDayKind;
+                      const look = KIND_TONE[kind];
                       let caption: string | null = null;
                       if (kind === "holiday") caption = shortHolidayName(row?.note || "Holiday");
-                      else if (kind === "leave") caption = "Leave";
-                      else if (kind === "wfh") caption = "WFH";
-                      else if (kind === "absent") caption = "Absent";
-                      else if (kind === "missing_punch") caption = "Missing punch";
+                      else if (kind === "present") caption = row?.checkIn ? formatHours(row.hoursWorked) : schedule.hoursLabel;
+                      else if (kind === "weekend") caption = isPrimaryWeeklyOffLabel(date, schedule.weeklyOffDays) ? "Weekly off" : null;
                       else if (kind === "pending_correction") caption = "Correction";
-                      else if (kind === "not_checked_in") caption = "Not checked in";
-                      else if (kind === "present") {
-                        caption = row?.checkIn ? formatHours(row.hoursWorked) : schedule.hoursLabel;
-                      } else if (
-                        kind === "weekend" &&
-                        isPrimaryWeeklyOffLabel(date, schedule.weeklyOffDays)
-                      ) {
-                        caption = "Weekly off";
-                      }
+                      else if (kind !== "upcoming" && kind !== "no_record") caption = kind === "wfh" ? "WFH" : kindLabel(kind);
                       const tip = [
                         formatShortDate(date),
                         kindLabel(kind),
@@ -893,85 +818,89 @@ export function AttendancePage() {
                           key={date}
                           type="button"
                           title={tip}
-                          className={`day att-day ${kind} ${date === today ? "today" : ""} ${date === selectedDate ? "selected" : ""}`}
+                          aria-label={tip}
+                          aria-pressed={date === selectedDate}
+                          className={`day att-day tz-tone-${look.tone}${look.dashed ? " dashed" : ""}${date === today ? " today" : ""}${date === selectedDate ? " selected" : ""}`}
                           onClick={() => setSelectedDate(date)}
                         >
                           <strong>{Number(date.slice(-2))}</strong>
                           {caption ? <span className="att-day-meta">{caption}</span> : null}
-                          {row?.lateMinutes ? <span className="att-flag">Late</span> : null}
-                          {row?.overtimeMinutes ? <span className="att-flag ot">OT</span> : null}
+                          {(row?.lateMinutes || row?.overtimeMinutes) ? (
+                            <span className="att-flags">
+                              {row?.lateMinutes ? <span>Late</span> : null}
+                              {row?.overtimeMinutes ? <span>OT</span> : null}
+                            </span>
+                          ) : null}
                         </button>
                       );
                     })}
                   </div>
+                  {monthStats.missing > 0 && (
+                    <button
+                      type="button"
+                      className="btn-ghost btn-tiny"
+                      style={{ marginTop: 12 }}
+                      onClick={() => {
+                        setRangeMode("month");
+                        setHistoryKind("missing_punch");
+                        setTab("history");
+                      }}
+                    >
+                      Show missing punches
+                    </button>
+                  )}
                 </Card>
 
-                <aside className="att-detail-panel">
-                  <Card title={selectedDate ? formatShortDate(selectedDate) : "Day detail"}>
+                <aside>
+                  <Card title={selectedDate ? formatShortDate(selectedDate) : "Day detail"} action={selectedRecord ? <KindChip kind={selectedRecord.kind} /> : undefined}>
                     {!selectedRecord ? (
                       <EmptyState title="No day selected" description="Click a date on the calendar." />
                     ) : (
-                      <div className="stack">
-                        <div className="att-today-grid">
-                          <div>
-                            <span className="muted">Status</span>
-                            <StatusBadge status={kindLabel(selectedRecord.kind)} />
-                          </div>
-                          <div>
-                            <span className="muted">Working hours</span>
-                            <strong>{formatHours(selectedRecord.hoursWorked)}</strong>
-                          </div>
-                          <div>
-                            <span className="muted">Check-in</span>
-                            <strong>{selectedRecord.checkIn ?? "—"}</strong>
-                          </div>
-                          <div>
-                            <span className="muted">Check-out</span>
-                            <strong>{selectedRecord.checkOut ?? "—"}</strong>
-                          </div>
-                          <div>
-                            <span className="muted">Break</span>
-                            <strong>{formatBreakDuration(breakMinutes(selectedRecord.breaks ?? []))}</strong>
-                          </div>
-                          <div>
-                            <span className="muted">Shift</span>
-                            <strong>
-                              {shift.start}–{shift.end}
-                            </strong>
-                          </div>
-                        </div>
-                        <div>
-                          <span className="muted">Breaks</span>
-                          {(selectedRecord.breaks?.length ?? 0) === 0 ? (
-                            <p className="muted">None</p>
-                          ) : (
-                            <ul className="todo">
-                              {selectedRecord.breaks.map((b, i) => (
-                                <li key={`${b.start}-${i}`}>
-                                  {b.start} – {b.end ?? "…"} ({formatBreakDuration(b.end ? breakMinutes([b]) : 0)})
-                                </li>
-                              ))}
-                            </ul>
+                      <div className="att-stack">
+                        <dl className="att-detail-list">
+                          <dt>Check-in</dt>
+                          <dd>{selectedRecord.checkIn ?? "—"}</dd>
+                          <dt>Check-out</dt>
+                          <dd>{selectedRecord.checkOut ?? "—"}</dd>
+                          <dt>Working hours</dt>
+                          <dd>{formatHours(selectedRecord.hoursWorked)}</dd>
+                          <dt>Break</dt>
+                          <dd>
+                            {formatBreakDuration(breakMinutes(selectedRecord.breaks ?? []))}
+                            {(selectedRecord.breaks?.length ?? 0) > 0 && (
+                              <span className="muted">
+                                {" "}
+                                ({selectedRecord.breaks.map((b) => `${b.start}–${b.end ?? "…"}`).join(", ")})
+                              </span>
+                            )}
+                          </dd>
+                          <dt>Shift</dt>
+                          <dd>
+                            {shift.start}–{shift.end}
+                          </dd>
+                          {selectedRecord.lateMinutes > 0 && (
+                            <>
+                              <dt>Late</dt>
+                              <dd>{selectedRecord.lateMinutes} min</dd>
+                            </>
                           )}
-                        </div>
+                          {selectedRecord.overtimeMinutes > 0 && (
+                            <>
+                              <dt>Overtime</dt>
+                              <dd>{selectedRecord.overtimeMinutes} min</dd>
+                            </>
+                          )}
+                        </dl>
                         {selectedRecord.note && <p className="note">{selectedRecord.note}</p>}
-                        {(selectedRecord.lateMinutes > 0 || selectedRecord.overtimeMinutes > 0) && (
-                          <p className="note">
-                            {selectedRecord.lateMinutes > 0 ? `Late by ${selectedRecord.lateMinutes} min. ` : ""}
-                            {selectedRecord.overtimeMinutes > 0
-                              ? `Overtime ${selectedRecord.overtimeMinutes} min.`
-                              : ""}
-                          </p>
-                        )}
                         {myCorrections
                           .filter((c) => c.date === selectedRecord.date)
                           .map((c) => (
                             <p key={c.id} className="note">
-                              Correction {c.status.toLowerCase()}
-                              {c.decisionNote ? ` · ${c.decisionNote}` : ""}
+                              <ToneChip tone={CORRECTION_TONE[c.status]} label={`Correction ${c.status.toLowerCase()}`} />
+                              {c.decisionNote ? ` ${c.decisionNote}` : ""}
                             </p>
                           ))}
-                        {canCorrect(selectedRecord, today) ? (
+                        {canCorrect(selectedRecord, today) && (
                           <button
                             type="button"
                             className="btn"
@@ -979,21 +908,22 @@ export function AttendancePage() {
                           >
                             Request correction
                           </button>
-                        ) : selectedRecord.kind === "pending_correction" ? (
-                          <p className="muted">A correction is waiting for review.</p>
-                        ) : null}
+                        )}
                       </div>
                     )}
                   </Card>
 
                   <Card title={`Holidays · ${employee.countryName || activeCountry.name}`}>
                     {regionHolidays.length === 0 ? (
-                      <p className="muted">No holidays in this range.</p>
+                      <p className="muted" style={{ margin: 0 }}>
+                        No holidays this month.
+                      </p>
                     ) : (
-                      <ul className="todo">
+                      <ul className="att-holidays">
                         {regionHolidays.map((h) => (
                           <li key={h.date}>
-                            {formatShortDate(h.date)} · {h.name}
+                            <span>{h.name}</span>
+                            <span className="muted">{formatShortDate(h.date)}</span>
                           </li>
                         ))}
                       </ul>
@@ -1004,7 +934,6 @@ export function AttendancePage() {
               </div>
             </>
           )}
-
           {tab === "history" && (
             <Card
               title="Attendance history"
@@ -1081,6 +1010,7 @@ export function AttendancePage() {
                     <option value="holiday">Holiday</option>
                   </select>
                 </label>
+                <RegionalFilter label={t("locale.region")} />
               </FilterBar>
               {rangeMode === "year" && yearRows.length > 0 && (
                 <div className="table-scroll att-year">
@@ -1164,7 +1094,7 @@ export function AttendancePage() {
                         >
                           <td>{formatShortDate(r.date)}</td>
                           <td>
-                            <StatusBadge status={kindLabel(r.kind)} />
+                            <KindChip kind={r.kind} />
                           </td>
                           <td>{r.checkIn ?? "—"}</td>
                           <td>{r.checkOut ?? "—"}</td>
@@ -1327,7 +1257,7 @@ export function AttendancePage() {
                           <td>{formatShortDate(d.date)}</td>
                           <td>{parseISODate(d.date).toLocaleDateString("en-GB", { weekday: "long" })}</td>
                           <td>
-                            <StatusBadge status={d.plan} tone={d.working ? "ok" : "neutral"} literal keepCase />
+                            <ToneChip tone={d.tone} label={d.plan} />
                           </td>
                           <td>{d.working ? `${shift.start}–${shift.end}` : "—"}</td>
                           <td>{d.working ? formatHours(expectedHours) : "—"}</td>
@@ -1365,7 +1295,7 @@ export function AttendancePage() {
               </Card>
             </div>
           )}
-      </>
+      </div>
       <Dialog open={corrOpen} title={`Request correction · ${formatShortDate(corrDate)}`} onClose={() => setCorrOpen(false)}>
         {correctionForm}
       </Dialog>
@@ -1380,7 +1310,7 @@ function CorrectionRow({ row }: { row: AttendanceCorrection }) {
         <strong>
           {formatShortDate(row.date)} · {correctionKindLabel(row.kind)}
         </strong>
-        <StatusBadge status={row.status} />
+        <ToneChip tone={CORRECTION_TONE[row.status]} label={row.status} />
       </div>
       <p style={{ margin: "6px 0 0" }}>{row.reason}</p>
       <p className="muted" style={{ margin: "4px 0 0" }}>

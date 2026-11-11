@@ -36,6 +36,7 @@ import {
   type TaskStatus,
 } from "../data/projectStore.ts";
 import "./projects.css";
+import "../styles/workspace.css";
 
 const HEALTH_TONE: Record<ProjectHealth, "ok" | "warn" | "danger" | "neutral"> = {
   "On track": "ok",
@@ -56,6 +57,59 @@ function Progress({ value, label, tone }: { value: number; label: string; tone?:
 }
 
 const h = (n: number) => formatHoursAmount(Math.round(n * 100) / 100);
+
+const AVATAR_HUES = [196, 160, 262, 24, 330, 210, 120, 280];
+function initialsOf(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() || "?";
+}
+function hueOf(id: string) {
+  let n = 0;
+  for (const ch of id) n = (n * 31 + ch.charCodeAt(0)) >>> 0;
+  return AVATAR_HUES[n % AVATAR_HUES.length];
+}
+
+/** Initials avatar with a stable colour per person. */
+function PersonAvatar({ id, name, size = 28 }: { id: string; name: string; size?: number }) {
+  return (
+    <span className="ws-avatar" style={{ width: size, height: size, fontSize: Math.round(size * 0.38), ["--hue" as string]: hueOf(id) }} title={name} aria-hidden="true">
+      {initialsOf(name)}
+    </span>
+  );
+}
+
+/** Overlapping avatars, then "+n". */
+function AvatarStack({ members, max = 5 }: { members: PMember[]; max?: number }) {
+  const shown = members.slice(0, max);
+  return (
+    <span className="ws-avatar-stack" aria-label={`${members.length} team ${members.length === 1 ? "member" : "members"}: ${members.map((m) => m.name).join(", ")}`}>
+      {shown.map((m) => (
+        <PersonAvatar key={m.employeeId} id={m.employeeId} name={m.name} size={26} />
+      ))}
+      {members.length > max && <span className="ws-avatar ws-avatar-more">+{members.length - max}</span>}
+    </span>
+  );
+}
+
+/** Milestones as dots on a line: done, overdue, upcoming. */
+function MilestoneTrack({ milestones, today }: { milestones: PMilestone[]; today: string }) {
+  if (milestones.length === 0) return <span className="muted ws-track-empty">No milestones yet</span>;
+  const sorted = [...milestones].sort((a, b) => a.due.localeCompare(b.due));
+  const done = sorted.filter((m) => m.completedOn).length;
+  return (
+    <span className="ws-track" aria-label={`${done} of ${sorted.length} milestones done`}>
+      <span className="ws-track-line" aria-hidden="true">
+        {sorted.map((m) => {
+          const state = m.completedOn ? "done" : m.due < today ? "late" : "todo";
+          return <i key={m.id} className={state} title={`${m.name} · ${formatShortDate(m.due)}${state === "late" ? " · overdue" : state === "done" ? " · done" : ""}`} />;
+        })}
+      </span>
+      <span className="ws-track-label">
+        {done}/{sorted.length} milestones
+      </span>
+    </span>
+  );
+}
 
 function usedPct(p: ProjectInfo) {
   return p.budgetHours ? Math.round((p.loggedHours / p.budgetHours) * 100) : 0;
@@ -96,7 +150,7 @@ export function ProjectsPage() {
     );
 
   return (
-    <Page title="My projects" subtitle={`${current.length} current · ${previous.length} previous`}>
+    <Page title="My projects">
       <Tabs
         tabs={[
           { id: "current", label: `Current (${current.length})` },
@@ -117,12 +171,28 @@ export function ProjectsPage() {
           </select>
         </label>
       </FilterBar>
+      {mode === "current" && current.length > 0 && (
+        <div className="ws-proj-summary">
+          <span>
+            <strong>{current.length}</strong> active
+          </span>
+          <span>
+            <strong>{current.filter((x) => { const hh = healthOf(x, today); return hh === "At risk" || hh === "Delayed"; }).length}</strong> need attention
+          </span>
+          <span>
+            <strong>{h(current.reduce((sum, x) => sum + x.myLoggedHours, 0))}</strong> logged by me
+          </span>
+          <span>
+            <strong>{current.reduce((sum, x) => sum + x.tasks.filter((t) => t.assigneeId === ctx.viewerId && t.status !== "done").length, 0)}</strong> open tasks for me
+          </span>
+        </div>
+      )}
       {list.length === 0 ? (
         <EmptyState title={needle ? "No project matches your search" : "No projects in this list"} />
       ) : (
-        <div className="project-cards">
+        <div className="project-cards ws-proj-grid">
           {list.map((project) => (
-            <ProjectCard key={project.id} project={project} onOpen={() => setParams(listParams({ id: project.id }))} />
+            <ProjectCard key={project.id} project={project} viewerId={ctx.viewerId} onOpen={() => setParams(listParams({ id: project.id }))} />
           ))}
         </div>
       )}
@@ -130,32 +200,62 @@ export function ProjectsPage() {
   );
 }
 
-function ProjectCard({ project: p, onOpen }: { project: ProjectInfo; onOpen: () => void }) {
-  const health = healthOf(p);
+function ProjectCard({ project: p, viewerId, onOpen }: { project: ProjectInfo; viewerId: string; onOpen: () => void }) {
+  const today = todayISO();
+  const health = healthOf(p, today);
   const done = completionOf(p);
   const next = nextMilestone(p);
   const used = usedPct(p);
+  const myOpen = p.tasks.filter((t) => t.assigneeId === viewerId && t.status !== "done").length;
+  const late = !!next && next.due < today;
   return (
-    <button type="button" className="project-card" onClick={onOpen} aria-label={`Open ${p.name}`}>
-      <span className="project-card-head">
-        <strong>{p.name}</strong>
-        <StatusBadge status={health} tone={HEALTH_TONE[health]} literal />
+    <button type="button" className={`ws-proj-card health-${health.replace(/\s+/g, "-").toLowerCase()}`} onClick={onOpen} aria-label={`Open ${p.name}`}>
+      <span className="ws-proj-top">
+        <span className="ws-proj-id">
+          <span className="ws-proj-code">{p.code}</span>
+          <StatusBadge status={health} tone={HEALTH_TONE[health]} literal />
+        </span>
+        <strong className="ws-proj-name">{p.name}</strong>
+        <span className="ws-proj-client">{p.client || "Internal"}</span>
       </span>
-      <span className="muted">
-        {p.client} · {p.myTitle || "Member"}
+
+      <span className="ws-proj-progress">
+        <span className="project-card-metric">
+          <span>Progress</span>
+          <strong>{done.pct}%</strong>
+        </span>
+        <Progress value={done.pct} label={`${done.pct}% complete`} />
       </span>
-      <span className="project-card-metric">
-        <span>Completion</span>
-        <strong>{done.pct}%</strong>
+
+      <MilestoneTrack milestones={p.milestones} today={today} />
+
+      <span className="ws-proj-facts">
+        <span>
+          <em>My role</em>
+          <b>{p.myTitle || "Member"}</b>
+        </span>
+        <span>
+          <em>My hours</em>
+          <b>
+            {h(p.myLoggedHours)}
+            {p.myBudgetHours ? ` / ${p.myBudgetHours} h` : ""}
+          </b>
+        </span>
+        <span>
+          <em>Team hours</em>
+          <b className={used > 100 ? "over" : undefined}>{p.budgetHours ? `${used}% of ${p.budgetHours} h` : h(p.loggedHours)}</b>
+        </span>
+        <span>
+          <em>My open tasks</em>
+          <b>{myOpen}</b>
+        </span>
       </span>
-      <Progress value={done.pct} label={`${done.pct}% complete`} />
-      <span className="project-card-metric">
-        <span>Hours used</span>
-        <strong>{p.budgetHours ? `${h(p.loggedHours)} of ${p.budgetHours} h (${used}%)` : h(p.loggedHours)}</strong>
-      </span>
-      {p.budgetHours ? <Progress value={used} label={`${used}% of the hours budget used`} tone={used > 100 ? "danger" : used > done.pct + 20 ? "warn" : undefined} /> : null}
-      <span className="muted project-card-foot">
-        <span>{next ? `Next: ${next.name} · ${formatShortDate(next.due)}` : p.end ? `Ends ${formatShortDate(p.end)}` : "No deadline"}</span>
+
+      <span className="ws-proj-foot">
+        <AvatarStack members={p.members} />
+        <span className={late ? "ws-proj-next late" : "ws-proj-next"}>
+          {next ? `${late ? "Overdue" : "Next"}: ${next.name} · ${formatShortDate(next.due)}` : p.end ? `Ends ${formatShortDate(p.end)}` : "No deadline"}
+        </span>
       </span>
     </button>
   );
@@ -227,6 +327,42 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
         </ul>
       )}
       <Banner message={msg} />
+      <div className="ws-proj-hero">
+        <div className="ws-proj-hero-main">
+          <span className="row-gap">
+            <StatusBadge status={health} tone={HEALTH_TONE[health]} literal />
+            <span className="muted">{p.start ? `${formatShortDate(p.start)} – ${p.end ? formatShortDate(p.end) : "ongoing"}` : p.end ? `Ends ${formatShortDate(p.end)}` : "Ongoing"}</span>
+          </span>
+          <div className="ws-proj-hero-progress">
+            <Progress value={done.pct} label={`${done.pct}% complete`} />
+            <strong>{done.pct}%</strong>
+          </div>
+          <MilestoneTrack milestones={p.milestones} today={today} />
+        </div>
+        <dl className="ws-proj-hero-facts">
+          <div>
+            <dt>My role</dt>
+            <dd>{p.myTitle || "Member"}</dd>
+          </div>
+          <div>
+            <dt>My hours</dt>
+            <dd>
+              {h(p.myLoggedHours)}
+              {p.myBudgetHours ? ` of ${p.myBudgetHours} h` : ""}
+            </dd>
+          </div>
+          <div>
+            <dt>Manager</dt>
+            <dd>{p.managerName || "—"}</dd>
+          </div>
+          <div>
+            <dt>Team</dt>
+            <dd>
+              <AvatarStack members={p.members} max={7} />
+            </dd>
+          </div>
+        </dl>
+      </div>
       <MetricGrid>
         <MetricCard label="Completion" value={`${done.pct}%`} hint={done.basis} />
         <MetricCard label="Hours used" value={h(p.loggedHours)} hint={p.budgetHours ? `${used}% of the ${p.budgetHours} h budget · mine ${h(p.myLoggedHours)}` : `Mine ${h(p.myLoggedHours)}`} />
@@ -238,6 +374,7 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
       <div className="split">
         <Card
           title="About"
+          className="ws-proj-about"
           action={
             p.canEdit ? (
               <button type="button" className="btn-ghost btn-tiny" onClick={() => setEditAbout(true)}>
@@ -347,12 +484,16 @@ function ProjectDetail({ p, ctx, onBack }: { p: ProjectInfo; ctx: LocalContext; 
           ) : (
             <ul className="project-team">
               {p.members.map((m) => (
-                <li key={m.employeeId}>
-                  <button type="button" className="link-btn" onClick={() => setOpenMember(m)}>
-                    {m.name}
-                    {m.employeeId === ctx.viewerId ? " (you)" : ""}
-                  </button>
-                  <span className="muted">{m.title || m.role}</span>
+                <li key={m.employeeId} className="ws-team-row">
+                  <PersonAvatar id={m.employeeId} name={m.name} size={32} />
+                  <span className="ws-team-who">
+                    <button type="button" className="link-btn" onClick={() => setOpenMember(m)}>
+                      {m.name}
+                      {m.employeeId === ctx.viewerId ? " (you)" : ""}
+                    </button>
+                    <span className="muted">{m.title || m.role}</span>
+                  </span>
+                  <span className="muted ws-team-hours">{h(m.loggedHours)}</span>
                 </li>
               ))}
             </ul>

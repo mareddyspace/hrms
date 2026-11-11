@@ -707,7 +707,7 @@ function ExitDetail({ row, onMessage }: { row: ExitCase; onMessage: (m: Message)
           {hr && row.status === "Accepted" && !API_ENABLED && (
             <Card title="Complete exit">
               <div className="stack">
-                <p className="muted">{blocker ?? "Marks the person as left and issues the relieving and experience letters."}</p>
+                {blocker && <p className="muted">{blocker}</p>}
                 <div>
                   <ActionButton className="btn" toastError disabled={Boolean(blocker)} success={`Exit completed for ${row.employeeName}.`} onAction={complete}>
                     Complete exit

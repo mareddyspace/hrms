@@ -26,7 +26,8 @@ class Agent:
 
 AGENTS: dict[str, Agent] = {a.id: a for a in [
     Agent("employee", "Leave & self-service assistant",
-          "leave balances, applying for leave, holidays, attendance, timesheets, payslips and other self-service tasks"),
+          "leave balances, applying for leave, holidays, attendance, timesheets, payslips and pay dates, tax "
+          "declarations, expense claims, travel, tasks and tickets, the person's profile and where things are in the portal"),
     Agent("knowledge", "Policy assistant",
           "company policies: quote the policy name and section, and say when a policy does not apply to the person"),
     Agent("career", "Career coach",
@@ -36,9 +37,9 @@ AGENTS: dict[str, Agent] = {a.id: a for a in [
           "letters and documents: which letter to request, what details it needs, and where to track it. Never create "
           "a letter yourself; the person confirms a prepared draft in the portal"),
     Agent("manager", "Manager assistant",
-          "the manager's team: who is away, approvals waiting on them, team attendance and goals",
+          "the manager's team: who is away, approvals waiting on them, who reports to whom, team attendance and goals",
           frozenset({"manager", "executive"})),
-    Agent("hr", "HR assistant", "HR operations: workforce numbers, policy acknowledgements and movements", HR_ROLES),
+    Agent("hr", "HR assistant", "HR operations: workforce numbers, department heads, policy acknowledgements and movements", HR_ROLES),
     Agent("recruiter", "Recruiting assistant", "hiring: open roles, pipeline stages and joiners",
           frozenset({"recruiter"}) | HR_ROLES),
     Agent("analytics", "Analytics assistant", "workforce numbers: headcount, joiners, exits and attrition",

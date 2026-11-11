@@ -145,7 +145,6 @@ function MyDataTab({ actor, onResult }: { actor: ComplianceActor; onResult: (msg
   return (
     <Card title="Download my data">
       <div className="stack">
-        <p className="muted">A JSON file of your own records.</p>
         <div>
           <button className="btn" type="button" onClick={download}>
             Download my data

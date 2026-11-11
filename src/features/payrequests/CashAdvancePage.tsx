@@ -39,6 +39,7 @@ import {
   useServerValue,
 } from "./requestKit.tsx";
 import { ATTACH_TYPES, addComment, addFile, type ThreadContext } from "./threadStore.ts";
+import "../../styles/pay-claims.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -622,7 +623,10 @@ function AdvanceList({ rows, actorId, onOpen, filename, empty }: { rows: CashVie
     <>
       <ListFilters state={f.filters} onChange={f.set} onReset={f.reset} statuses={STATUSES} categories={categories} categoryLabel="Purpose" searchPlaceholder="ID, name, purpose" dateLabel="Asked" extra={<CsvButton filename={filename} headers={CSV_HEADERS} rows={() => csvRows(shown)} />} />
       {shown.length === 0 ? (
-        <EmptyState title={rows.length ? "No advances match these filters" : empty} />
+        <EmptyState
+          title={rows.length ? "No advances match these filters" : empty}
+          description={rows.length ? "Clear the filters to see every advance." : "Requests show here with approval, payout and repayment."}
+        />
       ) : (
         <div className="pr-list">
           {shown.map((v) => (
@@ -691,14 +695,13 @@ export function CashAdvancePage() {
           {open ? (
             <Card title="Current advance">
               <AdvanceRow v={open} actorId={demoProfile.id} onOpen={() => setOpenId(open.id)} />
-              <p className="muted" style={{ marginBottom: 0 }}>One open advance at a time. Open it to see details, settle it or withdraw it.</p>
             </Card>
           ) : (
             <Card title="New advance">
               {!policy ? <LoadState error={server.error} onRetry={server.retry} /> : <NewAdvanceForm policy={policy} onMessage={setMessage} onCreated={setOpenId} />}
             </Card>
           )}
-          <Card title="My requests">
+          <Card title="My requests" action={mine.length ? <span className="muted">{moneyAll(mine.filter((v) => v.status === "Paid" || v.status === "Settled"), (v) => v.amount, currency)} disbursed</span> : undefined}>
             {listLoading ? (
               <p className="muted">Loading…</p>
             ) : listError ? (

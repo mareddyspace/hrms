@@ -119,12 +119,52 @@ def test_owner_reveals_new_fields_and_others_cannot(client, babu, ram, farhan):
 
 
 def test_owner_cannot_set_hr_owned_fields(client, babu):
-    for body in ({"nationality": "British"}, {"work_arrangement": "Remote"}, {"first_name": "X"}, {"date_of_birth": "1990-01-01"}):
+    for body in ({"job_title": "CTO"}, {"department": "Finance"}, {"manager_id": "emp-ram"}, {"grade": "L9"},
+                 {"location": "Mars"}, {"employment_type": "Contract"}, {"company": "Other"}, {"salary": 1}):
         assert client.patch(f"{P}/me", headers=babu, json=body).status_code == 422
+    assert client.patch(f"{P}/me", headers=babu, json={"work_arrangement": "Moon"}).status_code == 422
+    assert client.patch(f"{P}/me", headers=babu, json={"last_name": " "}).status_code == 422
     assert client.patch(f"{P}/me", headers=babu, json={"emergency_phone": "abc"}).status_code == 422
     assert client.patch(f"{P}/me", headers=babu, json={"personal_email": "not-an-email"}).status_code == 422
     bad_exp = {"experience": [{"employer": "A", "title": "B", "from": "2016-01", "to": "2015-01"}]}
     assert client.patch(f"{P}/me", headers=babu, json=bad_exp).status_code == 422
+
+
+def test_owner_edits_own_legal_record_directly(client, babu, monkeypatch):
+    """No correction request: legal name, date of birth, nationality, gender and work arrangement save directly."""
+    from app.config import get_settings
+    from app.services import profile_otp
+    monkeypatch.setattr(get_settings(), "otp_dev_echo", True)
+    monkeypatch.setattr(profile_otp, "RESEND_SECONDS", 0)
+    before = _raw("emp-mahesh")
+    body = {"first_name": "Baburaj", "middle_name": "K", "last_name": "Menon", "date_of_birth": "1988-07-14",
+            "nationality": "Canadian", "gender": "Male", "work_arrangement": "Remote"}
+    assert client.patch(f"{P}/me", headers=babu, json=body).status_code == 400  # name and birth date need a code
+    code = client.post(f"{P}/me/otp", headers=babu, json={"changes": body}).json()["dev_code"]
+    try:
+        res = client.patch(f"{P}/me", headers=babu, json={**body, "otp_code": code})
+        assert res.status_code == 200, res.text
+        raw = _raw("emp-mahesh")
+        assert raw.full_name == "Baburaj K Menon" and raw.nationality == "Canadian" and raw.work_arrangement == "Remote"
+        assert raw.date_of_birth.isoformat() == "1988-07-14"
+        assert raw.job_title == before.job_title and raw.department == before.department and raw.manager_id == before.manager_id
+        entry = _audits("employee", "emp-mahesh")[-1]
+        assert entry.action == "updated own profile" and entry.actor_id == "emp-mahesh"
+        assert entry.changes["after"]["nationality"] == "Canadian" and entry.changes["after"]["full_name"] == "Baburaj K Menon"
+        assert "1988-07-14" not in str(entry.changes)  # birth date masked in the audit
+        # Nationality alone is not a personal detail that needs a code.
+        assert client.patch(f"{P}/me", headers=babu, json={"nationality": "Indian"}).status_code == 200
+        assert _raw("emp-mahesh").nationality == "Indian"
+        # Job fields stay HR-only.
+        for hr_only in ({"job_title": "CTO"}, {"department": "Finance"}, {"manager_id": "emp-ram"}):
+            assert client.patch(f"{P}/me", headers=babu, json=hr_only).status_code == 422
+    finally:
+        with SessionLocal() as db:
+            emp = db.get(Employee, "emp-mahesh")
+            for name in ("first_name", "middle_name", "last_name", "full_name", "date_of_birth", "nationality", "gender",
+                         "work_arrangement"):
+                setattr(emp, name, getattr(before, name))
+            db.commit()
 
 
 def test_hr_edits_in_scope_and_others_cannot(client, babu, ram, farhan, alex, jordan):

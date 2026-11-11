@@ -35,6 +35,7 @@ import {
   useServerValue,
 } from "./requestKit.tsx";
 import { addComment, recordLocalEvent, type ThreadContext } from "./threadStore.ts";
+import "../../styles/pay-claims.css";
 
 type Msg = { tone: "ok" | "err" | "warn" | "info"; text: string } | null;
 
@@ -359,6 +360,32 @@ export function EncashmentPage() {
       )}
       {(!showTeam || tab === "mine") && (
         <>
+          <Card title="History" action={mine.length ? <span className="muted">{money(sum(mine.filter((v) => v.status === "Approved"), (v) => v.amount), currency)} approved in all</span> : undefined}>
+            <ListFilters
+              state={hist.filters}
+              onChange={hist.set}
+              onReset={hist.reset}
+              statuses={STATUSES}
+              searchPlaceholder="ID"
+              dateLabel="Asked"
+              extra={<CsvButton filename={`leave-encashment-${todayISO()}.csv`} headers={csvHeaders} rows={() => csvRows(histShown)} />}
+            />
+            {API_ENABLED && !encashMirror.loaded() ? (
+              <LoadState error={encashMirror.lastError()} onRetry={() => void encashMirror.reload()} />
+            ) : histShown.length === 0 ? (
+              <EmptyState
+                title={mine.length ? "No requests match these filters" : "No encashment requests yet"}
+                description={mine.length ? "Clear the filters to see all requests." : "Requests show here with approval and the payslip they are paid with."}
+              />
+            ) : (
+              <div className="pr-list">
+                {histShown.map((v) => (
+                  <EncashRow key={v.id} v={v} mine onOpen={() => setOpenId(v.id)} />
+                ))}
+              </div>
+            )}
+          </Card>
+          <div className="split">
           <Card title="What you can encash">
             {!policy ? (
               <LoadState error={server.error} onRetry={server.retry} />
@@ -388,11 +415,11 @@ export function EncashmentPage() {
                     ))}
                   </div>
                 )}
-                <p className="pr-note" style={{ margin: 0 }}>
-                  {shownTypes.map((t) => t.name).join(", ") || "Privilege leave"} only · up to {policy.maxDaysAYear} days a year · keep at least {policy.keepDays} days · paid at{" "}
-                  {money(policy.perDay, policy.currency)} a day (basic pay ÷ {policy.workingDays}
-                  {policy.paySource === "compensation" ? ", from your pay record" : ", standard package for your role"}). Select a type for its rules.
-                </p>
+                <ul className="pc-rules" aria-label="Encashment rules">
+                  <li>Up to {policy.maxDaysAYear} days a year</li>
+                  <li>Keep {policy.keepDays} days</li>
+                  <li>{money(policy.perDay, policy.currency)} a day</li>
+                </ul>
               </div>
             )}
           </Card>
@@ -425,9 +452,6 @@ export function EncashmentPage() {
                   { success: "Encashment sent for approval.", toastError: true },
                 )}
               >
-                <p className="muted" style={{ margin: 0 }}>
-                  {encashable?.name}: balance {encashable?.available} days, up to {max} days now.
-                </p>
                 <div className="pr-days">
                   <input type="range" min={0.5} max={max} step={0.5} value={Math.min(Math.max(days || 0.5, 0.5), max)} onChange={(e) => setDaysText(e.target.value)} aria-label="Days to encash" />
                   <input type="number" min={0.5} max={max} step={0.5} value={daysText} onChange={(e) => setDaysText(e.target.value)} aria-label="Days" />
@@ -451,9 +475,10 @@ export function EncashmentPage() {
                     <span>Balance left</span>
                     <span>{daysError ? "—" : `${Math.round(((encashable?.available ?? 0) - days) * 10) / 10} days`}</span>
                   </div>
-                  <span className="muted">
-                    Estimate only: taxed as salary, the payslip shows the final amount. Paid with {paidWith} pay if approved by the {policy.cutoffDay}th, else the month after.
-                  </span>
+                  <div className="row">
+                    <span>Paid with</span>
+                    <span>{paidWith} pay</span>
+                  </div>
                 </div>
                 <div className="pr-actions">
                   <SubmitButton action={act} className="btn" disabled={!!daysError}>
@@ -463,28 +488,7 @@ export function EncashmentPage() {
               </form>
             )}
           </Card>
-          <Card title="History">
-            <ListFilters
-              state={hist.filters}
-              onChange={hist.set}
-              onReset={hist.reset}
-              statuses={STATUSES}
-              searchPlaceholder="ID"
-              dateLabel="Asked"
-              extra={<CsvButton filename={`leave-encashment-${todayISO()}.csv`} headers={csvHeaders} rows={() => csvRows(histShown)} />}
-            />
-            {API_ENABLED && !encashMirror.loaded() ? (
-              <LoadState error={encashMirror.lastError()} onRetry={() => void encashMirror.reload()} />
-            ) : histShown.length === 0 ? (
-              <EmptyState title={mine.length ? "No requests match these filters" : "No encashment requests yet"} />
-            ) : (
-              <div className="pr-list">
-                {histShown.map((v) => (
-                  <EncashRow key={v.id} v={v} mine onOpen={() => setOpenId(v.id)} />
-                ))}
-              </div>
-            )}
-          </Card>
+          </div>
         </>
       )}
       {showTeam && (tab === "act" || tab === "all") && (

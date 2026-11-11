@@ -192,7 +192,8 @@ def list_announcements(db: DbSession, user: CurrentUserDep) -> list[Announcement
     me = _me(user)
     _publish_due(db)
     rows = db.scalars(select(Announcement).options(selectinload(Announcement.reads))
-                      .order_by(func.coalesce(Announcement.published_at, Announcement.created_at).desc())).all()
+                      .order_by(Announcement.pinned.desc(),
+                                func.coalesce(Announcement.published_at, Announcement.created_at).desc())).all()
     out: list[AnnouncementOut] = []
     for a in rows:
         manage = _can_manage(a, user, me)

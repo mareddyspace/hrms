@@ -2,7 +2,9 @@ import { useState, useSyncExternalStore } from "react";
 import { ActionButton, Banner, Card, DataTable, Dialog, EmptyState, Field, MetricCard, MetricGrid, Page, StatusBadge } from "../../components/ui.tsx";
 import { formatShortDate, todayISO } from "../../model.ts";
 import { getTalentState, subscribeTalent } from "../../data/talentLocal.ts";
+import { listPeople, subscribePeople } from "../../data/peopleLocal.ts";
 import {
+  allBgvRecords,
   BGV_VENDORS,
   CHECK_STATUSES,
   canEditRecord,
@@ -34,6 +36,9 @@ export function BackgroundChecksPage() {
   const actor = useComplianceActor();
   const state = useSyncExternalStore(subscribeBgv, getBgvState, getBgvState);
   const talent = useSyncExternalStore(subscribeTalent, getTalentState, getTalentState);
+  const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
+  // Saved verifications plus the default file every employee has from joining.
+  const allRecords = allBgvRecords(state, people);
   const [msg, setMsg] = useState<Msg>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [employeeId, setEmployeeId] = useState("");
@@ -41,7 +46,7 @@ export function BackgroundChecksPage() {
 
   const readAll = canReadAllBgv(actor.role);
   const manage = canManageBgv(actor.role);
-  const own = state.records.filter((r) => isSubject(actor, r));
+  const own = allRecords.filter((r) => isSubject(actor, r));
 
   if (!readAll) {
     return (
@@ -75,7 +80,7 @@ export function BackgroundChecksPage() {
     );
   }
 
-  const records = state.records;
+  const records = allRecords;
   const withoutRecord = talent.joiners.filter((j) => !records.some((r) => r.subjectKind === "joiner" && r.subjectId === j.id));
   const counts = { clear: 0, review: 0, progress: 0, consent: 0 };
   for (const r of records) {

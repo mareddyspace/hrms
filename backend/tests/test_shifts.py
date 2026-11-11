@@ -111,5 +111,32 @@ def test_coverage_recheck_detects_new_gap(client):
 def test_seeded_roster_visible_to_babu(client, babu):
     week = _monday(0)
     mine = client.get(f"{SH}/mine", headers=babu, params={"from_date": week.isoformat()}).json()
-    days = {s["work_date"] for s in mine}
-    assert week.isoformat() in days and (week + timedelta(days=7)).isoformat() in days
+    days = {date.fromisoformat(s["work_date"]) for s in mine}
+    assert any(week <= d < week + timedelta(days=7) for d in days)
+    assert any(week + timedelta(days=7) <= d < week + timedelta(days=14) for d in days)
+
+
+def test_seeded_rotation_covers_next_week_and_skips_holidays(client):
+    ram = login(client, "ram.krishnan@timez.com")
+    week = _monday(1)
+    roster = client.get(f"{SH}/roster", headers=ram, params={"week_start": week.isoformat()}).json()
+    weekday_gaps = [g for g in roster["gaps"] if date.fromisoformat(g["date"]).weekday() < 5]
+    assert [g for g in weekday_gaps if not g["on_leave"]] == []  # only leave booked later can open a gap
+    seeded = [s for s in roster["shifts"] if s["id"].startswith("rs-seed-") and s["employee_id"] in ("emp-mahesh", "emp-priya", "emp-oliver")]
+    assert len({s["shift_id"] for s in seeded}) >= 2  # a real rotation, not everyone on General
+    holidays = {h["date"] for h in client.get("/api/v1/leave/holidays", headers=ram, params={"year": week.year}).json()}
+    assert not [s for s in seeded if s["employee_id"] != "emp-oliver" and s["work_date"] in holidays
+                and s["work_date"] > date.today().isoformat()]
+    after = client.get(f"{SH}/roster", headers=ram, params={"week_start": _monday(2).isoformat()}).json()
+    assert after["status"] in ("draft", "published")
+
+
+def test_seeded_swaps_reach_ram_and_babu(client, babu):
+    ram = login(client, "ram.krishnan@timez.com")
+    to_decide = {s["id"] for s in client.get(f"{SH}/swaps", headers=ram, params={"view": "to_decide"}).json()}
+    mine = {s["id"]: s for s in client.get(f"{SH}/swaps", headers=babu, params={"view": "mine"}).json()}
+    if "sw-seed-priya-babu" in mine and mine["sw-seed-priya-babu"]["status"] == "awaiting_manager":
+        assert "sw-seed-priya-babu" in to_decide
+    if "sw-seed-oliver-babu" in mine:
+        assert mine["sw-seed-oliver-babu"]["teammate_id"] == "emp-mahesh"
+    assert {"sw-seed-priya-babu", "sw-seed-oliver-babu"} & set(mine)

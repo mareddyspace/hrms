@@ -9,6 +9,8 @@ import type { CopilotAnswer, CopilotContext } from "../../data/platformData.ts";
 import type { NavAccessId } from "../../demoAccounts.ts";
 import { hasWord, monthIn, normalizeQuestion } from "./normalize.ts";
 import { leaveSources, policyLibraryAnswer } from "./policyAnswers.ts";
+import { directoryCardAnswer, earlyAnswer, lateAnswer } from "./moreAnswers.ts";
+import { promptsForRole } from "./prompts.ts";
 
 export type RawCopilotAnswer = CopilotAnswer & { requires?: NavAccessId };
 
@@ -687,6 +689,10 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
       : { kind: "text", denied: true, summary: "I can't share anyone else's pay — only the person and HR can see it.", links: [{ label: "My payslips", to: "/payslips" }] };
   }
 
+  // Profile facts, upcoming leave, "where do I …", who reports to whom (directory facts), department heads, pay date.
+  const early = earlyAnswer(q, question, ctx);
+  if (early) return early;
+
   // "<Name>'s leave / manager / goals …": Copilot only answers these about the asker.
   const possessive = q.match(
     /\b([a-z]{3,})s (leave|leaves|balance|leave balance|manager|goals|goal|timesheet|shift|attendance|holidays|review|rating|learning|courses|expenses|pto|wfh|team)\b/,
@@ -708,8 +714,9 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
 
   if (hasWord(q, ["copilot", "how do you work", "are you real", "llm", "chatgpt", "what can you do", "what can i ask", "help me"])) {
     return {
-      kind: "text",
-      summary: `I answer from your own portal data and your team's, within your access — leave, holidays, payslips, approvals, timesheet, goals, learning. Ask "Summarise <name>" for someone below you, "headcount by country" or "leave taken by department this month" for numbers, "experience letter for me" for a letter draft, or "apply leave next Friday" and I'll prepare it for you to confirm. ${NO_DECISIONS}`,
+      kind: "table",
+      summary: `I answer from your own portal data and your team's, within your access — leave, holidays, attendance, timesheets, payslips and pay dates, tax declarations, claims and trips, tasks and tickets, goals, learning, approvals, who reports to whom, and where things are in the portal. Ask "Summarise <name>" for someone below you, "headcount by country" or "leave taken by department this month" for numbers, "experience letter for me" for a letter draft, or "apply leave next Friday" and I'll prepare it for you to confirm. ${NO_DECISIONS}`,
+      table: { headers: ["Try asking"], rows: promptsForRole(ctx.viewer.role).slice(0, 12).map((p) => [p]) },
       links: [{ label: "Help", to: "/help" }],
     };
   }
@@ -855,6 +862,10 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
     }
     return holidayAnswer(q, ctx);
   }
+
+  // Attendance today, this month and late days.
+  const late = lateAnswer(q, ctx);
+  if (late) return late;
 
   // Reporting line.
   if (hasWord(q, ["who is my manager", "my manager", "manager", "report to", "reporting manager", "my lead", "line manager", "supervisor"]) &&
@@ -1013,13 +1024,13 @@ export function copilotAnswer(question: string, ctx: CopilotContext): RawCopilot
   // "who is <name>" / "<name>" — only when the name matches someone.
   const who = q.match(/^(?:who is|whos|who s|find|look up|lookup|show me|show)\s+([a-z][a-z ]{1,40})$/)?.[1]?.trim();
   if (who && !/^(?:my|on|in|out|off|the|this|that|it|available|free|online)\b/.test(who)) {
-    const found = personSummaryAnswer(who, ctx, true);
+    const found = personSummaryAnswer(who, ctx, true) ?? directoryCardAnswer(who, ctx);
     if (found) return found;
   }
 
   return {
     kind: "text",
-    summary: "I can't answer that from your portal data. I can help with leave, holidays, payslips, approvals, timesheet, goals, learning and your team.",
+    summary: "I can't answer that from your portal data. I can help with leave, holidays, attendance, timesheets, payslips, tax declarations, claims, tasks, approvals, goals, learning, your team and where things are in the portal.",
     links: [{ label: "Help", to: "/help" }],
   };
 }

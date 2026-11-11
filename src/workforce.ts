@@ -481,3 +481,44 @@ export function countryRollup() {
 }
 
 void TIMEZ_PERSONAS;
+
+/** Who hired someone: the fields the offline sample needs (the same shape the server sends). */
+type HiringInput = { id: string; fullName: string; countryCode: string; department: string; dateOfJoining: string; managerId: string; managerName: string };
+
+/**
+ * "Hired by" (a recruiter in People / talent in the same country who joined earlier) and "Hiring manager" (the
+ * person's manager; the board for the CEO). Same rule as fill_hiring() in backend/app/seed_profiles.py; deterministic.
+ */
+export function hiringFor(people: HiringInput[]): Map<string, { hiredBy: string; hiringManager: string }> {
+  const byId = new Map(people.map((p) => [p.id, p]));
+  const recruiters = new Map<string, HiringInput[]>();
+  for (const p of people) {
+    const dept = p.department.toLowerCase();
+    if (p.id === "demo-recruiter" || dept === "people" || dept.includes("human resources") || dept.includes("talent")) {
+      const list = recruiters.get(String(p.countryCode)) ?? [];
+      list.push(p);
+      recruiters.set(String(p.countryCode), list);
+    }
+  }
+  for (const list of recruiters.values())
+    list.sort((a, b) => Number(a.id !== "demo-recruiter") - Number(b.id !== "demo-recruiter") || (a.dateOfJoining || "").localeCompare(b.dateOfJoining || "") || a.id.localeCompare(b.id));
+  const hash = (text: string) => {
+    let h = 7;
+    for (let i = 0; i < text.length; i += 1) h = (h * 31 + text.charCodeAt(i)) >>> 0;
+    return h;
+  };
+  const out = new Map<string, { hiredBy: string; hiringManager: string }>();
+  for (const p of people) {
+    if (p.id === CEO_ID) {
+      out.set(p.id, { hiredBy: "Board of Directors (executive search)", hiringManager: "Board of Directors" });
+      continue;
+    }
+    const boss = (p.managerId && byId.get(p.managerId)?.fullName) || p.managerName || "Board of Directors";
+    const pool = (recruiters.get(String(p.countryCode)) ?? []).filter(
+      (r) => r.id !== p.id && (!r.dateOfJoining || !p.dateOfJoining || r.dateOfJoining <= p.dateOfJoining),
+    );
+    const pick = pool.length ? pool[hash(`${p.id}:recruiter`) % pool.length] : undefined;
+    out.set(p.id, { hiredBy: pick ? `${pick.fullName} (Talent Acquisition)` : "TimeZ Talent Acquisition", hiringManager: boss });
+  }
+  return out;
+}

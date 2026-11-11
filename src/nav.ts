@@ -258,10 +258,12 @@ export function breadcrumbsFor(pathname: string): { label: string; to?: string }
   if (pathname === "/") return crumbs;
   const hit = findNavLink(pathname);
   if (hit) {
+    // Every step is a link back: the section goes to its first page, the page to its own start (no tab or filter).
     if (hit.group.label !== "Me" || hit.link.id !== "home") {
-      crumbs.push({ label: hit.group.label });
+      const first = hit.group.links[0]?.to;
+      crumbs.push({ label: hit.group.label, ...(first ? { to: first } : {}) });
     }
-    crumbs.push({ label: hit.link.label });
+    crumbs.push({ label: hit.link.label, to: hit.link.to });
     return crumbs;
   }
   // Pages outside the menu (account settings and the like): name them after their path rather than "Page".

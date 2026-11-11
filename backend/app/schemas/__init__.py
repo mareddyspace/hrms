@@ -146,6 +146,8 @@ class PersonFullOut(ORM):
     education: list[dict[str, object]] = []
     experience: list[dict[str, object]] = []
     career_goals: str | None = None
+    hired_by: str | None = None  # recruiter (migration 0030)
+    hiring_manager: str | None = None
     direct_report_count: int | None = None
     can_reveal: bool = False  # caller may call /people/{id}/reveal (self, or HR / admin in scope)
 

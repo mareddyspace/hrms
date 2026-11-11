@@ -64,6 +64,17 @@ export const DAY_STATUS_LABEL: Record<DayStatus, string> = {
   reopened: "Reopened",
 };
 
+/** One colour per meaning on the Timesheet and Time & attendance pages (src/styles/time.css, .tz-tone-*). */
+export type TimeTone = "green" | "teal" | "purple" | "blue" | "amber" | "red" | "grey" | "none";
+
+export const DAY_STATUS_TONE: Record<DayStatus, TimeTone> = {
+  draft: "grey",
+  submitted: "amber",
+  approved: "green",
+  rejected: "red",
+  reopened: "teal",
+};
+
 /** Sent back or reopened: the person can log and submit the day later. */
 export function isFixable(status: string | undefined): boolean {
   return status === "rejected" || status === "reopened";

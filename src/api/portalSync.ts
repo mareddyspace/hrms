@@ -41,7 +41,8 @@ export async function revealPersonDetail(personId: string, field: RevealField): 
 
 function toPerson(p: PersonOut): PersonRecord {
   const country = TIMEZ_COUNTRIES.find((c) => c.code === p.country_code);
-  const full = p.view === "full" ? p : null;
+  // hired_by / hiring_manager: backend migration 0030 (names, shown in the profile's Employment card).
+  const full = p.view === "full" ? (p as typeof p & { hired_by?: string | null; hiring_manager?: string | null }) : null;
   // The server says "Exited" once the last working day has passed; the portal calls a leaver "Terminated".
   // Basic card: only whether they have started (a pre-boarding joiner is "Onboarding", not a colleague yet).
   const raw = full?.employment_status ?? (p.view === "basic" && p.started === false ? "Onboarding" : "Active");
@@ -96,6 +97,8 @@ function toPerson(p: PersonOut): PersonRecord {
     preferredLanguage: full?.preferred_language ?? "",
     spokenLanguages: full?.languages ?? [],
     careerGoals: full?.career_goals ?? "",
+    hiredBy: full?.hired_by ?? "",
+    hiringManager: full?.hiring_manager ?? "",
     company: p.company || "TimeZ",
     holidayCalendar: full?.holiday_calendar ?? "",
     leavePolicy: full?.leave_policy_name ?? "",

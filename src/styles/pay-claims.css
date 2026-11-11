@@ -1,0 +1,143 @@
+/* Holidays, shifts, payslips and pay claims pages. Each block below belongs to one area. */
+
+/* ===== holidays ===== */
+.pc-hol-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 14px; }
+.pc-hol-bar .tabs { margin: 0; }
+.pc-hol-year { display: inline-flex; align-items: center; gap: 6px; }
+.pc-hol-year strong { font-size: 1.15rem; min-width: 3.2em; text-align: center; }
+.pc-hol-tools { margin-top: 0; flex-wrap: wrap; }
+.pc-hol-tools select { min-width: 0; max-width: 100%; }
+.pc-hol-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.pc-hol-stats > div { display: grid; gap: 2px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft, var(--bg)); min-width: 140px; }
+.pc-hol-stats > div > strong { font-size: 1.3rem; }
+.pc-hol-stats .pc-hol-next > strong { font-size: 1rem; }
+.pc-hol-stats .muted { font-size: 0.8rem; }
+.pc-hol-months { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px 22px; }
+.pc-hol-month h3 { margin: 0 0 6px; font-size: 0.95rem; }
+.pc-hol-month ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.pc-hol-row { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); }
+.pc-hol-row:hover { border-color: var(--accent); }
+.pc-hol-row.is-past { opacity: 0.55; }
+.pc-hol-row.is-today { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.pc-hol-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px 10px; background: none; border: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.pc-hol-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 10px; }
+.pc-hol-date { display: grid; place-items: center; width: 44px; flex: none; padding: 4px 0; border-radius: 8px; background: var(--cal-holiday); line-height: 1.1; }
+.pc-hol-date strong { font-size: 1.1rem; }
+.pc-hol-date span { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.pc-hol-name { display: grid; gap: 1px; min-width: 0; }
+.pc-hol-name strong { overflow-wrap: anywhere; }
+.pc-hol-name .muted { font-size: 0.8rem; }
+.pc-hol-when { margin-left: auto; flex: none; font-size: 0.78rem; font-weight: 600; color: var(--accent); }
+.pc-hol-actions { display: inline-flex; gap: 4px; padding-right: 8px; }
+.pc-hol-past { margin-top: 12px; }
+.pc-hol-optlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.pc-hol-optlist li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+@media (max-width: 520px) {
+  .pc-hol-months { grid-template-columns: 1fr; }
+  .pc-hol-stats > div { flex: 1 1 120px; }
+}
+/* ===== end holidays ===== */
+
+/* ===== shifts ===== */
+.wf-my-day.sr-holiday,
+.wf-month-day.sr-holiday {
+  background: color-mix(in srgb, var(--accent, #0f766e) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #0f766e) 35%, transparent);
+}
+.wf-my-day.sr-past { opacity: 0.7; }
+.sr-off {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, #0f766e) 15%, transparent);
+  color: var(--accent, #0f766e);
+}
+.sr-gaps {
+  border: 1px solid color-mix(in srgb, #dc2626 35%, transparent);
+  background: color-mix(in srgb, #dc2626 6%, transparent);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.sr-gaps strong { color: #b91c1c; }
+.sr-gaps ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sr-gaps li {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  border: 1px solid color-mix(in srgb, #dc2626 30%, transparent);
+}
+/* ===== end shifts ===== */
+
+/* ===== payslips ===== */
+.pc-periods { display: flex; align-items: stretch; gap: 6px; }
+.pc-periods-arrow { flex: none; width: 34px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); color: inherit; font-size: 1.3rem; line-height: 1; cursor: pointer; }
+.pc-periods-arrow:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pc-periods-arrow:disabled { opacity: 0.35; cursor: default; }
+.pc-periods-rail { flex: 1; min-width: 0; display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x proximity; padding: 4px 2px 8px; cursor: grab; user-select: none; scrollbar-width: thin; }
+.pc-periods-rail:active { cursor: grabbing; }
+.pc-periods-rail:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
+.pc-period { position: relative; flex: none; width: 104px; scroll-snap-align: center; display: grid; gap: 1px; justify-items: start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pc-period:hover { border-color: var(--accent); }
+.pc-period.is-on { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 -3px 0 var(--accent); }
+.pc-period-month { font-weight: 700; font-size: 1rem; }
+.pc-period-year { font-size: 0.75rem; color: var(--muted); }
+.pc-period-net { font-size: 0.8rem; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.pc-period-dot { position: absolute; top: 9px; right: 9px; width: 8px; height: 8px; border-radius: 50%; background: #d97706; }
+.pc-period.is-final .pc-period-dot { background: #16a34a; }
+.pc-slip { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.pc-slip-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+.pc-slip-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pc-slip-title h3 { margin: 0; font-size: 1.1rem; min-width: 9em; text-align: center; }
+.pc-slip-actions { margin-top: 0; }
+.pc-slip-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.pc-slip-figures > div { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.pc-slip-figures strong { font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.pc-slip-figures .is-net { border-color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 520px) {
+  .pc-periods-arrow { width: 28px; }
+  .pc-period { width: 92px; }
+  .pc-slip-title h3 { min-width: 0; }
+}
+@media print { .pc-periods-card { display: none; } }
+/* ===== end payslips ===== */
+
+/* ===== claims ===== */
+.pc-stack { display: grid; gap: 16px; min-width: 0; }
+.pc-stack > * { min-width: 0; }
+.pc-rules {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pc-rules li {
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--muted);
+}
+/* ===== end claims ===== */
+
+/* ===== travel reimbursements ===== */
+.tr-sample-note { margin: 0 0 10px; font-size: 13px; }
+.tr-history .tr-row { cursor: pointer; }
+.tr-history .tr-row:hover td,
+.tr-history .tr-row:focus-visible td { background: var(--accent-soft); }
+.tr-history .tr-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tr-history td { vertical-align: top; }
+/* ===== end travel reimbursements ===== */

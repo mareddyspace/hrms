@@ -203,7 +203,7 @@ function AccountEditor({ account, actor, onResult }: { account: DemoAccount; act
           </ActionButton>
         }
       >
-        <p className="note">Whose records they see in lists and search. Default for {roleLabel(account.role)}: {dataScopeLabel(defaultDataScope(account))}.</p>
+        <p className="note">Default for {roleLabel(account.role)}: {dataScopeLabel(defaultDataScope(account))}.</p>
         <ul className="perm-grid">
           {DATA_SCOPES.map((s) => (
             <li key={s.id}>

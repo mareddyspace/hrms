@@ -163,6 +163,18 @@ const ENTITY_ADDRESS: Record<string, string> = {
   DE: "Friedrichstraße 68, 10117 Berlin, Germany",
 };
 
+/** Contact and registration lines printed on the letterhead and footer, per country. */
+export const ENTITY_CONTACT: Record<string, { phone: string; email: string; registration: string }> = {
+  IN: { phone: "+91 80 4710 2200", email: "hr.in@timez.com", registration: "CIN U72900KA2015PTC081234" },
+  US: { phone: "+1 212 555 0142", email: "hr.us@timez.com", registration: "EIN 84-2917365" },
+  GB: { phone: "+44 20 7946 0321", email: "hr.uk@timez.com", registration: "Company No. 10293847 (England & Wales)" },
+  AU: { phone: "+61 2 9067 4410", email: "hr.au@timez.com", registration: "ABN 51 824 753 556" },
+  CA: { phone: "+1 416 555 0187", email: "hr.ca@timez.com", registration: "BN 81729 4563 RC0001" },
+  AE: { phone: "+971 4 555 0193", email: "hr.ae@timez.com", registration: "DED Licence 784512" },
+  SA: { phone: "+966 11 555 0174", email: "hr.sa@timez.com", registration: "CR 1010654321" },
+  DE: { phone: "+49 30 5557 1290", email: "hr.de@timez.com", registration: "HRB 214587 B, Amtsgericht Charlottenburg" },
+};
+
 const TYPE_CODE: Record<FullLetterType, string> = {
   Internship: "INT",
   Warning: "WRN",
@@ -488,46 +500,81 @@ export function renderLetterBody(fields: LetterFields, meta: LetterRenderMeta): 
   return letterShell({
     entity,
     address: esc(ENTITY_ADDRESS[c] ?? ENTITY_ADDRESS.IN),
+    countryCode: c,
     referenceNo: esc(meta.referenceNo),
     date: esc(letterDate(meta.date, c)),
     title: esc(b.title),
-    addressee: b.toWhom ? "" : `${esc(fields.employeeName)}<br>${esc(fields.title)}, ${esc(fields.department)}<br>Employee ID ${esc(fields.employeeCode)}`,
+    toWhom: b.toWhom,
+    addressee: b.toWhom ? "" : `<strong>${esc(fields.employeeName)}</strong><br>${esc(fields.title)}, ${esc(fields.department)}<br>Employee ID ${esc(fields.employeeCode)}`,
     salute: b.toWhom ? "To whom it may concern," : `Dear ${esc(fields.employeeName)},`,
     paragraphs,
     approval,
+    signatory: meta.approval ? esc(meta.approval.by) : "",
     footer,
   });
 }
 
-/** The letter layout: TimeZ letterhead, ref and date, addressee, title, body, signatory. All parts are trusted markup. */
+/** The letterhead block: logo mark, brand, legal entity and contact lines. */
+function letterhead(entity: string, address: string, countryCode: string): string {
+  const contact = ENTITY_CONTACT[countryCode] ?? ENTITY_CONTACT.IN;
+  return `<header class="lh">
+  <div class="lh-brand">
+    <div class="lh-mark" aria-hidden="true">TZ</div>
+    <div>
+      <div class="lh-name">TimeZ</div>
+      <div class="lh-entity">${entity}</div>
+    </div>
+  </div>
+  <div class="lh-contact">${address}<br>${esc(contact.phone)} · ${esc(contact.email)}<br>www.timez.com</div>
+</header>
+<div class="lh-rule" aria-hidden="true"></div>`;
+}
+
+/** The letter layout: TimeZ letterhead, ref and date, addressee, subject, body, signatory, registered office footer. */
 export function letterShell(p: {
   entity: string;
   address: string;
+  countryCode?: string;
   referenceNo: string;
   date: string;
   title: string;
+  /** Certificates addressed "To whom it may concern" get a centred title; addressed letters a Subject line. */
+  toWhom?: boolean;
   addressee: string;
   salute: string;
   paragraphs: string[];
   approval: string;
+  /** The approver's name, printed above the signatory title (escaped). */
+  signatory?: string;
   footer: string;
 }): string {
-  return `<header class="lh">
-  <div class="lh-name">TimeZ</div>
-  <div class="lh-addr">${p.entity} · ${p.address}</div>
-</header>
-<div class="meta"><span>Ref: ${p.referenceNo}</span><span>${p.date}</span></div>
-${p.addressee ? `<p class="to">${p.addressee}</p>` : ""}
-<h1>${p.title}</h1>
+  const c = p.countryCode || "IN";
+  const contact = ENTITY_CONTACT[c] ?? ENTITY_CONTACT.IN;
+  const heading = p.toWhom ? `<h1>${p.title}</h1>` : `<p class="subject"><span>Subject:</span> ${p.title}</p>`;
+  return `${letterhead(p.entity, p.address, c)}
+<table class="meta" role="presentation"><tr>
+  <td><span class="k">Ref. No.</span> ${p.referenceNo}</td>
+  <td class="r"><span class="k">Date</span> ${p.date}</td>
+</tr></table>
+${p.addressee ? `<div class="to"><span class="k">To</span>${p.addressee}</div>` : ""}
+${heading}
 <p class="salute">${p.salute}</p>
+<div class="body">
 ${p.paragraphs.map((x) => `<p>${x}</p>`).join("\n")}
+</div>
+<p class="close">Yours sincerely,</p>
 <div class="sign">
-  <p>For ${p.entity}</p>
+  <p class="for">For <strong>${p.entity}</strong></p>
   <div class="sign-line"></div>
-  <p><strong>Authorised Signatory</strong><br>Human Resources, TimeZ</p>
+  ${p.signatory ? `<p class="sig-name">${p.signatory}</p>` : ""}
+  <p class="sig-title">Authorised Signatory<br>Human Resources</p>
   <p class="approval">${p.approval}</p>
 </div>
-<footer class="foot">${p.footer}</footer>`;
+<footer class="foot">
+  <div><strong>Registered office:</strong> ${p.entity}, ${p.address}</div>
+  <div>${esc(contact.registration)} · ${p.footer}</div>
+  <div class="foot-note">This letter is issued electronically from TimeZ HRMS. Verify it with HR quoting the reference number above.</div>
+</footer>`;
 }
 
 /** Backend preview: server paragraphs carry escaped values and <b> markup only; anything else is escaped. */
@@ -538,7 +585,7 @@ export function serverParagraph(p: string): string {
 /** A full letter from the server's preview (fields + paragraphs), in the same layout as the PDF. */
 export function serverLetterBody(
   preview: { title: string; paragraphs: string[]; fields: Record<string, string>; letter_type: string },
-  meta: { referenceNo: string; date: string; approval: string; footer: string; ownText?: string },
+  meta: { referenceNo: string; date: string; approval: string; footer: string; ownText?: string; signatory?: string },
 ): string {
   const f = preview.fields;
   const c = f.country_code ?? "";
@@ -546,10 +593,13 @@ export function serverLetterBody(
   return letterShell({
     entity: esc(f.legal_entity ?? ""),
     address: esc(ENTITY_ADDRESS[c] ?? ENTITY_ADDRESS.IN),
+    countryCode: c,
     referenceNo: esc(meta.referenceNo),
     date: esc(letterDate(meta.date, c)),
     title: esc(preview.title),
-    addressee: toWhom ? "" : `${esc(f.employee_name ?? "")}<br>${esc(f.title ?? "")}, ${esc(f.department ?? "")}<br>Employee ID ${esc(f.employee_code ?? "")}`,
+    toWhom,
+    signatory: meta.signatory ? esc(meta.signatory) : "",
+    addressee: toWhom ? "" : `<strong>${esc(f.employee_name ?? "")}</strong><br>${esc(f.title ?? "")}, ${esc(f.department ?? "")}<br>Employee ID ${esc(f.employee_code ?? "")}`,
     salute: toWhom ? "To whom it may concern," : `Dear ${esc(f.employee_name ?? "")},`,
     paragraphs: withOwnParagraph(preview.paragraphs.map(serverParagraph), meta.ownText ? esc(meta.ownText) : ""),
     approval: esc(meta.approval),
@@ -561,27 +611,43 @@ export function serverLetterBody(
 const TO_WHOM_TYPES = new Set(["Employment", "Experience", "NOC", "Visa/Travel", "Address proof", "Internship", "Salary certificate", "Bonafide"]);
 
 const PRINT_CSS = `
-@page { size: A4; margin: 18mm 18mm 20mm; }
+@page { size: A4; margin: 14mm 16mm 16mm; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: #fff; color: #1d2433; }
-body { font: 11pt/1.55 Georgia, "Times New Roman", serif; }
-.page { position: relative; max-width: 174mm; margin: 0 auto; padding: 8mm 0; min-height: 250mm; display: flex; flex-direction: column; }
-.lh { border-bottom: 2px solid #1d3d6e; padding-bottom: 8px; margin-bottom: 14px; }
-.lh-name { font: 700 17pt/1.2 Arial, Helvetica, sans-serif; color: #1d3d6e; letter-spacing: .02em; }
-.lh-addr { font: 9pt/1.4 Arial, Helvetica, sans-serif; color: #555; }
-.meta { display: flex; justify-content: space-between; font: 9.5pt Arial, Helvetica, sans-serif; color: #333; margin-bottom: 18px; }
-h1 { font: 700 14pt Arial, Helvetica, sans-serif; text-align: center; text-transform: uppercase; letter-spacing: .06em; margin: 6px 0 18px; }
+body { font: 11pt/1.6 Georgia, "Times New Roman", serif; }
+.page { position: relative; max-width: 178mm; margin: 0 auto; min-height: 265mm; display: flex; flex-direction: column; }
+.lh { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; padding-bottom: 10px; }
+.lh-brand { display: flex; align-items: center; gap: 10px; }
+.lh-mark { width: 38px; height: 38px; border-radius: 8px; background: #1d3d6e; color: #fff; display: grid; place-items: center; font: 700 13pt Arial, Helvetica, sans-serif; letter-spacing: .02em; }
+.lh-name { font: 700 19pt/1.1 Arial, Helvetica, sans-serif; color: #1d3d6e; letter-spacing: .01em; }
+.lh-entity { font: 600 9pt/1.3 Arial, Helvetica, sans-serif; color: #33415c; margin-top: 2px; }
+.lh-contact { font: 8.5pt/1.45 Arial, Helvetica, sans-serif; color: #5a6475; text-align: right; max-width: 82mm; }
+.lh-rule { height: 4px; border-top: 2px solid #1d3d6e; border-bottom: 1px solid #c9a227; margin-bottom: 16px; }
+.meta { width: 100%; border-collapse: collapse; font: 9.5pt Arial, Helvetica, sans-serif; color: #1d2433; margin-bottom: 16px; }
+.meta td { padding: 0; } .meta .r { text-align: right; }
+.k { display: inline-block; font: 600 8pt Arial, Helvetica, sans-serif; color: #5a6475; text-transform: uppercase; letter-spacing: .06em; margin-right: 6px; }
+.to { margin: 0 0 16px; font-size: 10.5pt; line-height: 1.5; }
+.to .k { display: block; margin-bottom: 2px; }
+h1 { font: 700 13pt Arial, Helvetica, sans-serif; text-align: center; text-transform: uppercase; letter-spacing: .08em; margin: 4px 0 18px; text-decoration: underline; text-underline-offset: 4px; }
+.subject { font: 700 10.5pt Arial, Helvetica, sans-serif; margin: 0 0 14px; }
+.subject span { text-decoration: underline; text-underline-offset: 3px; }
 p { margin: 0 0 10px; }
+.body p { text-align: justify; }
 .salute { margin-bottom: 12px; }
-.to { margin: 0 0 14px; font-size: 10.5pt; }
-.sign { margin-top: 28px; }
-.sign-line { width: 55mm; border-bottom: 1px solid #333; height: 14mm; margin-bottom: 4px; }
-.approval { font: 9pt Arial, Helvetica, sans-serif; color: #1d3d6e; margin-top: 6px; }
-.foot { margin-top: auto; padding-top: 14px; border-top: 1px solid #ccc; font: 8pt Arial, Helvetica, sans-serif; color: #777; text-align: center; }
+.close { margin-top: 18px; }
+.sign { margin-top: 6px; break-inside: avoid; }
+.sign .for { margin-bottom: 0; }
+.sign-line { width: 58mm; border-bottom: 1px solid #333; height: 16mm; margin-bottom: 6px; }
+.sig-name { font-weight: 700; margin: 0; }
+.sig-title { margin: 0; font-size: 10pt; color: #33415c; }
+.approval { font: 8.5pt Arial, Helvetica, sans-serif; color: #1d3d6e; margin-top: 6px; }
+.foot { margin-top: auto; padding-top: 10px; border-top: 1px solid #c9ced8; font: 7.8pt/1.5 Arial, Helvetica, sans-serif; color: #5a6475; text-align: center; }
+.foot-note { color: #8a93a3; }
 .watermark { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 10; }
 .watermark span { transform: rotate(-35deg); font: 700 110pt Arial, Helvetica, sans-serif; color: rgba(200, 40, 40, .13); letter-spacing: .1em; }
-@media screen { body { background: #eef0f4; padding: 16px; } .page { background: #fff; padding: 16mm 18mm; max-width: 210mm; box-shadow: 0 1px 6px rgba(0,0,0,.15); } }
-@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+@media screen { body { background: #e9ecf1; padding: 20px 12px; } .page { background: #fff; padding: 14mm 16mm 12mm; max-width: 210mm; min-height: 297mm; box-shadow: 0 2px 10px rgba(0,0,0,.14); border-radius: 2px; } }
+@media screen and (max-width: 640px) { .page { padding: 18px; min-height: 0; } .lh { flex-direction: column; align-items: flex-start; } .lh-contact { text-align: left; } }
+@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .page { min-height: 265mm; } }
 `;
 
 /** A complete, print-ready HTML document (A4). Drafts get a DRAFT watermark. */
@@ -627,10 +693,11 @@ export function offerLetterHtml(letter: { title: string; paragraphs: string[]; d
   return letterShell({
     entity: esc(f.legal_entity ?? f.legalEntity ?? ""),
     address: esc(ENTITY_ADDRESS[c] ?? ENTITY_ADDRESS.IN),
+    countryCode: c,
     referenceNo: "Offer",
     date: esc(letterDate(letter.date, c)),
     title: esc(letter.title),
-    addressee: `${esc(name)}<br>${esc(f.title ?? "")}, ${esc(f.department ?? "")}`,
+    addressee: `<strong>${esc(name)}</strong><br>${esc(f.title ?? "")}, ${esc(f.department ?? "")}`,
     salute: `Dear ${esc(name)},`,
     paragraphs: fromServer ? letter.paragraphs.map(serverParagraph) : letter.paragraphs,
     approval: "Approved by the hiring manager and HR",

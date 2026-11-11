@@ -93,6 +93,9 @@ class Employee(TimestampMixin, Base):
     # Celebrations and compliance calendar (migration 0023): hide my birthday from colleagues; fixed-term contract end.
     hide_birthday: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     contract_end_date: Mapped[date | None] = mapped_column(Date)
+    # Who hired the person (migration 0030): the recruiter and the hiring manager at the time, as names.
+    hired_by: Mapped[str | None] = mapped_column(String(200))
+    hiring_manager: Mapped[str | None] = mapped_column(String(200))
 
 
 class EmployeeAssignment(TimestampMixin, Base):

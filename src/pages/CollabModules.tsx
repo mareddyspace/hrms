@@ -746,7 +746,7 @@ export function HelpHrRequestsPage() {
   );
 
   return (
-    <Page title="Helpdesk" subtitle={hrView ? "HR requests from employees" : undefined}>
+    <Page title="Helpdesk">
       <Tabs
         tabs={[
           ...(hrView ? [] : [{ id: "request", label: "New request" }, { id: "history", label: "Request history" }]),

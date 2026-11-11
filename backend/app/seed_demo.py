@@ -143,6 +143,7 @@ def _lifecycle(db: Session, today: date) -> int:
 
 
 def _shift_swap(db: Session, today: date) -> int:
+    return 0  # sample swaps are between teammates now (app/seed_shift_roster.py); an existing row is left as it is
     if db.get(ShiftSwap, "sw-seed-babu-ram") is not None or db.get(Employee, BABU) is None or db.get(Employee, RAM) is None:
         return 0
     monday = today - timedelta(days=today.weekday()) + timedelta(days=7)

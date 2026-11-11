@@ -153,13 +153,17 @@ def seed_accounts(db: Session, reset_passwords: bool) -> int:
         row = db.get(Account, a["id"])
         if row is None:
             db.add(Account(id=a["id"], email=a["email"].lower(), password_hash=hash_password(a["password"]), role=a["role"],
-                           employee_id=a["employee_id"], active=True, failed_attempts=0))
+                           employee_id=a["employee_id"], active=True, failed_attempts=0,
+                           password_changed_at=datetime.now(timezone.utc)))
         else:
             row.email, row.role, row.employee_id = a["email"].lower(), a["role"], a["employee_id"]
             if reset_passwords:
                 row.password_hash = hash_password(a["password"])
                 row.failed_attempts, row.locked_until = 0, None
                 row.must_change_password = False
+                row.password_changed_at = datetime.now(timezone.utc)  # the 90-day clock starts at seed time
+            elif row.password_changed_at is None:
+                row.password_changed_at = datetime.now(timezone.utc)
     db.flush()
     for a in accounts:
         if db.get(AccessScope, a["id"]) is None:
@@ -316,9 +320,9 @@ def run(reset_passwords: bool = False, *, only_if_free: bool = False) -> dict[st
         stats.update(seed_profiles(db))
         db.flush()
         # Sample activity so no screen is empty (all insert-only; see each module's docstring).
-        from app import seed_admin_data, seed_hr_activity, seed_talent_activity, seed_time_activity
+        from app import seed_admin_data, seed_comms, seed_hr_activity, seed_pay_claims, seed_reimbursements, seed_shift_roster, seed_talent_activity, seed_time_activity, seed_fill_gaps, seed_hr_period
 
-        for module in (seed_admin_data, seed_time_activity, seed_talent_activity, seed_hr_activity):
+        for module in (seed_admin_data, seed_time_activity, seed_talent_activity, seed_hr_activity, seed_shift_roster, seed_pay_claims, seed_reimbursements, seed_comms, seed_fill_gaps, seed_hr_period):
             stats.update(module.seed(db))
             db.flush()
         db.commit()
@@ -415,12 +419,19 @@ def _seed_roster(db: Session, today: date) -> int:
     for week_start in (monday, monday + timedelta(days=7)):
         if db.scalar(select(RosterWeek).where(RosterWeek.manager_id == "emp-ram", RosterWeek.week_start == week_start)):
             continue
+        from app.seed_shift_roster import _target  # weekly rotation (morning / general / evening)
+        from app.services.leave import holiday_dates
+
+        babu = db.get(Employee, "emp-mahesh")
+        holidays = holiday_dates(db, babu.country_code, week_start, week_start + timedelta(days=6))
         for offset in range(5):
             day = week_start + timedelta(days=offset)
+            if day in holidays:
+                continue
             taken = db.scalar(select(RosterShift).where(RosterShift.employee_id == "emp-mahesh", RosterShift.work_date == day))
             if taken is None:
                 db.add(RosterShift(id=f"rs-seed-{day.isoformat()}", employee_id="emp-mahesh", work_date=day,
-                                   shift_id="sh-general", manager_id="emp-ram"))
+                                   shift_id=_target("emp-mahesh", week_start), manager_id="emp-ram"))
                 added += 1
         db.add(RosterWeek(manager_id="emp-ram", week_start=week_start, status="published",
                           published_at=datetime.now(timezone.utc), published_by="emp-ram", published_with_gaps=False))

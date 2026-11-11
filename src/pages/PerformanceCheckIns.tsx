@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ActionButton, Banner, Card, EmptyState, Field, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
+import { SuccessFlash } from "../components/SuccessFlash.tsx";
 import type { DemoAccount } from "../demoAccounts.ts";
 import {
   PRAISE_BADGES,
@@ -182,7 +183,7 @@ export function FeedbackPanel({
               {kind === "Praise" ? "Post praise" : kind === "Feedback" ? "Send feedback" : "Send request"}
             </SubmitButton>
           </div>
-          <Banner message={banner} />
+          <SuccessFlash message={banner} onDismiss={() => setBanner(null)} />
         </form>
       </Card>
 
@@ -366,7 +367,7 @@ export function OneOnOnePanel({
                 Schedule
               </SubmitButton>
             </div>
-            <Banner message={banner} />
+            <SuccessFlash message={banner} onDismiss={() => setBanner(null)} />
           </form>
         </Card>
         <Card title="Your 1:1s">
@@ -422,7 +423,6 @@ function MeetingDetail({ meeting, me }: { meeting: OneOnOne; me: TalentActor }) 
       <div className="stack">
         <ChecklistSection
           title="Agenda"
-          hint="Either of you can add points."
           items={meeting.agenda}
           onAdd={(text) => talentRun(() => addCheckInItem(me, meeting.id, "agenda", text), (res) => setError(res ?? ""))}
           onToggle={(id) => talentAction(() => toggleCheckInItem(me, meeting.id, "agenda", id), (res) => setError(res ?? ""))}

@@ -77,3 +77,14 @@ def test_pick_goes_to_manager_and_counts_against_balance(client, babu, ram, farh
         over = client.post(LR, headers=babu, json={"leave_code": "optional", "from": third, "to": third, "reason": "Optional holiday"})
         assert over.status_code == 422 and "available" in over.json()["detail"]
     client.post(f"{LR}/{two.json()['id']}/cancel", headers=babu)
+
+
+def test_countries_with_optional_holidays_get_a_yearly_pick(client):
+    """Every country that has optional holidays offers at least one pick a year (else the list can't be used)."""
+    oliver = login(client, "oliver.hughes@timez.com")
+    year = date.today().year
+    listed = client.get(OH, headers=oliver, params={"year": year}).json()
+    assert listed and all(h["country_code"] == "GB" for h in listed)
+    balances = client.get("/api/v1/leave/balances", headers=oliver, params={"year": year}).json()["balances"]
+    optional = next(b for b in balances if b["code"] == "optional")
+    assert optional["quota"] >= 1

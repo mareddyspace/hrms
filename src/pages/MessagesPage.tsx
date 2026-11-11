@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ActionButton, Banner, EmptyState, Page, StatusBadge, SubmitButton, notify, useAction } from "../components/ui.tsx";
-import { CHAT_PEOPLE, type ChatAvailability, type Conversation } from "../data/collabData.ts";
+import { CHAT_PEOPLE, HR_ROLES, type ChatAvailability, type Conversation } from "../data/collabData.ts";
+import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 import { API_ENABLED } from "../api/client.ts";
 import { PENDING_DIRECT, apiChatContacts, apiCreateGroup, apiMessageTeam, apiOpenDirect, apiSendChat, findDirect, type ChatContacts } from "../api/syncChat.ts";
-import { usePeopleList } from "../data/peopleLocal.ts";
+import { allReportIds, managerChainIds, usePeopleList } from "../data/peopleLocal.ts";
 import {
   conversationUnreadCount,
   createGroupConversation,
@@ -62,7 +63,7 @@ function Avatar({ name, group }: { name: string; group?: boolean }) {
   );
 }
 
-const RELATION_LABEL = { manager: "Your manager", team: "Your team", teammate: "Teammate", hr: "HR" } as const;
+const RELATION_LABEL = { manager: "Reporting line", team: "Your team", teammate: "Teammate", hr: "HR" } as const;
 
 /** Backend mode: who this person may start a chat with (the server's reporting-line + HR rule). */
 function useAllowedContacts(): ChatContacts | null {
@@ -78,24 +79,40 @@ function useAllowedContacts(): ChatContacts | null {
   return allowed;
 }
 
-function useContacts(selfId: string, allowed: ChatContacts | null): Contact[] {
+function useContacts(selfId: string, role: string, allowed: ChatContacts | null): Contact[] {
   const directory = usePeopleList();
   return useMemo(() => {
+    if (API_ENABLED && !allowed) return []; // the server's list is still loading: never show the whole directory
     if (allowed && !allowed.anyone) {
-      // Only your manager, teammates, your team and HR (the server refuses anyone else).
+      // Only your reporting line, teammates, your team and HR (the server refuses anyone else).
       return allowed.contacts
         .map((c) => ({ id: c.id, name: c.name, sub: [RELATION_LABEL[c.relation], c.job_title].filter(Boolean).join(" · ") }))
         .sort(byName);
     }
+    const active = directory.filter((p) => !/exit|terminat|inactive|left/i.test(String(p.employmentStatus)));
+    if (!allowed && !HR_ROLES.includes(role)) {
+      // Local mode: the same reporting-line + HR rule as the server.
+      const me = active.find((p) => p.id === selfId);
+      const relation = new Map<string, keyof typeof RELATION_LABEL>();
+      for (const a of DEMO_ACCOUNTS) if (HR_ROLES.includes(a.role)) relation.set(a.id, "hr");
+      if (me?.managerId) for (const p of active) if (p.managerId === me.managerId) relation.set(p.id, "teammate");
+      for (const id of managerChainIds(selfId)) relation.set(id, "manager");
+      for (const id of allReportIds(selfId)) relation.set(id, "team");
+      relation.delete(selfId);
+      return active
+        .filter((p) => relation.has(p.id))
+        .map((p) => ({ id: p.id, name: p.fullName, sub: [RELATION_LABEL[relation.get(p.id)!], p.designation].filter(Boolean).join(" · ") }))
+        .sort(byName);
+    }
     const map = new Map<string, Contact>();
     for (const p of CHAT_PEOPLE) map.set(p.id, { id: p.id, name: p.name, sub: `${p.title} · ${p.department}`, availability: p.availability });
-    for (const p of directory) {
-      if (map.has(p.id) || /exit|terminat|inactive|left/i.test(String(p.employmentStatus))) continue;
+    for (const p of active) {
+      if (map.has(p.id)) continue;
       map.set(p.id, { id: p.id, name: p.fullName, sub: [p.designation, p.department].filter(Boolean).join(" · ") });
     }
     map.delete(selfId);
     return [...map.values()].sort(byName);
-  }, [directory, selfId, allowed]);
+  }, [directory, selfId, role, allowed]);
 }
 
 const matches = (c: Contact, q: string) => !q || `${c.name} ${c.sub}`.toLowerCase().includes(q);
@@ -151,7 +168,7 @@ export function MessagingPage() {
   const { employee, demoProfile } = usePortal();
   const collab = useSyncExternalStore(subscribeCollab, getCollabState, getCollabState);
   const allowed = useAllowedContacts();
-  const contacts = useContacts(employee.id, allowed);
+  const contacts = useContacts(employee.id, demoProfile.role, allowed);
   const hasTeam = !!allowed?.contacts.some((c) => c.relation === "team") || (allowed?.anyone ?? false);
   const [teamText, setTeamText] = useState("");
   const [teamOpen, setTeamOpen] = useState(false);

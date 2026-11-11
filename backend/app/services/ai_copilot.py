@@ -43,7 +43,8 @@ SYSTEM_PROMPT = """You are TimeZ Copilot, the HR assistant inside the TimeZ HRMS
 Rules:
 - Answer ONLY from the CONTEXT below (the person's own data, what their role allows them to see, and policy sections).
 - If the answer is not in the context, say you don't have that information and point to the right portal page
-  (for example Leave, Attendance, Timesheet, Approvals, Policies, Payslips, Benefits, Expenses, Help desk).
+  (PORTAL PAGES in the context lists them; for "where do I ..." questions name the page and its path).
+- The person's OWN payslips may be shared with them. Organisation and recruiting numbers are counts only.
 - Never invent numbers, dates, names or policy rules. Quote numbers exactly as they appear in the context.
 - Never make or promise decisions: no approvals, rejections, ratings, hiring, pay or disciplinary decisions.
   You can explain how to do something; the person or the right approver does it in the portal.
@@ -230,6 +231,15 @@ _DATA_TOPICS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(skills?|career|promotion|target role|next role|mentor)\b", re.I), "/skills"),
     (re.compile(r"\b(courses?|training|learning|certifications?|certificates?)\b", re.I), "/programs"),
     (re.compile(r"\b(benefits?|insurance|medical plan|pension|enrol(ment|led)?|enroll(ment|ed)?)\b", re.I), "/benefits"),
+    (re.compile(r"\b(payslips?|pay ?day|pay date|net pay|salary|paid|lop|loss of pay)\b", re.I), "/payslips"),
+    (re.compile(r"\b(holidays?|festival|bank holiday|public holiday)\b", re.I), "/holidays"),
+    (re.compile(r"\b(tax|taxes|declarations?|80c|80d|proofs?|regime)\b", re.I), "/investment"),
+    (re.compile(r"\b(expenses?|claims?|reimburse(ment)?s?|travel|trips?|advances?)\b", re.I), "/expenses"),
+    (re.compile(r"\b(tasks?|tickets?|to.?do|assigned|helpdesk)\b", re.I), "/tasks"),
+    (re.compile(r"\b(reports? to|manager|org chart|reporting|direct reports?)\b", re.I), "/org-chart"),
+    (re.compile(r"\b(who is|colleague|directory|reports? to|manager|joined|based)\b", re.I), "/directory"),
+    (re.compile(r"\b(department heads?|head of|organi[sz]ation structure)\b", re.I), "/organization"),
+    (re.compile(r"\b(requisitions?|candidates?|pipeline|hiring|recruit(ing|ment)?|openings?|offers?)\b", re.I), "/recruiting"),
 ]
 
 

@@ -1,0 +1,186 @@
+/* Time & attendance and Timesheet: one colour legend for every status, the week strip, the day editor. */
+
+/* ───────── The legend: one tone per meaning, used by chips, calendar cells and day boxes ─────────
+   green  present · approved          teal   work from home
+   purple leave                       blue   holiday · reopened
+   amber  pending (submitted, correction waiting)
+   red    absent · sent back · missing punch (dashed) · missing time
+   grey   weekly off · draft · not checked in · no record                                            */
+:root {
+  --tz-green: #047857;  --tz-green-bg: #e6f6ee;  --tz-green-line: #9fd9bd;
+  --tz-teal: #0f766e;   --tz-teal-bg: #e2f4f1;   --tz-teal-line: #97d3cb;
+  --tz-purple: #6d28d9; --tz-purple-bg: #f1ebfd; --tz-purple-line: #c9b5f4;
+  --tz-blue: #1d4ed8;   --tz-blue-bg: #e8effd;   --tz-blue-line: #b3c8f5;
+  --tz-amber: #b45309;  --tz-amber-bg: #fdf3e2;  --tz-amber-line: #f1cf95;
+  --tz-red: #b91c1c;    --tz-red-bg: #fdeceb;    --tz-red-line: #f1b4b0;
+  --tz-grey: #5a6878;   --tz-grey-bg: #eef3f6;   --tz-grey-line: #d3dde4;
+}
+html[data-theme="night"] {
+  --tz-green: #34d399;  --tz-green-bg: color-mix(in srgb, #34d399 14%, var(--card));  --tz-green-line: color-mix(in srgb, #34d399 40%, var(--card));
+  --tz-teal: #2dd4bf;   --tz-teal-bg: color-mix(in srgb, #2dd4bf 14%, var(--card));   --tz-teal-line: color-mix(in srgb, #2dd4bf 40%, var(--card));
+  --tz-purple: #a78bfa; --tz-purple-bg: color-mix(in srgb, #a78bfa 16%, var(--card)); --tz-purple-line: color-mix(in srgb, #a78bfa 42%, var(--card));
+  --tz-blue: #60a5fa;   --tz-blue-bg: color-mix(in srgb, #60a5fa 14%, var(--card));   --tz-blue-line: color-mix(in srgb, #60a5fa 40%, var(--card));
+  --tz-amber: #fbbf24;  --tz-amber-bg: color-mix(in srgb, #fbbf24 14%, var(--card));  --tz-amber-line: color-mix(in srgb, #fbbf24 40%, var(--card));
+  --tz-red: #f87171;    --tz-red-bg: color-mix(in srgb, #f87171 14%, var(--card));    --tz-red-line: color-mix(in srgb, #f87171 40%, var(--card));
+  --tz-grey: #9fb3c8;   --tz-grey-bg: var(--soft);                                     --tz-grey-line: var(--line);
+}
+
+.tz-tone-green  { --tz-fg: var(--tz-green);  --tz-bg: var(--tz-green-bg);  --tz-ln: var(--tz-green-line); }
+.tz-tone-teal   { --tz-fg: var(--tz-teal);   --tz-bg: var(--tz-teal-bg);   --tz-ln: var(--tz-teal-line); }
+.tz-tone-purple { --tz-fg: var(--tz-purple); --tz-bg: var(--tz-purple-bg); --tz-ln: var(--tz-purple-line); }
+.tz-tone-blue   { --tz-fg: var(--tz-blue);   --tz-bg: var(--tz-blue-bg);   --tz-ln: var(--tz-blue-line); }
+.tz-tone-amber  { --tz-fg: var(--tz-amber);  --tz-bg: var(--tz-amber-bg);  --tz-ln: var(--tz-amber-line); }
+.tz-tone-red    { --tz-fg: var(--tz-red);    --tz-bg: var(--tz-red-bg);    --tz-ln: var(--tz-red-line); }
+.tz-tone-grey   { --tz-fg: var(--tz-grey);   --tz-bg: var(--tz-grey-bg);   --tz-ln: var(--tz-grey-line); }
+.tz-tone-none   { --tz-fg: var(--muted);     --tz-bg: var(--card);         --tz-ln: var(--line); }
+
+/* A status chip (replaces the generic status badge on these pages). */
+.tz-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--tz-ln); background: var(--tz-bg); color: var(--tz-fg);
+  font-size: 12px; font-weight: 600; line-height: 1.5; white-space: nowrap;
+}
+.tz-chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--tz-fg); }
+.tz-chip.dashed { border-style: dashed; }
+
+.tz-legend { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 0 0 12px; padding: 0; list-style: none; }
+.tz-legend li { display: contents; }
+
+/* ───────── Attendance ───────── */
+.att-page { display: grid; gap: 16px; }
+.att-page > * { margin: 0; }
+.att-today-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px 16px; }
+.att-today-grid > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.att-today-grid strong { font-size: 15px; }
+.att-today-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.att-today-actions .note { margin: 0; }
+.att-workbench { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.att-workbench > aside { display: grid; gap: 16px; }
+.att-workbench .card, .att-workbench > aside .card { margin: 0; }
+.att-cal { gap: 6px; }
+.att-cal .att-day {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 68px;
+  width: 100%; padding: 6px 7px; text-align: left; cursor: pointer; font: inherit; font-size: 12px;
+  border: 1px solid var(--tz-ln); background: var(--tz-bg); color: var(--ink); border-radius: 8px;
+}
+.att-cal .att-day strong { margin: 0; font-size: 13px; color: var(--ink); }
+.att-cal .att-day .att-day-meta { color: var(--tz-fg); font-weight: 600; font-size: 11.5px; line-height: 1.25; }
+.att-cal .att-day.dashed { border-style: dashed; border-width: 1.5px; }
+.att-cal .att-day.today { box-shadow: inset 0 0 0 2px var(--accent); }
+.att-cal .att-day.selected { outline: 2px solid var(--ink); outline-offset: 1px; }
+.att-cal .att-day:hover { border-color: var(--accent); }
+.att-flags { display: flex; gap: 4px; margin-top: auto; }
+.att-flags span { font-size: 10.5px; font-weight: 700; padding: 0 5px; border-radius: 4px; background: var(--card); color: var(--muted); border: 1px solid var(--line); }
+.att-month-nav { display: flex; align-items: center; gap: 6px; }
+.att-month-nav strong { min-width: 130px; text-align: center; }
+.att-detail-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; }
+.att-detail-list dt { color: var(--muted); }
+.att-detail-list dd { margin: 0; font-weight: 600; }
+.att-stack { display: grid; gap: 10px; }
+.att-stack > * { margin: 0; }
+.att-holidays { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; }
+.att-holidays li { display: flex; justify-content: space-between; gap: 8px; }
+.att-corr-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.att-corr-grid .card { margin: 0; }
+.att-corr-span { grid-column: 1 / -1; }
+.att-corr-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.att-corr-item { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.att-corr-list > li.att-corr-item > .att-corr-item { padding: 0; border: 0; }
+@media (max-width: 1100px) {
+  .att-workbench { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .att-corr-grid { grid-template-columns: 1fr; }
+  .att-cal .att-day { min-height: 54px; padding: 4px; }
+  .att-cal .att-day .att-day-meta { font-size: 10.5px; }
+}
+
+/* ───────── Timesheet ───────── */
+.tsx-page { display: grid; gap: 16px; }
+.tsx-page > * { margin: 0; }
+.tsx-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.tsx-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tsx-nav strong { min-width: 150px; text-align: center; }
+.tsx-exports { display: flex; gap: 6px; }
+
+.tsx-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+.tsx-daybox {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; padding: 10px;
+  border: 1px solid var(--tz-ln); border-left: 4px solid var(--tz-fg); border-radius: 10px;
+  background: var(--tz-bg); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.tsx-daybox:hover { border-color: var(--accent); border-left-color: var(--tz-fg); }
+.tsx-daybox.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tsx-daybox.today .tsx-dow::after { content: " · today"; color: var(--accent); font-weight: 700; }
+.tsx-daybox.missing { border-style: dashed; }
+.tsx-dow { font-size: 12px; color: var(--muted); font-weight: 600; }
+.tsx-hours { font-size: 17px; font-weight: 700; line-height: 1.2; }
+.tsx-hours small { font-size: 12px; font-weight: 500; color: var(--muted); }
+.tsx-daybox .tsx-state { font-size: 12px; font-weight: 600; color: var(--tz-fg); }
+.tsx-bar-mini { width: 100%; height: 4px; border-radius: 4px; background: color-mix(in srgb, var(--tz-fg) 18%, transparent); overflow: hidden; }
+.tsx-bar-mini i { display: block; height: 100%; background: var(--tz-fg); }
+
+.tsx-main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.tsx-main > aside { display: grid; gap: 16px; }
+.tsx-main .card { margin: 0; }
+
+.tsx-editor { display: grid; gap: 12px; }
+.tsx-editor-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.tsx-editor-head h2 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.tsx-rows { display: grid; gap: 8px; }
+.tsx-row {
+  display: grid; grid-template-columns: 92px 92px minmax(130px, 1.1fr) minmax(130px, 1.1fr) minmax(140px, 1.4fr) 64px 58px 32px;
+  gap: 8px; align-items: center;
+}
+.tsx-row.head { font-size: 12px; color: var(--muted); font-weight: 600; }
+.tsx-row input, .tsx-row select { width: 100%; min-width: 0; }
+.tsx-row.bad input, .tsx-row.bad select { border-color: var(--tz-red); }
+.tsx-row .tsx-row-hours { font-weight: 700; text-align: right; }
+.tsx-row .tsx-bill { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 12px; }
+.tsx-row-remove { border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; border-radius: 6px; padding: 4px; }
+.tsx-row-remove:hover { color: var(--tz-red); background: var(--tz-red-bg); }
+.tsx-row-error { grid-column: 1 / -1; color: var(--tz-red); font-size: 12px; margin-top: -4px; }
+.tsx-add { display: flex; flex-wrap: wrap; gap: 8px; }
+.tsx-totals { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.tsx-meter { display: grid; gap: 4px; min-width: 220px; }
+.tsx-meter strong { font-size: 15px; }
+.tsx-meter .tsx-bar-mini { height: 6px; }
+.tsx-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tsx-why { font-size: 12.5px; color: var(--muted); }
+.tsx-error { color: var(--tz-red); font-size: 13px; margin: 0; }
+.tsx-readonly { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.tsx-readonly li { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.tsx-readonly li span:last-child { font-weight: 700; }
+
+.tsx-projects { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.tsx-projects li { display: grid; gap: 4px; font-size: 13px; }
+.tsx-projects .tsx-proj-line { display: flex; justify-content: space-between; gap: 8px; }
+.tsx-projects .tsx-proj-line span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsx-projects .tsx-bar-mini { height: 6px; }
+.tsx-week-sum { display: flex; justify-content: space-between; gap: 8px; padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); font-size: 13px; }
+
+.tsx-attention { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.tsx-attention li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border: 1px solid var(--tz-ln); border-left: 4px solid var(--tz-fg); border-radius: 8px; background: var(--tz-bg); font-size: 13px; }
+
+.tsx-assigned { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.tsx-assigned li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.tsx-assigned li > div { display: grid; min-width: 0; }
+.tsx-assigned li > div > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Team timesheets: day chips use the same legend. */
+.ts-day-chip.tz-day { border: 1px solid var(--tz-ln); border-left: 3px solid var(--tz-fg); background: var(--tz-bg); }
+.ts-day-chip.tz-day span:last-child { color: var(--tz-fg); font-weight: 600; }
+
+@media (max-width: 1100px) {
+  .tsx-main { grid-template-columns: 1fr; }
+}
+@media (max-width: 900px) {
+  .tsx-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .tsx-row { grid-template-columns: 1fr 1fr; }
+  .tsx-row.head { display: none; }
+  .tsx-row .tsx-row-hours { text-align: left; }
+  .tsx-row > .tsx-cell-wide { grid-column: 1 / -1; }
+}
+@media (max-width: 520px) {
+  .tsx-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

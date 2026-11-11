@@ -491,7 +491,7 @@ interface PortalApi {
   addTaskPerson: (taskId: string, personId: string) => string | null;
   /** Manager: remove a collaborator (cannot remove primary owner this way). */
   removeTaskPerson: (taskId: string, personId: string) => string | null;
-  /** Manager: create a new task for a team member. */
+  /** Create a task for yourself, someone below you, or a colleague on one of your projects (allowedOwnerIds). */
   createTask: (input: {
     subject: string;
     ownerId: string;
@@ -506,7 +506,11 @@ interface PortalApi {
     links?: TaskLink[];
     referenceTaskId?: string;
     ccIds?: string[];
+    /** Colleagues on the creator's projects (the page works them out); they may own or join the task too. */
+    allowedOwnerIds?: string[];
   }) => string | null;
+  /** Change a task's name, description, priority or due date (its creator, or a manager above the owner). */
+  editTask: (taskId: string, change: { subject?: string; notes?: string; priority?: TaskPriority; due?: string }) => string | null;
   taskAction: (
     taskId: string,
     action: "accept" | "decline" | "start" | "progress" | "block" | "unblock" | "help" | "review" | "complete",
@@ -2218,8 +2222,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return null;
       },
       createTask: (input) => {
-        if (!canApproveTeam(active.role)) return "Only managers can create team tasks.";
-        if (!canApproveFor(input.ownerId)) return "You can only assign tasks to people who report to you.";
+        const allowed = new Set(input.allowedOwnerIds ?? []);
+        const mayGive = (id: string) => id === active.id || canApproveFor(id) || allowed.has(id);
+        if (!mayGive(input.ownerId)) return "You can assign tasks to yourself, people who report to you, or colleagues on your projects.";
         const subject = input.subject.trim().replace(/\s+/g, " ");
         if (subject.length < 3) return "Enter a task name (at least 3 characters).";
         if (subject.length > 120) return "Keep the task name under 120 characters.";
@@ -2248,8 +2253,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (links.length > 10) return "Add at most 10 links.";
         if (input.referenceTaskId && !state.tasks.some((t) => t.id === input.referenceTaskId)) return "The related task no longer exists.";
         const peopleIds = [...new Set(input.peopleIds ?? [])].filter((id) => id !== person.id);
-        if (peopleIds.some((id) => !taskPersonById(id) || !canApproveFor(id))) {
-          return "Collaborators must be people who report to you.";
+        if (peopleIds.some((id) => !taskPersonById(id) || !mayGive(id))) {
+          return "Collaborators must be people you can assign work to.";
         }
         const ccIds = [...new Set(input.ccIds ?? [])].filter((id) => id !== person.id && id !== active.id && !peopleIds.includes(id));
         if (ccIds.some((id) => !TIMEZ_DEMOS.some((a) => a.id === id) && !taskPersonById(id))) return "Someone on CC wasn't found.";
@@ -2258,6 +2263,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         // Next code after the highest existing one, so codes never repeat.
         const codeNum = Math.max(1099, ...state.tasks.map((t) => Number(t.code.replace(/\D/g, "")) || 0)) + 1;
         const assigner = active.fullName.split(" ")[0] || "Manager";
+        const own = person.id === active.id;
         const task: Task = {
           id: uid("task"),
           code: `TSK-${codeNum}`,
@@ -2269,6 +2275,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           links,
           referenceTaskId: input.referenceTaskId || undefined,
           ccIds,
+          createdById: active.id,
           assignedBy: assigner,
           owner: person.shortName,
           department: person.department,
@@ -2287,15 +2294,20 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           due,
           peopleIds,
           progressPct: 0,
-          accepted: false,
+          // Your own to-do needs no "accept" step.
+          accepted: own,
           inReview: false,
           subtasks: [],
           attachments: [],
           comments: [],
-          activity: [{ id: uid("tact"), at: now, actor: assigner, action: "Assigned", detail: `Assigned to ${person.shortName}` }],
+          activity: [
+            own
+              ? { id: uid("tact"), at: now, actor: assigner, action: "Created" }
+              : { id: uid("tact"), at: now, actor: assigner, action: "Assigned", detail: `Assigned to ${person.shortName}` },
+          ],
         };
         setState((prev) => ({ ...prev, tasks: [task, ...prev.tasks] }));
-        pushPersonTaskAlert({
+        if (!own) pushPersonTaskAlert({
           recipientId: person.id,
           title: `New task · ${task.code}`,
           body: `${active.fullName} assigned you “${subject}” (due ${due}).`,
@@ -2312,7 +2324,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       taskAction: (taskId, action, payload = {}) => {
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return "Task not found.";
-        const canAct = task.employeeId === active.id || canApproveFor(task.employeeId);
+        // Whoever gave the task out (e.g. a project colleague) may sign it off or send it back.
+        const creatorReview = task.createdById === active.id && (action === "complete" || action === "progress");
+        const canAct = task.employeeId === active.id || canApproveFor(task.employeeId) || creatorReview;
         if (!canAct) return "You can only update your own tasks.";
         if (task.status === "scheduled" && action !== "accept") return "This task is not open yet.";
         if (task.status === "done") return "This task is already complete.";
@@ -2438,7 +2452,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }
         if (action === "complete") {
           if (task.blocked) return "Unblock the task before completing it.";
-          if (task.employeeId === active.id && managementChain(active.id, TIMEZ_DEMOS).length > 0) {
+          // Your own to-do you close yourself; work given to you goes to review first.
+          if (task.employeeId === active.id && task.createdById !== active.id && managementChain(active.id, TIMEZ_DEMOS).length > 0) {
             return "Submit it for review — your manager marks it complete.";
           }
           pushActivity("Completed", undefined, {
@@ -2553,11 +2568,51 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }));
         return null;
       },
+      editTask: (taskId, change) => {
+        const task = state.tasks.find((item) => item.id === taskId);
+        if (!task) return "Task not found.";
+        const mayEdit = task.createdById === active.id || canApproveFor(task.employeeId);
+        if (!mayEdit) return "Only whoever created the task or the owner's manager can change it.";
+        if (task.status === "done") return "Completed tasks can't be changed.";
+        const next: Partial<Task> = {};
+        const notes: string[] = [];
+        if (change.subject !== undefined) {
+          const subject = change.subject.trim().replace(/\s+/g, " ");
+          if (subject.length < 3 || subject.length > 120) return "Task name: 3 to 120 characters.";
+          if (subject !== task.subject) { next.subject = subject; notes.push("renamed"); }
+        }
+        if (change.notes !== undefined && change.notes.trim() !== task.notes) {
+          next.notes = change.notes.trim().slice(0, 4000);
+          notes.push("description updated");
+        }
+        if (change.priority && change.priority !== task.priority) {
+          next.priority = change.priority;
+          notes.push(`priority ${change.priority}`);
+        }
+        if (change.due !== undefined && change.due !== task.due) {
+          if (change.due && !/^\d{4}-\d{2}-\d{2}$/.test(change.due)) return "Use a valid due date.";
+          next.due = change.due;
+          notes.push(change.due ? `due ${change.due}` : "due date removed");
+        }
+        if (!notes.length) return null;
+        const now = new Date().toISOString();
+        const actor = active.fullName.split(" ")[0] || "User";
+        setState((prev) => ({
+          ...prev,
+          tasks: patchById(prev.tasks, taskId, {
+            ...next,
+            lastActivityAt: now,
+            activity: [...(task.activity ?? []), { id: uid("tact"), at: now, actor, action: "Edited", detail: notes.join(", ") }],
+          }),
+        }));
+        return null;
+      },
       addTaskComment: (taskId, text) => {
         const task = state.tasks.find((item) => item.id === taskId);
         if (!task) return "Task not found.";
-        const canAct = task.employeeId === active.id || canApproveFor(task.employeeId);
-        if (!canAct) return "You can only comment on your own tasks.";
+        const follower = !!task.peopleIds?.includes(active.id) || !!task.ccIds?.includes(active.id);
+        const canAct = task.employeeId === active.id || canApproveFor(task.employeeId) || follower;
+        if (!canAct) return "You can only comment on tasks you are on.";
         const trimmed = text.trim();
         if (!trimmed) return "Enter a comment.";
         const now = new Date().toISOString();

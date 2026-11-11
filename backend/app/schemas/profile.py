@@ -31,8 +31,9 @@ class ProfileExperienceItem(BaseModel):
 class SelfProfileUpdateIn(BaseModel):
     """PATCH /people/me. Only the fields sent are changed; send null or "" to clear one.
 
-    Changing a personal detail (preferred name, mobile, personal email, address, emergency contact) needs otp_code
-    from POST /people/me/otp, sent for exactly these new values.
+    Changing a personal detail (legal or preferred name, date of birth, mobile, personal email, address, emergency
+    contact) needs otp_code from POST /people/me/otp, sent for exactly these new values. Job fields (title,
+    department, manager, grade, location, employment type, company) are HR-only and are refused here.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -52,6 +53,14 @@ class SelfProfileUpdateIn(BaseModel):
     education: list[ProfileEducationItem] | None = Field(default=None, max_length=20)
     experience: list[ProfileExperienceItem] | None = Field(default=None, max_length=30)
     career_goals: str | None = Field(default=None, max_length=1000)
+    # Your own legal record: saved directly (and audited), no HR approval.
+    first_name: str | None = Field(default=None, max_length=100)
+    middle_name: str | None = Field(default=None, max_length=100)
+    last_name: str | None = Field(default=None, max_length=100)
+    nationality: str | None = Field(default=None, max_length=64)
+    work_arrangement: WorkArrangementValue | None = None
+    date_of_birth: date | None = None
+    gender: str | None = Field(default=None, max_length=32)
     otp_code: str | None = Field(default=None, max_length=12)
 
 
@@ -76,13 +85,6 @@ class ProfileOtpOut(BaseModel):
 class HrProfileUpdateIn(SelfProfileUpdateIn):
     """PATCH /people/{id} for HR / admin in scope: the employee fields plus the HR-owned ones."""
 
-    first_name: str | None = Field(default=None, max_length=100)
-    middle_name: str | None = Field(default=None, max_length=100)
-    last_name: str | None = Field(default=None, max_length=100)
-    nationality: str | None = Field(default=None, max_length=64)
-    work_arrangement: WorkArrangementValue | None = None
-    date_of_birth: date | None = None
-    gender: str | None = Field(default=None, max_length=32)
     company: str | None = Field(default=None, max_length=100)
     # Job fields (each change also starts a new row in the dated assignment history). Status changes go through
     # exits and lifecycle actions, not this edit.
