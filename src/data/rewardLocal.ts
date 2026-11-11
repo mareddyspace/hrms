@@ -1,4 +1,4 @@
-import { API_ENABLED, apiSessionAccount, onApiSession } from "../api/client.ts";
+import { API_ENABLED, apiSessionAccount, onApiSession, sessionLoad } from "../api/client.ts";
 import {
   apiAddBonus,
   apiAddDependent,
@@ -282,12 +282,13 @@ async function viaApi(call: Promise<string | null>, areas: ApiArea[]): Promise<R
 }
 
 if (API_ENABLED) {
-  onApiSession((accountId) => {
+  onApiSession(() => {
     apiGeneration += 1;
     forgetApiMe();
     write(apiEmpty());
-    if (accountId) void refreshRewardApi();
   });
+  // Loaded with the other module data once the home is shown.
+  sessionLoad(() => refreshRewardApi());
 }
 
 export function subscribeReward(listener: () => void) {

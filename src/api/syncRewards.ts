@@ -21,7 +21,7 @@ import type {
 } from "../data/rewardData.ts";
 import type { CompProposal } from "../data/rewardLocal.ts";
 import { TIMEZ_COUNTRIES, formatShortDate } from "../model.ts";
-import { api, apiRequest, type MeOut } from "./client.ts";
+import { api, apiRequest, apiSessionMe, type MeOut } from "./client.ts";
 import {
   attempt,
   authorizedFetch,
@@ -276,7 +276,7 @@ let meCache: { accountId: string; me: MeOut } | null = null;
 /** The signed-in API account (cached per session). */
 export async function apiMe(accountId: string): Promise<MeOut> {
   if (meCache?.accountId === accountId) return meCache.me;
-  const me = await api.get<MeOut>("/auth/me");
+  const me = await apiSessionMe();
   meCache = { accountId, me };
   return me;
 }

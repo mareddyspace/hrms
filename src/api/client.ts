@@ -110,7 +110,10 @@ export function onApiSession(listener: (accountId: string | null) => void): () =
 export function announceApiSession(accountId: string | null) {
   if (accountId === currentAccountId) return;
   currentAccountId = accountId;
-  sessionMe = null;
+  // The sign-in already asked who this is: reuse that answer instead of asking again.
+  sessionMe = accountId && signInMe?.account === accountId ? signInMe : null;
+  signInMe = null;
+  invalidateApiCache();
   sessionListeners.forEach((fn) => {
     try {
       fn(accountId);
@@ -118,11 +121,125 @@ export function announceApiSession(accountId: string | null) {
       console.error("Session listener failed", error);
     }
   });
+  startSessionLoads(accountId);
+}
+
+/* ───────── Module data: loaded after the home is shown, a few at a time ───────── */
+
+/**
+ * Module stores (benefits, rosters, compensation, talent, cases…) don't load while the person waits for the
+ * home page. Their loads wait in a queue until the home's own data is in (releaseSessionLoads, or a short
+ * timer), then run a few at a time. A page that shows the data calls now() to jump the queue.
+ */
+export interface SessionLoad {
+  /** Load as soon as possible if this load is still waiting (its page has opened). */
+  now(): void;
+}
+
+interface QueuedLoad {
+  run: (accountId: string) => Promise<unknown>;
+}
+
+const SESSION_LOAD_LIMIT = 4;
+/** The queue opens on its own after this long even if the home's data never settles. */
+const SESSION_LOAD_FALLBACK_MS = 8000;
+const sessionLoads = new Set<QueuedLoad>();
+let waitingLoads: QueuedLoad[] = [];
+let loadsOpen = false;
+let loadsRunning = 0;
+let loadsTimer: number | undefined;
+
+function runSessionLoad(item: QueuedLoad, account: string, counted: boolean) {
+  if (counted) loadsRunning += 1;
+  void Promise.resolve()
+    .then(() => (currentAccountId === account ? item.run(account) : undefined))
+    .catch((error) => console.warn("Could not load data from the server", error))
+    .finally(() => {
+      if (!counted) return;
+      loadsRunning -= 1;
+      pumpSessionLoads();
+    });
+}
+
+function pumpSessionLoads() {
+  const account = currentAccountId;
+  if (!loadsOpen || !account) return;
+  while (loadsRunning < SESSION_LOAD_LIMIT && waitingLoads.length) {
+    runSessionLoad(waitingLoads.shift()!, account, true);
+  }
+}
+
+function startSessionLoads(accountId: string | null) {
+  window.clearTimeout(loadsTimer);
+  loadsOpen = false;
+  waitingLoads = accountId ? [...sessionLoads] : [];
+  if (accountId) loadsTimer = window.setTimeout(releaseSessionLoads, SESSION_LOAD_FALLBACK_MS);
+}
+
+/* Every store update re-renders the portal, so updates from loads that land close together are applied in one go:
+   at once normally, gathered for a moment while the background queue is still filling the stores. */
+const pendingNotify = new Set<() => void>();
+let notifyTimer: number | undefined;
+const BACKGROUND_NOTIFY_MS = 400;
+
+function flushNotify() {
+  notifyTimer = undefined;
+  const run = [...pendingNotify];
+  pendingNotify.clear();
+  for (const fn of run) {
+    try {
+      fn();
+    } catch (error) {
+      console.error("Store update failed", error);
+    }
+  }
+}
+
+/** Tells a store's listeners about newly loaded data, together with other loads that finish around the same time. */
+export function notifyLoaded(fn: () => void) {
+  pendingNotify.add(fn);
+  if (notifyTimer !== undefined) return;
+  const busy = loadsRunning > 0 || waitingLoads.length > 0;
+  notifyTimer = window.setTimeout(flushNotify, busy ? BACKGROUND_NOTIFY_MS : 0);
+}
+
+/** The home's own data is in: start loading module data in the background. */
+export function releaseSessionLoads() {
+  window.clearTimeout(loadsTimer);
+  if (loadsOpen) return;
+  loadsOpen = true;
+  pumpSessionLoads();
+}
+
+/**
+ * Registers a module's load for every API session. It runs in the background queue after the home is shown,
+ * or right away when now() is called (a page that shows the data subscribed to it).
+ */
+export function sessionLoad(run: (accountId: string) => Promise<unknown>): SessionLoad {
+  const item: QueuedLoad = { run };
+  sessionLoads.add(item);
+  // Code that arrives mid-session (a page's chunk) joins the queue; its page asks for it with now().
+  if (currentAccountId) {
+    waitingLoads.push(item);
+    pumpSessionLoads();
+  }
+  return {
+    now() {
+      const index = waitingLoads.indexOf(item);
+      if (index < 0 || !currentAccountId) return;
+      waitingLoads.splice(index, 1);
+      // The server answers the home's own requests first; a page's data goes to the front of the queue until then.
+      if (loadsOpen) runSessionLoad(item, currentAccountId, false);
+      else waitingLoads.unshift(item);
+    },
+  };
 }
 
 /* ───────── Who is signed in (cached per session) ───────── */
 
 let sessionMe: { account: string; me: Promise<MeOut> } | null = null;
+/** The /auth/me answer from the sign-in itself, handed to the session that starts next. */
+let signInMe: { account: string; me: Promise<MeOut> } | null = null;
 
 /**
  * GET /auth/me once per session, so loaders can skip lists the role isn't allowed to see (no expected 403s).
@@ -301,6 +418,16 @@ async function refreshTokens(): Promise<boolean> {
 
 /** JSON request with the bearer token; on 401 refreshes once and retries, and signs out if that fails. */
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const write = (options.method ?? "GET") !== "GET";
+  if (write) invalidateApiCache();
+  try {
+    return await request<T>(path, options);
+  } finally {
+    if (write) invalidateApiCache();
+  }
+}
+
+async function request<T>(path: string, options: RequestOptions): Promise<T> {
   let res = await send(path, options);
   if (res.status === 401 && !options.anonymous) {
     if (await refreshTokens()) res = await send(path, options);
@@ -312,8 +439,42 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   return parse<T>(res);
 }
 
+/* ───────── Reads: one request per path + params at a time, kept for a moment ───────── */
+
+/** Several stores ask for the same list as a session starts; they share one request and its answer. */
+const GET_CACHE_MS = 5000;
+const getCache = new Map<string, { at: number; value: Promise<unknown> }>();
+/** Bumped on every change (and on sign-in/out), so a read that started before it is not kept. */
+let cacheGeneration = 0;
+
+/** Forget kept reads (after any change, so a reload shows it). Raw-body uploads call this too. */
+export function invalidateApiCache() {
+  cacheGeneration += 1;
+  getCache.clear();
+}
+
+function cachedGet<T>(path: string, query?: Query): Promise<T> {
+  const key = `${tokens?.access ?? ""}|${urlFor(path, query)}`;
+  const hit = getCache.get(key);
+  if (hit && Date.now() - hit.at < GET_CACHE_MS) return hit.value as Promise<T>;
+  const generation = cacheGeneration;
+  const value = apiRequest<T>(path, { query });
+  getCache.set(key, { at: Date.now(), value });
+  value.then(
+    () => {
+      // Kept from when it arrived; dropped if something changed while it was on its way.
+      if (generation !== cacheGeneration) getCache.delete(key);
+      else if (getCache.get(key)?.value === value) getCache.set(key, { at: Date.now(), value });
+    },
+    () => {
+      if (getCache.get(key)?.value === value) getCache.delete(key);
+    },
+  );
+  return value;
+}
+
 export const api = {
-  get: <T>(path: string, query?: Query) => apiRequest<T>(path, { query }),
+  get: <T>(path: string, query?: Query) => cachedGet<T>(path, query),
   post: <T>(path: string, body?: unknown) => apiRequest<T>(path, { method: "POST", body: body ?? {} }),
 };
 
@@ -532,7 +693,8 @@ export async function apiLogin(
   mfaSetupRequired = Boolean(out.mfa_setup_required);
   saveTokens({ access: out.access_token, refresh: out.refresh_token });
   try {
-    const me = await api.get<MeOut>("/auth/me");
+    const me = await apiRequest<MeOut>("/auth/me");
+    signInMe = { account: me.account_id, me: Promise.resolve(me) };
     return {
       me,
       previousLoginAt: out.last_login_at ?? null,

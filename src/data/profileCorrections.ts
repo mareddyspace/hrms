@@ -24,7 +24,7 @@ import {
 import { getPerson, upsertPerson, wouldCreateLoop, type LocalPersonRecord } from "./peopleLocal.ts";
 import { canManagePeople } from "./peoplePermissions.ts";
 import { profileExtrasFor, saveProfileExtras } from "./profileExtras.ts";
-import { API_ENABLED, onApiSession } from "../api/client.ts";
+import { API_ENABLED, onApiSession, sessionLoad } from "../api/client.ts";
 import {
   apiDecideCorrection,
   apiListCorrections,
@@ -282,12 +282,13 @@ export async function refreshApiCorrections(): Promise<void> {
 
 if (API_ENABLED) {
   onApiSession((account) => {
-    if (account) void refreshApiCorrections();
-    else {
+    if (!account) {
       apiRows = [];
       listeners.forEach((fn) => fn());
     }
   });
+  // Loaded with the other module data once the home is shown.
+  sessionLoad(() => refreshApiCorrections());
 }
 
 async function afterApi(result: Promise<ProfileResult>): Promise<ProfileResult> {

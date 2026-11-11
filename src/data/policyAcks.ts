@@ -2,7 +2,7 @@
  * Per-user policy acknowledgements: {policyId, version, at}. Small localStorage store.
  * Backend mode (VITE_API_URL set): kept in memory and loaded from /documents/policy-acks; acknowledging posts there.
  */
-import { API_ENABLED, onApiSession } from "../api/client.ts";
+import { API_ENABLED, onApiSession, sessionLoad } from "../api/client.ts";
 import { apiAcknowledgePolicy, apiMe, fetchPolicyAcks, type PolicyAckOut } from "../api/syncRewards.ts";
 import { RETIRED_SIGN_IN_IDS } from "../demoAccounts.ts";
 
@@ -90,8 +90,9 @@ if (API_ENABLED) {
     apiAccount = accountId;
     myEmployeeId = null;
     write({});
-    if (accountId) void loadMine(accountId);
   });
+  // Loaded with the other module data once the home is shown.
+  sessionLoad((accountId) => loadMine(accountId));
 }
 
 /**

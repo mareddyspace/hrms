@@ -5,7 +5,7 @@
  */
 import type { Task } from "../model.ts";
 import { notify } from "../components/ui.tsx";
-import { API_ENABLED, ApiError, api, apiRequest, apiSessionAccount, onApiSession } from "./client.ts";
+import { API_ENABLED, ApiError, api, apiRequest, apiSessionAccount, onApiSession, sessionLoad } from "./client.ts";
 import { errorText } from "./syncOps.ts";
 import { keepFresh } from "./syncShare.ts";
 
@@ -56,14 +56,15 @@ async function load(): Promise<void> {
 
 if (API_ENABLED) {
   queueMicrotask(() =>
-    onApiSession((who) => {
+    onApiSession(() => {
       seq += 1;
       known.clear();
       pending.clear();
       loaded = false;
-      if (who) void load();
     }),
   );
+  // Loaded with the other module data once the home is shown.
+  queueMicrotask(() => sessionLoad(() => load()));
   keepFresh(load, 30_000);
 }
 

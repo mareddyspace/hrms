@@ -2,7 +2,7 @@
  * HR cases and the HR service desk from the backend (VITE_API_URL mode only), mapped to the shapes the
  * grievance store and the collab store already use.
  */
-import { API_URL, ApiError, api, apiSessionMe, isApiAdmin, isApiHr, type MeOut } from "./client.ts";
+import { API_URL, ApiError, api, apiRequest, apiSessionMe, invalidateApiCache, isApiAdmin, isApiHr } from "./client.ts";
 import { downloadBlob } from "./syncShared.ts";
 import type { CaseCategory, CaseEntry, CaseRecord, CaseStatus } from "../features/compliance/grievanceStore.ts";
 import type { HrRequest, HrRequestCategory, HrRequestPriority } from "../data/collabData.ts";
@@ -134,7 +134,7 @@ let meCache: { account: string; employeeId: string } | null = null;
 
 async function myEmployeeId(accountId: string): Promise<string> {
   if (meCache?.account === accountId) return meCache.employeeId;
-  const me = await api.get<MeOut>("/auth/me");
+  const me = await apiSessionMe();
   meCache = { account: accountId, employeeId: me.employee_id ?? accountId };
   return meCache.employeeId;
 }
@@ -327,13 +327,14 @@ async function uploadFile(path: string, file: File, query: Record<string, string
   try {
     res = await send();
     if (res.status === 401) {
-      await api.get("/auth/me"); // refreshes the session (or ends it)
+      await apiRequest("/auth/me"); // refreshes the session (or ends it)
       res = await send();
     }
   } catch (e) {
     if (e instanceof ApiError) throw e;
     throw new ApiError(0, "The server is starting up. Try again in about 30 seconds.");
   }
+  invalidateApiCache();
   if (!res.ok) {
     let message = res.status === 413 ? "The file is too large." : "That didn't work. Try again.";
     try {

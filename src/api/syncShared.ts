@@ -6,7 +6,7 @@ import { findDemoById } from "../demoAccounts.ts";
 import { getPerson, subscribePeople } from "../data/peopleLocal.ts";
 import type { ExpenseApprovalStep } from "../model.ts";
 import type { FlowDecision, FlowGroup, FlowStep } from "../data/approvalWorkflows.ts";
-import { API_ENABLED, API_URL, ApiError, apiRequest, apiSessionAccount, onApiSession } from "./client.ts";
+import { API_ENABLED, API_URL, ApiError, apiRequest, apiSessionAccount, invalidateApiCache, notifyLoaded, onApiSession, sessionLoad, type SessionLoad } from "./client.ts";
 
 /** Message for a failed call, shown in the page's existing notice. */
 export function errorText(error: unknown, fallback = "That didn't work. Try again."): string {
@@ -54,6 +54,7 @@ async function authorizedFetch(path: string, init: RequestInit): Promise<Respons
     if (error instanceof ApiError) throw error;
     throw new ApiError(0, "The server is starting up. Try again in about 30 seconds.");
   }
+  if ((init.method ?? "GET") !== "GET") invalidateApiCache();
   if (!res.ok) {
     let message = res.status === 413 ? "The file is too large." : "That didn't work. Try again.";
     try {
@@ -255,19 +256,22 @@ export function createMirror<R, M>(empty: () => M, load: (accountId: string) => 
       if (mine !== seq || apiSessionAccount() !== who) return;
       raw = next;
       account = who;
-      remap();
+      if (raw === null || !account) return;
+      mapped = map(raw, account);
+      notifyLoaded(emit);
     } catch (error) {
       console.warn("Could not load data from the server", error);
     }
   }
 
+  // Loads after the home is shown (background queue), or straight away when a page that shows it subscribes.
+  let loader: SessionLoad | null = null;
   if (API_ENABLED) {
     // Deferred so every module finishes initialising before the first load.
     queueMicrotask(() => {
+      loader = sessionLoad(() => reload());
       onApiSession((who) => {
-        if (who) {
-          void reload();
-        } else {
+        if (!who) {
           seq += 1;
           raw = null;
           account = null;
@@ -286,6 +290,7 @@ export function createMirror<R, M>(empty: () => M, load: (accountId: string) => 
     reload,
     subscribe(fn) {
       listeners.add(fn);
+      loader?.now();
       return () => {
         listeners.delete(fn);
       };

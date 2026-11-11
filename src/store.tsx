@@ -93,7 +93,7 @@ import { approvedNameFor, getCorrections, subscribeCorrections } from "./data/pr
 import { canPayExpenses, currentStepOf, decideFlowStep, isWaitingOn, waitingApproverIds } from "./data/expenseFlow.ts";
 import { taskProgress } from "./data/taskHelpers.ts";
 import { isTaskAutoMode } from "./data/taskAutoMode.ts";
-import { API_ENABLED, ApiError, announceApiSession, apiChangePassword, apiLogin, clearTokens, hasTokens, onSessionEnded } from "./api/client.ts";
+import { API_ENABLED, ApiError, announceApiSession, apiChangePassword, apiLogin, clearTokens, hasTokens, onSessionEnded, releaseSessionLoads } from "./api/client.ts";
 import {
   apiApplyLeave,
   apiCancelLeave,
@@ -647,13 +647,16 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
 
-  async function refreshApiLeave() {
+  async function refreshApiLeave(peopleReady?: Promise<unknown>) {
     const account = findDemoById(userIdRef.current);
     if (!account || !hasTokens()) return;
     const data = await loadApiLeave(
       { id: account.id, role: account.role },
       (id) => getPerson(id)?.fullName ?? findDemoById(id)?.fullName,
+      peopleReady,
     );
+    // Signed out (or someone else signed in) while it loaded.
+    if (!hasTokens() || userIdRef.current !== account.id) return;
     setState((prev) => ({ ...prev, leaveRequests: data.requests }));
     setApiLeave({ balances: data.balances });
   }
@@ -682,10 +685,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     const report = (error: unknown) => {
       if (!stopped) console.error("Could not load data from the server", error);
     };
-    void loadApiPeople()
-      .then(() => (stopped ? undefined : refreshApiLeave()))
-      .catch(report);
-    void refreshApiNotifications().catch(report);
+    // The home needs the directory, leave and notifications; module data (benefits, rosters, talent…) waits
+    // until these are in, then loads in the background a few at a time (client.ts sessionLoad).
+    const people = loadApiPeople();
+    // Leave is fetched alongside the directory and read once the names are in.
+    const leave = refreshApiLeave(people).then(() => undefined);
+    const notifications = refreshApiNotifications();
+    void people.catch(report);
+    void leave.catch(report);
+    void notifications.catch(report);
+    void Promise.allSettled([leave, notifications]).then(() => {
+      if (!stopped) releaseSessionLoads();
+    });
     const timer = window.setInterval(() => {
       void refreshApiNotifications().catch(report);
       void refreshApiLeave().catch(report);

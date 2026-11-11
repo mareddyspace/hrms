@@ -4,7 +4,7 @@
  */
 import { getPerson } from "../data/peopleLocal.ts";
 import { TIMEZ_COUNTRIES } from "../model.ts";
-import { API_URL, ApiError, apiRequest } from "./client.ts";
+import { API_URL, ApiError, apiRequest, invalidateApiCache } from "./client.ts";
 
 export type Outcome = string | null;
 
@@ -98,6 +98,7 @@ export async function authorizedFetch(path: string, init: RequestInit = {}): Pro
   } catch {
     throw new ApiError(0, "The server is starting up. Try again in about 30 seconds.");
   }
+  if ((init.method ?? "GET") !== "GET") invalidateApiCache();
   if (!res.ok) throw await errorFrom(res);
   return res;
 }

@@ -3,7 +3,7 @@
  * See backend/app/routers/shifts.py.
  */
 import { addDaysISO, todayISO } from "../model.ts";
-import { ApiError, api, type MeOut } from "./client.ts";
+import { ApiError, api, apiSessionMe } from "./client.ts";
 import { apiPut } from "./syncShared.ts";
 import type {
   CompOffCredit,
@@ -240,7 +240,7 @@ export async function loadRosterWeek(managerId: string, weekStart: string, names
 }
 
 export async function loadApiShifts(accountId: string, names: (id: string) => string, extraWeeks: string[] = []): Promise<ApiShiftData> {
-  const me = (await api.get<MeOut>("/auth/me")).employee_id ?? accountId;
+  const me = (await apiSessionMe()).employee_id ?? accountId;
   const weeks = [...new Set([...defaultWeeks(), ...extraWeeks])];
   const [types, mine, swapsMine, swapsToDecide, coverage, rosters, compOff] = await Promise.all([
     api.get<ShiftTypeOut[]>("/shifts/types"),

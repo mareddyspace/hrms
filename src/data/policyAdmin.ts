@@ -7,7 +7,7 @@
  * the window regains focus and every minute.
  * Browser-only mode: a localStorage store shared by the demo sign-ins (other tabs follow via the storage event).
  */
-import { API_ENABLED, api, apiRequest, onApiSession } from "../api/client.ts";
+import { API_ENABLED, api, apiRequest, onApiSession, sessionLoad } from "../api/client.ts";
 import { pushPersonTaskAlert } from "./collabLocal.ts";
 import { getPerson } from "./peopleLocal.ts";
 import type { Policy, PolicyCategory, PolicySection } from "./policyLibrary.ts";
@@ -292,8 +292,9 @@ if (API_ENABLED) {
     apiAccount = accountId;
     state = { policies: [], loaded: false, error: null };
     emit();
-    if (accountId) void reloadPolicies();
   });
+  // Loaded with the other module data once the home is shown.
+  sessionLoad(() => reloadPolicies());
   if (typeof window !== "undefined") {
     window.addEventListener("focus", () => void reloadPolicies());
     window.setInterval(() => {

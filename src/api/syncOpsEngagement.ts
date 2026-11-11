@@ -3,7 +3,7 @@
  * Maps backend/app/routers/engagement.py shapes into the stores' own shapes.
  */
 import { TIMEZ_COUNTRIES } from "../model.ts";
-import { api, type MeOut } from "./client.ts";
+import { api, apiSessionMe } from "./client.ts";
 import type {
   ApiSurveyResults,
   EngagementPoint,
@@ -131,7 +131,7 @@ function toResults(survey: Survey, r: ResultsApi): ApiSurveyResults {
 }
 
 export async function loadApiSurveys(accountId: string): Promise<SurveyState> {
-  const [me, rows] = await Promise.all([api.get<MeOut>("/auth/me"), api.get<SurveyApi[]>("/surveys")]);
+  const [me, rows] = await Promise.all([apiSessionMe(), api.get<SurveyApi[]>("/surveys")]);
   const who = me.employee_id ?? accountId;
   const surveys = rows.map(toSurvey);
   const responded: Record<string, string[]> = {};
@@ -271,7 +271,7 @@ function toRedemption(r: RedemptionApi, nameOf: (id: string) => string | undefin
 }
 
 export async function loadApiRecognition(accountId: string, praiseLikes: Record<string, string[]>): Promise<RecognitionState> {
-  const me = await api.get<MeOut>("/auth/me");
+  const me = await apiSessionMe();
   const who = me.employee_id ?? accountId;
   const hr = HR_ROLES.has(me.role);
   const [kudos, points, rewards, mine, all] = await Promise.all([

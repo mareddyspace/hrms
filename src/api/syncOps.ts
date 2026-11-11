@@ -5,7 +5,7 @@
  * API session starts, reloads after each change, and empties on sign-out. Stores read the mirror instead of
  * their browser copy when API_ENABLED; with the backend off nothing here runs.
  */
-import { API_ENABLED, ApiError, apiSessionAccount, onApiSession } from "./client.ts";
+import { API_ENABLED, ApiError, apiSessionAccount, notifyLoaded, onApiSession, sessionLoad, type SessionLoad } from "./client.ts";
 
 export { API_ENABLED };
 
@@ -44,30 +44,31 @@ export function createApiMirror<T>(empty: () => T, load: (accountId: string) => 
       state = next;
       isLoaded = true;
       error = null;
-      emit();
+      notifyLoaded(emit);
     } catch (e) {
       if (mine !== seq) return;
       error = errorText(e);
       console.warn("API load failed", e);
-      emit();
+      notifyLoaded(emit);
     }
   }
 
+  // Loads after the home is shown (background queue), or straight away when a page that shows it subscribes.
+  let loader: SessionLoad | null = null;
   if (API_ENABLED) {
     // Deferred so stores finish initialising before the first load.
-    queueMicrotask(() =>
+    queueMicrotask(() => {
+      loader = sessionLoad(() => reload());
       onApiSession((account) => {
-        if (account) {
-          void reload();
-        } else {
+        if (!account) {
           seq += 1;
           state = empty();
           isLoaded = false;
           error = null;
           emit();
         }
-      }),
-    );
+      });
+    });
   }
 
   return {
@@ -75,6 +76,7 @@ export function createApiMirror<T>(empty: () => T, load: (accountId: string) => 
     loaded: () => isLoaded,
     subscribe(listener) {
       listeners.add(listener);
+      loader?.now();
       return () => {
         listeners.delete(listener);
       };

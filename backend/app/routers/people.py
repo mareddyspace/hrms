@@ -56,7 +56,7 @@ def list_people(
     status: Annotated[str | None, Query(description="Employment status, e.g. Active")] = None,
     scope: Annotated[str, Query(pattern="^(directory|mine)$", description="mine = only people whose full record you may see")] = "directory",
     page: Annotated[int, Query(ge=1, le=10_000)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    page_size: Annotated[int, Query(ge=1, le=1000)] = 50,  # the portal loads the whole directory in one request
 ) -> Page[PersonBasicOut | PersonFullOut]:
     manager = aliased(Employee)
     conditions = [_directory_filter(user)]

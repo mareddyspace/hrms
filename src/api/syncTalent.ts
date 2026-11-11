@@ -29,7 +29,7 @@ import { listPeople, subscribePeople, usingApiPeople } from "../data/peopleLocal
 import { TIMEZ_COUNTRIES } from "../model.ts";
 import type { CvFields } from "../features/ai/cvReader.ts";
 import type { MatchResult } from "../features/ai/candidateMatch.ts";
-import { API_ENABLED, API_URL, ApiError, api, apiRequest, apiSessionAccount, onApiSession } from "./client.ts";
+import { API_ENABLED, API_URL, ApiError, api, apiRequest, apiSessionAccount, invalidateApiCache, notifyLoaded, onApiSession, sessionLoad, type SessionLoad } from "./client.ts";
 import { loadInstances, nameOf, stepsFromInstance, type ApprovalInstanceOut } from "./syncShared.ts";
 import { keepFresh } from "./syncShare.ts";
 
@@ -59,23 +59,25 @@ export function createTalentMirror<T>(empty: () => T, load: (accountId: string) 
       if (mine !== seq || apiSessionAccount() !== account) return;
       value = next;
       isLoaded = true;
-      emit();
+      notifyLoaded(emit);
     } catch (error) {
       console.warn("Could not load talent data from the server", error);
     }
   }
+  // Loads after the home is shown (background queue), or straight away when a page that shows it subscribes.
+  let loader: SessionLoad | null = null;
   if (API_ENABLED) {
-    queueMicrotask(() =>
+    queueMicrotask(() => {
+      loader = sessionLoad(() => reload());
       onApiSession((account) => {
-        if (account) void reload();
-        else {
+        if (!account) {
           seq += 1;
           value = empty();
           isLoaded = false;
           emit();
         }
-      }),
-    );
+      });
+    });
     // New careers applications, approvals and offers made by others show up without a full page reload.
     keepFresh(reload, 120_000);
   }
@@ -84,6 +86,7 @@ export function createTalentMirror<T>(empty: () => T, load: (accountId: string) 
     loaded: () => isLoaded,
     subscribe(fn) {
       listeners.add(fn);
+      loader?.now();
       return () => {
         listeners.delete(fn);
       };
@@ -1017,6 +1020,7 @@ async function rawFetch(path: string, init: RequestInit): Promise<Response> {
     if (error instanceof ApiError) throw error;
     throw new ApiError(0, "The server is starting up. Try again in about 30 seconds.");
   }
+  if ((init.method ?? "GET") !== "GET") invalidateApiCache();
   if (!res.ok) {
     let message = res.status === 413 ? "The file is larger than 5 MB." : "That didn't work. Try again.";
     try {

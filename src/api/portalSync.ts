@@ -10,6 +10,7 @@ import { TIMEZ_COUNTRIES } from "../model.ts";
 import type { LeaveCode, LeaveRequest, LeaveRow, RequestStatus } from "../model.ts";
 import {
   api,
+  ApiError,
   type LeaveBalancesOut,
   type LeavePolicyOut,
   type LeaveRequestOut,
@@ -23,6 +24,8 @@ import { downloadBlob, uploadRaw } from "./syncShared.ts";
 /* ───────── People ───────── */
 
 const PAGE_SIZE = 200;
+/** Whole directory in one request (the server allows up to 1000 a page). */
+const BIG_PAGE = 1000;
 
 /** People whose personal details this user may reveal (API can_reveal). Mobile, personal email, DOB arrive masked. */
 const apiRevealIds = new Set<string>();
@@ -116,13 +119,24 @@ function toPerson(p: PersonOut): PersonRecord {
 
 /** Loads the whole directory (all pages) into the portal's people list. */
 export async function loadApiPeople(): Promise<number> {
-  const items: PersonOut[] = [];
-  let page = 1;
-  for (;;) {
-    const res = await api.get<Page<PersonOut>>("/people", { page, page_size: PAGE_SIZE });
-    items.push(...res.items);
-    if (res.items.length < PAGE_SIZE || items.length >= res.total) break;
-    page += 1;
+  // One request for the whole directory (one round trip on a slow connection). A server that still caps pages
+  // at 200 refuses that, so fall back to 200 a page: the first page says how many there are, the rest side by side.
+  let size = BIG_PAGE;
+  let first: Page<PersonOut>;
+  try {
+    first = await api.get<Page<PersonOut>>("/people", { page: 1, page_size: size });
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 422) throw error;
+    size = PAGE_SIZE;
+    first = await api.get<Page<PersonOut>>("/people", { page: 1, page_size: size });
+  }
+  const items: PersonOut[] = [...first.items];
+  if (first.items.length >= size && first.total > first.items.length) {
+    const pages = Math.ceil(first.total / size);
+    const rest = await Promise.all(
+      Array.from({ length: pages - 1 }, (_, i) => api.get<Page<PersonOut>>("/people", { page: i + 2, page_size: size })),
+    );
+    for (const res of rest) items.push(...res.items);
   }
   apiRevealIds.clear();
   for (const p of items) if (p.view === "full" && p.can_reveal) apiRevealIds.add(p.id);
@@ -188,10 +202,11 @@ function toLeaveRequest(r: LeaveRequestOut & WithApproval & LeaveExtras, nameOf:
 
 const HR_ROLES = new Set(["hr", "hr_admin", "hrbp"]);
 
-/** Requests this user can see, their balances and policies. */
+/** Requests this user can see, their balances and policies. `peopleReady`: names and managers are read after it. */
 export async function loadApiLeave(
   user: { id: string; role: string },
   nameOf: (id: string) => string | undefined,
+  peopleReady?: Promise<unknown>,
 ): Promise<ApiLeaveData> {
   const [all, team, balances, policies] = await Promise.all([
     api.get<(LeaveRequestOut & WithApproval)[]>("/leave/requests", { view: "all", limit: 500 }),
@@ -199,6 +214,7 @@ export async function loadApiLeave(
     api.get<LeaveBalancesOut>("/leave/balances"),
     api.get<LeavePolicyOut[]>("/leave/policies"),
   ]);
+  await peopleReady?.catch(() => undefined);
   const teamIds = new Set(team.map((r) => r.id));
   const isHr = HR_ROLES.has(user.role);
   apiLeaveMeta.clear();
