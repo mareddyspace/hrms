@@ -63,6 +63,7 @@ import {
   PersonalCard,
   ProfileDetailsCards,
   ProfileEditDialog,
+  type ProfileSection,
   VerifyBadge,
   type ProfileEditRights,
 } from "./ProfileDetailsCards.tsx";
@@ -318,6 +319,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   const history = useSyncExternalStore(subscribeLifecycleHistory, getLifecycleHistory, getLifecycleHistory);
   const [hrEditOpen, setHrEditOpen] = useState(false);
   const [profileEditOpen, setProfileEditOpen] = useState(false);
+  const [editSection, setEditSection] = useState<ProfileSection | undefined>(undefined);
   const now = useNow();
   const today = todayISO();
   const [meetOpen, setMeetOpen] = useState(false);
@@ -400,6 +402,9 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
   const rights: ProfileEditRights = { isMe: ownRecord, canHrEdit };
   // One Edit profile for the whole record: yourself, or HR / admin on someone in their scope.
   const canEditProfile = Boolean(person.record) && (ownRecord || canHrEdit);
+  // Each card's own Edit button opens just that section.
+  const editPart = (part: ProfileSection) =>
+    canEditProfile ? () => { setEditSection(part); setProfileEditOpen(true); } : undefined;
 
   const skillsCard: ReactNode =
     isMe && demoProfile.id === person.id ? (
@@ -589,7 +594,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
           </div>
           <div className="profile-actions">
             {canEditProfile && (
-              <button type="button" className="btn" onClick={() => setProfileEditOpen(true)}>
+              <button type="button" className="btn" onClick={() => { setEditSection(undefined); setProfileEditOpen(true); }}>
                 <Pencil size={15} aria-hidden /> Edit profile
               </button>
             )}
@@ -615,8 +620,8 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
       {withRecord && person.record ? (
         <div className="prof-grid">
           <div className="stack">
-            {canSeePersonal && <PersonalCard record={person.record} viewer={demoProfile} rights={rights} />}
-            <EmploymentCard record={person.record} canSeePersonal={canSeePersonal} canSeeWork={access.work} />
+            {canSeePersonal && <PersonalCard record={person.record} viewer={demoProfile} rights={rights} onEdit={editPart("personal")} />}
+            <EmploymentCard record={person.record} canSeePersonal={canSeePersonal} canSeeWork={access.work} onEdit={editPart("work")} />
             {skillsCard}
             {recognitionCard}
           </div>
@@ -627,12 +632,13 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
                 record={person.record}
                 viewer={demoProfile}
                 rights={rights}
+                onEdit={editPart("contact")}
                 extra={links[person.id]?.linkedin || isMe ? <LinkedInInline personId={person.id} url={links[person.id]?.linkedin} editable={isMe} /> : undefined}
               />
             ) : (
               contactCard
             )}
-            {(isMe || access.work) && <BackgroundCard record={person.record} viewer={demoProfile} rights={rights} />}
+            {(isMe || access.work) && <BackgroundCard record={person.record} viewer={demoProfile} rights={rights} onEdit={editPart("background")} />}
             {certificationsCard}
           </div>
         </div>
@@ -797,10 +803,11 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
 
       {profileEditOpen && person.record && (
         <ProfileEditDialog
-          key={person.id}
+          key={`edit-${person.id}`}
           record={person.record}
           viewer={demoProfile}
           isSelf={ownRecord}
+          section={editSection}
           onClose={() => setProfileEditOpen(false)}
           onSaved={(text) => {
             setProfileEditOpen(false);
@@ -819,7 +826,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
 
       {hrEditOpen && person.record && (
         <EmployeeFormDialog
-          key={person.id}
+          key={`job-${person.id}`}
           open
           title="Edit job record"
           initial={person.record}
@@ -841,7 +848,7 @@ export function PersonProfilePage({ personId }: { personId?: string } = {}) {
       )}
 
       <MeetDialog
-        key={person.id}
+        key={`meet-${person.id}`}
         open={meetOpen && !hasLeft}
         onClose={() => setMeetOpen(false)}
         meName={employee.fullName}

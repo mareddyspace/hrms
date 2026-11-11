@@ -6,7 +6,7 @@
  */
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { BadgeCheck, Briefcase, Clock3, GraduationCap, IdCard, ShieldAlert, ShieldCheck, Target } from "lucide-react";
+import { BadgeCheck, Briefcase, Clock3, GraduationCap, IdCard, Pencil, ShieldAlert, ShieldCheck, Target } from "lucide-react";
 import { Card, Dialog, Field, SubmitButton, useAction } from "../components/ui.tsx";
 import {
   NATIONALITIES,
@@ -63,12 +63,12 @@ export type ProfileEditRights = { isMe: boolean; canHrEdit: boolean };
 
 /* ───────────── Personal ───────────── */
 
-export function PersonalCard({ record, viewer, rights }: { record: PersonRecord; viewer: DemoAccount; rights: ProfileEditRights }) {
+export function PersonalCard({ record, viewer, rights, onEdit }: { record: PersonRecord; viewer: DemoAccount; rights: ProfileEditRights; onEdit?: () => void }) {
   const extras = useProfileExtras(record.id);
   const languages = record.spokenLanguages ?? [];
 
   return (
-    <Card title="Personal" className="prof-card">
+    <Card title="Personal" className="prof-card" action={onEdit ? <button type="button" className="btn-ghost btn-tiny" onClick={onEdit}><Pencil size={13} aria-hidden /> Edit</button> : undefined}>
       <dl className="pi-grid two">
         <Fact label="Legal name" value={record.fullName} />
         <Fact label="Preferred name" value={extras.preferredName || record.preferredName} />
@@ -116,7 +116,7 @@ export function PersonalCard({ record, viewer, rights }: { record: PersonRecord;
 /* ───────────── Contact ───────────── */
 
 /** Contact, home address and emergency contact. `extra` adds rows (LinkedIn) under the work email. */
-export function ContactCard({ record, viewer, rights, extra }: { record: PersonRecord; viewer: DemoAccount; rights: ProfileEditRights; extra?: ReactNode }) {
+export function ContactCard({ record, viewer, rights, extra, onEdit }: { record: PersonRecord; viewer: DemoAccount; rights: ProfileEditRights; extra?: ReactNode; onEdit?: () => void }) {
   const { employee } = usePortal();
   const extras = useProfileExtras(record.id);
   const isSelf = rights.isMe;
@@ -140,7 +140,7 @@ export function ContactCard({ record, viewer, rights, extra }: { record: PersonR
       : undefined;
 
   return (
-    <Card title="Contact" className="prof-card">
+    <Card title="Contact" className="prof-card" action={onEdit ? <button type="button" className="btn-ghost btn-tiny" onClick={onEdit}><Pencil size={13} aria-hidden /> Edit</button> : undefined}>
       <dl className="pi-grid two">
         <Fact label="Work email" wide value={<a href={`mailto:${record.email}`}>{record.email}</a>} />
         {extra && <Fact label="LinkedIn" wide value={extra} />}
@@ -182,18 +182,21 @@ export function EmploymentCard({
   record,
   canSeePersonal,
   canSeeWork,
+  onEdit,
 }: {
   record: PersonRecord;
   viewer?: DemoAccount;
   rights?: ProfileEditRights;
   canSeePersonal: boolean;
   canSeeWork: boolean;
+  /** Edits the work arrangement (job, department and manager stay with HR's job record). */
+  onEdit?: () => void;
 }) {
   const today = todayISO();
   const showHiring = canSeePersonal || canSeeWork;
 
   return (
-    <Card title="Employment" className="prof-card">
+    <Card title="Employment" className="prof-card" action={onEdit ? <button type="button" className="btn-ghost btn-tiny" onClick={onEdit}><Pencil size={13} aria-hidden /> Edit</button> : undefined}>
       <dl className="pi-grid two">
         <Fact label="Job title" value={record.designation} />
         <Fact label="Department" value={record.department} />
@@ -259,7 +262,7 @@ const CHECK_LABEL: Partial<Record<CheckType, string>> = { Identity: "ID check", 
  * Education and previous jobs with their background-verification status (vendor, when), plus the ID and other
  * checks. Check details: the person and HR. Managers above see the education and job history only.
  */
-export function BackgroundCard({ record, viewer, rights }: { record: PersonRecord; viewer: DemoAccount; rights: ProfileEditRights }) {
+export function BackgroundCard({ record, viewer, rights, onEdit }: { record: PersonRecord; viewer: DemoAccount; rights: ProfileEditRights; onEdit?: () => void }) {
   const bgv = useSyncExternalStore(subscribeBgv, getBgvState, getBgvState);
   const people = useSyncExternalStore(subscribePeople, listPeople, listPeople);
   // Saved verification, or the default file everyone has from joining.
@@ -276,7 +279,7 @@ export function BackgroundCard({ record, viewer, rights }: { record: PersonRecor
   const experience = record.experience ?? [];
 
   return (
-    <Card title="Background & verification" className="prof-card bgv-card">
+    <Card title="Background & verification" className="prof-card bgv-card" action={onEdit ? <button type="button" className="btn-ghost btn-tiny" onClick={onEdit}><Pencil size={13} aria-hidden /> Edit</button> : undefined}>
       {showChecks && (
         <div className="bgv-summary">
           <span className="bgv-summary-icon" aria-hidden>
@@ -578,6 +581,14 @@ const brief = (value: unknown): string => {
  * profile saves directly through PATCH /people/me (with a code when a personal detail changes); HR / admin in
  * scope save someone else's through PATCH /people/{id}. Job fields are HR-only: `onEditJob` (HR) opens that form.
  */
+export type ProfileSection = "personal" | "contact" | "work" | "background";
+const SECTION_TITLE: Record<ProfileSection, string> = {
+  personal: "personal details",
+  contact: "contact details",
+  work: "work arrangement",
+  background: "background",
+};
+
 export function ProfileEditDialog({
   record,
   viewer,
@@ -585,6 +596,7 @@ export function ProfileEditDialog({
   onClose,
   onSaved,
   onEditJob,
+  section,
 }: {
   record: PersonRecord;
   viewer: DemoAccount;
@@ -592,7 +604,10 @@ export function ProfileEditDialog({
   onClose: () => void;
   onSaved: (message: string) => void;
   onEditJob?: () => void;
+  /** Edit one section only (the card's own Edit button); all sections when left out. */
+  section?: ProfileSection;
 }) {
+  const show = (part: ProfileSection) => !section || section === part;
   const { employee, updateProfile } = usePortal();
   const [{ form: initial, masked }] = useState(() => startForm(record, isSelf, { mobile: employee.mobile, address: employee.address }));
   const [form, setForm] = useState<ProfileForm>(initial);
@@ -788,13 +803,15 @@ export function ProfileEditDialog({
     return result === true;
   }
 
-  const name = isSelf ? "Edit profile" : `Edit profile · ${record.fullName}`;
+  const what = section ? SECTION_TITLE[section] : "profile";
+  const name = isSelf ? `Edit ${what}` : `Edit ${what} · ${record.fullName}`;
 
   return (
     <>
       <Dialog open wide title={name} onClose={onClose}>
         <form className="stack prof-edit-form" onSubmit={saveAction.submit(submit, { success: "Profile saved." })}>
-          <h3 className="profile-subhead">Personal</h3>
+          {show("personal") && (<>
+          {!section && <h3 className="profile-subhead">Personal</h3>}
           <div className="form-grid-2">
             <Field label="First name" required>
               <input value={form.firstName} maxLength={100} onChange={text("firstName")} />
@@ -873,8 +890,10 @@ export function ProfileEditDialog({
               <span className="note">{photo ? "New photo ready to save." : "JPEG, PNG or WebP, up to 5 MB."}</span>
             </Field>
           )}
+          </>)}
 
-          <h3 className="profile-subhead">Contact</h3>
+          {show("contact") && (<>
+          {!section && <h3 className="profile-subhead">Contact</h3>}
           <div className="form-grid-2">
             <Field label="Personal email">
               <input type="email" value={form.personalEmail} maxLength={255} onChange={text("personalEmail")} placeholder={unchanged("personalEmail")} />
@@ -912,8 +931,10 @@ export function ProfileEditDialog({
               <input type="tel" inputMode="tel" value={form.emergencyPhone} maxLength={32} onChange={text("emergencyPhone")} placeholder={unchanged("emergencyPhone")} />
             </Field>
           </div>
+          </>)}
 
-          <h3 className="profile-subhead">Work arrangement</h3>
+          {show("work") && (<>
+          {!section && <h3 className="profile-subhead">Work arrangement</h3>}
           <div className="form-grid-2">
             <Field label="Work arrangement">
               <select value={form.workArrangement} onChange={text("workArrangement")}>
@@ -924,15 +945,16 @@ export function ProfileEditDialog({
               </select>
             </Field>
           </div>
+          </>)}
 
-          <BackgroundFields
+          {show("background") && <BackgroundFields
             education={form.education}
             experience={form.experience}
             careerGoals={form.careerGoals}
             setEducation={(next) => set("education", next)}
             setExperience={(next) => set("experience", next)}
             setCareerGoals={(next) => set("careerGoals", next)}
-          />
+          />}
 
           {isSelf ? (
             <p className="note">Job title, department, manager and grade are kept by HR.</p>
