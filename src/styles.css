@@ -4400,9 +4400,16 @@ html[data-theme="night"] .orgchart-you {
   color: inherit;
   text-decoration: none;
 }
-.profile-chip img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
-.profile-chip strong { display: block; font-size: var(--text-sm); line-height: 1.2; }
-.profile-chip small { display: block; font-size: var(--text-xs); color: var(--muted); }
+.profile-chip img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex: none; }
+.profile-chip > span { min-width: 0; max-width: 150px; text-align: left; }
+/* The top bar never runs past the screen edge: the search box gives way first, the right-hand group keeps its size. */
+.topbar { min-width: 0; }
+.topbar .topbar-search { flex: 1 1 220px; min-width: 140px; max-width: 320px; }
+.topbar .top-actions { flex: none; }
+.profile-chip strong,
+.profile-chip small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.profile-chip strong { font-size: var(--text-sm); line-height: 1.2; }
+.profile-chip small { font-size: var(--text-xs); line-height: 1.25; color: var(--muted); }
 .main { flex: 1; min-height: 0; overflow: auto; padding: 20px 24px 32px; }
 .page-chrome { margin-bottom: 16px; }
 .breadcrumbs {
@@ -6688,3 +6695,16 @@ html[data-theme="night"] .btn.action-btn.is-done { color: #04241a; }
   .topbar-search { flex: 1 1 0; }
   .top-actions { flex: 1 1 100%; justify-content: flex-end; }
 }
+
+/* Header profile menu: the chip is the button (no second frame around it), same 36px height as the icons beside it. */
+.btn-ghost:has(> .profile-chip) {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  min-height: 0;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+}
+.btn-ghost:has(> .profile-chip):hover .profile-chip { border-color: var(--accent); }
+.btn-ghost:has(> .profile-chip) .profile-chip { height: 36px; box-sizing: border-box; padding: 3px 10px 3px 3px; }
