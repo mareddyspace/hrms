@@ -186,7 +186,7 @@ export function LoginPage() {
         <div className="login-layout">
           <form className="login-card" onSubmit={signInAction.submit(onSubmit)} noValidate>
             <span className="mark" aria-hidden>
-              TZ
+              BH
             </span>
             <h1>{COMPANY_NAME}</h1>
             <p className="lede">{PRODUCT_TAGLINE}</p>
@@ -312,7 +312,7 @@ export function LoginPage() {
       ) : (
         <form className="login-card" onSubmit={resetAction.submit(onReset, { success: "Password updated." })}>
           <span className="mark" aria-hidden>
-            TZ
+            BH
           </span>
           <h1>Forgot password</h1>
           <div className="stack">

@@ -305,7 +305,7 @@ function ProfileChange({ action }: { action: Extract<CopilotAction, { kind: "pro
     });
   }
 
-  // A mobile or address change is confirmed with a code sent to your TimeZ inbox (ProfileCodeDialog).
+  // A mobile or address change is confirmed with a code sent to your Bellora HRMS inbox (ProfileCodeDialog).
   async function confirm() {
     const next = value.trim();
     if (!next) return fail(`Enter the ${isMobile ? "new number" : "new address"}.`);

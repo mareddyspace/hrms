@@ -128,7 +128,7 @@ export class PdfDoc {
     objects[2] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
     objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
     objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
-    objects[5] = `<< /Title (${esc(this.title)}) /Producer (TimeZ HRMS) /Creator (TimeZ HRMS) >>`;
+    objects[5] = `<< /Title (${esc(this.title)}) /Producer (Bellora HRMS) /Creator (Bellora HRMS) >>`;
     let out = "%PDF-1.4\n%\xe2\xe3\xcf\xd3\n";
     const offsets: number[] = [];
     for (let id = 1; id < objects.length; id += 1) {

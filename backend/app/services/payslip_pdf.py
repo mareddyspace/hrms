@@ -48,7 +48,7 @@ def _table(rows: list[list[str]], widths: list[Any], bold_last: bool = False, he
 def _letterhead(entity: str, country: str, s: dict[str, Any]) -> list[Any]:
     from reportlab.platypus import HRFlowable, Paragraph
 
-    return [Paragraph("TimeZ", s["head"]),
+    return [Paragraph("Bellora HRMS", s["head"]),
             Paragraph(f"{escape(entity)} · {escape(ENTITY_ADDRESS.get(country, ENTITY_ADDRESS['IN']))}", s["small"]),
             HRFlowable(width="100%", thickness=1.5, color=s["navy"], spaceBefore=4, spaceAfter=8)]
 
@@ -123,7 +123,7 @@ def plan_pdf(*, plan: Any, eligibility: list[str], country_name: str) -> bytes:
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
     s = _styles()
-    entity = plan.legal_entity or f"All TimeZ entities in {country_name}"
+    entity = plan.legal_entity or f"All Bellora HRMS entities in {country_name}"
     story: list[Any] = _letterhead(entity, plan.country_code, s)
     story.append(Paragraph(f"{escape(plan.name)} · plan summary", s["h1"]))
     facts = [["Plan type", plan.plan_type], ["Provider", plan.provider], ["Country", country_name],
@@ -146,5 +146,5 @@ def plan_pdf(*, plan: Any, eligibility: list[str], country_name: str) -> bytes:
     story += [Spacer(1, 14), Paragraph("Summary for information. The provider's policy wording prevails.", s["small"])]
     buf = io.BytesIO()
     SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=16 * mm, bottomMargin=16 * mm,
-                      title=f"{plan.name} plan summary", author="TimeZ", subject="Benefit plan").build(story)
+                      title=f"{plan.name} plan summary", author="Bellora HRMS", subject="Benefit plan").build(story)
     return buf.getvalue()

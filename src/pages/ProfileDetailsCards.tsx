@@ -1,7 +1,7 @@
 /**
  * The profile's detail cards (Personal, Contact, Employment, Background & verification) are read-only. Changes go
  * through one "Edit profile" dialog (ProfileEditDialog) opened from the profile header: your own profile saves
- * directly (with a code from your TimeZ inbox for personal details), and HR / admin in scope edit someone else's
+ * directly (with a code from your Bellora HRMS inbox for personal details), and HR / admin in scope edit someone else's
  * directly. Job title, department, manager and grade stay HR-only and are not in the dialog for yourself.
  */
 import { useState, useSyncExternalStore, type ReactNode } from "react";
@@ -559,7 +559,7 @@ const LABEL: Record<keyof ProfileForm, string> = {
 
 /** Kept out of the browser audit trail as values. */
 const SENSITIVE = new Set<keyof ProfileForm>(["dateOfBirth", "personalEmail", "mobile", "address", "addressLine", "addressPostcode", "emergencyPhone"]);
-/** Personal details that need a code from your TimeZ inbox (local mode; the server decides in backend mode). */
+/** Personal details that need a code from your Bellora HRMS inbox (local mode; the server decides in backend mode). */
 const CODE_FIELDS = new Set<keyof ProfileForm>([
   "firstName", "middleName", "lastName", "preferredName", "dateOfBirth", "preferredLanguage", "languages",
   "personalEmail", "mobile", "address", "emergencyName", "emergencyRelationship", "emergencyPhone",

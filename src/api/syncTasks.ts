@@ -119,7 +119,7 @@ export function pushTaskChanges(tasks: Task[]): void {
 
 const FILE_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"];
 const MAX_FILE = 5 * 1024 * 1024;
-const OFFLINE = "Files can be attached when TimeZ is connected to the server.";
+const OFFLINE = "Files can be attached when Bellora HRMS is connected to the server.";
 
 /** Checks a file before it is sent; null when it can be uploaded. */
 export function checkWorkFile(file: File): string | null {

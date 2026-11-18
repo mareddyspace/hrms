@@ -72,7 +72,7 @@ function declared(code: CountryCode, options: TaxOptions, sections: string[], ca
 /* ── India · FY 2026-27 · Finance Act 2025 slabs (new regime default, 87A rebate to ₹12L), old regime unchanged ── */
 const IN_NEW: Band[] = [[400000, 0], [800000, 0.05], [1200000, 0.1], [1600000, 0.15], [2000000, 0.2], [2400000, 0.25], [Infinity, 0.3]];
 const IN_OLD: Band[] = [[250000, 0], [500000, 0.05], [1000000, 0.2], [Infinity, 0.3]];
-/** PF: 12% of basic from the employee, matched by the employer (on full basic, as TimeZ does). */
+/** PF: 12% of basic from the employee, matched by the employer (on full basic, as Bellora HRMS does). */
 const IN_PF_RATE = 0.12;
 /** Professional tax (Karnataka): ₹200 a month. */
 const IN_PT_YEAR = 2400;

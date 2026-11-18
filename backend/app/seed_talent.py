@@ -122,12 +122,12 @@ GOALS = [
 
 # id, title, provider, category, hours, mandatory, audience, skills
 COURSES = [
-    ("crs-1", "Workplace safety", "TimeZ Academy", "Compliance", 1, True, "All", []),
-    ("crs-2", "Secure coding fundamentals", "TimeZ Academy", "Engineering", 4, True, "Engineering", ["TypeScript", "System design"]),
-    ("crs-3", "Manager essentials", "TimeZ Academy", "Leadership", 6, False, "Managers", ["People leadership"]),
-    ("crs-4", "Inclusive hiring", "TimeZ Academy", "People", 2, False, "Hiring", ["Recruiting"]),
+    ("crs-1", "Workplace safety", "Bellora HRMS Academy", "Compliance", 1, True, "All", []),
+    ("crs-2", "Secure coding fundamentals", "Bellora HRMS Academy", "Engineering", 4, True, "Engineering", ["TypeScript", "System design"]),
+    ("crs-3", "Manager essentials", "Bellora HRMS Academy", "Leadership", 6, False, "Managers", ["People leadership"]),
+    ("crs-4", "Inclusive hiring", "Bellora HRMS Academy", "People", 2, False, "Hiring", ["Recruiting"]),
     ("crs-5", "React performance patterns", "Frontend Masters", "Engineering", 3, False, "Engineering", ["React"]),
-    ("crs-6", "Data privacy basics", "TimeZ Academy", "Compliance", 1.5, True, "All", []),
+    ("crs-6", "Data privacy basics", "Bellora HRMS Academy", "Compliance", 1.5, True, "All", []),
     ("crs-7", "Cloud architecture foundations", "AWS Skill Builder", "Engineering", 5, False, "Engineering",
      ["Cloud architecture", "System design"]),
     ("crs-8", "Employee relations essentials", "CIPD", "People", 3, False, "All", ["Employee relations"]),
@@ -216,7 +216,7 @@ POSTINGS: list[tuple[str, str, str]] = [
 ]
 
 POSTINGS += [
-    ("JOB-235", "post-seed-235", "Build and run the data pipelines behind TimeZ people analytics in Hyderabad. "
+    ("JOB-235", "post-seed-235", "Build and run the data pipelines behind Bellora HRMS people analytics in Hyderabad. "
      "Python, SQL and Airflow every day; cloud data warehouses a plus."),
     ("JOB-238", "post-seed-238", "Look after a portfolio of UK customers from onboarding to renewal. "
      "You will be their trusted contact and work closely with product and support."),

@@ -1,8 +1,8 @@
-"""Security messages to a person's in-portal inbox, sent as "TimeZ Security" (verification codes and the like).
+"""Security messages to a person's in-portal inbox, sent as "Bellora HRMS Security" (verification codes and the like).
 
 deliver_security_mail is the one place that decides delivery:
 - With the shared Mail store (app/models/sharing.py: mail_messages / mail_recipients), the message lands in the
-  person's TimeZ Mail inbox from "TimeZ Security", plus a bell note pointing at it. Returns "/mail?thread=…".
+  person's Bellora HRMS Mail inbox from "Bellora HRMS Security", plus a bell note pointing at it. Returns "/mail?thread=…".
 - Without it (older schema), it falls back to a notification that carries the code. Returns "/notifications".
 No email is queued here; callers queue their own outbox row.
 """
@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.db import utcnow
 from app.services.activity import notify
 
-SENDER = "TimeZ Security"
+SENDER = "Bellora HRMS Security"
 SENDER_ID = "timez-security"
 
 try:  # the shared Mail store; absent on older schemas

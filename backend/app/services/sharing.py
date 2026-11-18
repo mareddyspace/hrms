@@ -133,7 +133,7 @@ _TASKS: list[dict[str, Any]] = [
 ]
 
 _ANNOUNCEMENTS: list[dict[str, Any]] = [
-    {"id": "an-1", "title": "Q4 All-hands", "scope": "Company", "audience": "All TimeZ", "state": "Published",
+    {"id": "an-1", "title": "Q4 All-hands", "scope": "Company", "audience": "All Bellora HRMS", "state": "Published",
      "published_at": "2026-10-08T10:00:00Z", "author_id": None, "author_name": "Internal Comms",
      "body": "Join the global all-hands on 22 Oct. Agenda covers roadmap, hiring, and wellbeing resources."},
     {"id": "an-2", "title": "India Dussehra holiday calendar", "scope": "Country", "audience": "IN",
@@ -143,7 +143,7 @@ _ANNOUNCEMENTS: list[dict[str, Any]] = [
     {"id": "an-3", "title": "Engineering on-call rotation update", "scope": "Department", "audience": "Engineering",
      "state": "Published", "published_at": "2026-10-11T12:00:00Z", "author_id": RAM, "author_name": "Ram Krishnan",
      "body": "New rotation starts 20 Oct. Managers: update the wiki before Friday."},
-    {"id": "an-5", "title": "Updated code of conduct", "scope": "Company", "audience": "All TimeZ",
+    {"id": "an-5", "title": "Updated code of conduct", "scope": "Company", "audience": "All Bellora HRMS",
      "state": "Published", "published_at": "2026-10-28T09:00:00Z", "author_id": FARHAN, "author_name": "Farhan Ali",
      "must_acknowledge": True,
      "body": "The code of conduct now covers client data on personal devices. Read it and acknowledge by 7 Nov."},

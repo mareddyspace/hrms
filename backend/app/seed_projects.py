@@ -34,7 +34,7 @@ DETAILS: dict[str, tuple[str, str, str | None, float, str, float, str]] = {
     "p-maple": ("Patient portal for Maple clinics: appointments, reports and secure messages with doctors.",
                 "2026-02-02", "2027-03-26", 1600, "Full-stack developer", 240,
                 "Lab report viewer and downloads, appointment reminders."),
-    "prj-hrms": ("The TimeZ HRMS portal itself: leave, time, pay and people modules.", "2026-01-05", "2026-12-31", 1200,
+    "prj-hrms": ("The Bellora HRMS portal itself: leave, time, pay and people modules.", "2026-01-05", "2026-12-31", 1200,
                  "Developer", 200, "Roster and holiday screens, timesheet review."),
     "prj-internal": ("Meetings, training, hiring interviews and admin time.", "2026-01-01", "2026-12-31", 600,
                      "Member", 160, "Team meetings, training and interviews."),

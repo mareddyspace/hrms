@@ -48,7 +48,7 @@ def test_seeded_templates_are_scoped_and_idempotent():
         assert len(default) == 10 and default["hr_docs"]["title"] == "HR documentation"
         assert default["first_week_review"]["depends_on"] == ["orientation", "team_intro"]
         assert all(t["owner_role"] in {"hr", "it", "manager", "employee"} for t in default.values())
-        india = {t["key"]: t for t in template_for(db, "IN", "TimeZ India Pvt Ltd", "Contract")}
+        india = {t["key"]: t for t in template_for(db, "IN", "Bellora HRMS India Pvt Ltd", "Contract")}
         assert "PAN" in india["hr_docs"]["title"]  # country row
         assert "POSH" in india["policy_training"]["title"]  # legal entity row
         assert "contractor" in india["mandatory_learning"]["title"]  # employment type row

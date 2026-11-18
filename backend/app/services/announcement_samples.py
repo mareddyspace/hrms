@@ -26,31 +26,31 @@ def _a(aid: str, title: str, category: str, scope: str, audience: str, at: str, 
 
 
 SAMPLES: list[dict[str, Any]] = [
-    _a("an-ceo-q3", "A note from Jordan: Q3 results and the road to 2027", "Leadership", "Company", "All TimeZ",
+    _a("an-ceo-q3", "A note from Jordan: Q3 results and the road to 2027", "Leadership", "Company", "All Bellora HRMS",
        "2026-10-29T08:00:00Z", JORDAN, "Jordan Blake",
        "Team,\n\nQ3 closed at 112% of plan, led by the Northwind and Maple programmes. Thank you for the long weeks "
        "around the October releases.\n\nFor Q4 our focus is simple: ship the clinic portal on time, keep client "
        "escalations under 48 hours and finish the hiring plan for Bengaluru and Austin.\n\nI'll take questions at the "
        "all-hands on 12 November.\n\nJordan", pinned=True),
-    _a("an-it-maint-nov8", "Planned maintenance: VPN and email, Sat 8 Nov", "IT", "Company", "All TimeZ",
+    _a("an-it-maint-nov8", "Planned maintenance: VPN and email, Sat 8 Nov", "IT", "Company", "All Bellora HRMS",
        "2026-10-28T11:00:00Z", ALEX, "Alex Morgan",
        "VPN, email and the portal will be unavailable on Saturday 8 November from 22:00 to 02:00 UTC while we upgrade "
        "the network gateways.\n\nSave your work and sign out before the window. On-call engineers can use the "
        "backup VPN profile (IT portal > Downloads)."),
-    _a("an-it-mfa", "Two-step sign-in required from 15 November", "IT", "Company", "All TimeZ",
+    _a("an-it-mfa", "Two-step sign-in required from 15 November", "IT", "Company", "All Bellora HRMS",
        "2026-10-27T09:30:00Z", ALEX, "Alex Morgan",
        "From 15 November every account needs two-step sign-in (an authenticator app). Set it up under My profile > "
        "Security. Accounts without it are locked after the deadline.", ack=True),
-    _a("an-policy-travel", "Travel and expense policy updated", "Policy", "Company", "All TimeZ",
+    _a("an-policy-travel", "Travel and expense policy updated", "Policy", "Company", "All Bellora HRMS",
        "2026-10-22T06:00:00Z", FARHAN, "Farhan Ali",
        "Changes from 1 November:\n- Book flights at least 14 days ahead unless your manager approves.\n- Hotel caps "
        "updated per city.\n- Submit receipts within 30 days.\n\nRead the full policy under Policies and acknowledge "
        "below.", ack=True),
-    _a("an-joiners-oct", "Welcome to our October joiners", "People", "Company", "All TimeZ",
+    _a("an-joiners-oct", "Welcome to our October joiners", "People", "Company", "All Bellora HRMS",
        "2026-10-20T07:00:00Z", FARHAN, "Farhan Ali",
        "Please welcome 14 new colleagues who joined in October across Engineering, Sales and Customer Success, "
        "including Diya Patel (Engineering, Bengaluru) and Marcus Lee (Sales, Austin). Say hello on Messages."),
-    _a("an-wellness-nov", "Wellbeing week: free counselling and fitness sessions", "Wellness", "Company", "All TimeZ",
+    _a("an-wellness-nov", "Wellbeing week: free counselling and fitness sessions", "Wellness", "Company", "All Bellora HRMS",
        "2026-10-24T05:00:00Z", FARHAN, "Farhan Ali",
        "From 10 to 14 November: confidential counselling slots, desk-yoga at lunch and a step challenge. Book "
        "counselling through the Employee Assistance Programme; it is free and private."),

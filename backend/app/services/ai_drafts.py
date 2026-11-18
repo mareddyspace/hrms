@@ -31,7 +31,7 @@ DRAFT_RULES = """Rules:
 - Never mention pay, personal contact details, health or case information.
 - Plain, neutral language. No headings, no tables."""
 
-EMPLOYEE_PROMPT = f"""You write a short draft summary of an employee for the TimeZ HRMS Employee 360 page.
+EMPLOYEE_PROMPT = f"""You write a short draft summary of an employee for the Bellora HRMS Employee 360 page.
 Write 3 to 5 sentences: role and tenure, current goals and learning, skills and career direction when given.
 {DRAFT_RULES}"""
 

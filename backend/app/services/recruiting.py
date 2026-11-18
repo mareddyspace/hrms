@@ -287,7 +287,7 @@ def offer_letter(db: Session, offer: Offer, cand: Candidate, req: Requisition) -
     country = db.get(Country, req.country_code)
     manager = db.get(Employee, req.hiring_manager_id)
     entity = (manager.legal_entity if manager and manager.country_code == req.country_code and manager.legal_entity
-              else f"TimeZ {country.name if country else req.country_code}")
+              else f"Bellora HRMS {country.name if country else req.country_code}")
     fields = {
         "employee_name": cand.name, "employee_code": "", "title": req.title, "department": req.department, "grade": offer.grade,
         "joining_date": offer.start_date.isoformat(), "last_working_day": "", "manager": manager.full_name if manager else "",

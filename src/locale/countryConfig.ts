@@ -53,7 +53,7 @@ export interface CountrySettings {
 const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currency" | "timeZone">> = {
   IN: {
     currencyLocale: "en-IN",
-    legalEntity: "TimeZ India Pvt Ltd",
+    legalEntity: "Bellora HRMS India Pvt Ltd",
     languages: ["en", "hi"],
     holidays: [
       { date: "2026-01-26", name: "Republic Day" },
@@ -84,7 +84,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   US: {
     currencyLocale: "en-US",
-    legalEntity: "TimeZ USA Inc",
+    legalEntity: "Bellora HRMS USA Inc",
     languages: ["en"],
     holidays: [
       { date: "2026-01-01", name: "New Year's Day" },
@@ -115,7 +115,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   GB: {
     currencyLocale: "en-GB",
-    legalEntity: "TimeZ UK Ltd",
+    legalEntity: "Bellora HRMS UK Ltd",
     languages: ["en"],
     holidays: [
       { date: "2026-01-01", name: "New Year's Day" },
@@ -146,7 +146,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   AU: {
     currencyLocale: "en-AU",
-    legalEntity: "TimeZ Australia Pty Ltd",
+    legalEntity: "Bellora HRMS Australia Pty Ltd",
     languages: ["en"],
     holidays: [
       { date: "2026-01-26", name: "Australia Day" },
@@ -172,7 +172,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   CA: {
     currencyLocale: "en-CA",
-    legalEntity: "TimeZ Canada Ltd",
+    legalEntity: "Bellora HRMS Canada Ltd",
     languages: ["en"],
     holidays: [
       { date: "2026-07-01", name: "Canada Day" },
@@ -198,7 +198,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   AE: {
     currencyLocale: "en-AE",
-    legalEntity: "TimeZ UAE LLC",
+    legalEntity: "Bellora HRMS UAE LLC",
     languages: ["en", "ar"],
     holidays: [
       { date: "2026-01-01", name: "New Year's Day" },
@@ -224,7 +224,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   SA: {
     currencyLocale: "ar-SA",
-    legalEntity: "TimeZ Saudi Arabia Ltd",
+    legalEntity: "Bellora HRMS Saudi Arabia Ltd",
     languages: ["en", "ar"],
     holidays: [
       { date: "2026-02-20", name: "Founding Day" },
@@ -249,7 +249,7 @@ const BASE: Record<CountryCode, Omit<CountrySettings, "code" | "name" | "currenc
   },
   DE: {
     currencyLocale: "de-DE",
-    legalEntity: "TimeZ Germany GmbH",
+    legalEntity: "Bellora HRMS Germany GmbH",
     languages: ["en", "de"],
     holidays: [
       { date: "2026-01-01", name: "Neujahr" },

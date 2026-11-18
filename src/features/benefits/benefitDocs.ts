@@ -16,8 +16,8 @@ function localPlanPdf(plan: BenefitPlan): Blob {
   const L = 42;
   const W = 511;
   doc.box(0, 0, 595.28, 60, [0.11, 0.24, 0.43]);
-  doc.text(L, 16, "TimeZ", { size: 18, bold: true, color: [1, 1, 1] });
-  doc.text(L, 38, plan.legalEntity ?? `All TimeZ entities in ${plan.country}`, { size: 9.5, color: [0.86, 0.9, 0.96] });
+  doc.text(L, 16, "Bellora HRMS", { size: 18, bold: true, color: [1, 1, 1] });
+  doc.text(L, 38, plan.legalEntity ?? `All Bellora HRMS entities in ${plan.country}`, { size: 9.5, color: [0.86, 0.9, 0.96] });
   let y = 80;
   doc.text(L, y, `${plan.name} · plan summary`, { size: 15, bold: true });
   y += 28;

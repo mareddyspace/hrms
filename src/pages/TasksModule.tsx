@@ -1201,7 +1201,7 @@ function TaskDrawer({
         <FileList
           files={(t.attachments ?? []).map((a) => ({ id: a.id, name: a.name, size: a.size, at: a.at, by: a.by ? taskPersonById(a.by)?.fullName : undefined }))}
           canAdd={canComment && API_ENABLED}
-          offlineNote={API_ENABLED ? undefined : "Files can be attached when TimeZ is connected to the server."}
+          offlineNote={API_ENABLED ? undefined : "Files can be attached when Bellora HRMS is connected to the server."}
           canRemove={(f) => {
             const a = (t.attachments ?? []).find((x) => x.id === f.id);
             return !!a && (a.by === me || isOwn || isCreator || managesOwner);

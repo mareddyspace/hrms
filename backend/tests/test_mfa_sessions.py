@@ -49,7 +49,7 @@ def test_mfa_setup_login_backup_and_disable(client, mfa_user):
     assert client.get(f"{SEC}/mfa", headers=headers).json()["enabled"] is False
 
     setup = client.post(f"{SEC}/mfa/setup", headers=headers).json()
-    assert setup["otpauth_uri"].startswith("otpauth://totp/") and "TimeZ" in setup["otpauth_uri"]
+    assert setup["otpauth_uri"].startswith("otpauth://totp/") and "Bellora%20HRMS" in setup["otpauth_uri"]
     totp = pyotp.TOTP(setup["secret"])
     assert client.post(f"{SEC}/mfa/enable", headers=headers, json={"code": "000000" if totp.now() != "000000" else "111111"}).status_code == 400
     code = totp.now()

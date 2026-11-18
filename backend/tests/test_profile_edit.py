@@ -53,13 +53,13 @@ def _raw(person_id: str) -> Employee:
 
 def test_excel_fields_and_company_are_returned(client, babu, farhan):
     me = client.get(f"{P}/emp-mahesh", headers=babu).json()
-    assert me["company"] == "TimeZ"
+    assert me["company"] == "Bellora HRMS"
     for key in ("holiday_calendar", "leave_policy_name", "payroll_status", "ai_profile_status"):
         assert key in me
     sample = client.get(f"{P}/TZ0001", headers=farhan).json()
-    assert sample["company"] == "TimeZ" and sample["holiday_calendar"] and sample["leave_policy_name"]
+    assert sample["company"] == "Bellora HRMS" and sample["holiday_calendar"] and sample["leave_policy_name"]
     basic = client.get(f"{P}/TZ0001", headers=babu).json()
-    assert basic["view"] == "basic" and basic["company"] == "TimeZ"
+    assert basic["view"] == "basic" and basic["company"] == "Bellora HRMS"
 
 
 def test_owner_updates_own_profile_masked_and_audited(client, babu, monkeypatch):

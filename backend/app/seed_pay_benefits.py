@@ -62,7 +62,7 @@ def _sample_pdf(text: str) -> bytes:
     c = canvas.Canvas(buf, pagesize=A4)
     c.setFont("Helvetica", 12)
     c.drawString(72, 760, text)
-    c.drawString(72, 740, "Sample proof generated for the TimeZ demo.")
+    c.drawString(72, 740, "Sample proof generated for the Bellora HRMS demo.")
     c.save()
     return buf.getvalue()
 
@@ -75,7 +75,7 @@ def seed(db: Session) -> dict[str, int]:
             plan.coverage, plan.terms = details
             stats["benefit_plan_details"] += 1
         if plan.id == "bp-in-med" and not plan.legal_entity:
-            plan.legal_entity = "TimeZ India Pvt Ltd"
+            plan.legal_entity = "Bellora HRMS India Pvt Ltd"
 
     today = date.today()
     for country in decl.SECTIONS:

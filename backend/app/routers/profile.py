@@ -200,7 +200,7 @@ def update_profile(person_id: str, body: HrProfileUpdateIn, request: Request, db
     if values.get("first_name", "") is None or values.get("last_name", "") is None:
         raise HTTPException(422, "First and last name can't be blank.")
     if "company" in values and not values["company"]:
-        values["company"] = "TimeZ"
+        values["company"] = "Bellora HRMS"
     for name in ("job_title", "department", "location", "grade", "employment_type"):
         if name in values and not (values[name] or "").strip():
             raise HTTPException(422, f"{name.replace('_', ' ').capitalize()} can't be blank.")
@@ -233,8 +233,8 @@ def create_person(body: PersonCreateIn, request: Request, db: DbSession, user: C
         id=emp_id, employee_code=emp_id, full_name=" ".join(names), first_name=body.first_name.strip(),
         middle_name=(body.middle_name or "").strip() or None, last_name=body.last_name.strip(),
         preferred_name=body.first_name.strip(), email=email, country_code=country_code,
-        legal_entity=ref.legal_entity if ref else f"TimeZ {country.name}",
-        business_unit=ref.business_unit if ref else f"TimeZ {country.name}", division=ref.division if ref else None,
+        legal_entity=ref.legal_entity if ref else f"Bellora HRMS {country.name}",
+        business_unit=ref.business_unit if ref else f"Bellora HRMS {country.name}", division=ref.division if ref else None,
         department=body.department.strip(), location=body.location.strip(), job_title=body.job_title.strip(),
         grade=body.grade.strip(), employment_type=body.employment_type.strip(),
         employment_status="Onboarding" if body.joining_date > date.today() else "Active",

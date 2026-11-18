@@ -71,7 +71,7 @@ class Employee(TimestampMixin, Base):
     shift_start: Mapped[str | None] = mapped_column(String(5))
     shift_end: Mapped[str | None] = mapped_column(String(5))
     # Profile details (migration 0008). Address and emergency phone are masked in responses (app/services/pii.py).
-    company: Mapped[str] = mapped_column(String(100), default="TimeZ", server_default="TimeZ")
+    company: Mapped[str] = mapped_column(String(100), default="Bellora HRMS", server_default="Bellora HRMS")
     nationality: Mapped[str | None] = mapped_column(String(64))
     address_line: Mapped[str | None] = mapped_column(String(300))
     address_city: Mapped[str | None] = mapped_column(String(100))

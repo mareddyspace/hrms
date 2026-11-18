@@ -1,4 +1,4 @@
-# TimeZ HRMS API (v1)
+# Bellora HRMS API (v1)
 
 FastAPI + PostgreSQL (Neon) only. Without a PostgreSQL `DATABASE_URL` the server stops with a clear message.
 

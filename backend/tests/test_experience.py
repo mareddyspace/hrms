@@ -134,7 +134,7 @@ def test_immigration_documents(client, babu, ram, farhan):
             "issue_date": (today - timedelta(days=100)).isoformat(), "expiry_date": (today + timedelta(days=40)).isoformat()}
     res = client.post(f"{API}/immigration/documents", json=body, headers=babu)
     assert res.status_code == 422 and "sponsor" in res.json()["detail"]
-    res = client.post(f"{API}/immigration/documents", json={**body, "sponsor": "TimeZ FZ-LLC"}, headers=babu)
+    res = client.post(f"{API}/immigration/documents", json={**body, "sponsor": "Bellora HRMS FZ-LLC"}, headers=babu)
     assert res.status_code == 201, res.text
     doc = res.json()
     assert doc["verification"] == "pending" and doc["status"] == "Expiring" and doc["number"] == "WP-778812"
@@ -153,7 +153,7 @@ def test_immigration_documents(client, babu, ram, farhan):
     res = client.post(f"{API}/immigration/documents/{doc['id']}/verify",
                       json={"approve": False, "note": "Scan the page with the stamp."}, headers=farhan)
     assert res.json()["verification"] == "rejected"
-    res = client.put(f"{API}/immigration/documents/{doc['id']}", json={**body, "sponsor": "TimeZ FZ-LLC"}, headers=babu)
+    res = client.put(f"{API}/immigration/documents/{doc['id']}", json={**body, "sponsor": "Bellora HRMS FZ-LLC"}, headers=babu)
     assert res.json()["verification"] == "pending"
     res = client.post(f"{API}/immigration/documents/{doc['id']}/verify", json={"approve": True}, headers=farhan)
     assert res.json()["verification"] == "verified" and _notes("emp-mahesh", "was verified") >= 1

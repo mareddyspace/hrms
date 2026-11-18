@@ -6,7 +6,7 @@ from datetime import date
 
 from app.services.letters import ENTITY_ADDRESS, ENTITY_CONTACT, build_pdf
 
-FIELDS = {"country_code": "GB", "legal_entity": "TimeZ UK Ltd", "employee_name": "Asha Rao", "title": "Engineer",
+FIELDS = {"country_code": "GB", "legal_entity": "Bellora HRMS UK Ltd", "employee_name": "Asha Rao", "title": "Engineer",
           "department": "Platform", "employee_code": "E-101"}
 
 
@@ -35,7 +35,7 @@ def test_addressed_letter_has_letterhead_subject_signatory_and_footer():
     raw = _pdf(to_whom=False)
     assert raw.startswith(b"%PDF")
     pdf = _text(raw)
-    for text in (b"TimeZ UK Ltd", b"20 Finsbury Circus", b"hr.uk@timez.com", b"INF-GB/HR/PRM/2026/0007",
+    for text in (b"Bellora HRMS UK Ltd", b"20 Finsbury Circus", b"hr.uk@timez.com", b"INF-GB/HR/PRM/2026/0007",
                  b"Subject:", b"Asha Rao", b"Yours sincerely", b"Priya Nair", b"Authorised Signatory",
                  b"Registered office", b"Company No. 10293847", b"DOC-20261111-ABC123", b"version 2"):
         assert text in pdf, text

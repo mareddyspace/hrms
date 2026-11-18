@@ -33,7 +33,7 @@ function mmss(ms: number): string {
 
 /**
  * Save flow for your own personal details: start() asks for a code and, when one is needed, opens a dialog to
- * enter it (the code is in your TimeZ inbox). Returns the dialog to render.
+ * enter it (the code is in your Bellora HRMS inbox). Returns the dialog to render.
  */
 export function useProfileCode(): { start: (req: ProfileCodeRequest) => Promise<boolean | string>; dialog: ReactNode } {
   const [open, setOpen] = useState<Open | null>(null);
@@ -146,7 +146,7 @@ function CodeDialog({ open, setOpen }: { open: Open; setOpen: (next: Open | null
         onSubmit={verifyAction.submit(() => (locked || expired ? false : verify()), { success: "Profile saved." })}
       >
         <p>
-          We sent a code to your TimeZ inbox.{" "}
+          We sent a code to your Bellora HRMS inbox.{" "}
           <a href={href} target="_blank" rel="opener">
             Open {inboxName}
           </a>

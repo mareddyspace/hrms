@@ -287,7 +287,7 @@ function allocate(total: number, min: (dept: string) => number): Record<string, 
 }
 
 /**
- * Build the TimeZ workforce across 8 countries. Personas and Ram's named teammates count towards
+ * Build the Bellora HRMS workforce across 8 countries. Personas and Ram's named teammates count towards
  * each country's headcount, so the whole company (generated + named) adds up to the blueprint.
  *
  * Reporting line in every country: country head (reports to the CEO) → department head → team leads
@@ -338,8 +338,8 @@ export function buildTimezWorkforce(_total = 500): WorkforceRow[] {
         mobile: phoneFor(country.code, input.location, seq),
         managerName: "",
         availability: status === "On Leave" ? "On Leave" : AVAIL[seq % AVAIL.length],
-        companyCode: "TimeZ",
-        businessUnit: `TimeZ ${country.name}`,
+        companyCode: "Bellora HRMS",
+        businessUnit: `Bellora HRMS ${country.name}`,
         practice: input.dept,
         subPractice: input.title,
         gender: FIRST_GENDER[first] ?? "Female",
@@ -518,7 +518,7 @@ export function hiringFor(people: HiringInput[]): Map<string, { hiredBy: string;
       (r) => r.id !== p.id && (!r.dateOfJoining || !p.dateOfJoining || r.dateOfJoining <= p.dateOfJoining),
     );
     const pick = pool.length ? pool[hash(`${p.id}:recruiter`) % pool.length] : undefined;
-    out.set(p.id, { hiredBy: pick ? `${pick.fullName} (Talent Acquisition)` : "TimeZ Talent Acquisition", hiringManager: boss });
+    out.set(p.id, { hiredBy: pick ? `${pick.fullName} (Talent Acquisition)` : "Bellora HRMS Talent Acquisition", hiringManager: boss });
   }
   return out;
 }

@@ -1006,7 +1006,7 @@ function TicketDrawer({
         <FileList
           files={(t.files ?? []).map((f) => ({ id: f.id, name: f.name, size: f.size, at: f.at, by: personName(f.byId), internal: f.internal }))}
           canAdd={API_ENABLED}
-          offlineNote={API_ENABLED ? undefined : "Files can be attached when TimeZ is connected to the server."}
+          offlineNote={API_ENABLED ? undefined : "Files can be attached when Bellora HRMS is connected to the server."}
           canRemove={(f) => {
             const file = (t.files ?? []).find((x) => x.id === f.id);
             return !!file && (file.byId === actor.id || canPlan);

@@ -102,7 +102,7 @@ function toPerson(p: PersonOut): PersonRecord {
     careerGoals: full?.career_goals ?? "",
     hiredBy: full?.hired_by ?? "",
     hiringManager: full?.hiring_manager ?? "",
-    company: p.company || "TimeZ",
+    company: p.company || "Bellora HRMS",
     holidayCalendar: full?.holiday_calendar ?? "",
     leavePolicy: full?.leave_policy_name ?? "",
     payrollStatus: full?.payroll_status ?? "",

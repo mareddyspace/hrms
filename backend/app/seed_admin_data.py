@@ -174,7 +174,7 @@ def _positions(db: Session, today: date) -> tuple[int, int]:
 # ---------------------------------------------------------------- job families and profiles
 FAMILY_TEXT: dict[str, str] = {
     "Customer Success": "Keeps customers successful after the sale: onboarding, adoption, renewals and support escalations.",
-    "Engineering": "Designs, builds, tests and runs the TimeZ product and the platforms it runs on.",
+    "Engineering": "Designs, builds, tests and runs the Bellora HRMS product and the platforms it runs on.",
     "Executive": "Sets the company's direction, strategy and priorities and is accountable to the board.",
     "Finance": "Accounting, planning, payroll accounting, tax and controls across every legal entity.",
     "Human Resources": "The employee life cycle: hiring, onboarding, policies, employee relations, rewards and exits.",
@@ -279,7 +279,7 @@ def _profile_text(title: str, family: str | None, rank: int) -> dict[str, Any]:
     lead = {100: "leads the company", 80: "leads the function", 60: "leads a team",
             45: "leads the work of a small group", 40: "works independently on complex work", 20: "delivers the core work"}[rank]
     return {
-        "description": f"The {title} {lead} in {family or 'the business'} at TimeZ. {area}",
+        "description": f"The {title} {lead} in {family or 'the business'} at Bellora HRMS. {area}",
         "required_skills": required,
         "preferred_skills": list(pref),
         "job_level": level,
@@ -307,7 +307,7 @@ def _job_profiles(db: Session) -> int:
         filled += changed
     for f in db.scalars(select(JobFamily)):
         if _blank(f.description):
-            f.description = FAMILY_TEXT.get(f.name, f"The {f.name} job family at TimeZ.")
+            f.description = FAMILY_TEXT.get(f.name, f"The {f.name} job family at Bellora HRMS.")
             filled += 1
     return filled
 
@@ -427,7 +427,7 @@ HOLIDAY_MEANING: dict[str, str] = {
     "juneteenth": "Commemorates the end of slavery in the United States.",
     "memorial day": "Honours those who died serving in the US armed forces.",
     "arafat": "The day before Eid al-Adha, the peak of the Hajj.",
-    "founders": "TimeZ Founders' Day: company holiday.",
+    "founders": "Bellora HRMS Founders' Day: company holiday.",
 }
 
 
@@ -720,7 +720,7 @@ def _emails(db: Session, now: datetime) -> int:
         created = now - timedelta(days=days, hours=days % 5)
         category = infer_category(link, subject)
         db.add(EmailOutboxItem(notification_id=None, recipient_id=rid, to_email=emp.email, subject=subject,
-                               body=f"{subject}. Open TimeZ to see the details.", link=link, category=category,
+                               body=f"{subject}. Open Bellora HRMS to see the details.", link=link, category=category,
                                channel=channel_for(category, link), status="Sent", created_at=created,
                                sent_at=created + timedelta(minutes=4), sent_by="demo-admin"))
         added += 1
@@ -754,7 +754,7 @@ def _access_examples(db: Session) -> int:
     return added
 
 
-INTERNAL_CLIENT = "TimeZ (internal)"
+INTERNAL_CLIENT = "Bellora HRMS (internal)"
 
 
 def _other_blanks(db: Session) -> tuple[int, int]:

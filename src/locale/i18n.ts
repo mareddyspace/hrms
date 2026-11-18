@@ -24,7 +24,7 @@ export type I18nKey =
   | "admin.countries";
 
 const EN: Record<I18nKey, string> = {
-  "app.name": "TimeZ",
+  "app.name": "Bellora HRMS",
   "nav.home": "Home",
   "nav.people": "People",
   "nav.settings": "Locale settings",
@@ -48,7 +48,7 @@ const EN: Record<I18nKey, string> = {
 
 /** Hindi — limited reliable UI strings only */
 const HI: Partial<Record<I18nKey, string>> = {
-  "app.name": "TimeZ",
+  "app.name": "Bellora HRMS",
   "nav.home": "होम",
   "nav.people": "लोग",
   "nav.settings": "स्थानीय सेटिंग्स",
@@ -72,7 +72,7 @@ const HI: Partial<Record<I18nKey, string>> = {
 
 /** German — limited reliable UI strings only */
 const DE: Partial<Record<I18nKey, string>> = {
-  "app.name": "TimeZ",
+  "app.name": "Bellora HRMS",
   "nav.home": "Startseite",
   "nav.people": "Personen",
   "nav.settings": "Gebietseinstellungen",
@@ -96,7 +96,7 @@ const DE: Partial<Record<I18nKey, string>> = {
 
 /** Arabic — limited reliable UI strings only */
 const AR: Partial<Record<I18nKey, string>> = {
-  "app.name": "TimeZ",
+  "app.name": "Bellora HRMS",
   "nav.home": "الرئيسية",
   "nav.people": "الأشخاص",
   "nav.settings": "إعدادات المنطقة",

@@ -270,14 +270,14 @@ export interface PositionRecord {
 }
 
 export const LEGAL_BY_COUNTRY: Record<string, string> = {
-  IN: "TimeZ India Pvt Ltd",
-  US: "TimeZ USA Inc",
-  GB: "TimeZ UK Ltd",
-  AU: "TimeZ Australia Pty Ltd",
-  CA: "TimeZ Canada Ltd",
-  AE: "TimeZ UAE LLC",
-  SA: "TimeZ Saudi Arabia Ltd",
-  DE: "TimeZ Germany GmbH",
+  IN: "Bellora HRMS India Pvt Ltd",
+  US: "Bellora HRMS USA Inc",
+  GB: "Bellora HRMS UK Ltd",
+  AU: "Bellora HRMS Australia Pty Ltd",
+  CA: "Bellora HRMS Canada Ltd",
+  AE: "Bellora HRMS UAE LLC",
+  SA: "Bellora HRMS Saudi Arabia Ltd",
+  DE: "Bellora HRMS Germany GmbH",
 };
 
 /* ───────────── Job catalog ───────────── */
@@ -426,7 +426,7 @@ function buildBasePeople(): PersonRecord[] {
       location: row.location,
       countryCode: country.code,
       countryName: country.name,
-      legalEntity: LEGAL_BY_COUNTRY[country.code] ?? "TimeZ",
+      legalEntity: LEGAL_BY_COUNTRY[country.code] ?? "Bellora HRMS",
       managerId: row.managerId,
       managerName: nameById.get(row.managerId) ?? "",
       availability: row.availability,
@@ -461,7 +461,7 @@ function buildBasePeople(): PersonRecord[] {
       grade: gradeForTitle(account.designation),
       department,
       division: divisionForDepartment(department),
-      businessUnit: `TimeZ ${country.name}`,
+      businessUnit: `Bellora HRMS ${country.name}`,
       costCenter: costCenterFor(country.code, department),
       location: account.location ?? "Bengaluru",
       countryCode: country.code,
@@ -496,7 +496,7 @@ function buildBasePeople(): PersonRecord[] {
     grade: gradeForTitle(t.title),
     department: "Engineering",
     division: divisionForDepartment("Engineering"),
-    businessUnit: `TimeZ ${india.name}`,
+    businessUnit: `Bellora HRMS ${india.name}`,
     costCenter: costCenterFor("IN", "Engineering"),
     location: "Bengaluru",
     countryCode: "IN",
@@ -740,7 +740,7 @@ export function buildOrgTree(people: PersonRecord[]): OrgNode {
             {
               id: `bu-${country.code}`,
               type: "businessUnit" as const,
-              name: `TimeZ ${country.name}`,
+              name: `Bellora HRMS ${country.name}`,
               headcount: inCountry.length,
               children: divisions.map((division) => {
                 const inDivision = inCountry.filter((p) => (p.division || divisionForDepartment(p.department)) === division);
@@ -794,7 +794,7 @@ export function buildOrgTree(people: PersonRecord[]): OrgNode {
   return {
     id: "company-timez",
     type: "company",
-    name: "TimeZ",
+    name: "Bellora HRMS",
     headcount: active.length,
     children: byCountry,
   };
@@ -807,7 +807,7 @@ export const FILTER_OPTIONS = {
   departments: [...new Set(getBasePeople().map((p) => p.department))].sort(departmentSort),
   employmentStatuses: ["Active", "On Leave", "Contractor", "Terminated"] as EmploymentStatus[],
   jobFamilies: JOB_FAMILY_LIST,
-  businessUnits: TIMEZ_COUNTRIES.map((c) => `TimeZ ${c.name}`),
+  businessUnits: TIMEZ_COUNTRIES.map((c) => `Bellora HRMS ${c.name}`),
   grades: GRADE_RANK,
 };
 

@@ -33,7 +33,7 @@ def normalize_database_url(raw: str | None) -> str:
     if url.startswith("sqlite") and os.environ.get(TEST_SUITE_FLAG) == "1":
         return url
     raise DatabaseConfigError("DATABASE_URL must be a PostgreSQL connection string (postgresql://...). "
-                              "TimeZ runs on PostgreSQL (Neon) only.")
+                              "Bellora HRMS runs on PostgreSQL (Neon) only.")
 
 
 class Settings(BaseSettings):

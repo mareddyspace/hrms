@@ -6,18 +6,18 @@ import { cycleCompletion, getTalentState } from "./talentLocal.ts";
 const BASE_PEOPLE = getBasePeople().filter((p) => inHeadcount(p));
 const MAIN_DEPARTMENTS = ["Engineering", "Product", "Sales", "People", "Finance", "Operations", "Customer Success", "Legal"];
 const REGION_BY_COUNTRY: Record<string, string> = {
-  IN: "TimeZ India",
-  US: "TimeZ Americas",
-  CA: "TimeZ Americas",
-  GB: "TimeZ EMEA",
-  DE: "TimeZ EMEA",
-  AE: "TimeZ EMEA",
-  SA: "TimeZ EMEA",
-  AU: "TimeZ APAC (ex-IN)",
+  IN: "Bellora HRMS India",
+  US: "Bellora HRMS Americas",
+  CA: "Bellora HRMS Americas",
+  GB: "Bellora HRMS EMEA",
+  DE: "Bellora HRMS EMEA",
+  AE: "Bellora HRMS EMEA",
+  SA: "Bellora HRMS EMEA",
+  AU: "Bellora HRMS APAC (ex-IN)",
 };
 const count = (test: (p: (typeof BASE_PEOPLE)[number]) => boolean) => BASE_PEOPLE.filter(test).length;
 
-/** Canonical TimeZ workforce numbers, counted from the directory so every dashboard agrees. */
+/** Canonical Bellora HRMS workforce numbers, counted from the directory so every dashboard agrees. */
 export const TZ_HEADCOUNT = {
   global: BASE_PEOPLE.length,
   byCountry: TIMEZ_COUNTRIES.map((c) => ({
@@ -30,7 +30,7 @@ export const TZ_HEADCOUNT = {
     ...MAIN_DEPARTMENTS.map((name) => ({ name, headcount: count((p) => p.department === name) })),
     { name: "Other", headcount: count((p) => !MAIN_DEPARTMENTS.includes(p.department)) },
   ],
-  byBusinessUnit: ["TimeZ India", "TimeZ Americas", "TimeZ EMEA", "TimeZ APAC (ex-IN)"].map((name) => ({
+  byBusinessUnit: ["Bellora HRMS India", "Bellora HRMS Americas", "Bellora HRMS EMEA", "Bellora HRMS APAC (ex-IN)"].map((name) => ({
     name,
     headcount: count((p) => REGION_BY_COUNTRY[String(p.countryCode)] === name),
   })),

@@ -243,7 +243,7 @@ def seed_leave_requests(db: Session) -> int:
 PROJECTS = [
     # id, code, name, client, billable by default
     ("prj-internal", "TZ-INT", "Internal & admin", None, False),
-    ("prj-hrms", "TZ-HRMS", "TimeZ HRMS platform", None, False),
+    ("prj-hrms", "TZ-HRMS", "Bellora HRMS platform", None, False),
     ("prj-acme", "ACME-PORTAL", "Acme customer portal", "Acme Corp", True),
     ("prj-globex", "GLOBEX-MIG", "Globex cloud migration", "Globex Ltd", True),
     # Same ids as the portal's ticket projects, so "Log time" on a ticket charges the right project.
@@ -554,7 +554,7 @@ def _seed_pay_benefits(db: Session) -> dict[str, int]:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Load TimeZ seed data (idempotent).")
+    parser = argparse.ArgumentParser(description="Load Bellora HRMS seed data (idempotent).")
     parser.add_argument("--reset-passwords", action="store_true", help="Set the demo passwords again and unlock accounts.")
     args = parser.parse_args()
     result = run(reset_passwords=args.reset_passwords)

@@ -1,5 +1,5 @@
 :root {
-  /* —— TimeZ design tokens —— */
+  /* —— Bellora HRMS design tokens —— */
   --font-sans: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
   --text-xs: 11.5px;
@@ -2654,7 +2654,7 @@ html[data-theme="night"] .help-ticket-btn:hover {
   body, .workspace { background: white; }
 }
 
-/* —— TimeZ foundation shell & primitives —— */
+/* —— Bellora HRMS foundation shell & primitives —— */
 .sidebar .mark {
   width: 40px;
   height: 40px;
@@ -4111,7 +4111,7 @@ html[data-theme="night"] .orgchart-you {
   .tz-bar-value { text-align: left; }
 }
 
-/* —— TimeZ foundation shell & primitives —— */
+/* —— Bellora HRMS foundation shell & primitives —— */
 .sidebar .mark {
   width: 40px;
   height: 40px;

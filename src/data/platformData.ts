@@ -593,7 +593,7 @@ export const ADMIN_LOCATIONS = [
 ];
 
 export const ADMIN_ORG_SETTINGS = {
-  company: "TimeZ",
+  company: "Bellora HRMS",
   fiscalYearStart: "April",
   weekStartDefault: "Monday",
   legalEntities: TIMEZ_COUNTRIES.length,

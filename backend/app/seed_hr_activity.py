@@ -560,7 +560,7 @@ def _own_documents(db: Session, people: dict[str, Employee], today: date) -> int
         name = emp.full_name
         joined = emp.joining_date.strftime("%d %B %Y").lstrip("0") if emp.joining_date else ""
         offer = ("offer", "Employment", "Offer letter", [
-            emp.legal_entity or "TimeZ", "", f"Dear {emp.first_name or name},", "",
+            emp.legal_entity or "Bellora HRMS", "", f"Dear {emp.first_name or name},", "",
             f"We are pleased to offer you the position of {emp.job_title} in {emp.department},",
             f"starting {joined}. Pay and benefits are set out in Annexure A.", "",
             "Authorised Signatory, Human Resources", "", f"Accepted by {name}."], None)

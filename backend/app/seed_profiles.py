@@ -125,7 +125,7 @@ def _blank(value: Any) -> bool:
 
 def _timeline(e: Employee) -> tuple[int, date, date, bool]:
     """Graduation year and previous job that fit together: born -> graduated at 21+ -> previous job starts after
-    graduating and ends 3-13 weeks before joining TimeZ. With no room for a job, a student internship instead."""
+    graduating and ends 3-13 weeks before joining Bellora HRMS. With no room for a job, a student internship instead."""
     key = e.id
     joined = e.joining_date or date(2020, 1, 1)
     dob = e.date_of_birth if isinstance(e.date_of_birth, date) else None
@@ -388,7 +388,7 @@ def fill_hiring(db: Session) -> int:
                 pool = [r for r in recruiters.get(e.country_code, []) if r.id != e.id
                         and (r.joining_date is None or e.joining_date is None or r.joining_date <= e.joining_date)]
                 pick = _pick(e.id + ":recruiter", pool) if pool else None
-                e.hired_by = f"{pick.full_name} (Talent Acquisition)" if pick else "TimeZ Talent Acquisition"
+                e.hired_by = f"{pick.full_name} (Talent Acquisition)" if pick else "Bellora HRMS Talent Acquisition"
             filled += 1
     return filled
 

@@ -121,12 +121,12 @@ def issue(db: Session, emp: Employee, changes: dict[str, Any], actor_id: str) ->
         "attempts": 0,
     }, actor_id)
     text = f"Your code is {code}. It expires in {OTP_MINUTES} minutes."
-    href = deliver_security_mail(db, emp.id, "Your TimeZ verification code", text, code=code)
+    href = deliver_security_mail(db, emp.id, "Your Bellora HRMS verification code", text, code=code)
     new_email = changes.get("personal_email")
     to = new_email if isinstance(new_email, str) and new_email else emp.email
     if to:
         db.add(EmailOutboxItem(
-            recipient_id=emp.id, to_email=to, subject="Your TimeZ verification code",
+            recipient_id=emp.id, to_email=to, subject="Your Bellora HRMS verification code",
             body=f"{text} Use it to save the changes to your profile.",
             link="/profile", category="System", channel="general", status="Queued",
         ))

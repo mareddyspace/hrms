@@ -671,7 +671,7 @@ REASONS_TEXT = {
     "new_role": "New role to support growth in {dept}; the team cannot take on the planned work without it.",
     "replacement": "Backfill for a team member who moved on; the work is ongoing and the team is at capacity.",
 }
-COVER_NOTES = ("I have followed TimeZ for a while and would love to help build people software.",
+COVER_NOTES = ("I have followed Bellora HRMS for a while and would love to help build people software.",
                "My recent work matches this role closely and I am ready to move quickly.",
                "I am looking for a team where I can own outcomes and keep learning.")
 BUDGET_PER_OPENING = {"INR": 3_200_000, "GBP": 75_000, "USD": 120_000, "CAD": 110_000, "EUR": 80_000, "AED": 300_000}
@@ -714,7 +714,7 @@ def _recruiting(db: Session, ctx: _Ctx) -> dict[str, int]:
     for p in postings.values():
         if not (p.description or "").strip():
             req = reqs.get(p.requisition_id)
-            p.description = req.description if req is not None and req.description else f"Join TimeZ as {p.title} in {p.location}."
+            p.description = req.description if req is not None and req.description else f"Join Bellora HRMS as {p.title} in {p.location}."
             filled += 1
     now = datetime.now(UTC)
     cands = list(db.scalars(select(Candidate).where(Candidate.id.in_(sample_cands))))

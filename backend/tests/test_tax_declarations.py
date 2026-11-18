@@ -98,7 +98,7 @@ def test_full_flow_and_privacy(client, babu, farhan, ram):
         # Payroll inputs carry the verified amount.
         month = date.today().replace(day=1) - timedelta(days=1)
         inputs = client.get("/api/v1/payroll/runs/inputs", params={"month": month.strftime("%Y-%m"), "country": "IN",
-                                                                   "entity": "TimeZ India Pvt Ltd"}, headers=farhan)
+                                                                   "entity": "Bellora HRMS India Pvt Ltd"}, headers=farhan)
         assert inputs.status_code == 200, inputs.text
         mine = next(p for p in inputs.json() if p["employee_id"] == "emp-mahesh")
         assert {"financial_year": fy, "section": "80CCD(1B)", "amount": 30000} in mine["declarations"]

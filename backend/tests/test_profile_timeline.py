@@ -1,4 +1,4 @@
-"""Every sample profile's dates fit together: born -> graduated (21+) -> previous job -> joined TimeZ."""
+"""Every sample profile's dates fit together: born -> graduated (21+) -> previous job -> joined Bellora HRMS."""
 from datetime import date
 
 from sqlalchemy import select

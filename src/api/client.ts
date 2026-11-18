@@ -1,5 +1,5 @@
 /**
- * Client for the TimeZ HRMS API (backend/). Used only when VITE_API_URL is set at build/dev time;
+ * Client for the Bellora HRMS API (backend/). Used only when VITE_API_URL is set at build/dev time;
  * without it the portal keeps everything in the browser as before.
  *
  * Tokens live in memory and sessionStorage (never localStorage), so they end with the browser tab.

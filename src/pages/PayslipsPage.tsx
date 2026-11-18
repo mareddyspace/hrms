@@ -551,7 +551,7 @@ function SummaryCard({ slips, employee, regime }: { slips: PayslipView[]; employ
             <SlipTag status="final" /> from the locked payroll run
           </span>
           <span>
-            <SlipTag status="estimated" /> worked out by TimeZ until payroll locks the month
+            <SlipTag status="estimated" /> worked out by Bellora HRMS until payroll locks the month
           </span>
         </p>
       </div>
@@ -973,7 +973,7 @@ export function PayslipsPage() {
       <Banner
         message={{
           tone: "info",
-          text: `${finalCount} of ${payslipViews.length} months are FINAL (from a locked payroll run); the rest are ESTIMATED by TimeZ and may change when payroll locks the month. Only you and HR / payroll can see your pay. Your payslips are also on your profile (Payslips tab).`,
+          text: `${finalCount} of ${payslipViews.length} months are FINAL (from a locked payroll run); the rest are ESTIMATED by Bellora HRMS and may change when payroll locks the month. Only you and HR / payroll can see your pay. Your payslips are also on your profile (Payslips tab).`,
         }}
       />
       <Tabs
@@ -1086,7 +1086,7 @@ export function PayslipDetail() {
           <span>
             {status === "final"
               ? "Final figures from the locked payroll run for this month."
-              : "Estimated by TimeZ from your pay record, tax rules and verified declarations. The final payslip comes from the locked payroll run and may differ."}
+              : "Estimated by Bellora HRMS from your pay record, tax rules and verified declarations. The final payslip comes from the locked payroll run and may differ."}
           </span>
         </div>
         <PayslipHead payslip={payslip} person={employee} />

@@ -473,7 +473,7 @@ def build_pdf(*, fields: dict[str, str], title: str, to_whom: bool, paragraphs: 
     logo = Table([[Paragraph("TZ", mark)]], colWidths=[11 * mm], rowHeights=[11 * mm])
     logo.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), navy), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                               ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
-    head = Table([[logo, [Paragraph("TimeZ", brand), Paragraph(entity, entity_style)],
+    head = Table([[logo, [Paragraph("Bellora HRMS", brand), Paragraph(entity, entity_style)],
                    Paragraph(f"{address}<br/>{escape(phone)} · {escape(email)}<br/>www.timez.com", contact_style)]],
                  colWidths=[14 * mm, 70 * mm, None])
     head.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
@@ -506,7 +506,7 @@ def build_pdf(*, fields: dict[str, str], title: str, to_whom: bool, paragraphs: 
 
     foot_lines = [f"Registered office: {fields['legal_entity']}, {ENTITY_ADDRESS.get(c, ENTITY_ADDRESS['IN'])}",
                   f"{registration} · Document {doc_id} · version {version}",
-                  "Issued electronically from TimeZ HRMS. Verify with HR quoting the reference number."]
+                  "Issued electronically from Bellora HRMS. Verify with HR quoting the reference number."]
 
     def footer(canvas: Any, doc: Any) -> None:
         canvas.saveState()
@@ -577,7 +577,7 @@ def issue(db: Session, req: LetterRequest, approver_id: str | None, generated_by
     return row
 
 
-WORD_PROMPT = """You word one paragraph for a formal HR letter issued by TimeZ.
+WORD_PROMPT = """You word one paragraph for a formal HR letter issued by Bellora HRMS.
 Rules:
 - Write ONE short paragraph (one or two sentences, under 60 words) in formal third person about the employee.
 - Use only facts in the request. Never invent dates, places, amounts or names.

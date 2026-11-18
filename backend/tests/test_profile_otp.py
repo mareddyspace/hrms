@@ -63,15 +63,15 @@ def test_code_goes_to_the_portal_inbox_and_outbox_not_the_response(client, jorda
     assert out["required"] is True and out["fields"] == ["mobile"] and out["dev_code"] is None
     assert out["inbox_href"].startswith("/mail?thread=") and out["resend_after"] == 0 and "•" in out["sent_to"]
     emp = _me(client, jordan)
-    # The code is in the person's TimeZ Mail inbox, from TimeZ Security.
-    inbox = [m for m in client.get("/api/v1/mail", headers=jordan).json() if m["from_name"] == "TimeZ Security"]
-    assert inbox and inbox[-1]["to_ids"] == [emp.id] and inbox[-1]["subject"] == "Your TimeZ verification code"
+    # The code is in the person's Bellora HRMS Mail inbox, from Bellora HRMS Security.
+    inbox = [m for m in client.get("/api/v1/mail", headers=jordan).json() if m["from_name"] == "Bellora HRMS Security"]
+    assert inbox and inbox[-1]["to_ids"] == [emp.id] and inbox[-1]["subject"] == "Your Bellora HRMS verification code"
     code = inbox[-1]["body"].split("Your code is ")[1][:6]
     assert code.isdigit() and inbox[-1]["body"] == f"Your code is {code}. It expires in 10 minutes."
     with SessionLocal() as db:
         note = db.scalars(select(Notification).where(Notification.recipient_id == emp.id)
                           .order_by(Notification.id.desc())).first()
-        assert note is not None and note.title == "New mail from TimeZ Security" and code not in note.title
+        assert note is not None and note.title == "New mail from Bellora HRMS Security" and code not in note.title
         mail = db.scalars(select(EmailOutboxItem).where(EmailOutboxItem.recipient_id == emp.id)
                           .order_by(EmailOutboxItem.id.desc())).first()
         assert mail is not None and mail.to_email == emp.email and code in mail.body

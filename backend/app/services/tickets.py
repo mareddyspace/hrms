@@ -170,7 +170,7 @@ def person_name(db: Session, person_id: str | None) -> str:
     if not person_id:
         return "Unassigned"
     if person_id == SYSTEM:
-        return "TimeZ"
+        return "Bellora HRMS"
     if person_id in TEAMMATES:
         return TEAMMATES[person_id][0]
     emp = db.get(Employee, person_id)

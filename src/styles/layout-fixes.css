@@ -230,3 +230,8 @@ table.data td:last-child > button + button, table.data td:last-child > .btn + .b
   .approval-actions > input, .approval-actions > textarea { flex: 1 1 100%; }
   .approval-actions > button, .approval-actions > .btn { flex: 1 1 0; justify-content: center; }
 }
+
+/* Sign-in page: all 8 demo accounts visible at once (the panel used to scroll inside itself and hide the last two). */
+.login-demo-panel { max-height: none; overflow: visible; }
+.login-demo-grid { gap: 8px; }
+.login-demo-card { padding: 8px 10px; gap: 6px; }

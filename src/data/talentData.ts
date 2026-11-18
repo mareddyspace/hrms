@@ -1,4 +1,4 @@
-/** Shared TimeZ talent modules mock data — recruiting through skills. */
+/** Shared Bellora HRMS talent modules mock data — recruiting through skills. */
 import type { FlowDecision, FlowStep } from "./approvalWorkflows.ts";
 
 /** Blueprint order. Rejected / Withdrawn are exits, reachable from any open stage. */

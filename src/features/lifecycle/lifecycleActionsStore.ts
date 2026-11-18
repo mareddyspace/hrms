@@ -388,7 +388,7 @@ function applyTo(person: PersonRecord, after: JobValues): LocalPersonRecord {
     next.countryCode = after.countryCode;
     next.countryName = country?.name ?? after.countryCode;
     next.legalEntity = LEGAL_BY_COUNTRY[after.countryCode] ?? person.legalEntity;
-    next.businessUnit = country ? `TimeZ ${country.name}` : person.businessUnit;
+    next.businessUnit = country ? `Bellora HRMS ${country.name}` : person.businessUnit;
     if (peer) {
       next.timeZone = peer.timeZone;
       next.currency = peer.currency;

@@ -1592,7 +1592,7 @@ function saveDirectoryRecord(s: TalentState, joiner: OnboardingJoiner, status: "
     grade: offer?.grade ?? "",
     department,
     division: `${department} Delivery`,
-    businessUnit: `TimeZ ${country.name}`,
+    businessUnit: `Bellora HRMS ${country.name}`,
     costCenter: `CC-${country.code}-1`,
     location,
     countryCode: country.code,

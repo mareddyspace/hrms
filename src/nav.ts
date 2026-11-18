@@ -2,7 +2,7 @@ import type { DemoAccount, NavAccessId } from "./demoAccounts.ts";
 import { accountHasNavAccess } from "./demoAccounts.ts";
 import type { UserRole } from "./model.ts";
 
-/** Navigation groups for the TimeZ shell. Visibility is driven by demo navAccess (prototype). */
+/** Navigation groups for the Bellora HRMS shell. Visibility is driven by demo navAccess (prototype). */
 export type NavGroupKey =
   | "me"
   | "myTime"

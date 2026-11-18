@@ -1,6 +1,6 @@
-# TimeZ — AI-Powered Global HR Portal
+# Bellora HRMS — AI-Powered Global HR Portal
 
-TimeZ is a full HR management system (HRMS / HCM) for a multinational company: one portal where employees,
+Bellora HRMS is a full HR management system (HRMS / HCM) for a multinational company: one portal where employees,
 managers, HR, recruiters, admins and executives do all their HR work. The sample company has **500 employees across
 8 countries** (India, USA, UK, Australia, Canada, UAE, Saudi Arabia, Germany).
 

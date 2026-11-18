@@ -276,7 +276,7 @@ def test_rehire_and_country_transfer(client, farhan, jordan, admin, leaves):
     aid = raise_action(client, farhan, who, "rehire", {"job_title": "Analyst"}).json()["id"]
     assert approve_all(client, aid, line_manager(who), admin)["status"] == "applied"
     aid = raise_action(client, farhan, who, "transfer", {"country_code": "AE", "location": "Dubai",
-                                                         "legal_entity": "TimeZ UAE LLC"}).json()["id"]
+                                                         "legal_entity": "Bellora HRMS UAE LLC"}).json()["id"]
     assert approve_all(client, aid, line_manager(who), admin)["status"] == "applied"
     with SessionLocal() as db:
         emp = db.get(Employee, who)

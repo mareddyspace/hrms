@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.models import Employee, EmployeeAssignment, JobFamily, JobProfile, OrgUnit, Position
 
 COMPANY_CODE = "TIMEZ"
-COMPANY_NAME = "TimeZ"
+COMPANY_NAME = "Bellora HRMS"
 ISO3 = {"IN": "IND", "US": "USA", "GB": "GBR", "AU": "AUS", "CA": "CAN", "AE": "ARE", "SA": "SAU", "DE": "DEU"}
 TYPE_PREFIX = {
     "company": "CO", "legal_entity": "LE", "business_unit": "BU", "division": "DIV", "department": "DEPT", "team": "TEAM",
@@ -55,8 +55,8 @@ def _most_common(values: list) -> object:
 FAMILY_ALIASES = {"Information Technology": "IT", "People": "Human Resources"}
 
 
-# Older seeds named the US legal entity "TimeZ Inc" while the HCM data uses "TimeZ USA Inc": one name everywhere.
-ENTITY_ALIASES = {"TimeZ Inc": "TimeZ USA Inc"}
+# Older seeds named the US legal entity "Bellora HRMS Inc" while the HCM data uses "Bellora HRMS USA Inc": one name everywhere.
+ENTITY_ALIASES = {"Bellora HRMS Inc": "Bellora HRMS USA Inc"}
 
 
 def _merge_entity_aliases(db: Session) -> None:

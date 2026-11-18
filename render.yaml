@@ -1,4 +1,4 @@
-# Render Blueprint for the TimeZ HRMS API (FastAPI). Render: New -> Blueprint -> pick this repo. See DEPLOY.md.
+# Render Blueprint for the Bellora HRMS API (FastAPI). Render: New -> Blueprint -> pick this repo. See DEPLOY.md.
 # The portal (front end) stays on Vercel; files go to a Backblaze B2 bucket (S3-compatible); the database is Neon.
 services:
   - type: web

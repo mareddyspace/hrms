@@ -36,12 +36,12 @@ def _pdf(title: str, lines: list[str]) -> bytes:
     head = ParagraphStyle("h", fontName="Helvetica-Bold", fontSize=15, leading=19, textColor=navy)
     sub = ParagraphStyle("s", fontName="Helvetica-Bold", fontSize=12, leading=16, spaceBefore=4, spaceAfter=8)
     body = ParagraphStyle("b", fontName="Courier", fontSize=9.5, leading=13)
-    story = [Paragraph("TimeZ", head), HRFlowable(width="100%", thickness=1.2, color=navy, spaceBefore=3, spaceAfter=8),
+    story = [Paragraph("Bellora HRMS", head), HRFlowable(width="100%", thickness=1.2, color=navy, spaceBefore=3, spaceAfter=8),
              Paragraph(escape(title), sub), Spacer(1, 4)]
     story += [Paragraph(escape(line).replace(" ", "&nbsp;") if line else "&nbsp;", body) for line in lines]
     buf = io.BytesIO()
     SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=16 * mm, bottomMargin=16 * mm,
-                      title=title, author="TimeZ").build(story)
+                      title=title, author="Bellora HRMS").build(story)
     return buf.getvalue()
 
 

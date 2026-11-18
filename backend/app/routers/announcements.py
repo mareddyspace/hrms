@@ -220,7 +220,7 @@ def create_announcement(payload: AnnouncementIn, request: Request, db: DbSession
     if payload.scope == "Country":
         audience = _country_code(db, audience)
     a = Announcement(id=f"an-{uuid.uuid4().hex[:10]}", title=payload.title.strip(), body=payload.body.strip(),
-                     scope=payload.scope, audience=audience or ("All TimeZ" if payload.scope == "Company" else "My team"),
+                     scope=payload.scope, audience=audience or ("All Bellora HRMS" if payload.scope == "Company" else "My team"),
                      state="Draft", scheduled_for=payload.scheduled_for if payload.state == "Scheduled" else None,
                      author_id=me, author_name=person_name(db, me), must_acknowledge=payload.must_acknowledge,
                      category=payload.category, pinned=payload.pinned)

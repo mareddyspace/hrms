@@ -222,14 +222,14 @@ export function receiptThresholdFor(country: CountryCode | undefined): number {
 }
 
 const LEGAL_ENTITY: Record<CountryCode, string> = {
-  IN: "TimeZ India Pvt Ltd",
-  US: "TimeZ USA Inc",
-  GB: "TimeZ UK Ltd",
-  AU: "TimeZ Australia Pty Ltd",
-  CA: "TimeZ Canada Ltd",
-  AE: "TimeZ UAE LLC",
-  SA: "TimeZ Saudi Arabia Ltd",
-  DE: "TimeZ Germany GmbH",
+  IN: "Bellora HRMS India Pvt Ltd",
+  US: "Bellora HRMS USA Inc",
+  GB: "Bellora HRMS UK Ltd",
+  AU: "Bellora HRMS Australia Pty Ltd",
+  CA: "Bellora HRMS Canada Ltd",
+  AE: "Bellora HRMS UAE LLC",
+  SA: "Bellora HRMS Saudi Arabia Ltd",
+  DE: "Bellora HRMS Germany GmbH",
 };
 
 /** The employing legal entity in a country — used when the employee record doesn't carry one. */

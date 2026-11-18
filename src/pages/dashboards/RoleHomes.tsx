@@ -2029,7 +2029,7 @@ export function ExecutiveHome() {
           <ChartWithDetail
             chart={(selected, toggle) => (
               <MiniBars
-                items={stats.byBusinessUnit.map((b) => ({ label: b.name.replace("TimeZ ", ""), title: b.name, value: b.count }))}
+                items={stats.byBusinessUnit.map((b) => ({ label: b.name.replace("Bellora HRMS ", ""), title: b.name, value: b.count }))}
                 share
                 ariaLabel="Headcount by business unit"
                 selected={selected}
@@ -2038,7 +2038,7 @@ export function ExecutiveHome() {
               />
             )}
             detail={(selected, close) => {
-              const rows = stats.byCountry.filter((c) => c.count > 0 && businessUnitFor(c.code).replace("TimeZ ", "") === selected);
+              const rows = stats.byCountry.filter((c) => c.count > 0 && businessUnitFor(c.code).replace("Bellora HRMS ", "") === selected);
               return (
                 <ChartDetail
                   title={`${selected} · ${rows.reduce((n, c) => n + c.count, 0)} people`}

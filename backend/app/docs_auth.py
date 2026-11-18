@@ -25,12 +25,12 @@ from app.security import verify_password
 from app.services.scope import SUPER_ADMIN_ROLES
 from app.services import login_throttle
 
-_CHALLENGE = {"WWW-Authenticate": 'Basic realm="TimeZ HRMS API docs", charset="UTF-8"'}
+_CHALLENGE = {"WWW-Authenticate": 'Basic realm="Bellora HRMS API docs", charset="UTF-8"'}
 _NO_STORE = {"Cache-Control": "no-store"}
 
 
 def _unauthorized() -> Response:
-    return Response("Sign in with your TimeZ HRMS account to view the API docs.", status_code=401,
+    return Response("Sign in with your Bellora HRMS account to view the API docs.", status_code=401,
                     headers={**_CHALLENGE, **_NO_STORE}, media_type="text/plain")
 
 

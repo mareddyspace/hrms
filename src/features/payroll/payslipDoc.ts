@@ -80,7 +80,7 @@ export function payslipPdf(slip: PayslipView, employee: Employee, regime?: strin
   const R = 553;
   const navy: [number, number, number] = [0.11, 0.24, 0.43];
   doc.box(0, 0, 595.28, 70, navy);
-  doc.text(L, 18, "TimeZ", { size: 20, bold: true, color: [1, 1, 1] });
+  doc.text(L, 18, "Bellora HRMS", { size: 20, bold: true, color: [1, 1, 1] });
   doc.text(L, 44, employee.legalEntity ?? legalEntityFor(employee.countryCode), { size: 10, color: [0.86, 0.9, 0.96] });
   doc.text(R, 20, `Payslip · ${monthTitle(slip.month)}`, { size: 14, bold: true, color: [1, 1, 1], align: "right" });
   doc.text(R, 44, status === "final" ? "FINAL" : "ESTIMATED", { size: 10, bold: true, color: status === "final" ? [0.7, 0.95, 0.75] : [1, 0.85, 0.5], align: "right" });

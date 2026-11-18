@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.models import Account, PlatformSetting
 from app.services.scope import HR_ACCESS_ROLES
 
-ISSUER = "TimeZ HRMS"
+ISSUER = "Bellora HRMS"
 POLICY_KEY = "require_mfa_admin_hr"
 POLICY_ROLES = HR_ACCESS_ROLES | {"admin"}
 BACKUP_CODE_COUNT = 10

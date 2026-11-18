@@ -854,7 +854,7 @@ export async function rateTicket(id: string, score: number, note: string, actor:
   return null;
 }
 
-const OFFLINE_FILES = "Files can be attached when TimeZ is connected to the server.";
+const OFFLINE_FILES = "Files can be attached when Bellora HRMS is connected to the server.";
 
 export async function uploadTicketFile(id: string, file: File, internal: boolean): Promise<string | null> {
   if (!API_ENABLED) return OFFLINE_FILES;

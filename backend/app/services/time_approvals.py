@@ -177,7 +177,7 @@ def _decider(db: Session, instance: ApprovalInstance, emp: Employee) -> tuple[st
     """(decided_by employee id, note, account id for the audit, name for the message)."""
     last = _last_decision(db, instance)
     if last is None:  # approved at start: no one left to approve
-        return emp.id, "Approved automatically - no one above you in the reporting line", emp.id, "TimeZ"
+        return emp.id, "Approved automatically - no one above you in the reporting line", emp.id, "Bellora HRMS"
     account = db.scalar(select(Account.id).where(Account.employee_id == last.approver_id)) or last.approver_id
     person = db.get(Employee, last.approver_id)
     name = person.full_name if person else last.approver_id

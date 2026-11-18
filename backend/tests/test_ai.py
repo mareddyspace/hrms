@@ -143,7 +143,7 @@ def test_model_fallback_on_429(client, babu, monkeypatch):
     assert body["answer"] == "You have 6 days of casual leave left."
     assert any(s["ref"] == "/leave" for s in body["sources"])
     headers = seen[0][1]
-    assert headers["Authorization"] == "Bearer test-key" and headers["X-Title"] == "TimeZ HRMS"
+    assert headers["Authorization"] == "Bearer test-key" and headers["X-Title"] == "Bellora HRMS"
 
 
 def test_all_models_fail_falls_back(client, babu, monkeypatch):

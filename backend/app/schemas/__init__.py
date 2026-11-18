@@ -80,7 +80,7 @@ class PersonBasicOut(ORM):
     manager_id: str | None
     manager_name: str | None = None
     photo: str | None
-    company: str = "TimeZ"
+    company: str = "Bellora HRMS"
     # Lets everyone tell a pre-boarding joiner (not started yet) from a colleague: team lists and "Works with".
     joining_date: date | None = None
     started: bool = True
@@ -131,7 +131,7 @@ class PersonFullOut(ORM):
     last_working_day: date | None = None  # set when an exit is approved (migration 0014)
     tax_regime: str | None = None  # India: "new" (NULL) or "old" (migration 0015)
     # Profile details (migration 0008). address_line, address_postcode and emergency_phone are always masked.
-    company: str = "TimeZ"
+    company: str = "Bellora HRMS"
     nationality: str | None = None
     address_line: str | None = None
     address_city: str | None = None
@@ -169,7 +169,7 @@ class PersonFullOut(ORM):
     @field_validator("company", mode="before")
     @classmethod
     def _company_default(cls, v: object) -> object:
-        return v or "TimeZ"
+        return v or "Bellora HRMS"
 
     @field_validator("mobile", mode="before")
     @classmethod

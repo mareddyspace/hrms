@@ -1,4 +1,4 @@
-"""TimeZ HRMS API. Run: uvicorn app.main:app --reload  (docs at /docs)."""
+"""Bellora HRMS API. Run: uvicorn app.main:app --reload  (docs at /docs)."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ for _noisy in ("httpx", "httpcore", "botocore", "boto3", "urllib3"):
 # portal account (app/docs_auth.py).
 _open_docs = bool(settings.docs_enabled) and not settings.is_production
 app = FastAPI(
-    title="TimeZ HRMS API", version="1.0.0", redoc_url=None,
+    title="Bellora HRMS API", version="1.0.0", redoc_url=None,
     docs_url="/docs" if _open_docs else None,
     openapi_url="/openapi.json" if _open_docs else None,
 )
@@ -61,7 +61,7 @@ app.include_router(approvals.workflows_router, prefix=API_PREFIX)
 @app.get("/", tags=["health"], include_in_schema=False)
 def root() -> dict[str, str]:
     """The API has no web page of its own: say what it is and where to go (the portal is the front end)."""
-    out = {"service": "TimeZ HRMS API", "status": "running", "health": "/health"}
+    out = {"service": "Bellora HRMS API", "status": "running", "health": "/health"}
     if settings.docs_enabled:
         out["docs"] = "/docs"
     return out
@@ -275,7 +275,7 @@ def _check_database() -> None:
 
 @asynccontextmanager
 async def _lifespan_migrate(app_: FastAPI):  # type: ignore[no-untyped-def]
-    log.info("Starting TimeZ HRMS API (env=%s, database=%s, docs=%s)", settings.app_env, engine.dialect.name,
+    log.info("Starting Bellora HRMS API (env=%s, database=%s, docs=%s)", settings.app_env, engine.dialect.name,
              "on" if settings.docs_enabled else "off")
     _check_database()
     _migrate.run_if_enabled()

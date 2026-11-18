@@ -39,7 +39,7 @@ RATE_WINDOW_SECONDS = 60.0
 MAX_HISTORY_TURNS = 6
 MAX_ANSWER_TOKENS = 700
 
-SYSTEM_PROMPT = """You are TimeZ Copilot, the HR assistant inside the TimeZ HRMS portal.
+SYSTEM_PROMPT = """You are Bellora HRMS Copilot, the HR assistant inside the Bellora HRMS portal.
 Rules:
 - Answer ONLY from the CONTEXT below (the person's own data, what their role allows them to see, and policy sections).
 - If the answer is not in the context, say you don't have that information and point to the right portal page
@@ -157,7 +157,7 @@ def _call_model(model: str, messages: list[dict[str, str]], key: str, timeout: f
     headers = {
         "Authorization": f"Bearer {key}",
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "TimeZ HRMS",
+        "X-Title": "Bellora HRMS",
         "Content-Type": "application/json",
     }
     payload = {

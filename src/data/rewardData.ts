@@ -1,4 +1,4 @@
-/** Compensation, benefits, and documents & letters — fictional TimeZ demo data only. */
+/** Compensation, benefits, and documents & letters — fictional Bellora HRMS demo data only. */
 
 export const LEGAL_DISCLAIMER =
   "Official employment, tax and legal documents are issued by HR.";
@@ -571,7 +571,7 @@ export const LETTER_REQUESTS: LetterRequest[] = [
     decidedOn: "2026-09-03",
     note: "Bank KYC support",
     previewBody:
-      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nEmployment particulars summary for Babu Menon (EMP1184).\nRole: Software Engineer · Entity: TimeZ India Pvt Ltd.\nPreview only — the issued letter is provided by HR.",
+      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nEmployment particulars summary for Babu Menon (EMP1184).\nRole: Software Engineer · Entity: Bellora HRMS India Pvt Ltd.\nPreview only — the issued letter is provided by HR.",
   },
   {
     id: "ltr-2",
@@ -599,7 +599,7 @@ export const LETTER_REQUESTS: LetterRequest[] = [
     decidedOn: "2026-08-20",
     note: "Passport renewal",
     previewBody:
-      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nAddress confirmation for Priya Nair (EMP1185).\nRole: Senior Software Engineer · Entity: TimeZ India Pvt Ltd.\nPreview only — the issued letter is provided by HR.",
+      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nAddress confirmation for Priya Nair (EMP1185).\nRole: Senior Software Engineer · Entity: Bellora HRMS India Pvt Ltd.\nPreview only — the issued letter is provided by HR.",
   },
   {
     id: "ltr-5",
@@ -614,7 +614,7 @@ export const LETTER_REQUESTS: LetterRequest[] = [
     decidedOn: "2026-09-16",
     note: "Mortgage application",
     previewBody:
-      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nEmployment particulars summary for Oliver Hughes (EMP1186).\nRole: QA Engineer · Entity: TimeZ UK Ltd.\nPreview only — the issued letter is provided by HR.",
+      "[TEMPLATE PREVIEW — NOT AN OFFICIAL DOCUMENT]\n\nEmployment particulars summary for Oliver Hughes (EMP1186).\nRole: QA Engineer · Entity: Bellora HRMS UK Ltd.\nPreview only — the issued letter is provided by HR.",
   },
   {
     id: "ltr-3",
@@ -689,7 +689,7 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "HR Ops",
     "2019-04-22T11:00:00",
     "180 KB",
-    "TimeZ India Pvt Ltd\nPrestige Tech Park, Outer Ring Road, Bengaluru 560103\n\nRef: INF-IN/HR/OFR/2019/0112          22 April 2019\n\nBabu Menon\n\nOFFER OF EMPLOYMENT\n\nDear Babu,\n\nWe are pleased to offer you the position of Software Engineer (grade L4) in Engineering with TimeZ India Pvt Ltd, starting 13 May 2019.\n\nYour annual base salary will be INR 12,00,000, subject to applicable deductions.\n\nThis offer is subject to background verification and submission of joining documents.\n\nFor TimeZ India Pvt Ltd\nAuthorised Signatory, Human Resources\n\nAccepted: Babu Menon, 24 April 2019",
+    "Bellora HRMS India Pvt Ltd\nPrestige Tech Park, Outer Ring Road, Bengaluru 560103\n\nRef: INF-IN/HR/OFR/2019/0112          22 April 2019\n\nBabu Menon\n\nOFFER OF EMPLOYMENT\n\nDear Babu,\n\nWe are pleased to offer you the position of Software Engineer (grade L4) in Engineering with Bellora HRMS India Pvt Ltd, starting 13 May 2019.\n\nYour annual base salary will be INR 12,00,000, subject to applicable deductions.\n\nThis offer is subject to background verification and submission of joining documents.\n\nFor Bellora HRMS India Pvt Ltd\nAuthorised Signatory, Human Resources\n\nAccepted: Babu Menon, 24 April 2019",
   ),
   babuDoc(
     "dl-2",
@@ -699,7 +699,7 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "HR Ops",
     "2019-05-13T09:00:00",
     "110 KB",
-    "NON-DISCLOSURE AGREEMENT\n\nBetween TimeZ India Pvt Ltd and Babu Menon (EMP1184).\nSigned on 13 May 2019.\n\nThe employee keeps company and client information confidential during and after employment.",
+    "NON-DISCLOSURE AGREEMENT\n\nBetween Bellora HRMS India Pvt Ltd and Babu Menon (EMP1184).\nSigned on 13 May 2019.\n\nThe employee keeps company and client information confidential during and after employment.",
   ),
   babuDoc(
     "dl-seed-payslip-sep",
@@ -709,7 +709,7 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "Payroll",
     "2026-09-30T18:00:00",
     "96 KB",
-    "TimeZ India Pvt Ltd — Payslip for September 2026\n\nEmployee: Babu Menon (EMP1184) · Software Engineer, Engineering\nPAN: ABCPM••••K · UAN: 1009••••4412 · Bank: HDFC ••••6620\nPaid days: 30 of 30\n\nEARNINGS                      INR\nBasic                       52,000\nHRA                         26,000\nSpecial allowance           26,000\nGross                     1,04,000\n\nDEDUCTIONS\nProvident Fund (12%)         6,240\nProfessional tax               200\nIncome tax (TDS)             8,450\nTotal deductions            14,890\n\nNET PAY                     89,110",
+    "Bellora HRMS India Pvt Ltd — Payslip for September 2026\n\nEmployee: Babu Menon (EMP1184) · Software Engineer, Engineering\nPAN: ABCPM••••K · UAN: 1009••••4412 · Bank: HDFC ••••6620\nPaid days: 30 of 30\n\nEARNINGS                      INR\nBasic                       52,000\nHRA                         26,000\nSpecial allowance           26,000\nGross                     1,04,000\n\nDEDUCTIONS\nProvident Fund (12%)         6,240\nProfessional tax               200\nIncome tax (TDS)             8,450\nTotal deductions            14,890\n\nNET PAY                     89,110",
   ),
   babuDoc(
     "dl-seed-payslip-aug",
@@ -719,7 +719,7 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "Payroll",
     "2026-08-31T18:00:00",
     "95 KB",
-    "TimeZ India Pvt Ltd — Payslip for August 2026\n\nEmployee: Babu Menon (EMP1184) · Software Engineer, Engineering\nPaid days: 31 of 31\n\nEARNINGS                      INR\nBasic                       52,000\nHRA                         26,000\nSpecial allowance           26,000\nGross                     1,04,000\n\nDEDUCTIONS\nProvident Fund (12%)         6,240\nProfessional tax               200\nIncome tax (TDS)             8,450\nTotal deductions            14,890\n\nNET PAY                     89,110",
+    "Bellora HRMS India Pvt Ltd — Payslip for August 2026\n\nEmployee: Babu Menon (EMP1184) · Software Engineer, Engineering\nPaid days: 31 of 31\n\nEARNINGS                      INR\nBasic                       52,000\nHRA                         26,000\nSpecial allowance           26,000\nGross                     1,04,000\n\nDEDUCTIONS\nProvident Fund (12%)         6,240\nProfessional tax               200\nIncome tax (TDS)             8,450\nTotal deductions            14,890\n\nNET PAY                     89,110",
   ),
   babuDoc(
     "dl-seed-form16",
@@ -729,7 +729,7 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "Payroll",
     "2026-06-12T10:00:00",
     "210 KB",
-    "FORM 16 — Certificate under section 203 of the Income-tax Act, 1961\nAssessment year 2026-27 (FY 2025-26)\n\nEmployer: TimeZ India Pvt Ltd · TAN: BLRT••••2E\nEmployee: Babu Menon · PAN: ABCPM••••K\n\nPart A — Tax deducted and deposited\nQ1  25,350   Q2  25,350   Q3  25,350   Q4  25,350\nTotal TDS                 1,01,400\n\nPart B — Salary and deductions\nGross salary             12,48,000\nStandard deduction          75,000\nTaxable income           11,73,000",
+    "FORM 16 — Certificate under section 203 of the Income-tax Act, 1961\nAssessment year 2026-27 (FY 2025-26)\n\nEmployer: Bellora HRMS India Pvt Ltd · TAN: BLRT••••2E\nEmployee: Babu Menon · PAN: ABCPM••••K\n\nPart A — Tax deducted and deposited\nQ1  25,350   Q2  25,350   Q3  25,350   Q4  25,350\nTotal TDS                 1,01,400\n\nPart B — Salary and deductions\nGross salary             12,48,000\nStandard deduction          75,000\nTaxable income           11,73,000",
   ),
   babuDoc(
     "dl-seed-12bb",
@@ -759,7 +759,7 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "HR Ops",
     "2020-06-15T11:00:00",
     "176 KB",
-    "TimeZ India Pvt Ltd\nPrestige Tech Park, Outer Ring Road, Bengaluru 560103\n\nPriya Nair\n\nOFFER OF EMPLOYMENT\n\nDear Priya,\n\nWe are pleased to offer you the position of Software Engineer in Engineering, reporting to Ram Krishnan, from 6 July 2020.\n\nPreview only — the signed copy is held by HR.",
+    "Bellora HRMS India Pvt Ltd\nPrestige Tech Park, Outer Ring Road, Bengaluru 560103\n\nPriya Nair\n\nOFFER OF EMPLOYMENT\n\nDear Priya,\n\nWe are pleased to offer you the position of Software Engineer in Engineering, reporting to Ram Krishnan, from 6 July 2020.\n\nPreview only — the signed copy is held by HR.",
   ),
   priyaDoc(
     "dl-priya-form16",
@@ -769,7 +769,7 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "Payroll",
     "2026-06-12T10:00:00",
     "205 KB",
-    "FORM 16 — Certificate under section 203 of the Income-tax Act, 1961\nAssessment year 2026-27 (FY 2025-26)\n\nEmployer: TimeZ India Pvt Ltd · TAN: BLRT••••2E\nEmployee: Priya Nair · PAN: BKRPN••••L\n\nSummary only — amounts are masked in the preview.",
+    "FORM 16 — Certificate under section 203 of the Income-tax Act, 1961\nAssessment year 2026-27 (FY 2025-26)\n\nEmployer: Bellora HRMS India Pvt Ltd · TAN: BLRT••••2E\nEmployee: Priya Nair · PAN: BKRPN••••L\n\nSummary only — amounts are masked in the preview.",
   ),
   oliverDoc(
     "dl-oliver-passport",
@@ -789,7 +789,7 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "HR Ops",
     "2022-08-22T11:00:00",
     "188 KB",
-    "TimeZ UK Ltd\nLondon\n\nWRITTEN STATEMENT OF EMPLOYMENT PARTICULARS\n\nEmployee: Oliver Hughes\nJob title: QA Engineer · Engineering\nStart date: 12 September 2022\nHours: 37.5 a week, Monday to Friday\nHoliday: 25 days plus bank holidays\nPension: auto-enrolment (Workplace Pension)\n\nPreview only — the signed copy is held by HR.",
+    "Bellora HRMS UK Ltd\nLondon\n\nWRITTEN STATEMENT OF EMPLOYMENT PARTICULARS\n\nEmployee: Oliver Hughes\nJob title: QA Engineer · Engineering\nStart date: 12 September 2022\nHours: 37.5 a week, Monday to Friday\nHoliday: 25 days plus bank holidays\nPension: auto-enrolment (Workplace Pension)\n\nPreview only — the signed copy is held by HR.",
   ),
   oliverDoc(
     "dl-oliver-p60",
@@ -799,7 +799,7 @@ export const DOC_LIBRARY_SEED: DocLibraryItem[] = [
     "Payroll",
     "2026-05-20T10:00:00",
     "88 KB",
-    "P60 End of Year Certificate — tax year to 5 April 2026\n\nEmployer: TimeZ UK Ltd · PAYE ref: 120/••••58\nEmployee: Oliver Hughes · NI number: QQ ••• •• 86 C\nTax code: 1257L\n\nSummary only — amounts are masked in the preview.",
+    "P60 End of Year Certificate — tax year to 5 April 2026\n\nEmployer: Bellora HRMS UK Ltd · PAYE ref: 120/••••58\nEmployee: Oliver Hughes · NI number: QQ ••• •• 86 C\nTax code: 1257L\n\nSummary only — amounts are masked in the preview.",
   ),
 ];
 
@@ -810,7 +810,7 @@ export const PLAN_DETAILS: Record<string, { coverage: string; terms: string; emp
     terms: "Cover runs from the enrollment date to 31 March. Dependents must be verified by HR. Pre-existing conditions covered from day one. Claims within 30 days of discharge.",
     employerAnnualCost: 45000,
     currency: "INR",
-    legalEntity: "TimeZ India Pvt Ltd",
+    legalEntity: "Bellora HRMS India Pvt Ltd",
   },
   "bp-in-pf": {
     coverage: "Employee 12% of basic + employer 12% of basic (3.67% to EPF, 8.33% to EPS). Interest as declared by EPFO.",

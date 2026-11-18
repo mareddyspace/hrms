@@ -61,7 +61,7 @@ COUNTRY_TEMPLATE: dict[str, list[tuple[str, str, str, str, int, list[str]]]] = {
 # (legal entity, employment type) -> rows; either may be None (= any)
 SCOPED_TEMPLATE: dict[tuple[str | None, str | None], list[tuple[str, str, str, str, int, list[str]]]] = {
     (None, "Contract"): [("mandatory_learning", "Mandatory learning (contractor set)", "employee", "Training", 7, ["access"])],
-    ("TimeZ India Pvt Ltd", None): [("policy_training", "Policy training: POSH & code of conduct", "employee", "Policy", 3,
+    ("Bellora HRMS India Pvt Ltd", None): [("policy_training", "Policy training: POSH & code of conduct", "employee", "Policy", 3,
                                      ["orientation"])],
 }
 LEGACY_KEYS = ("docs", "accounts", "security", "code_of_conduct")  # earlier checklist rows, switched off by the seed
@@ -144,8 +144,8 @@ def create_joiner(db: Session, cand: Candidate, req: Requisition, actor: Current
         id=emp_id, employee_code=emp_id, full_name=cand.name, first_name=parts[0] if parts else None,
         last_name=" ".join(parts[1:]) or None, preferred_name=parts[0] if parts else None, email=email,
         personal_email=None, mobile=cand.phone, country_code=req.country_code,
-        legal_entity=ref.legal_entity if ref else f"TimeZ {country.name if country else req.country_code}",
-        business_unit=ref.business_unit if ref else f"TimeZ {country.name if country else req.country_code}",
+        legal_entity=ref.legal_entity if ref else f"Bellora HRMS {country.name if country else req.country_code}",
+        business_unit=ref.business_unit if ref else f"Bellora HRMS {country.name if country else req.country_code}",
         division=ref.division if ref else None, department=req.department, cost_centre=None, location=req.location,
         job_title=req.title, job_family=None, position_id=None, grade=offer.grade, employment_type="Full-Time",
         employment_status="Onboarding", joining_date=offer.start_date, manager_id=req.hiring_manager_id,

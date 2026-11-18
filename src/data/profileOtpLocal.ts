@@ -1,6 +1,6 @@
 /**
  * Local mode (no VITE_API_URL): verification codes for changes to your own personal details, same rules as
- * backend/app/services/profile_otp.py. The code goes to your TimeZ Mail inbox from "TimeZ Security" and to the
+ * backend/app/services/profile_otp.py. The code goes to your Bellora HRMS Mail inbox from "Bellora HRMS Security" and to the
  * email outbox; only hashes of the code and the new values are kept. 10 minutes, 5 tries, then locked for
  * 15 minutes; a new code 30 seconds after the last.
  */
@@ -84,8 +84,8 @@ export async function sendLocalProfileCode(userId: string, changes: Record<strin
     open: { codeHash: await hash(`${userId}|code|${code}`), changesHash: await hash(`${userId}|${canon(changes)}`), issuedAt: now, expiresAt, attempts: 0 },
   });
   const text = `Your code is ${code}. It expires in 10 minutes.`;
-  sendMail({ fromId: SECURITY_SENDER_ID, fromName: "TimeZ Security", toIds: [userId], subject: "Your TimeZ verification code", body: text, category: "General" });
-  queueEmailForNotification({ recipientId: userId, category: "System", title: "Your TimeZ verification code", body: text, href: "/mail" });
+  sendMail({ fromId: SECURITY_SENDER_ID, fromName: "Bellora HRMS Security", toIds: [userId], subject: "Your Bellora HRMS verification code", body: text, category: "General" });
+  queueEmailForNotification({ recipientId: userId, category: "System", title: "Your Bellora HRMS verification code", body: text, href: "/mail" });
   return { error: null, required: true, inboxHref: "/mail", expiresAt, resendAfter: RESEND_MS / 1000 };
 }
 

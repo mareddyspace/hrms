@@ -23,8 +23,8 @@ if (import.meta.env.PROD && localStorage.getItem(BUILD_KEY) !== __APP_BUILD__) {
   localStorage.setItem(BUILD_KEY, __APP_BUILD__);
 }
 
-// One-time reset after the company was renamed to TimeZ, so saved records don't keep the old name.
-const BRAND_KEY = "kastech.migrate.timez-brand";
+// One-time reset after the company was renamed to Bellora HRMS, so saved records don't keep the old name.
+const BRAND_KEY = "kastech.migrate.bellora-brand";
 if (!localStorage.getItem(BRAND_KEY)) {
   clearSavedSampleData();
   localStorage.setItem(BRAND_KEY, "1");

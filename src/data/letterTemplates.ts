@@ -519,9 +519,9 @@ function letterhead(entity: string, address: string, countryCode: string): strin
   const contact = ENTITY_CONTACT[countryCode] ?? ENTITY_CONTACT.IN;
   return `<header class="lh">
   <div class="lh-brand">
-    <div class="lh-mark" aria-hidden="true">TZ</div>
+    <div class="lh-mark" aria-hidden="true">BH</div>
     <div>
-      <div class="lh-name">TimeZ</div>
+      <div class="lh-name">Bellora HRMS</div>
       <div class="lh-entity">${entity}</div>
     </div>
   </div>
@@ -530,7 +530,7 @@ function letterhead(entity: string, address: string, countryCode: string): strin
 <div class="lh-rule" aria-hidden="true"></div>`;
 }
 
-/** The letter layout: TimeZ letterhead, ref and date, addressee, subject, body, signatory, registered office footer. */
+/** The letter layout: Bellora HRMS letterhead, ref and date, addressee, subject, body, signatory, registered office footer. */
 export function letterShell(p: {
   entity: string;
   address: string;
@@ -573,7 +573,7 @@ ${p.paragraphs.map((x) => `<p>${x}</p>`).join("\n")}
 <footer class="foot">
   <div><strong>Registered office:</strong> ${p.entity}, ${p.address}</div>
   <div>${esc(contact.registration)} · ${p.footer}</div>
-  <div class="foot-note">This letter is issued electronically from TimeZ HRMS. Verify it with HR quoting the reference number above.</div>
+  <div class="foot-note">This letter is issued electronically from Bellora HRMS. Verify it with HR quoting the reference number above.</div>
 </footer>`;
 }
 

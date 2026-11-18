@@ -136,7 +136,7 @@ const SEEDS: Seed[] = [
   {
     id: "p-timez-hrms",
     code: "TZ-HRMS",
-    description: "The TimeZ HRMS portal itself: leave, time, pay and people modules.",
+    description: "The Bellora HRMS portal itself: leave, time, pay and people modules.",
     start: "2026-01-05",
     end: "2026-12-31",
     budget: 1200,

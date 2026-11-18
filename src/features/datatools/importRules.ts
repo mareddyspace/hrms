@@ -344,7 +344,7 @@ export function buildImportRecords(rows: ValidatedRow[], people: readonly Person
     const managerId = managerRow?.targetId ?? manager?.id ?? "";
     const managerName = managerRow?.values.fullName ?? manager?.fullName ?? "";
     const country = TIMEZ_COUNTRIES.find((c) => c.name === v.countryName) ?? TIMEZ_COUNTRIES[0];
-    const legalEntity = people.find((p) => p.countryCode === country.code)?.legalEntity ?? "TimeZ";
+    const legalEntity = people.find((p) => p.countryCode === country.code)?.legalEntity ?? "Bellora HRMS";
     const status = v.employmentStatus as EmploymentStatus;
     const existing = row.existingId ? byId.get(row.existingId) : undefined;
 
@@ -390,7 +390,7 @@ export function buildImportRecords(rows: ValidatedRow[], people: readonly Person
         grade: "L4",
         department: v.department,
         division: `${v.department} Delivery`,
-        businessUnit: `TimeZ ${country.name}`,
+        businessUnit: `Bellora HRMS ${country.name}`,
         costCenter: `CC-${country.code}-1`,
         location: v.location,
         countryCode: country.code,

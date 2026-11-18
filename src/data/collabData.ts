@@ -1,6 +1,6 @@
 import { isSuperAdmin } from "../model.ts";
 import { findDemoById } from "../demoAccounts.ts";
-/** TimeZ collaboration & workflow — fictional demo data only. */
+/** Bellora HRMS collaboration & workflow — fictional demo data only. */
 
 import { DEMO_ACCOUNTS } from "../demoAccounts.ts";
 
@@ -790,7 +790,7 @@ export const ANNOUNCEMENTS_SEED: Announcement[] = [
     title: "Q4 All-hands",
     body: "Join the global all-hands on 22 Oct. Agenda covers roadmap, hiring, and wellbeing resources.",
     scope: "Company",
-    audience: "All TimeZ",
+    audience: "All Bellora HRMS",
     state: "Published",
     publishedAt: "2026-10-08T10:00:00",
     author: "Internal Comms",

@@ -1,4 +1,4 @@
-# Putting TimeZ online
+# Putting Bellora HRMS online
 
 Portal on **Vercel** · API on **Render** (free) · files on **Backblaze B2** (free, no card) · database on **Neon** (already set up and seeded).
 

@@ -341,7 +341,7 @@ def _out(db: DbSession, user: CurrentUser, project: Project, hours: tuple[dict, 
         acts = db.scalars(select(ProjectActivity).where(ProjectActivity.project_id == project.id)
                           .order_by(ProjectActivity.created_at.desc()).limit(60)).all()
         out.activity = sorted(
-            [ActivityOut(id=a.id, actor_name=_name(db, a.actor_id) if a.actor_id else "TimeZ", text=a.text,
+            [ActivityOut(id=a.id, actor_name=_name(db, a.actor_id) if a.actor_id else "Bellora HRMS", text=a.text,
                          on=a.happened_on or a.created_at.date()) for a in acts],
             key=lambda a: a.on, reverse=True)[:30]
     return out

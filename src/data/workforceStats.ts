@@ -32,14 +32,14 @@ export type RangeKey = "7d" | "30d" | "90d" | "ytd";
 /* ───────────── Business units (derived from country so totals always match the country table) ───────────── */
 
 const BU_BY_COUNTRY: Record<CountryCode, string> = {
-  IN: "TimeZ India",
-  US: "TimeZ Americas",
-  CA: "TimeZ Americas",
-  GB: "TimeZ EMEA",
-  DE: "TimeZ EMEA",
-  AE: "TimeZ EMEA",
-  SA: "TimeZ EMEA",
-  AU: "TimeZ APAC",
+  IN: "Bellora HRMS India",
+  US: "Bellora HRMS Americas",
+  CA: "Bellora HRMS Americas",
+  GB: "Bellora HRMS EMEA",
+  DE: "Bellora HRMS EMEA",
+  AE: "Bellora HRMS EMEA",
+  SA: "Bellora HRMS EMEA",
+  AU: "Bellora HRMS APAC",
 };
 
 export function businessUnitFor(code: string): string {
